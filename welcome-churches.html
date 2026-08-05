@@ -141,7 +141,7 @@
   <div class="wrap">
     <a href="/" class="wm-sm" style="text-decoration:none;gap:11px"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
     <div class="links">
-      <a href="/#mission">For churches</a><a href="downloads.html">Get the app</a>
+      <a href="/#how">How it works</a><a href="why.html">Why</a><a href="/#mission">For the Church</a><a href="features.html">Features</a><a href="downloads.html">Downloads</a><a href="welcome-churches.html" class="is-here">For churches</a><a href="help.html">Help</a>
     </div>
     <div class="spacer"></div>
     <a href="https://app.trinityone.church/steward.html" data-steward-cta class="to-btn to-btn--clay" style="padding:11px 20px;font-size:14px">Start a church</a>
@@ -161,7 +161,7 @@
       <a href="https://app.trinityone.church/steward.html" data-steward-cta class="to-btn to-btn--clay">Start a church — free</a>
       <a href="#church" class="to-btn to-btn--ghost">See how it works</a>
     </div>
-    <p style="margin:16px 0 0;font-size:14px;text-align:center"><a href="migrate.html" style="color:var(--clay-ink,#8f3f2f);font-weight:700;text-decoration:none">Already on WhatsApp, spreadsheets or another church platform? See the move-over guide →</a></p>
+    <p style="margin:16px 0 0;font-size:14px;text-align:center"><a href="#switching" style="color:var(--clay-ink,#8f3f2f);font-weight:700;text-decoration:none">Already on WhatsApp, spreadsheets or another church platform? See how the move works →</a></p>
   </div>
 </section>
 
@@ -175,7 +175,7 @@
 </section>
 
 <!-- DE-RISK: switching feels safe -->
-<section class="band" style="padding-top:8px">
+<section class="band" id="switching" style="padding-top:8px">
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill">Switching is easy</span></div>
     <h2>Move at your pace. Nothing's locked in.</h2>
@@ -206,7 +206,31 @@
         <p style="font-size:14px;color:var(--ink-2);margin:10px 0 0;line-height:1.6">Church software commonly charges around <b>2.9% + 30p on every donation</b>, and caps you at 50&ndash;100 member profiles before you have to upgrade. On &pound;50,000 of annual giving that fee alone is about <b>&pound;1,450 a year</b> &mdash; every year, for software your church still doesn't own.</p>
       </div>
     </div>
-    <div style="display:flex;justify-content:center;margin-top:32px"><a href="migrate.html" class="to-btn to-btn--clay">Read the move-over guide →</a></div>
+    <!-- MARKETING-AUDIT-2026-08-05: migrate.html folded in here. Its opening three principles were already
+         verbatim above ("start small / run alongside / no lock-in") and its free-forever section restated the
+         arithmetic in the card above — that page was 879 words to add one thing this page did not have: the
+         actual order you do it in. So only the order survives, and the button that led to a separate page is
+         now the steps themselves. -->
+    <h3 style="font-family:var(--font-display);font-weight:700;font-size:22px;margin:40px 0 4px">The move, step by step</h3>
+    <p class="intro" style="max-width:640px;margin-bottom:18px">Five steps, at whatever pace suits your church. Nothing here has to happen in one week.</p>
+    <ol style="max-width:720px;margin:0;padding-left:20px;font-size:15.5px;line-height:1.65;color:var(--ink-2)">
+      <li style="margin-bottom:12px"><b>Start with one group.</b> Your leadership team or a single life group, for a week or two. Most of TrinityOne — serving, events, care, Library, Finance — turns on and off under <b>Settings → Features</b>, so you can begin with just chat and a Bible and add the rest when you're ready.</li>
+      <li style="margin-bottom:12px"><b>Re-create your groups.</b> In the Steward console → <b>Groups</b>, make a room for each one: <i>open</i> for anything church-wide, <i>invite-only</i> for a closed group. A WhatsApp group is really just a name and a set of people — you re-make the name here, and the people arrive in the next step.</li>
+      <li style="margin-bottom:12px"><b>Bring your people across.</b> Drop your join link into each existing WhatsApp or Facebook group; for anyone not in those, print the church's invite poster — one QR the whole room can scan. No app to download, no account, no password. If you've turned join approval on, people land in a gentle waiting state until a steward waves them in.</li>
+      <li style="margin-bottom:12px"><b>Move your records.</b> Giving history imports from the CSV your current software exports (<b>Finance → import</b>). Your directory fills itself in, because everyone arrived already named. Rotas and the calendar take a few minutes to re-create.</li>
+      <li><b>Go live, gently.</b> Keep the old tool around read-only for a season if it helps people settle. There is no moment where everything has to switch at once.</li>
+    </ol>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;max-width:720px">
+      <div style="background:var(--sage-soft);border:1px solid color-mix(in oklab,var(--sage) 30%,var(--line));border-radius:16px;padding:16px 18px">
+        <div style="font-weight:800;font-size:14px;margin-bottom:8px">✓ Comes with you</div>
+        <ul style="margin:0;padding-left:18px;font-size:14px;color:var(--ink-2)"><li style="margin-bottom:4px">Your groups, with more control</li><li style="margin-bottom:4px">Your people, by their real names</li><li style="margin-bottom:4px">Giving records &amp; statements</li><li>Rotas, events and rooms</li></ul>
+      </div>
+      <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:16px;padding:16px 18px">
+        <div style="font-weight:800;font-size:14px;margin-bottom:8px">✕ Stays behind</div>
+        <ul style="margin:0;padding-left:18px;font-size:14px;color:var(--ink-2)"><li style="margin-bottom:4px">Phone numbers (TrinityOne needs none)</li><li style="margin-bottom:4px">Old chat history and forwards</li><li style="margin-bottom:4px">Monthly fees</li><li>A company sitting in the middle</li></ul>
+      </div>
+    </div>
+    <p style="max-width:720px;font-size:15px;color:var(--ink-3);margin:14px 0 0">Leaving the history behind isn't a loss — it's a clean, quiet start. The relationships come; the noise doesn't.</p>
   </div>
 </section>
 
@@ -358,7 +382,7 @@
 <footer>
   <div class="wrap">
     <span>© TrinityOne — Read · Gather · Share</span>
-    <span style="display:flex;gap:22px;align-items:center"><a href="mailto:hello@trinityone.church">Contact</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer">Source</a><a href="migrate.html">Moving over</a><a href="roadmap.html">Roadmap</a><a href="/">← trinityone.church</a></span>
+    <span style="display:flex;gap:22px;align-items:center"><a href="mailto:hello@trinityone.church">Contact</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer">Source</a><a href="/">← trinityone.church</a></span>
   </div>
 </footer>
 

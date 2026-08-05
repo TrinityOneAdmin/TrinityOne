@@ -246,6 +246,15 @@ window.HelpData = {
         ] },
         { type: 'callout', tone: 'sage', text: 'You hold your child’s 12 recovery words, so the account is yours to look after. A steward confirms every parent–child link, so no one can attach themselves to a child who isn’t theirs.' },
         { type: 'note', text: 'Not every child needs a parent account. A young person who comes to youth club can join on their own and your church will still mark and protect them — the parent link just adds a guarantee that you and your child can always reach each other.' },
+        // MARKETING-AUDIT-2026-08-05: from verify-a-child.html, now deleted. That page had been serving three
+        // unresolved "📸 Screenshot placeholder — replace this box with a real screenshot" boxes to the public
+        // since 2026-06-25; the steps are the part that mattered and they read fine without pictures.
+        { type: 'p', text: 'For stewards — how you mark a young person. A child is only ever marked by a steward, or confirmed from a parent’s request. It is never self-declared, and never a “are you over 18?” tick-box:' },
+        { type: 'steps', label: 'Mark a young person as a child', items: [
+          'Open the Steward console → Members, and find them in the list.',
+          'Tap “Child”. A badge appears beside their name — that is the whole job.',
+          'The two protections above start immediately, and are enforced by the relay rather than by their phone, so they cannot be switched off by tampering with a device.',
+        ] },
         { type: 'note', text: 'This supports your church’s safeguarding — it doesn’t replace background checks, training, supervision or policy. If you’re ever concerned, speak to your church’s safeguarding lead.' },
         { type: 'tech', text: 'This is enforced at the relay, not just hidden in the app: the minor and approved-adult lists are owner-only, and the write-policy blocks child↔adult direct messages and child posts to adult groups server-side, so a tampered or third-party client can’t get around it.' },
       ],
@@ -312,6 +321,14 @@ window.HelpData = {
           { lead: 'Privacy & safeguarding', text: 'Enforced by the relay’s write-policy, not just the app: membership, invite-only groups and child↔adult message rules are checked server-side, so a modified client can’t bypass them.' },
           { lead: 'The Bible', text: 'Stored locally (IndexedDB) and read with WebAssembly SQLite — fully offline. Modules are open formats (MySword, USFM / Open.Bible).' },
           { lead: 'Open source', text: 'The whole app is AGPL-3.0 and self-hostable — a church can run its own relay on a small box and hold all of its own data.' },
+          // MARKETING-AUDIT-2026-08-05. Salvaged from how-trinityone-stays-up.html, which has been moved out
+          // of the public site (it published the live relay hosts, their tailnet names, and the fact that the
+          // primary and the fallback are the same machine). Its glossary was the genuinely good part and the
+          // only part a reader outside the project needed — these are the three terms the rest of the site
+          // uses without ever defining.
+          { lead: 'Relay', text: 'The small server that stores and passes on your church’s messages. It holds events, not accounts — it is plumbing, and your church can run its own or use ours.' },
+          { lead: 'Nostr', text: '“Notes and Other Stuff Transmitted by Relays” — the open protocol underneath. Every message is a small JSON document signed by your key, which is why no company has to be trusted to carry it.' },
+          { lead: 'Module', text: 'A downloadable file — a Bible translation, a dictionary, a commentary, a devotional. It is cached on your device the first time you download it, and works offline after that.' },
         ] },
         { type: 'tech', text: 'Deeper still: the code is plain, bundler-free JSX you can read end to end, and the architecture and specs live in the project’s README and reference docs. Found a security issue? There’s a responsible-disclosure policy in SECURITY.md.' },
       ],
@@ -349,6 +366,20 @@ window.HelpData = {
         ] },
         { type: 'callout', tone: 'sage', text: 'Two extra desks can be switched on in Settings when you need them: Practical care (meal trains), and Church finances — a treasurer’s ledger (see the next guide).' },
         { type: 'note', text: 'Being a steward is delegated and revocable: a steward gets their own key and can be added or removed at any time, so leadership can change hands without anyone losing access to the church.' },
+        // MARKETING-AUDIT-2026-08-05: from stewards-guide.html, now deleted (940 words, zero inbound links —
+        // it had no href pointing at it from anywhere on the site). This distinction is the useful part, and
+        // it is genuinely load-bearing: one of the two options cannot be undone.
+        { type: 'p', text: 'There are two ways to share control of a church, and the difference is mostly about whether you can undo it:' },
+        { type: 'list', items: [
+          { lead: 'A delegated steward (recommended)', text: 'Nothing secret changes hands — you send an invite, they request, you approve, and they act under their own key. The church key is never copied to their device. Revoke them and they lose access instantly. Use this for volunteers and for a second leader you might change.' },
+          { lead: 'A full handoff', text: 'You give someone the church’s 12-word recovery phrase, making them a co-owner with exactly your powers. This cannot be undone — once they have the phrase they have it for good, and the only way back is to move the church to a new key. Share it only with someone you would trust to be the church permanently.' },
+        ] },
+        // D4. stewards-guide.html listed "Manage who joins (approve / admit)" for a delegate with no caveat.
+        // A delegate genuinely can admit — but the blocklist is owner-only at the relay
+        // (scripts/gateway.mjs: `if (d.startsWith(BLOCKED_D)) return isLeader;  // OWNER-ONLY: banning is not
+        // delegated to stewards`), so the half of "managing who joins" that keeps somebody OUT is not
+        // delegated. A church that hands moderation to a volunteer needs to know that before it matters.
+        { type: 'note', text: 'One limit worth knowing: a delegated steward can let people in, but only the owner can block or remove someone. If you are handing over the welcoming, keep the owner reachable for the times it has to go the other way.' },
         { type: 'tech', text: 'The console is the same app pointed at the church’s relay with owner/steward privileges. The relay’s write-policy is the real gatekeeper — membership, approvals, invite-only groups and the safeguarding rules are all enforced server-side, so they hold even against a modified client.' },
       ],
     },

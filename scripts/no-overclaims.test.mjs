@@ -28,7 +28,7 @@
 // the screens with reach, never to weaken it — so this file also asserts the honest text is still there.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const IDENTITY = read('app/identity.jsx');
@@ -37,8 +37,15 @@ const EXTRAS = read('app/identity-extras.jsx');
 const CHAT = read('app/screens-chat.jsx');
 const DASH = read('app/stew-dashboard.jsx');
 const APP = read('app/app.jsx');
-const ABOUT = read('about.html');
 const FEATURES = read('features.html');
+// EVERY served marketing page, not a hand-listed pair. MARKETING-AUDIT-2026-08-05: this file used to read
+// about.html by name, and the trim deleted that page — so the test died with ENOENT rather than telling
+// anyone anything. Worse, a hand-listed pair is the wrong shape for the question being asked, which is "does
+// the site claim this ANYWHERE": the claim could simply move to a page not on the list. Same lesson as
+// no-internal-docs.test.mjs — ask what ships, don't list the paths you happened to look at.
+const SITE = readdirSync(new URL('..', import.meta.url).pathname)
+  .filter(f => f.endsWith('.html') && f !== 'index.html' && f !== 'steward.html')
+  .map(f => [f, read(f)]);
 // Strip comments before asserting. These fixes are commented, and the comments necessarily QUOTE the phrases
 // being removed — so a naive text search finds the record of the fix and reports it as the bug. JSX comments
 // matter as much as `//` ones: my first version stripped only the latter and failed on its own `{/* … */}`.
@@ -77,8 +84,10 @@ test('the join screen does not claim following is passive', () => {
 test('marketing does not claim messages are encrypted while groups default to plaintext', () => {
   assert.match(DASH, /const \[encrypted, setEncrypted\] = React\.useState\(false\)/,
     'group encryption is no longer off by default — if that changed, these claims become true and can return');
-  assert.doesNotMatch(code(ABOUT), /Messages are encrypted/,
-    'about.html still says "Messages are encrypted" unqualified, while new group rooms are plaintext');
+  const offenders = SITE.filter(([, html]) => /Messages are encrypted/.test(code(html))).map(([f]) => f);
+  assert.deepEqual(offenders, [],
+    'these pages say "Messages are encrypted" unqualified, while new group rooms are plaintext: ' +
+    offenders.join(', '));
   assert.doesNotMatch(code(FEATURES), /private, encrypted messages/,
     'features.html still lists "Group rooms and private, encrypted messages" — the group rooms are not encrypted');
 });
@@ -147,7 +156,9 @@ test('the honest wording that already existed is still there', () => {
 
 test('the withdrawn "big company" line is left alone', () => {
   // Recorded so a later pass does not "fix" it again. It is true: TrinityOne is not a big company.
-  assert.match(read('about.html') + read('welcome.html'), /big company/,
+  // about.html carried a second copy and was deleted by the 2026-08-05 trim; welcome.html is where the
+  // sentence lives now, and it survived the trim intact.
+  assert.match(read('welcome.html'), /big company/,
     'the "big company" line was removed. It was withdrawn as a finding on the owner\'s correction — the sentence ' +
     'is about who stands behind the product, not about where data sits, and it is honest.');
 });

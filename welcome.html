@@ -18,47 +18,15 @@
 <meta name="twitter:description" content="Scripture, prayer, groups and serving in one place, kept private to your church. No account, no password." />
 <meta name="twitter:image" content="https://trinityone.church/og-join.png" />
 <link rel="stylesheet" href="vendor/fonts/fonts.css" />
+<link rel="stylesheet" href="brand.css" />
 <link rel="icon" href="icons/halo.svg" type="image/svg+xml" />
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <style>
-  /* ── Brand tokens (from brand.css, inlined so this page renders standalone) ── */
-  :root {
-    --paper:      #F4EEE2;
-    --paper-soft: #FBF6EC;
-    --surface:    #FFFDF8;
-    --ink:        #221C16;
-    --ink-2:      #6B6052;
-    --ink-3:      #A89E8E;
-    --line:       rgba(34,28,22,0.10);
-    --line-2:     rgba(34,28,22,0.05);
-
-    --clay:       #C25A38;
-    --clay-deep:  #9C4327;
-    --clay-ink:   #A8462A;
-    --clay-soft:  #F3DECF;
-
-    --gold:       #C8962E;
-    --gold-soft:  #E0B860;
-    --gold-tint:  #F3E4C4;
-
-    --sage:       #5E8C6A;
-    --sage-soft:  #D8E6DC;
-
-    --midnight:   #17120B;
-    --midnight-2: #241C12;
-
-    --font-display: 'Sora', system-ui, sans-serif;
-    --font-serif:   'Newsreader', Georgia, serif;
-    --font-ui:      'Sora', system-ui, sans-serif;
-
-    --r-sm: 10px;  --r-md: 16px;  --r-lg: 24px;  --r-xl: 32px;
-    --shadow-sm: 0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
-    --shadow-md: 0 4px 12px rgba(34,28,16,.10), 0 20px 44px rgba(34,28,16,.12);
-    --shadow-lg: 0 10px 30px rgba(34,28,16,.14), 0 40px 80px rgba(34,28,16,.18);
-    --ease: cubic-bezier(.32,.72,0,1);
-    --spark: var(--gold);
-  }
+  /* Brand tokens now come from brand.css (linked above). They were inlined here as a
+     31-token copy; 30 were byte-identical and the 31st, --ink-3, had drifted LIGHTER
+     (#A89E8E vs the brand #736958), which weakened contrast on every muted line.
+     MARKETING-AUDIT-2026-08-05. */
 
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -260,7 +228,7 @@
   <div class="wrap">
     <a href="#" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
     <div class="links">
-      <a href="#how">How it works</a><a href="why.html">Why</a><a href="#mission">For the Church</a><a href="features.html">Features</a><a href="downloads.html">Downloads</a><a href="about.html">About</a><a href="help.html">Help</a>
+      <a href="#how">How it works</a><a href="why.html">Why</a><a href="#mission">For the Church</a><a href="features.html">Features</a><a href="downloads.html">Downloads</a><a href="welcome-churches.html">For churches</a><a href="help.html">Help</a>
     </div>
     <div class="spacer"></div>
     <div class="nav-cta">
@@ -529,7 +497,7 @@
   <div class="wrap">
     <a href="#" class="wm"><svg class="halo" style="font-size:30px;color:var(--paper);--spark:var(--gold)"><use href="#to-halo" /></svg><span>Trinity<span class="one">One</span></span></a>
     <p>A church home of your own — Bible, prayer, chat, and care, all in one place.</p>
-    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="why.html" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="#mission" style="color:var(--paper);text-decoration:none;opacity:.85">For the Church</a><a href="features.html" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="downloads.html" style="color:var(--paper);text-decoration:none;opacity:.85">Downloads</a><a href="about.html" style="color:var(--paper);text-decoration:none;opacity:.85">About</a><a href="help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a><a href="welcome-churches.html" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
+    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="why.html" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="#mission" style="color:var(--paper);text-decoration:none;opacity:.85">For the Church</a><a href="features.html" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="downloads.html" style="color:var(--paper);text-decoration:none;opacity:.85">Downloads</a><a href="help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a><a href="welcome-churches.html" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
     <div class="copy">© 2026 TrinityOne · Made for the Church.</div>
   </div>
 </footer>

@@ -33,6 +33,14 @@
   .wm-sm .one { color: var(--clay); }
   .nav-back { font-weight: 600; font-size: 14.5px; color: var(--ink-2); text-decoration: none; }
   .nav-back:hover { color: var(--ink); }
+  /* MARKETING-AUDIT-2026-08-05: this page had a 2-link nav ("← Overview / Get the app") and no .links rule,
+     which is half of why the site grew orphans — a page you can land on with no way onward. Same rule as
+     welcome/why/downloads/help so the six surviving pages navigate identically. */
+  nav .links { display: flex; gap: 26px; margin-left: 20px; }
+  nav .links a { font-weight: 600; font-size: 14.5px; color: var(--ink-2); text-decoration: none; white-space: nowrap; transition: color .15s; }
+  nav .links a:hover { color: var(--ink); }
+  nav .links a.is-here { color: var(--clay-ink); }
+  @media (max-width: 820px) { nav .links { display: none; } }   /* same breakpoint as welcome/why/downloads */
 
   /* sticky section nav */
   .secnav { position: sticky; top: 72px; z-index: 40; background: color-mix(in oklab, var(--paper) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line-2); }
@@ -128,8 +136,10 @@
 <nav class="top">
   <div class="wrap">
     <a href="/" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span>Trinity<span class="one">One</span></span></a>
+    <div class="links">
+      <a href="/#how">How it works</a><a href="why.html">Why</a><a href="/#mission">For the Church</a><a href="features.html" class="is-here">Features</a><a href="downloads.html">Downloads</a><a href="welcome-churches.html">For churches</a><a href="help.html">Help</a>
+    </div>
     <div class="spacer"></div>
-    <a href="/" class="nav-back">&larr; Overview</a>
     <a href="downloads.html" class="to-btn" style="padding:11px 20px;font-size:14px">Get the app</a>
   </div>
 </nav>
@@ -462,7 +472,11 @@
   <div style="text-align:center;border-top:1px solid var(--line-2);padding:44px 0 8px">
     <span class="soon-pill">On the roadmap · after the pilot</span>
     <h3 style="font-family:var(--font-display);font-weight:800;font-size:24px;margin:16px 0 8px">Where we're heading next</h3>
-    <p style="margin:0 auto;max-width:580px;color:var(--ink-3);font-size:15px;line-height:1.65">Once the pilot has settled we're building <b>giving</b> straight from your own wallet, <b>a way for a church to give to those in need</b>, links with local <b>care charities</b>, and <b>offline gathering</b> when the internet is down. First we get the heart of it right &mdash; then, in time, the rest.</p>
+    <!-- MARKETING-AUDIT-2026-08-05: roadmap.html (13 unbuilt entries, one inbound link) is gone. Its two
+         entries worth keeping are folded in here. Keykeeper keeps its honest caveat verbatim — a roadmap that
+         tells you when you DON'T need something is the reason to believe the rest of it. -->
+    <p style="margin:0 auto;max-width:580px;color:var(--ink-3);font-size:15px;line-height:1.65">Once the pilot has settled we're building <b>giving</b> straight from your own wallet — sent over the Lightning Network with near-zero fees, landing with the church and no card processor taking a cut — plus <b>a way for a church to give to those in need</b>, links with local <b>care charities</b>, and <b>offline gathering</b> when the internet is down. First we get the heart of it right &mdash; then, in time, the rest.</p>
+    <p style="margin:14px auto 0;max-width:580px;color:var(--ink-3);font-size:15px;line-height:1.65">Later, <b>Keykeeper</b> will hold a steward's church key on a device of its own, so the everyday app only ever receives signatures and never the secret itself. Honestly, though: for a small church the PIN lock already covers the everyday risks. Keykeeper is for when the stakes rise — real giving, larger congregations, or the security-conscious.</p>
   </div>
 
 </main>
