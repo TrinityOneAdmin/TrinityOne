@@ -83,6 +83,32 @@ test('marketing does not claim messages are encrypted while groups default to pl
     'features.html still lists "Group rooms and private, encrypted messages" — the group rooms are not encrypted');
 });
 
+// MARKETING-AUDIT-2026-08-05 D5. features.html sold "Reminders reach you even with the app closed" as a plain
+// tick, unqualified. It is true on Android — Capacitor LocalNotifications hands the schedule to the OS, which
+// fires it whether or not the app is running. On web it is a `setTimeout` "while this tab is alive"
+// (app/reminders.jsx), which dies with the tab. And there is no iOS app: downloads.html routes iPhone users to
+// "Open in your browser", so for every iPhone member the sentence was simply false — on the feature whose whole
+// value is that it reaches you when you are NOT looking. A rota reminder that silently never arrives is worse
+// than none, because they stopped checking.
+test('the reminders claim is qualified to the platform that can keep it', () => {
+  const REM = code(read('app/reminders.jsx'));
+  // The code fact first, so this test dies honestly the day web/iOS gets real background delivery. Anchored on
+  // EXECUTABLE code, not the comment that describes it: code() strips comments, so matching the explanation
+  // would assert against text this very helper deletes — and would then fail for a reason it is not testing.
+  assert.match(REM, /webTimers\[id\] = setTimeout\(/,
+    'the web reminder path is no longer a tab-lifetime setTimeout — if it can now deliver with the app ' +
+    'closed, the unqualified claim becomes true and may return');
+  assert.match(REM, /LN\.schedule\(/,
+    'native no longer schedules OS notifications, so even the Android half of the claim needs re-checking');
+  assert.doesNotMatch(code(FEATURES), /Reminders reach you even with the app closed/,
+    'features.html still promises reminders "even with the app closed" without naming Android. On web and ' +
+    'iOS that is a setTimeout on a live tab — and the site sends iPhone users to the browser, so those ' +
+    'members are being promised the one thing this feature cannot do for them.');
+  // Over-correction check: the capability is real on Android and should still be sold.
+  assert.match(code(FEATURES), /On Android, reminders reach you with the app closed/,
+    'the reminders capability has been dropped entirely rather than qualified — it genuinely works on Android');
+});
+
 test('the waiting-for-approval screen does not tell a member to close the app', () => {
   // AUDIT-2026-07-30 U3. The code facts, asserted first so this test dies honestly if push ever ships:
   const REM = read('app/reminders.jsx');
