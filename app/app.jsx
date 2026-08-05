@@ -1896,7 +1896,7 @@ function App() {
         {/* Front-door PIN gate: over the whole app on open when a PIN is set and this session isn't unlocked.
             Not during the splash or first-run onboarding (there's no PIN yet then). */}
         {!showSplash && !showOnboarding && commLocked && !gateEscaped
-          ? <PinUnlockGate onUnlocked={() => { setCommLocked(false); setGateEscaped(false); }} onReadBible={() => setGateEscaped(true)} /> : null}
+          ? <PinUnlockGate onUnlocked={(r) => { setCommLocked(false); setGateEscaped(false); if (r && r.rememberFailed) ctx.toast('Unlocked — but this phone couldn’t save “stay open”, so it will ask for your PIN next time.'); }} onReadBible={() => setGateEscaped(true)} /> : null}
         {/* "Read the Bible without unlocking" leaves the app running with NO identity — which is the state
             that looked completely normal and made the missing gate invisible for months. Say so, permanently,
             and keep the way back one tap away. An empty church and a broken one must never look the same. */}

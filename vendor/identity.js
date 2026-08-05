@@ -12008,6 +12008,50 @@ zoo`.split("\n"));
     }
     await secureRemoveEnc();
   }
+  var REMEMBER_KEY = "trinityone.nostr.remember";
+  var REMEMBER_DAYS = 30;
+  var nowSec = () => Math.floor(Date.now() / 1e3);
+  async function rememberRead() {
+    if (!isNative()) return null;
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      const s = await SecureStorage.get(REMEMBER_KEY);
+      if (!s) return null;
+      const o = JSON.parse(String(s));
+      if (!o || typeof o.m !== "string" || !o.m || !(o.until > 0)) return null;
+      if (o.until <= nowSec()) {
+        await rememberClear();
+        return null;
+      }
+      return o;
+    } catch (e) {
+      console.warn("[identity] remember read failed", e);
+      return null;
+    }
+  }
+  async function rememberWrite(m, until) {
+    if (!isNative()) return false;
+    const payload = JSON.stringify({ m, until });
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      await SecureStorage.set(REMEMBER_KEY, payload);
+      const v = await SecureStorage.get(REMEMBER_KEY);
+      if (v == null || String(v) !== payload) return false;
+      return true;
+    } catch (e) {
+      console.warn("[identity] remember write failed", e);
+      return false;
+    }
+  }
+  async function rememberClear() {
+    if (!isNative()) return;
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      await SecureStorage.remove(REMEMBER_KEY);
+    } catch (e) {
+      console.warn("[identity] remember clear failed", e);
+    }
+  }
   async function hasOrphanEncBlob() {
     try {
       const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
@@ -12120,6 +12164,12 @@ zoo`.split("\n"));
   }
   async function init() {
     if (hasEnc()) {
+      const r = await rememberRead();
+      if (r && r.until > nowSec()) {
+        sessionMnemonic = r.m;
+        apply(deriveProfile(r.m), { ephemeral: false });
+        return;
+      }
       applyLocked();
       return;
     }
@@ -12164,6 +12214,7 @@ zoo`.split("\n"));
     async regenerate() {
       const mnemonic = generateSeedWords();
       await clearEnc();
+      await rememberClear();
       sessionMnemonic = null;
       await secureSet(mnemonic);
       apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -12389,16 +12440,42 @@ zoo`.split("\n"));
       const saved = await secureSet(m);
       if (!saved) return false;
       await clearEnc();
+      await rememberClear();
       sessionMnemonic = null;
       window.TrinityIdentity.locked = false;
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
       return true;
+    },
+    // ── "Remember me on this device" (30 days). See the block by REMEMBER_KEY for what it trades. ──
+    rememberDays: REMEMBER_DAYS,
+    // Offer it only where it is honest to: native, and only once a PIN actually exists to be skipped.
+    canRemember() {
+      return isNative() && hasEnc();
+    },
+    // Called AFTER a successful unlock, only when the member ticked the box. Reads the seed from this session
+    // rather than taking it as an argument, so there is no way to remember a key that was never unlocked.
+    async rememberDevice() {
+      if (!isNative() || !hasEnc() || !sessionMnemonic) return false;
+      return rememberWrite(sessionMnemonic, nowSec() + REMEMBER_DAYS * 86400);
+    },
+    // Turning it off must clear BOTH the stored seed and its expiry — they live in one record, so this does.
+    // Does NOT lock the current session: the member is looking at the app, and throwing them out for changing
+    // a preference would be its own bug. The next launch will ask for the PIN.
+    async forgetDevice() {
+      await rememberClear();
+      return true;
+    },
+    // For the profile screen: 0 when not remembered, else the unix second it lapses.
+    async rememberedUntil() {
+      const r = await rememberRead();
+      return r && r.until > nowSec() ? r.until : 0;
     },
     // Re-lock this session WITHOUT removing the PIN (forget the decrypted seed). Community becomes
     // unreachable until unlock() is called again.
     lock() {
       if (!hasEnc()) return false;
       sessionMnemonic = null;
+      rememberClear();
       window.TrinityIdentity.locked = true;
       try {
         if (window.Fellowship && window.Fellowship.clearCommunityCache) window.Fellowship.clearCommunityCache();

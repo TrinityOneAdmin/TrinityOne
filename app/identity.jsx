@@ -767,6 +767,15 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
   const [err, setErr] = useId('');
   const [busy, setBusy] = useId(false);
   const [forgot, setForgot] = useId(false);
+  // "Remember me on this device", 30 days. OFF by default and never persisted as a default: this is a decision
+  // about who can open the member's church, and it must be taken deliberately each time, not inherited from
+  // the last time they were in a hurry. Offered only where it is honest — canRemember() is native-and-a-PIN-
+  // exists, because on web the seed would live in localStorage rather than a hardware store.
+  const [remember, setRemember] = useId(false);
+  const [canRemember, setCanRemember] = useId(false);
+  useIdE(() => {
+    try { const ID = window.TrinityIdentity; setCanRemember(!!(ID && ID.canRemember && ID.canRemember())); } catch (e) {}
+  }, []);
   // A forgotten PIN must NEVER be a dead end. TrinityIdentity.importMnemonic clears the community-PIN lock and
   // re-seats the seed — the engine says so itself: "RECOVERY ALWAYS WINS: importing clears any community-PIN
   // lock, so a forgotten PIN can NEVER trap the key". This screen used to say the opposite ("reinstall the app
@@ -823,7 +832,19 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
     if (ok) {
       // A member who mistyped four times and then got it right must not stay one miss from a lockout.
       try { localStorage.removeItem(GUARD_KEY); } catch (e) {}
-      try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {} onUnlocked && onUnlocked();
+      // Remember AFTER the unlock, and only if they asked. rememberDevice() reads the seed from the session
+      // rather than taking it, so there is no path that remembers a key which was never actually unlocked.
+      // Its result is checked: a hardware store that silently no-ops the write would otherwise leave the
+      // member believing the phone stays open, until in 30 days it asks for a PIN they stopped typing.
+      let rememberFailed = false;
+      if (remember && ID && ID.rememberDevice) {
+        try { rememberFailed = !(await ID.rememberDevice()); } catch (e) { rememberFailed = true; }
+      }
+      // Handed UP rather than shown here: this screen unmounts the instant onUnlocked fires, so an error set
+      // on it would be rendered to nobody. The member IS unlocked — the only thing that failed is a
+      // preference — so we let them through and let the app say so where it can be read.
+      try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {}
+      onUnlocked && onUnlocked({ rememberFailed });
       return;
     }
     // Four free tries — a member mistyping is not an attacker. Then 30s, doubling, capped at 1h. Same numbers as
@@ -844,6 +865,22 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
       <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
         placeholder="PIN" style={{ width: 'min(320px, 100%)', boxSizing: 'border-box', height: 54, textAlign: 'center', letterSpacing: '.3em', border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', fontSize: 20, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
+      {/* The copy is half the feature. "Stay signed in" would describe the convenience and hide the trade, and
+          this is the exact screen where the member is deciding that trade: the PIN protects against somebody
+          HOLDING the phone, so skipping it means anyone who can unlock the phone can open the church. There is
+          no wording that keeps the protection and skips the PIN, because the PIN is the protection. 30 days is
+          stated because the owner chose a bounded window over "never ask again" — a phone that is lost and not
+          missed quickly re-locks on its own. */}
+      {canRemember ? (
+        <label style={{ width: 'min(320px, 100%)', display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 18, cursor: 'pointer' }}>
+          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)}
+            style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
+          <span style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink-2)', textAlign: 'left' }}>
+            Stay open on this phone for <b>30 days</b>.<br />
+            <span style={{ color: 'var(--ink-3)' }}>Anyone who can unlock this phone will be able to open your church.</span>
+          </span>
+        </label>
+      ) : null}
       {/* U4: the button must SHOW the cooldown. Leaving it enabled during a lockout means tapping it does
           nothing visible — the silent-failure class this codebase keeps being bitten by — so it counts down. */}
       <button onClick={tryUnlock} disabled={!pin || busy || waitLeft > 0} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy || waitLeft > 0) ? 'default' : 'pointer', background: (!pin || busy || waitLeft > 0) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy || waitLeft > 0) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{waitLeft > 0 ? 'Wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
