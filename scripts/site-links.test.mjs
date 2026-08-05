@@ -104,3 +104,21 @@ test('every page in the nav can navigate onward', () => {
       `nowhere to go, which is exactly how this site accumulated five orphans.`);
   }
 });
+
+// THE INVITE MUST REACH THE APP, ON EVERY HOST THAT SERVES IT. Journey audit 2026-08-05.
+//
+// Measured live: both domains serve the whole repo and differ in one place — trinityone.church/ is
+// welcome.html (the brochure) while app.trinityone.church/ is the app. joinUrl() builds the invite from
+// location.origin whenever it is public, and trinityone.church/steward.html serves the console — so a steward
+// working from the marketing domain hands out an invite whose "Open TrinityOne now" button pointed at
+// `/?follow=…` and landed the member on the sales page, church silently dropped. The page said "Join <church>"
+// and "Hi, <name>" first, so it looked like it had worked.
+test('the join landing sends people to the app, not to whatever "/" happens to be', () => {
+  const js = readFileSync(ROOT + 'join.js', 'utf8').replace(/\/\/[^\n]*/g, '');
+  assert.doesNotMatch(js, /var app = '\/\?follow=/,
+    'join.js opens "/?follow=…". On the marketing domain "/" is welcome.html, so the invite drops the member ' +
+    'on the brochure with no error and no church.');
+  assert.match(js, /var app = 'index\.html\?follow=/,
+    'the join landing must target index.html — the one path that is the app on every host that serves this ' +
+    'page (marketing, app, and any church\'s own relay)');
+});

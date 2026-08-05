@@ -8,7 +8,20 @@
   var APK = './trinityone.apk';   // SECURITY-AUDIT-2026-06-24 L12: relative path so the download resolves on whichever host served the join page (Pages, gateway, or church relay) — not pinned to the dev box's Tailnet hostname.
 
   // the instant path: open the web app with the join context (key minted on-device, name pre-filled, church followed)
-  var app = '/?follow=' + encodeURIComponent(follow);
+  //
+  // `index.html`, NOT `/`. JOURNEY AUDIT 2026-08-05, measured against the live hosts. Both domains serve the
+  // whole repo, and they differ in exactly one place — what `/` resolves to:
+  //     app.trinityone.church/  → the app        trinityone.church/  → welcome.html, the brochure
+  //     app.trinityone.church/index.html → the app   trinityone.church/index.html → the app
+  // joinUrl() builds the invite from `location.origin` whenever that origin is public, and the Steward console
+  // is served from BOTH domains (trinityone.church/steward.html returns the console). So a steward who opens
+  // the console on the marketing domain hands out https://trinityone.church/join?follow=… — and this button
+  // sent the member to https://trinityone.church/?follow=…, which renders the sales page and drops the church
+  // on the floor. It fails the way that costs most: the invite page says "Join <church>" and "Hi, <name>", the
+  // button looks right, and tapping it silently lands them on a brochure with no error and nothing to retry.
+  // index.html is the app on EVERY host by construction — marketing, app, and any church's own relay — which
+  // is the same reasoning the APK path above already relies on.
+  var app = 'index.html?follow=' + encodeURIComponent(follow);
   if (name)  app += '&name=' + encodeURIComponent(name);
   if (relay && /^wss:\/\//i.test(relay)) app += '&relay=' + encodeURIComponent(relay);   // SECURITY-AUDIT-2026-07-06 L9: only forward an ENCRYPTED (wss://) relay from a public join link — never a cleartext/hostile one
 
