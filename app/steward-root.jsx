@@ -646,6 +646,20 @@ function StewardRoot() {
     window.addEventListener('steward-key', f);
     return () => { window.removeEventListener('steward-needs-pin', f); window.removeEventListener('steward-key', f); };
   }, []);
+  // K2. A key adopted from a LEGACY breadcrumb — the bare '1' that pre-dates the direction-aware one — came
+  // from an operation whose direction the device cannot recover. Both an interrupted removal and an
+  // interrupted PIN-set left that breadcrumb, and on the old build they left identical localStorage, so there
+  // is nothing to read that tells them apart. The engine keeps the key, which is the only safe half (a
+  // deleted key is a church that no longer exists; an orphaned ciphertext is an at-rest exposure the next
+  // removal clears). But if the interrupted operation WAS a removal, the steward has their church back and
+  // was told nothing. They know which it was even though the console does not — so ask them.
+  const [resumed, setResumed] = useSt(() => !!window.Steward.keyResumedUnknown);
+  useStE(() => {
+    const f = () => setResumed(!!window.Steward.keyResumedUnknown);
+    window.addEventListener('steward-key-resumed', f);
+    return () => window.removeEventListener('steward-key-resumed', f);
+  }, []);
+
   // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
   useStE(() => {
     if (!ks.has || !window.Steward.hasPinLock || !window.Steward.hasPinLock()) return;
@@ -659,6 +673,16 @@ function StewardRoot() {
   if (!showcase) {
     return (
       <div className="stew-root" style={{ height: '100%' }}>
+        {resumed && ks.has && !ks.locked && !needsPin ? (
+          <div role="status" style={{ padding: '10px 14px', background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 32%, transparent)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <span style={{ flex: 1 }}>
+              This device finished an interrupted change to its stored church key, and cannot tell which change it was.
+              <b> If you meant to remove this church from this device, do it again</b> — Settings → Security → Remove this church. Otherwise nothing is wrong and you can dismiss this.
+            </span>
+            <button onClick={() => { try { window.Steward.keyResumedUnknown = false; } catch (e) {} setResumed(false); }}
+              style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
+          </div>
+        ) : null}
         {ks.locked ? <StewardUnlock />
           : !ks.has ? <StewardWelcome />
           : needsPin ? <StewardForcedPin />

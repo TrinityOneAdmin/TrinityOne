@@ -1195,7 +1195,27 @@ async function encBlobRemoveResume() {
       // Only adopt something that actually looks like a key. Anything else is a half-written or corrupted
       // value, and marking it valid would reject the steward's correct PIN for ever — leave it, claim nothing,
       // and let unlock() report honestly that this device has no key.
-      if (v != null && _looksLikeKeyBlob(String(v))) { _encIntent = { have: String(v) }; lsSet(ENC_LS, JSON.stringify({ native: 1 })); }
+      if (v != null && _looksLikeKeyBlob(String(v))) {
+        _encIntent = { have: String(v) };
+        lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+        // K2, and the resolution is NOT the one the finding proposed. A LEGACY breadcrumb (the bare '1' that
+        // pre-dates PENDING_WRITE/PENDING_REMOVE) carries no direction, and on the old build BOTH an
+        // interrupted removal and an interrupted write left it. The finding suggested resolving legacy by the
+        // marker's absence instead. Measured against main: that does not discriminate. encBlobRemove() clears
+        // the marker up front, and encBlobWrite() on native does not set it until _encConverge() runs AFTER
+        // the store write — so an interrupted write leaves marker-absent + breadcrumb, byte-identical to an
+        // interrupted removal. Treating absence as "removal" would delete the key in exactly the case this
+        // branch was cut to fix.
+        //
+        // So the direction stays unknowable and we keep the safe half: never delete on a guess. What was
+        // wrong was doing it SILENTLY — a steward who asked to remove this church finds it back, PIN-locked,
+        // with nothing said. They know the direction even though the device cannot, so tell them and let them
+        // finish the job. Cleared by removeKey(), and by any later settled state.
+        if (pending !== PENDING_WRITE) {
+          window.Steward.keyResumedUnknown = true;
+          try { window.dispatchEvent(new CustomEvent('steward-key-resumed')); } catch (e) {}
+        }
+      }
     } catch (e) { console.warn('[steward] could not settle an interrupted key write', e); return false; }
     try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
     return true;
@@ -1830,16 +1850,26 @@ window.Steward = {
     } catch { return false; }
   },
   // drop the PIN. SECURITY-AUDIT-2026-06-25 Critical-2: NO LONGER writes the plaintext seed back to
-  // localStorage — instead removes the encrypted form and sets needsPin=true. The seed stays in
-  // memory (currentMnemonic); the UI immediately renders the forced PIN modal, requiring the
-  // steward to set a new PIN before any further action. Net effect: there is NO post-removeLock
-  // state where a plaintext seed exists on disk, even transiently.
+  // localStorage — instead sets needsPin=true. The seed stays in memory (currentMnemonic); the UI immediately
+  // renders the forced PIN modal, requiring the steward to set a new PIN before any further action. Net
+  // effect: there is NO post-removeLock state where a plaintext seed exists on disk, even transiently.
+  //
+  // K3, and the third appearance of one shape. This used to `await encBlobRemove()` here — clearing
+  // localStorage AND the hardware store — which left `currentMnemonic` as the only copy of the church key in
+  // existence until the steward finished typing a new PIN. cd67c7a fixed the identical order in restoreKey;
+  // this window is worse, because restoreKey's is however long the modal takes while this one belongs to a
+  // steward who has just been told the lock is gone, with nothing forcing them to finish. An idle auto-lock, a
+  // backgrounded WebView or a crash in that window destroyed the church outright.
+  //
+  // Nothing needed the eager removal: setPin() → encBlobWrite() writes the SAME slot, so completing the flow
+  // overwrites the old ciphertext anyway and S6's at-rest concern is still met. An ABANDONED removal now
+  // leaves the previous key intact and openable with the OLD PIN — the steward keeps their church instead of
+  // losing it. The blob is ciphertext in both cases; nothing is ever kept unlocked.
   async removeLock(pin) {
     if (!currentMnemonic) return false;
     if (lsGet(ENC_LS) && !(await window.Steward.verifyPin(pin))) return false;   // wrong/empty PIN → refuse
-    await encBlobRemove();   // S6: localStorage AND the hardware store, or the next boot finds an orphan blob
     window.Steward.locked = false;
-    _setNeedsPin(true);   // force an immediate re-PIN
+    _setNeedsPin(true);   // force an immediate re-PIN, which overwrites the stored blob
     return true;
   },
   createKey() {
@@ -2135,6 +2165,7 @@ window.Steward = {
   // synchronously first, so every existing synchronous caller behaves exactly as before.
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
+    window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;

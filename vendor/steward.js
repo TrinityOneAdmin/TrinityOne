@@ -15438,6 +15438,13 @@ zoo`.split("\n");
         if (v != null && _looksLikeKeyBlob(String(v))) {
           _encIntent = { have: String(v) };
           lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+          if (pending !== PENDING_WRITE) {
+            window.Steward.keyResumedUnknown = true;
+            try {
+              window.dispatchEvent(new CustomEvent("steward-key-resumed"));
+            } catch (e) {
+            }
+          }
         }
       } catch (e) {
         console.warn("[steward] could not settle an interrupted key write", e);
@@ -15889,14 +15896,24 @@ zoo`.split("\n");
       }
     },
     // drop the PIN. SECURITY-AUDIT-2026-06-25 Critical-2: NO LONGER writes the plaintext seed back to
-    // localStorage — instead removes the encrypted form and sets needsPin=true. The seed stays in
-    // memory (currentMnemonic); the UI immediately renders the forced PIN modal, requiring the
-    // steward to set a new PIN before any further action. Net effect: there is NO post-removeLock
-    // state where a plaintext seed exists on disk, even transiently.
+    // localStorage — instead sets needsPin=true. The seed stays in memory (currentMnemonic); the UI immediately
+    // renders the forced PIN modal, requiring the steward to set a new PIN before any further action. Net
+    // effect: there is NO post-removeLock state where a plaintext seed exists on disk, even transiently.
+    //
+    // K3, and the third appearance of one shape. This used to `await encBlobRemove()` here — clearing
+    // localStorage AND the hardware store — which left `currentMnemonic` as the only copy of the church key in
+    // existence until the steward finished typing a new PIN. cd67c7a fixed the identical order in restoreKey;
+    // this window is worse, because restoreKey's is however long the modal takes while this one belongs to a
+    // steward who has just been told the lock is gone, with nothing forcing them to finish. An idle auto-lock, a
+    // backgrounded WebView or a crash in that window destroyed the church outright.
+    //
+    // Nothing needed the eager removal: setPin() → encBlobWrite() writes the SAME slot, so completing the flow
+    // overwrites the old ciphertext anyway and S6's at-rest concern is still met. An ABANDONED removal now
+    // leaves the previous key intact and openable with the OLD PIN — the steward keeps their church instead of
+    // losing it. The blob is ciphertext in both cases; nothing is ever kept unlocked.
     async removeLock(pin) {
       if (!currentMnemonic) return false;
       if (lsGet(ENC_LS) && !await window.Steward.verifyPin(pin)) return false;
-      await encBlobRemove();
       window.Steward.locked = false;
       _setNeedsPin(true);
       return true;
@@ -16275,6 +16292,7 @@ zoo`.split("\n");
         localStorage.removeItem(KEY_LS);
       } catch {
       }
+      window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
       sk = null;
       pub = null;

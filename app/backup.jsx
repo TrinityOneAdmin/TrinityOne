@@ -117,7 +117,14 @@
   // the `identity` field, which is exactly what the confirm already guards.
   function restoreLocal(map, allow) {
     const ok = (k) => (allow || []).some(p => String(k).startsWith(p))
-      && !/^trinityone\.nostr\.mnemonic/.test(k);   // never the seed, whatever the prefix list says
+      && !/^trinityone\.nostr\.mnemonic/.test(k)    // never the seed, whatever the prefix list says
+      // …and never a DEVICE-BOUND key wrap. church-key.enc is bound to the machine that wrote it: on web it is
+      // ciphertext only that device's PIN opens, and on native it is merely the MARKER saying the real blob is
+      // in this device's hardware store. Restoring another device's copy leaves the steward on "Console locked"
+      // holding a PIN that cannot work, or pointing at a Keystore slot that was never written here. The
+      // previous code wrote it and then deleted it a line later, which also took THIS device's marker with it —
+      // finding K1. Excluding it here is the same rule as the seed, and it fixes old backup files too.
+      && !/\.church-key\.enc$/.test(k);
     let skipped = 0;
     Object.keys(map || {}).forEach(k => {
       if (!ok(k)) { skipped++; return; }
@@ -149,11 +156,20 @@
   function applySteward(obj) {
     if (obj.kind !== 'steward') throw new Error(obj.kind ? ('That’s a ' + obj.kind + ' backup, not a church backup.') : 'That file doesn’t say what it is, so it isn’t safe to restore.');
     if (obj.churchKey && window.Steward && window.Steward.restoreKey) window.Steward.restoreKey(obj.churchKey);
-    // NOT the device-bound wrap. restoreKey deliberately clears it; putting the OLD device's blob back over
-    // the top leaves the console locked behind a passphrase that machine can never unwrap — the steward lands
-    // on "Console locked" holding a correct PIN that will never work.
+    // NOT the device-bound wrap — restoreLocal excludes it outright, so the OLD device's blob never lands here
+    // and this device's own marker is never disturbed.
+    //
+    // K1. This used to write the backup's copy and then `removeItem` it on the next line. That removal was
+    // unconditional, so it deleted THIS device's marker whether or not the file carried one — and on native the
+    // marker is all that points at the hardware store, where the real ciphertext lives untouched. hasEnc() then
+    // read false over a key that was still physically present, and a steward who closed the console before
+    // setting the new PIN reopened it to "Set up a new church".
+    //
+    // Nothing needs to be cleared here. restoreKey keeps the seed in memory and sets needsPin; the forced-PIN
+    // modal's setPin() overwrites the same slot in both stores. An ABANDONED file restore therefore leaves the
+    // previous key intact and openable, which is the same rule cd67c7a established for the phrase path — the
+    // steward keeps the church they had instead of losing both.
     restoreLocal(obj.local, STEWARD_PREFIXES.concat([]).filter(Boolean));
-    try { localStorage.removeItem('trinityone.steward.church-key.enc'); } catch (e) {}
   }
 
   // save the encrypted text. mode 'local' writes a file straight onto the device (no share sheet);

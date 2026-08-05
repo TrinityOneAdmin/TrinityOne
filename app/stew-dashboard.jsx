@@ -5047,7 +5047,11 @@ function PinModal({ action, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={remove ? 'Remove console PIN' : change ? 'Change console PIN' : 'Lock with a PIN'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 400, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 4 }}>{remove ? 'Remove console PIN' : change ? 'Change console PIN' : 'Lock with a PIN'}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16 }}>{remove
-          ? 'Enter your current PIN to remove the lock. The stored key is DELETED from this device — nothing is kept unlocked — and you’ll be asked to set a new PIN straight away. Stay on that screen: until you do, the church key is only held in memory.'
+          // K3: this said the stored key "is DELETED from this device" and is "only held in memory" until a
+          // new PIN is set. That was true, and it was the danger — removeLock no longer destroys the key
+          // first. Saying so still matters, because it tells a steward whose console closes mid-way that
+          // their old PIN is the way back in, rather than leaving them thinking the church is gone.
+          ? 'Enter your current PIN to remove the lock. Nothing is kept unlocked, and you’ll be asked to set a new PIN straight away. If you close the console before you do, your current PIN still works — so the church key is never left with nowhere to live.'
           : 'Encrypts the church key on this device. You’ll enter it to open the console; it auto-locks after 10 minutes idle. Don’t forget it — without it (or the 12-word phrase) this device can’t open the church.'}</div>
         <input type="password" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && remove) save(); }} placeholder={remove ? 'Current PIN' : 'New PIN or passphrase'} autoComplete="off" style={inp} />
         {!remove ? <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" autoComplete="off" style={inp} /> : null}
