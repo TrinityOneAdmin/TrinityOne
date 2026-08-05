@@ -15382,26 +15382,62 @@ zoo`.split("\n");
     //
     // The old key stays ON the safeguarding lists rather than being removed: that half fails closed, and a key
     // nobody holds costs nothing. AUDIT 2026-08-02.
+    // EVERY WRITE HERE IS CHECKED, and the order is chosen so that a refusal leaves a state the steward can
+    // still act on. HANDOFF-2026-08-05 \u00a74.2: this awaited seven church writes and inspected none of them.
+    // publish() does not throw on refusal \u2014 it returns `false` \u2014 so a console that was offline, or a relay that
+    // refused every doc, ran straight through to a report saying it had all happened.
+    //
+    // THE ORDER IS THE FIX, not just the checking. reseatOld filters the old key out of the roster the moment
+    // the VOUCH lands, and the roster row is where the Block control lives. So anything that must remain
+    // retryable has to happen while that row is still on screen:
+    //   1. the stolen-phone block   \u2014 abort if refused; the old row is still there, so the steward can retry
+    //   2. the safeguarding lists   \u2014 abort if refused; a key nobody has admitted yet costs nothing, and the
+    //                                 alternative is a child admitted to the church whom no list calls a child
+    //   3. the vouch, then admit    \u2014 the pre-existing rule, which only ever worked if the result was read
+    //   4. the clearance re-seal    \u2014 reported, never fatal: the seat HAS moved by here, the relay enforces
+    //                                 from the lists written in (2), and this re-runs safely by itself
+    // Re-running the whole thing after an abort is idempotent (every setter de-dupes through a Set).
+    // A replaceable write refused on a SAME-SECOND TIE is not something the steward did wrong — it is the clock.
+    // event-store breaks a created_at tie by lowest event id ("rt === et && r.id < e.id → have-newer"), so of any
+    // two writes to the same doc inside one second, roughly half lose. Every setter below stamps its own now(),
+    // so waiting past the second boundary and writing again produces a strictly-later created_at that cannot
+    // tie, and the retry is decisive. ONE retry: a second refusal is a real refusal (offline, or genuinely
+    // rejected), and must still surface.
+    //
+    // This is HANDOFF-2026-08-05 §6's "same-second replaceable race", which is why reseat-safeguarding fails
+    // ~2-in-5 on unmodified code. It silently lost writes before; checking the results here turned it into a
+    // visible refusal, which is honest but still wrong — the write should simply succeed. Scoped to the re-seat
+    // path deliberately: publish() has 77 call sites and this branch is not the place to change all of them.
+    //
+    // Kept as a LOCAL closure rather than a sibling method: two harnesses lift reseatMember out of the shipped
+    // bundle on its own and run it, so a helper reached through window.Steward is a helper they do not have.
     async reseatMember(oldPub, newPub, o) {
       o = o || {};
+      const w = async (fn) => {
+        const first = await fn();
+        if (first) return first;
+        await new Promise((r) => setTimeout(r, 1100));
+        return fn();
+      };
       const oldH = (toPubHex(oldPub) || oldPub || "").toLowerCase();
       const newH = (toPubHex(newPub) || newPub || "").toLowerCase();
       if (!/^[0-9a-f]{64}$/.test(oldH) || !/^[0-9a-f]{64}$/.test(newH)) throw new Error("That doesn\u2019t look like a member code.");
       if (oldH === newH) throw new Error("That is the same key they already have.");
-      const pairs = [...(o.reseats || []).filter((p) => p && p.new !== newH), { old: oldH, new: newH, name: o.name || "", at: now() }];
-      await window.Steward.setReseats(pairs);
-      await window.Steward.setAdmitted([.../* @__PURE__ */ new Set([...o.admitted || [], newH])]);
       const low = (a) => (a || []).map((x) => String(x || "").toLowerCase()).filter(Boolean);
+      if (o.blockOld) {
+        const blocked = await w(() => window.Steward.setBlocked([.../* @__PURE__ */ new Set([...low(o.blocked), oldH])]));
+        if (!blocked) throw new Error("Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.");
+      }
       const mins = low(o.minors), appr = low(o.approved);
       const wasMinor = mins.indexOf(oldH) !== -1, wasCleared = appr.indexOf(oldH) !== -1;
       let nextMins = mins, nextAppr = appr;
       if (wasMinor && mins.indexOf(newH) === -1) {
         nextMins = [...mins, newH];
-        await window.Steward.setMinors(nextMins);
+        if (!await w(() => window.Steward.setMinors(nextMins))) throw new Error("Couldn\u2019t save the child marking, so nothing was changed. Check your connection and try again \u2014 reconnecting them without it would leave them unprotected.");
       }
       if (wasCleared && appr.indexOf(newH) === -1) {
         nextAppr = [...appr, newH];
-        await window.Steward.setApproved(nextAppr);
+        if (!await w(() => window.Steward.setApproved(nextAppr))) throw new Error("Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.");
       }
       const g = o.guardians || {};
       let nextG = null;
@@ -15416,10 +15452,26 @@ zoo`.split("\n");
           nextG[childK] = [.../* @__PURE__ */ new Set([...low(nextG[childK] || parents), newH])];
         }
       }
-      if (nextG) await window.Steward.setGuardians(nextG);
-      await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g);
-      if (o.blockOld) await window.Steward.setBlocked([.../* @__PURE__ */ new Set([...low(o.blocked), oldH])]);
-      return { minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG, blockedOld: !!o.blockOld };
+      if (nextG && !await w(() => window.Steward.setGuardians(nextG))) throw new Error("Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.");
+      const pairs = [...(o.reseats || []).filter((p) => p && p.new !== newH), { old: oldH, new: newH, name: o.name || "", at: now() }];
+      if (!await w(() => window.Steward.setReseats(pairs))) throw new Error("Couldn\u2019t record the reconnection, so nothing was changed. Check your connection and try again.");
+      if (!await w(() => window.Steward.setAdmitted([.../* @__PURE__ */ new Set([...o.admitted || [], newH])]))) throw new Error("Recorded the reconnection, but couldn\u2019t let the new phone in. Open Members and approve them, or run this again.");
+      const failed = [];
+      let clr = null;
+      try {
+        clr = await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g);
+      } catch (e) {
+        clr = null;
+      }
+      if (!clr || clr.failed > 0 || clr.unverified) failed.push("clearance");
+      return {
+        minorCarried: wasMinor,
+        clearedCarried: wasCleared,
+        guardiansCarried: !!nextG,
+        blockedOld: !!o.blockOld,
+        // only reachable if the block LANDED — a refusal threw above
+        failed
+      };
     },
     setAdmitted(pubkeys) {
       _requireTrustedView("approved-members list");

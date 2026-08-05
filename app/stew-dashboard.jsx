@@ -3107,6 +3107,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [done, setDone] = React.useState(false);
+  // What the engine says ACTUALLY moved. The screen used to assert the whole list unconditionally, having
+  // discarded this. HANDOFF-2026-08-05 §4.2.
+  const [res, setRes] = React.useState(null);
   const reseats = window.useStewardReseats ? window.useStewardReseats() : [];
   const newPub = window.Steward && window.Steward.parseMemberKey ? window.Steward.parseMemberKey(text) : null;
   const same = newPub && newPub === member;
@@ -3117,11 +3120,14 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
     try {
       // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
       // while the church still showed two of them; this order fails the safer way round.
-      await window.Steward.reseatMember(member, newPub, {
+      // KEEP THE RESULT. Every write in there can be refused without throwing, and this screen makes claims
+      // about all of them — including the stolen-phone block, which it never mentioned at all.
+      const r = await window.Steward.reseatMember(member, newPub, {
         name: realName || '', reseats, admitted: admittedList,
         minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow,
         blocked: blockedNow, blockOld: taken,
       });
+      setRes(r || {});
       setDone(true);
     } catch (e) { setErr((e && e.message) || 'Couldn’t save that — try again.'); }
     setBusy(false);
@@ -3138,12 +3144,28 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             membership is a list of pubkeys on each group document; a re-seat does not rewrite those, so the
             new key is not in them. Telling the steward now costs one sentence; leaving them to find out means
             the member sits outside their own small group wondering why. AUDIT-2026-07-26 CRITICAL 3. */}
+        {/* NAME ONLY WHAT LANDED. Each of these is a separate church write that can be refused without
+            throwing, and this paragraph used to assert all of them from the fact that the call returned.
+            A re-seat that is refused halfway now throws, so reaching this screen means the seat moved — but
+            the clearance re-seal is deliberately non-fatal, so it is the one that still has to be reported. */}
         <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 14px' }}>
-          {isMinor ? <React.Fragment>Their <b>child marking, youth clearance and parent link</b> moved across with
-          them, and their new phone has been told. </React.Fragment> : null}
+          {res && (res.minorCarried || res.clearedCarried || res.guardiansCarried) ? <React.Fragment>Their <b>{[
+            res.minorCarried ? 'child marking' : null,
+            res.clearedCarried ? 'youth clearance' : null,
+            res.guardiansCarried ? 'parent link' : null,
+          ].filter(Boolean).reduce((a, s, i, arr) => i === 0 ? s : (i === arr.length - 1 ? a + ' and ' + s : a + ', ' + s), '')}</b> moved across with
+          them{res.failed && res.failed.includes('clearance') ? ', though their new phone has not confirmed it yet — it should pick it up shortly' : ', and their new phone has been told'}. </React.Fragment> : null}
           One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
           again. Ordinary groups need nothing — they are already back in those.
         </p>
+        {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
+            thief reading the church for ever, and the screen said nothing either way. It can only be true
+            now: a refused block throws before anything else is written. */}
+        {res && res.blockedOld ? (
+          <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-2)', fontWeight: 700, margin: '0 0 14px' }}>
+            Their old phone is <b>blocked</b> — it can no longer read this church.
+          </p>
+        ) : null}
         <button onClick={onClose} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: '10px 14px' }}>Close</button>
       </React.Fragment>) : (<React.Fragment>
         <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '4px 0 10px' }}>
