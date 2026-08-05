@@ -18,6 +18,10 @@ import { SimplePool } from 'nostr-tools/pool';
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
+// Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
+// (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
+import { validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
@@ -770,6 +774,33 @@ function setKey(mnemonic) {
   try { Promise.resolve().then(() => { try { window.Steward.publishRelayList && window.Steward.publishRelayList(); } catch {} }); } catch {}
 }
 
+// Everything in this module that is scoped to ONE church, cleared in one place.
+//
+// Why it exists: this state used to be reset in exactly one path (setActiveIdentity), and everywhere else it
+// survived on the strength of `window.location.reload()` wiping the module. When the reload was removed from
+// the restore routes (2026-08-04) the state carried across a WHOLE-KEY replacement, and the roster effect then
+// republished church A's name/care/media rings as church B's envelopes — replaceable events, so B's originals
+// were overwritten on the relay, B's sealed names and care needs stopped opening for good, and A's keys were
+// handed to B's congregation. The name-key half of that had already happened once (AUDIT-2026-07-27) and was
+// fixed for identity SWITCHING only; the same hole stayed open for key REPLACEMENT.
+//
+// So: one function, called from both. Adding a per-church global without adding it here is the bug.
+function _resetChurchScopedState() {
+  lastProfile = {}; _profileLoaded = false;
+  _clearanceSent.clear();
+  _careRoster = new Set(); _careRosterKnown = false;
+  _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+  _applyNoPhotoList([]);
+  // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
+  // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
+  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
+  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false;
+  // NIP-42 is bound to the key that signed the challenge. These sockets authed as the PREVIOUS church and will
+  // not be re-challenged while they stay open, so _isRelayAuthed() would answer true for a church that has
+  // never proved itself — the exact false-true the comment above it warns "silently destroys a church's keys".
+  _authedRelays.clear();
+}
+
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
 // locked console holds NO usable key until unlocked, so a stolen device / copied localStorage is inert.
 //
@@ -810,8 +841,28 @@ function setKey(mnemonic) {
 const ENC_LS = 'trinityone.steward.church-key.enc';
 // Breadcrumb: a hardware-store removal was started and has not been confirmed finished. See encBlobRemove().
 const ENC_PENDING_LS = 'trinityone.steward.church-key.removing';
+// The breadcrumb records WHICH DIRECTION was unfinished, not merely that something was.
+//
+// It used to be the bare string '1', written by encBlobRemove AND by both failure branches of _encConverge —
+// including failures belonging to a WRITE. On the next boot _encIntent is back to its module default
+// ({have:null}), so encBlobRemoveResume resolved every breadcrumb as a removal and converged toward "no key".
+// A PIN set while the Keystore was slow therefore left the blob in the hardware store, no marker in
+// localStorage, and a breadcrumb — and the next launch DELETED the church key and showed "Set up a new
+// church". Adversarial review 2026-08-04; reachable on a brand-new church too, where the steward may well
+// have skipped the 12-word backup.
+//
+// Legacy '1' is treated as UNKNOWN, never as a removal: an orphaned ciphertext in the Keystore is an at-rest
+// exposure the next removeKey/removeLock will clear, while a deleted key is a church that no longer exists.
+const PENDING_WRITE = 'write';
+const PENDING_REMOVE = 'remove';
 
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
+// Does this look like a church-key blob at all? Used when finishing an INTERRUPTED WRITE, where module state is
+// gone and the only evidence is whatever the hardware store happens to hold. Adopting that unconditionally is
+// not safe: the store may hold a half-written or corrupted value, and writing the marker over it makes
+// localStorage claim a key that will never decrypt — the "correct PIN rejected for ever" state, which is worse
+// than reporting no key. The random-interleaving fuzz caught exactly that on the first version of this guard.
+const _looksLikeKeyBlob = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.ct && o.iv && o.salt); } catch { return false; } };
 // NEVER return the Capacitor plugin object itself from an async function. `Capacitor.Plugins.SecureStorage` is a
 // PROXY: every property access becomes a native call, so when the await machinery probes the returned value for
 // `.then` — which it does for anything a promise resolves to — the proxy forwards `then` to Android. Found on a
@@ -947,7 +998,11 @@ async function encBlobRaw() {
 async function encBlobWrite(str) {
   // INTENT FIRST, synchronously. Everything after this line can be interrupted, hang, or land late. This
   // cannot, which is why every converge pass can trust it.
-  if (_isNative()) _encIntent = { have: str };
+  //
+  // The breadcrumb goes down here too, saying WRITE. _encIntent is module state and does not survive the app
+  // being killed; the breadcrumb does, and without a direction on it the next boot resolved an interrupted
+  // write as a removal and deleted the key. A successful converge clears it.
+  if (_isNative()) { _encIntent = { have: str }; try { lsSet(ENC_PENDING_LS, PENDING_WRITE); } catch {} }
   if (_isNative()) {
     try {
       const { S } = await _secureStore();
@@ -1083,14 +1138,14 @@ function _encConverge() {
         // Did not reach the intent. Keep the breadcrumb so a later pass or boot tries again, and never leave
         // localStorage claiming a key the store does not hold — "no key on this device" is recoverable from
         // the phrase; "correct PIN rejected for ever" is not.
-        try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+        try { lsSet(ENC_PENDING_LS, want ? PENDING_WRITE : PENDING_REMOVE); } catch {}
         if (actual === null) { try { localStorage.removeItem(ENC_LS); } catch {} }
       }
     } catch (e) {
       // Could not reach the store, or a call outran its bound. We know nothing for certain, so change nothing
       // beyond guaranteeing another attempt.
       console.warn('[steward] could not converge the church key', e);
-      try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+      try { lsSet(ENC_PENDING_LS, want ? PENDING_WRITE : PENDING_REMOVE); } catch {}
     }
   };
   _encConverging = (_encConverging || Promise.resolve()).then(run, run);
@@ -1102,7 +1157,7 @@ async function encBlobRemove() {
   // removal is always finishable; the marker is cleared at once so the console stops offering to unlock a
   // church it is forgetting.
   if (_isNative()) _encIntent = { have: null };
-  try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+  try { lsSet(ENC_PENDING_LS, PENDING_REMOVE); } catch {}
   try { localStorage.removeItem(ENC_LS); } catch {}
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return; }
   await _encConverge();
@@ -1110,8 +1165,41 @@ async function encBlobRemove() {
 // Finish an operation that was cut off — by the reload racing it, a hung bridge call, or the app being
 // killed. Safe on every boot: does nothing without the breadcrumb.
 async function encBlobRemoveResume() {
-  if (!lsGet(ENC_PENDING_LS)) return false;
+  const pending = lsGet(ENC_PENDING_LS);
+  if (!pending) return false;
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
+  // A removal is the ONLY direction this function may finish. An interrupted WRITE — and a legacy '1', whose
+  // direction was never recorded — must never be resolved by deleting: converging toward `want = null` when
+  // the steward was in fact saving a key is precisely how a set PIN turned into "Set up a new church" on the
+  // next launch. Instead, adopt whatever the store actually holds. If a blob is there the key survived the
+  // interruption and only the marker is missing, so writing the marker finishes the job honestly; if nothing
+  // is there the write never landed, and there is nothing to finish either way.
+  if (pending !== PENDING_REMOVE) {
+    // If this process already KNOWS what was asked for, leave it entirely alone. The live machinery owns that
+    // intent and its own converge passes will settle it; this function exists only to finish work orphaned by
+    // a RESTART. Two earlier attempts here were both wrong: adopting the store's contents as the intent
+    // overrode a newer request with an older blob ("the marker points at a key that is not the one last asked
+    // for"), and scheduling another converge re-entered the chain and hung the runner outright with
+    // "Map maximum size exceeded" — the exact infinite loop _encAfter's on-success-only rule exists to avoid.
+    if (_encIntent.have != null) {
+      // One exception, and it is bookkeeping rather than repair: if localStorage already carries the marker the
+      // device is settled, so this breadcrumb is left over from some earlier, unrelated operation. Drop it
+      // rather than leaving it to be re-examined on every future boot.
+      if (_encIsMarker(lsGet(ENC_LS))) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} }
+      return false;
+    }
+    // Boot case: module state is gone, so the store is the only evidence of what the interrupted write left.
+    try {
+      const { S } = await _encBound(_secureStore());
+      const v = await _encBound(S.get(ENC_LS));
+      // Only adopt something that actually looks like a key. Anything else is a half-written or corrupted
+      // value, and marking it valid would reject the steward's correct PIN for ever — leave it, claim nothing,
+      // and let unlock() report honestly that this device has no key.
+      if (v != null && _looksLikeKeyBlob(String(v))) { _encIntent = { have: String(v) }; lsSet(ENC_LS, JSON.stringify({ native: 1 })); }
+    } catch (e) { console.warn('[steward] could not settle an interrupted key write', e); return false; }
+    try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+    return true;
+  }
   // Module state is gone after a restart, so recover the intent from what localStorage says: a marker means a
   // key is wanted (a completed removal clears it), no marker means none is.
   //
@@ -1682,7 +1770,15 @@ window.Steward = {
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
     // S6: goes to the hardware store on native, localStorage on web. Awaited, so needsPin is only cleared
     // once the ciphertext is durably somewhere — the plaintext KEY_LS removal below depends on that.
-    await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count
+    const landed = await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count
+    // HONOUR THE ANSWER. encBlobWrite returns true only if the blob durably landed somewhere it can be read
+    // back, and this call used to discard that: on a slow Keystore it reported success, dropped the plaintext
+    // seed and cleared needsPin, leaving the key nowhere localStorage could see it. The comment above already
+    // said the KEY_LS removal "depends on that" — nothing enforced it. Adversarial review 2026-08-04.
+    //
+    // Failing here is safe and recoverable: the seed is still in memory, needsPin is still set, so the forced
+    // PIN modal stays up and says so. Losing the plaintext on a write that did not land is not.
+    if (!landed) return false;
     try { localStorage.removeItem(KEY_LS); } catch {}
     _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
@@ -1708,6 +1804,13 @@ window.Steward = {
     } catch { return false; }
   },
   lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
+    // "seed stays encrypted" is only true once it HAS been encrypted. While needsPin is set — after createKey,
+    // restoreKey, adoptChurch or removeLock — the seed exists nowhere but `currentMnemonic`, so forgetting it
+    // is not locking, it is destroying the church. The 10-minute idle timer in steward-root.jsx fires on a
+    // dep array of [ks.has], which does not change across a restore, so its pre-restore deadline stayed armed
+    // over the forced-PIN screen: walk away for ten minutes and the console came back to "Set up a new
+    // church". Guarded HERE rather than in the timer, so every caller is covered. Adversarial review 2026-08-04.
+    if (needsPin) return;
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
     window.Steward.locked = !!lsGet(ENC_LS);
@@ -1925,14 +2028,26 @@ window.Steward = {
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (m.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
-    // SECURITY-AUDIT-2026-06-25 Critical-2: restore does NOT persist plaintext. The seed lives in
-    // memory only; needsPin forces the forced PIN modal before the steward can act. Any existing
-    // PIN-encrypted blob on this device is wiped (it belonged to a different key).
-    // S6: encBlobRemove() clears the hardware store too. Without it the PREVIOUS key's ciphertext would sit
-    // in Keystore after a restore — the exact at-rest exposure this change exists to close, left behind by the
-    // one operation whose comment promises the old blob is wiped.
-    setKey(m); try { localStorage.removeItem(KEY_LS); } catch (e) {}
-    encBlobRemove();
+    // CHECKSUM, not just word count. `privateKeyFromSeedWords` is a bare PBKDF2: any twelve lowercase tokens
+    // derive a perfectly valid key. Without this a single mistyped word destroyed the real church key and
+    // installed a stranger's — and the forced-PIN screen shows no npub or church name, so nothing on screen
+    // contradicted it. The member app has validated since M12 (src/identity.src.js); the console, which holds
+    // the higher-value key, did not. Adversarial review 2026-08-04.
+    if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase — check the spelling of each word.');
+    // ORDER MATTERS, and it used to be backwards. This wiped the previous key from localStorage AND the
+    // hardware store FIRST, leaving the restored seed in memory only until setPin() encrypted it. Anything
+    // that ended the JS context in that window — an idle lock, a backgrounded WebView, a reload, a crash —
+    // left the device with NO church key at all. Deterministic key loss, found on a phone 2026-08-04.
+    //
+    // Nothing needed that eager wipe: setPin() → encBlobWrite() writes the SAME slot, so a successful restore
+    // overwrites the old ciphertext anyway (S6's at-rest concern is still met), and setPin() removes KEY_LS
+    // itself. An ABANDONED restore now leaves the previous key intact and openable, which is the safe
+    // outcome — the steward keeps the church they had instead of losing both.
+    setKey(m);
+    // The active church has just changed to a DIFFERENT one. Everything scoped to the old church must go with
+    // it, or the roster effect republishes church A's name/care/media keys as church B's. `location.reload()`
+    // used to do this by accident; nothing did it on purpose. See _resetChurchScopedState.
+    _resetChurchScopedState();
     _setNeedsPin(true);
     // fire steward-key so the first-run welcome advances to the console (createKey does this too)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
@@ -1948,7 +2063,9 @@ window.Steward = {
     const q = m.match(/[?&#](?:adopt|church)=([^&#\s]+)/);   // also accept a URL form
     if (q) { try { m = decodeURIComponent(q[1]); } catch {} }
     m = m.replace(/^trinityone-church:/i, '').trim();
-    return window.Steward.restoreKey(m);                     // validates + persists; throws on a bad phrase
+    // validates; throws on a bad phrase. Does NOT persist — the seed is memory-only until the forced-PIN
+    // modal encrypts it (see restoreKey). Callers must NOT reload, or the restored key is lost.
+    return window.Steward.restoreKey(m);
   },
   // ---- "Become a steward" handshake: a would-be steward shows this code to a church owner, who scans/pastes
   // it under Delegated stewards to add them. Unlike the church handoff this carries ONLY the public npub of
@@ -4391,6 +4508,11 @@ window.Steward = {
     // church's moderation decisions into another's screen. Cleared here beside the other per-identity state;
     // subscribeSafeguard refills it within a beat. (Same shape as the member app, which resets on church change.)
     _applyNoPhotoList([]);
+    // NOTE: the block above is the same list as _resetChurchScopedState(), minus the care-key, media-key and
+    // NIP-42 state. Deliberately NOT converged in this commit — a SWITCH keeps this device's key while a
+    // RESTORE replaces it, so the wider reset is not obviously correct here and changing it is not what this
+    // fix is for. But the duplication IS the bug class that produced AUDIT-2026-07-27 and the 2026-08-04 key
+    // loss. If you are adding per-church state, add it to _resetChurchScopedState() and settle this properly.
     window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
     window.Steward.actingChurch = actingChurch;   // UI reads this to show "acting as steward" + hide owner-only controls
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));
