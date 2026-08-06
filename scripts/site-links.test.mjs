@@ -140,3 +140,31 @@ test('the site says an invite is needed, on the pages that start that journey', 
       `moment to learn it.`);
   }
 });
+
+// NO ROOT-RELATIVE LINKS. Found by the owner, 2026-08-06, on a branch I had just called clean.
+//
+// `/` is not the site. Both domains serve the whole repo and differ in exactly one place:
+//     trinityone.church/      -> welcome.html          app.trinityone.church/      -> the app
+// The marketing pages are served from BOTH (app.trinityone.church/welcome.html returns 200), and every church
+// relay serves them too, with the app at `/`. So `href="/#how"` sends a reader into the Bible reader on every
+// host except the marketing domain. 24 of them shipped across four pages — including on two pages that had no
+// such link until I unified the nav and introduced them.
+//
+// THIS IS THE SAME DEFECT AS THE JOIN BUTTON, three commits earlier, where I wrote the comment explaining
+// that the hosts differ only in `/` and then did not apply it here.
+//
+// And the tests above could not see it: linksIn() strips the fragment and maps `/` to home, so all 24 looked
+// like valid links to welcome.html. A test that normalises away the exact thing that is broken will report a
+// broken site as clean — which is what happened. Hence this check reads the RAW href.
+test('no page links to "/" — that is the app on every host but one', () => {
+  const offenders = [];
+  for (const p of pages) {
+    for (const m of live(read(p)).matchAll(/<a\s[^>]*href="(\/[^"]*)"/g)) {
+      offenders.push(`${p} → ${m[1]}`);
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'these links point at "/", which resolves to the member app on app.trinityone.church, on any church ' +
+    'relay, and locally — only the marketing domain serves welcome.html there. Link the page by name ' +
+    '(welcome.html#how), the way help.html already does.\n  ' + offenders.join('\n  '));
+});
