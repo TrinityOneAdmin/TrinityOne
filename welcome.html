@@ -111,7 +111,9 @@
   .sx-dark h2, .sx-dark h3 { color: var(--paper); }
   .sx-dark .sx-intro, .sx-dark p { color: color-mix(in oklab, var(--paper) 78%, transparent); }
   .sx-dark .sx-card { background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.12); }
-  .sx-price { border: 2px solid var(--clay); box-shadow: var(--shadow-md); }
+  .sx-price { border: 2px solid var(--clay) !important; box-shadow: 0 0 0 4px color-mix(in oklab, var(--clay) 18%, transparent), var(--shadow-md); }
+  .sx-grid--2 { grid-template-columns: repeat(2, minmax(0,1fr)); max-width: 860px; margin-left: auto; margin-right: auto; }
+  @media (max-width: 720px) { .sx-grid--2 { grid-template-columns: 1fr; } }
   .sx-details { margin-top: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overflow: hidden; }
   .sx-details summary { cursor: pointer; padding: 16px 20px; font-weight: 700; font-size: 15.5px; list-style: none; }
   .sx-details summary::-webkit-details-marker { display: none; }
@@ -595,7 +597,7 @@
     <div class="eyebrow"><span class="to-pill" style="background:rgba(255,255,255,.12);color:var(--gold-soft)">For churches</span></div>
     <h2>Don't build your church on ground you don't own.</h2>
     <p class="sx-intro">Rotas, the member list, groups, the calendar, giving and safeguarding — the whole life of your church, on infrastructure you hold the keys to.</p>
-    <div class="sx-grid">
+    <div class="sx-grid sx-grid--2">
       <div class="sx-card sx-price" style="background:rgba(255,255,255,.07)">
         <h3>Free — for good</h3>
         <p>No subscription after setup, no per-member fee, no tier to upgrade to. There's no company in the middle to bill you.</p>
