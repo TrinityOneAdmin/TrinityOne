@@ -122,3 +122,21 @@ test('the join landing sends people to the app, not to whatever "/" happens to b
     'the join landing must target index.html — the one path that is the app on every host that serves this ' +
     'page (marketing, app, and any church\'s own relay)');
 });
+
+// THE MEMBER MUST KNOW THEY NEED AN INVITE, BEFORE THEY SPEND EFFORT. Journey audit 2026-08-05.
+//
+// Walked live: "Join a church" is the most prominent member CTA on the site, and the path it starts cannot be
+// completed without an invite — the app's join step wants a QR, a code or a link, and refuses an unknown church
+// name ("Couldn't find that church"). Checked all five member-facing pages for any mention of an invite link,
+// joining code or asking a steward: ZERO. The only "link" sentence on the site was addressed to leaders. So a
+// member typed a name, accepted responsibility for twelve words, set a PIN, and only then discovered they were
+// never able to finish. The error copy at the end is good; arriving there at all is the defect.
+test('the site says an invite is needed, on the pages that start that journey', () => {
+  const needs = /invite link or code|link or code|invite link|joining code/i;
+  for (const p of ['welcome.html', 'downloads.html']) {
+    assert.match(live(read(p)), needs,
+      `${p} sends members toward joining a church without ever saying they need the link or code their ` +
+      `church shared. They find out after four onboarding steps, which is the most expensive possible ` +
+      `moment to learn it.`);
+  }
+});

@@ -91,6 +91,7 @@
   .hero .sub { font-family: var(--font-serif); font-size: clamp(19px, 2.4vw, 23px); line-height: 1.5; color: var(--ink-2); max-width: 520px; margin: 22px 0 0; text-wrap: pretty; }
   .hero .cta { display: flex; gap: 14px; margin-top: 30px; flex-wrap: wrap; }
   .hero .free { font-family: var(--font-serif); font-size: 16px; color: var(--ink-2); font-weight: 600; margin: 18px 0 0; }
+  .hero .need { font-size: 14.5px; line-height: 1.5; color: var(--ink-3); margin: 9px 0 0; max-width: 460px; }
 
   /* feature pills — the breadth at a glance */
   .feat-pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 0; }
@@ -244,7 +245,11 @@
     <div>
       <span class="to-pill"><svg class="halo" style="font-size:15px;color:var(--clay-ink);--spark:var(--clay-ink)"><use href="#to-halo" /></svg> For your church</span>
       <h1>A church home<br/>of your own.</h1>
-      <p class="sub">God's Word at the heart of it all — and around it, everything your church needs to live it out together: sermons, reading plans, devotionals, prayer, serving rotas, and caring for one another, in one app.</p>
+      <!-- MARKETING-AUDIT-2026-08-05: the page answered "what is this" in line one and never answered "is it
+           safe" above the fold — that waited ~2,000px. Re-measured after the trim: the opening 600 characters
+           contained none of private / safe / secure / encrypted / no account. For an audience whose first
+           question is safety, that is a long wait, so it is now the second sentence. -->
+      <p class="sub">God's Word at the heart of it all — and around it, everything your church needs to live it out together: sermons, reading plans, devotionals, prayer, serving rotas, and caring for one another, in one app. It stays private to your church — no account, no password, and no company in the middle.</p>
       <div class="feat-pills" aria-label="What's inside">
         <span class="is-heart">The Bible</span><span>Sermons</span><span>Reading plans</span><span>Devotionals</span><span>Prayer</span><span>Serving rotas</span><span>Care</span>
       </div>
@@ -253,6 +258,13 @@
         <a href="downloads.html" class="to-btn to-btn--ghost">Join a church</a>
       </div>
       <p class="free">Free to start, and always free to use.</p>
+      <!-- JOURNEY AUDIT 2026-08-05, the cheapest fix in either audit. "Join a church" is the most prominent
+           member CTA on the site, and the path it starts CANNOT be finished without an invite: the app's join
+           step asks for a QR, code or link, and refuses an unknown church name. Not one of the five
+           member-facing pages mentioned that — the only "link" sentence on the site is addressed to leaders.
+           So a member gave four steps (name, twelve words, PIN) and learned at the end that they were never
+           able to finish. Setting the expectation costs one line HERE, before the effort. -->
+      <p class="need">Joining a church? Have the invite link or code from your church to hand — that's what connects you to them.</p>
     </div>
     <div class="phone-stage">
       <div class="phone-embed"><picture>
