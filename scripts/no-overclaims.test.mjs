@@ -37,7 +37,8 @@ const EXTRAS = read('app/identity-extras.jsx');
 const CHAT = read('app/screens-chat.jsx');
 const DASH = read('app/stew-dashboard.jsx');
 const APP = read('app/app.jsx');
-const FEATURES = read('features.html');
+// features.html and downloads.html were folded into welcome.html's single scroll on 2026-08-06.
+const FEATURES = read('welcome.html');
 // EVERY served marketing page, not a hand-listed pair. MARKETING-AUDIT-2026-08-05: this file used to read
 // about.html by name, and the trim deleted that page — so the test died with ENOENT rather than telling
 // anyone anything. Worse, a hand-listed pair is the wrong shape for the question being asked, which is "does

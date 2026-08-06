@@ -94,13 +94,20 @@ test('no page serves an unfinished placeholder', () => {
 // Every surviving page must offer a way onward. The 2-link navs are how features.html and
 // welcome-churches.html became dead ends a reader could land on from search.
 test('every page in the nav can navigate onward', () => {
-  const inNav = ['welcome.html', 'why.html', 'features.html', 'downloads.html', 'welcome-churches.html', 'help.html'];
+  // 2026-08-06: the site became a single scroll — welcome.html carries #how/#why/#features/#churches/#get and
+  // help.html is the only other reading page. The old list named four pages that no longer exist, which would
+  // have made this pass vacuously once they were deleted.
+  const inNav = ['welcome.html', 'help.html'];
   for (const p of inNav) {
     const nav = live(read(p)).match(/<nav class="top">[\s\S]*?<\/nav>/);
     assert.ok(nav, `${p} has no top nav — that is how a page becomes a dead end`);
-    const hrefs = [...nav[0].matchAll(/href="([^"]+)"/g)].map(m => m[1]).filter(h => h.endsWith('.html'));
-    assert.ok(hrefs.length >= 5,
-      `${p}'s nav offers only ${hrefs.length} page link(s). A reader landing here from search has almost ` +
+    // Count DESTINATIONS, not pages: on the single scroll the nav is same-page anchors (#why, #features, …)
+    // plus help.html, so a .html-only count reads 1 and says nothing. What matters is unchanged — can a
+    // reader who lands here get somewhere?
+    const dests = [...nav[0].matchAll(/href="([^"]+)"/g)].map(m => m[1])
+      .filter(h => h.endsWith('.html') || /^#\w/.test(h) || /\.html#/.test(h));
+    assert.ok(dests.length >= 5,
+      `${p}'s nav offers only ${dests.length} destination(s). A reader landing here from search has almost ` +
       `nowhere to go, which is exactly how this site accumulated five orphans.`);
   }
 });
@@ -133,7 +140,7 @@ test('the join landing sends people to the app, not to whatever "/" happens to b
 // never able to finish. The error copy at the end is good; arriving there at all is the defect.
 test('the site says an invite is needed, on the pages that start that journey', () => {
   const needs = /invite link or code|link or code|invite link|joining code/i;
-  for (const p of ['welcome.html', 'downloads.html']) {
+  for (const p of ['welcome.html']) {   // downloads.html folded into #get on the single scroll
     assert.match(live(read(p)), needs,
       `${p} sends members toward joining a church without ever saying they need the link or code their ` +
       `church shared. They find out after four onboarding steps, which is the most expensive possible ` +
