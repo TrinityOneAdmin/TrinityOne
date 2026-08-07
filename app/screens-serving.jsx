@@ -455,15 +455,37 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ctx.church ? ctx.church.name : 'Your church'}</div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 4, padding: '0 14px 12px' }}>
+        {/* Four tabs need 399px and a 360px phone offers 320 after padding and gaps, so Care was cut off at
+            the right edge — tappable, but its label never readable, and nothing here scrolled. `flex: 1` is
+            not the shrink it looks like: a flex item defaults to `min-width: auto`, so these refuse to go
+            below their own label width and simply overflowed a container that clipped them.
+            So the strip scrolls, and `1 0 auto` keeps the old behaviour where there IS room — grow to fill a
+            wide screen, never shrink a label to fit a narrow one. Selecting a tab scrolls it fully into
+            view, which is what makes the last tab reachable rather than merely present. */}
+        {/* Two things are needed to keep the 14px inset on BOTH ends, and each fixes a different scroll.
+            The right inset is a spacer rather than padding, because a flex scroll container drops its
+            padding-right at the end of the scroll — the last tab would sit flush against the screen edge
+            while the first keeps its inset. A real child cannot be dropped. That covers a finger swipe.
+            scroll-padding covers the other one: scrollIntoView aligns the BUTTON to the nearest edge and
+            reads straight past a spacer, so without it selecting Care parks it flush anyway. */}
+        <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '0 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
           {[['serving', 'Serving', 'hand'], ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
             const on = tab === k;
+            const pick = (e) => {
+              setTab(k);
+              const el = e.currentTarget;
+              try {
+                const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+                el.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: still ? 'auto' : 'smooth' });
+              } catch (err) {}
+            };
             return (
-              <button key={k} onClick={() => setTab(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
+              <button key={k} onClick={pick} style={{ flex: '1 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
                 <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
               </button>
             );
           })}
+          <div aria-hidden="true" style={{ flex: '0 0 14px' }} />
         </div>
       </div>
 
