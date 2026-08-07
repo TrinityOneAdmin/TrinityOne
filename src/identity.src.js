@@ -158,7 +158,8 @@ async function rememberRead() {   // → { m, until } or null. Never returns an 
 // the phone will open, when in 30 days' time it will ask for a PIN they may no longer have written down.
 async function rememberWrite(m, until) {
   if (!isNative()) return false;
-  const payload = JSON.stringify({ m, until });
+  // The record carries the account it was made for, so a boot can tell whether it still belongs here.
+  const payload = JSON.stringify({ m, until, pub: deriveProfile(m).pubkey });
   try {
     const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
     await SecureStorage.set(REMEMBER_KEY, payload);
@@ -171,6 +172,32 @@ async function rememberClear() {
   if (!isNative()) return;
   try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(REMEMBER_KEY); }
   catch (e) { console.warn('[identity] remember clear failed', e); }
+}
+// WHOSE encrypted blob is on this device? Written by setPin. Absent on a device whose PIN predates this, and
+// on the two recovery paths that rebuild the marker without knowing the account — callers must read that as
+// "cannot prove it", never as "must be fine".
+function encOwnerPub() {
+  try { const o = JSON.parse(localStorage.getItem(ENC_KEY) || 'null'); return (o && o.pub) || null; } catch (e) { return null; }
+}
+// The remembered seed, but ONLY if it belongs to the account the encrypted blob holds.
+//
+// The audit found rememberClear() missing from importMnemonic() and setPin(), so a record could outlive the
+// identity that made it and open the phone as that identity with no PIN. Both calls are now there — but the
+// bug WAS a list of call sites being incomplete, and a fix shaped like a longer list fails the same way the
+// next time this file grows. So the guarantee lives here instead: a record that does not match is inert
+// however it survived, and is destroyed on sight rather than left to expire on time it may have plenty of.
+//
+// Fails CLOSED. No recorded owner, or no owner on the record, means the check cannot be made — and the cost
+// of guessing wrong is somebody else's account opening without a PIN.
+async function rememberedSeed() {
+  const rec = await rememberRead();   // expiry is enforced in there
+  if (!rec) return null;
+  const owner = encOwnerPub();
+  if (!owner || !rec.pub || String(rec.pub).toLowerCase() !== String(owner).toLowerCase()) {
+    await rememberClear();
+    return null;
+  }
+  return rec.m;
 }
 // native: is there an encrypted-seed blob in the hardware store with NO localStorage marker? (marker lost to a
 // kill before flush). Only setPin writes this blob; removePin/recovery/regenerate all clearEnc() it — so an
@@ -270,10 +297,10 @@ async function init() {
     // have passed we drop the record and lock normally; a window that quietly renewed itself would not be a
     // 30-day window. Any failure to read falls through to the lock, which is the safe direction.
     // rememberRead() refuses and clears an expired record, so a non-null answer is a live one by construction.
-    const r = await rememberRead();
-    if (r && r.until > nowSec()) {
-      sessionMnemonic = r.m;
-      apply(deriveProfile(r.m), { ephemeral: false });
+    const remembered = await rememberedSeed();   // live, AND belonging to the account this blob holds
+    if (remembered) {
+      sessionMnemonic = remembered;
+      apply(deriveProfile(remembered), { ephemeral: false });
       return;
     }
     applyLocked(); return;
@@ -429,6 +456,7 @@ window.TrinityIdentity = {
     const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
+    await rememberClear();   // this device is no longer that account — do not leave its seed remembered
     sessionMnemonic = null;
     await secureSet(m);
     apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -445,6 +473,7 @@ window.TrinityIdentity = {
     if (!pin || pin.length < 6) return false;   // floor: the PIN is the only secret over the at-rest blob (audit #5); UI adds the all-numeric rule
     const m = sessionMnemonic || await secureGet();   // secureGet returns the plaintext seed while no blob exists yet
     if (!m) return false;
+    await rememberClear();   // a record made before this PIN was set belongs to a state that no longer exists
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
     const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });   // M11: carries its iteration count
@@ -453,7 +482,13 @@ window.TrinityIdentity = {
       // BEFORE writing the marker or dropping the plaintext — a failed Keystore write leaves the plaintext seed
       // intact (the PIN simply isn't set), so the only durable copy of the key is never destroyed.
       if (!(await secureSetEnc(blob))) return false;
-      try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) { return false; }
+      // The marker records WHICH account this blob holds. Nothing secret — a pubkey is public — and it is the
+      // only reference the boot path can consult without the PIN. Without it a remembered seed cannot be
+      // checked against anything, which is how a record left by a previous identity came to open the phone as
+      // that identity. The two recovery paths that also write this marker do NOT know the account (that is the
+      // point of them), so they leave it absent and rememberedSeed() refuses rather than guesses.
+      const ownerPub = deriveProfile(m).pubkey;
+      try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub })); } catch (e) { return false; }
     } else {
       try { localStorage.setItem(ENC_KEY, blob); } catch (e) { return false; }   // web/desktop: no secure store — keep the blob in localStorage
     }

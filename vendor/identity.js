@@ -12031,7 +12031,7 @@ zoo`.split("\n"));
   }
   async function rememberWrite(m, until) {
     if (!isNative()) return false;
-    const payload = JSON.stringify({ m, until });
+    const payload = JSON.stringify({ m, until, pub: deriveProfile(m).pubkey });
     try {
       const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
       await SecureStorage.set(REMEMBER_KEY, payload);
@@ -12051,6 +12051,24 @@ zoo`.split("\n"));
     } catch (e) {
       console.warn("[identity] remember clear failed", e);
     }
+  }
+  function encOwnerPub() {
+    try {
+      const o = JSON.parse(localStorage.getItem(ENC_KEY) || "null");
+      return o && o.pub || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  async function rememberedSeed() {
+    const rec = await rememberRead();
+    if (!rec) return null;
+    const owner = encOwnerPub();
+    if (!owner || !rec.pub || String(rec.pub).toLowerCase() !== String(owner).toLowerCase()) {
+      await rememberClear();
+      return null;
+    }
+    return rec.m;
   }
   async function hasOrphanEncBlob() {
     try {
@@ -12164,10 +12182,10 @@ zoo`.split("\n"));
   }
   async function init() {
     if (hasEnc()) {
-      const r = await rememberRead();
-      if (r && r.until > nowSec()) {
-        sessionMnemonic = r.m;
-        apply(deriveProfile(r.m), { ephemeral: false });
+      const remembered = await rememberedSeed();
+      if (remembered) {
+        sessionMnemonic = remembered;
+        apply(deriveProfile(remembered), { ephemeral: false });
         return;
       }
       applyLocked();
@@ -12349,6 +12367,7 @@ zoo`.split("\n"));
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
       await clearEnc();
+      await rememberClear();
       sessionMnemonic = null;
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -12368,13 +12387,15 @@ zoo`.split("\n"));
       if (!pin || pin.length < 6) return false;
       const m = sessionMnemonic || await secureGet();
       if (!m) return false;
+      await rememberClear();
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
       const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });
       if (isNative()) {
         if (!await secureSetEnc(blob)) return false;
+        const ownerPub = deriveProfile(m).pubkey;
         try {
-          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 }));
+          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub }));
         } catch (e) {
           return false;
         }

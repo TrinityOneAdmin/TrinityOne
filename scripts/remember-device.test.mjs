@@ -61,6 +61,7 @@ function store({ native = true, breakWrites = false } = {}) {
     __SS: SecureStorage,
     REMEMBER_KEY: 'trinityone.nostr.remember',
     isNative: () => native,
+    deriveProfile: () => ({ pubkey: 'a'.repeat(64) }),   // the record now carries the account it was made for
     nowSec: () => Math.floor(Date.now() / 1000),
     console: { warn() {} },
   };
@@ -143,15 +144,17 @@ test('the seed is restored at boot instead of the blob being dropped', () => {
   const code = stripComments(SRC);
   const at = code.indexOf('async function init()');
   const body = code.slice(at, code.indexOf('\n}', at));
-  assert.match(body, /sessionMnemonic = r\.m/,
+  assert.match(body, /sessionMnemonic = remembered/,
     'boot does not populate the in-memory seed, so "remembered" must be being achieved some other way — and ' +
     'every other way removes the lock rather than opening it');
-  // Expiry is enforced inside rememberRead (and asserted behaviourally above), so init only has to refuse a
-  // record that is not live. Both halves must be present: reading it and checking it.
-  assert.match(body, /rememberRead\(\)/, 'boot does not consult the remembered record at all');
-  assert.match(body, /r\.until > nowSec\(\)/,
-    'boot accepts whatever the store holds without checking the window — enforcement then rests entirely on ' +
-    'one function, and the 30-day bound is one edit away from being permanent');
+  // Boot asks ONE question now: rememberedSeed() folds together "is this record live" and "does it belong to
+  // the account this blob holds". The second half did not exist until the 2026-08-07 audit found that a record
+  // left by a previous identity opened the phone AS that identity, with no PIN. Both halves are exercised for
+  // real in remember-account-binding.test.mjs; this line only checks that boot still routes through them,
+  // because an assertion over source text cannot tell a working check from a decorative one.
+  assert.match(body, /rememberedSeed\(\)/,
+    'boot no longer consults the bound reader — going back to rememberRead() directly would accept any live ' +
+    'record, including one belonging to somebody else');
   assert.ok(!/clearEnc|localStorage.removeItem\(ENC_KEY\)/.test(body),
     'init() drops the encrypted blob on the remembered path — the bypass');
 });
