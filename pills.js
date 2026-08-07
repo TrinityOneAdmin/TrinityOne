@@ -47,6 +47,18 @@
     // two highlighted pills read as two selections — so the resting emphasis stands down while a choice is
     // active, and comes back on reset.
     wrap.classList.add('has-selection');
+    // On a narrow screen the hero stacks text-first, so the phone is BELOW the pills and off-screen — tap a
+    // pill there and the only feedback is the pill itself while the thing it changed is out of sight. Bring
+    // it into view when it isn't, and leave it alone when it is (no jumping on desktop, where both are
+    // visible side by side).
+    try {
+      var r = img.getBoundingClientRect();
+      var offscreen = r.bottom < 60 || r.top > (window.innerHeight || 0) - 60;
+      if (offscreen && img.scrollIntoView) {
+        var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        img.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
+      }
+    } catch (e) {}
   }
   function reset() {
     if (current === null) return;
