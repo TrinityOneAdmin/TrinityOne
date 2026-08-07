@@ -49,7 +49,8 @@ reference/TrinityOne.zip
 reference/nas-relay/
 payments-options.html
 scripts/.seed-members.json
-scripts/.seed-church.json   # a church SECRET key — disposable, but never commit it
+# a church SECRET key — disposable, but never commit it
+scripts/.seed-church.json
 .secrets/
 
 # ── relay runtime data: DEFAULT-DENY. ARCHITECTURE-AUDIT-2026-07-30 ────────────────────────────────────────
