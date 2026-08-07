@@ -60,6 +60,21 @@ test('every internal link points at a file that exists', () => {
     'is something there and concludes the product is broken.\n  ' + broken.join('\n  '));
 });
 
+// The hero's feature pills carry their screenshot in `data-shot`, and pills.js swaps it into the <img> on tap.
+// That is neither an href nor a src, so `linksIn` above cannot see it — a mistyped filename ships a pill that
+// blanks the phone when a reader taps it, on the one part of the page whose entire job is showing the product.
+// The resting image IS an src and is already covered; these are not.
+test('every feature pill points at a screenshot that exists', () => {
+  const missing = [];
+  for (const p of pages) {
+    for (const m of live(read(p)).matchAll(/data-shot="([^"]+)"/g)) {
+      if (!existsSync(ROOT + m[1].replace(/^\//, ''))) missing.push(`${p} → ${m[1]}`);
+    }
+  }
+  assert.deepEqual(missing, [],
+    'these pills would blank the phone when tapped:\n  ' + missing.join('\n  '));
+});
+
 // THE ORPHAN CHECK — the one that would have caught the 52%.
 test('every served page is reachable from the home page', () => {
   const home = 'welcome.html';
