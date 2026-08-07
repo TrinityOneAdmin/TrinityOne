@@ -113,6 +113,18 @@
   .sx-dark .sx-card { background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.12); }
   .sx-price { border: 2px solid var(--clay) !important; box-shadow: 0 0 0 4px color-mix(in oklab, var(--clay) 18%, transparent), var(--shadow-md); }
   .sx-grid--2 { grid-template-columns: repeat(2, minmax(0,1fr)); max-width: 860px; margin-left: auto; margin-right: auto; }
+  .sx-grid--dl { align-items: stretch; }
+  .sx-dl { display: flex; flex-direction: column; }
+  .sx-acts { margin-top: auto; padding-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .sx-act { display: block; padding: 10px 13px; border-radius: 12px; border: 1px solid var(--line); background: var(--paper); text-decoration: none; color: var(--ink); transition: border-color .15s, transform .15s; }
+  .sx-act:hover { border-color: var(--clay); transform: translateY(-1px); }
+  .sx-act b { display: block; font-size: 14px; font-weight: 700; }
+  .sx-act span { display: block; font-size: 12.5px; color: var(--ink-3); line-height: 1.4; margin-top: 1px; }
+  .sx-act--go { background: var(--clay); border-color: var(--clay); }
+  .sx-act--go b, .sx-act--go span { color: #fff; }
+  .sx-act--go span { color: rgba(255,255,255,.82); }
+  .sx-act--go:hover { border-color: var(--clay-deep, var(--clay)); }
+
   @media (max-width: 720px) { .sx-grid--2 { grid-template-columns: 1fr; } }
   .sx-details { margin-top: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overflow: hidden; }
   .sx-details summary { cursor: pointer; padding: 16px 20px; font-weight: 700; font-size: 15.5px; list-style: none; }
@@ -566,17 +578,17 @@
 <section class="sx" id="features">
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill">What it does</span></div>
-    <h2>Bible, community and church life — on ground you own</h2>
+    <h2>Everything your church does, in one place</h2>
     <p class="sx-intro">Everything below works today. Nothing here is a plan.</p>
     <div class="sx-grid">
-      <div class="sx-card"><h3>A Bible you'll want to stay in</h3><p>A full Bible the moment you open the app, in clean book-quality type, working entirely offline. Tap any word for its original-language root, and highlight like a real marker. Over a thousand translations to download.</p></div>
+      <div class="sx-card"><h3>The Bible</h3><p>A full Bible the moment you open the app, in clean book-quality type, working entirely offline. Tap any word for its original-language root, and highlight like a real marker. Over a thousand translations to download.</p></div>
       <div class="sx-card"><h3>The conversations that keep a church close</h3><p>Group rooms for your small groups and teams, announcement channels, and private messages. Prayer requests that people actually answer.</p></div>
       <div class="sx-card"><h3>The rota in your pocket</h3><p>See when you're next on, accept or ask a teammate to swap, and set the days you're away. On Android, reminders reach you with the app closed.</p></div>
       <div class="sx-card"><h3>The whole church's week, in one place</h3><p>Services, socials and meetings on one calendar, with RSVPs — so nobody misses the thing that was only mentioned once from the front.</p></div>
       <div class="sx-card"><h3>When someone needs the church to show up</h3><p>A new baby, a hard week, someone home from hospital — the church opens a need for meals, rides, errands or visits, and members sign up day by day.</p></div>
       <div class="sx-card"><h3>When something happens, know everyone's safe</h3><p>A steward asks the congregation to mark themselves safe, and sees at a glance who has answered and who has not.</p></div>
       <div class="sx-card"><h3>Protection anchored in your leaders</h3><p>Your church decides who is a child and which adults are cleared for youth work — not a meaningless tick-box. The relay enforces it, so a modified phone can't get around it.</p></div>
-      <div class="sx-card"><h3>Run the whole thing on a box you own</h3><p>A church can hold its own messages, members and records on hardware in the building. Or use ours, and move later without anyone losing anything.</p></div>
+      <div class="sx-card"><h3>Host it yourself, if you want to</h3><p>A church can hold its own messages, members and records on hardware in the building. Or use ours, and move later without anyone losing anything.</p></div>
     </div>
 
     <details class="sx-details sx-narrow">
@@ -595,8 +607,8 @@
 <section class="sx sx-dark" id="churches">
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill" style="background:rgba(255,255,255,.12);color:var(--gold-soft)">For churches</span></div>
-    <h2>Don't build your church on ground you don't own.</h2>
-    <p class="sx-intro">Rotas, the member list, groups, the calendar, giving and safeguarding — the whole life of your church, on infrastructure you hold the keys to.</p>
+    <h2>Free for your church — at any size, for good.</h2>
+    <p class="sx-intro">Rotas, the member list, groups, the calendar, giving and safeguarding — the whole life of your church, with no subscription and no per-member cap. It runs on infrastructure you hold the keys to, which is why nobody can start charging you for it later.</p>
     <div class="sx-grid sx-grid--2">
       <div class="sx-card sx-price" style="background:rgba(255,255,255,.07)">
         <h3>Free — for good</h3>
@@ -622,30 +634,44 @@
     <div class="eyebrow"><span class="to-pill">Get the app</span></div>
     <h2>Get TrinityOne</h2>
     <p class="sx-intro">Install it on an Android phone, or just open it in your browser on any device — there's nothing to set up.</p>
-    <div class="sx-grid">
-      <div class="sx-card">
+    <div class="sx-grid sx-grid--dl">
+      <div class="sx-card sx-dl">
         <h3>TrinityOne</h3>
-        <p style="margin-bottom:14px">For every member — read the Bible, join your groups, pray together, and keep up with your church through the week.</p>
-        <p style="margin-bottom:14px;color:var(--ink-3)">The Bible works straight away. To join your church you'll need the invite link or code they shared with you.</p>
-        <a href="https://app.trinityone.church/trinityone.apk" class="to-btn to-btn--clay" style="padding:11px 18px;font-size:14.5px" download>Download for Android</a>
-        <p style="margin-top:10px;font-size:13.5px"><a href="https://app.trinityone.church/" style="color:var(--clay-ink);font-weight:700;text-decoration:none">Open in your browser →</a> <span style="color:var(--ink-3)">iPhone, computer, any device</span></p>
+        <p>For every member — read the Bible, join your groups, pray together, and keep up with your church through the week.</p>
+        <p style="color:var(--ink-3);margin-top:9px">The Bible works straight away. To join your church you'll need the invite link or code they shared with you.</p>
+        <div class="sx-acts">
+          <a class="sx-act sx-act--go" href="https://app.trinityone.church/trinityone.apk" download><b>Android</b><span>Download the app</span></a>
+          <a class="sx-act" href="https://app.trinityone.church/"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen</span></a>
+          <a class="sx-act" href="https://app.trinityone.church/"><b>Computer</b><span>Open in your browser — nothing to install</span></a>
+        </div>
       </div>
-      <div class="sx-card">
+
+      <div class="sx-card sx-dl">
         <h3>TrinityOne Steward</h3>
-        <p style="margin-bottom:14px">The console to set up and run your church. You only need this once per church, and it's best on a computer.</p>
-        <a href="https://app.trinityone.church/trinityone-steward.apk" class="to-btn to-btn--ghost" style="padding:11px 18px;font-size:14.5px" download>Download for Android</a>
-        <p style="margin-top:10px;font-size:13.5px"><a href="https://app.trinityone.church/steward.html" style="color:var(--clay-ink);font-weight:700;text-decoration:none">Open the console →</a></p>
+        <p>The console to set up and run your church — groups, rotas, members and the church's life. You only need it once per church, and it is best on a computer.</p>
+        <div class="sx-acts">
+          <a class="sx-act sx-act--go" href="https://app.trinityone.church/steward.html"><b>Computer</b><span>Open the console — nothing to install</span></a>
+          <a class="sx-act" href="https://app.trinityone.church/trinityone-steward.apk" data-steward-cta download><b>Android</b><span>Download the Steward app</span></a>
+          <a class="sx-act" href="https://app.trinityone.church/steward.html"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen</span></a>
+        </div>
       </div>
-      <div class="sx-card">
+
+      <div class="sx-card sx-dl">
         <h3>TrinityOne Suite</h3>
-        <p style="margin-bottom:14px">Optional, for churches that self-host: your own relay <b>and</b> the Steward console in one double-click app — no command line.</p>
-        <p style="font-size:13.5px;line-height:2"><a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe" style="color:var(--clay-ink);font-weight:700;text-decoration:none">Windows</a> · <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg" style="color:var(--clay-ink);font-weight:700;text-decoration:none">macOS</a> · <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage" style="color:var(--clay-ink);font-weight:700;text-decoration:none">Linux</a> · <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" style="color:var(--ink-3);text-decoration:none">Other builds</a></p>
+        <p>Optional, for churches that host their own: your own relay <b>and</b> the Steward console in one double-click app — no command line.</p>
+        <div class="sx-acts">
+          <a class="sx-act sx-act--go" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe"><b>Windows</b><span>Installer (.exe)</span></a>
+          <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg"><b>macOS</b><span>Apple silicon (.dmg)</span></a>
+          <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage"><b>Linux</b><span>AppImage — or the Debian package</span></a>
+        </div>
       </div>
     </div>
 
-    <h3 style="font-family:var(--font-display);font-weight:700;font-size:22px;text-align:center;margin:44px 0 0">Can't reach this page? Install from any church</h3>
-    <p class="sx-intro" style="margin-top:10px">Every TrinityOne church running its own relay serves a complete copy — the app, the console, the Bibles. If this page doesn't load where you are, install from another church's relay: same app, same signing key, byte-for-byte identical. That is by design; it was built to travel with the people.</p>
-    <p class="sx-note"><b>The one rule:</b> install from a TrinityOne relay you asked for — this page, or a church's own address. Don't install a file someone sends you as an attachment or on a memory stick unless you can check where they got it. A changed copy looks exactly the same, and your phone will not warn you the first time you install it.</p>
+    <!-- The "Install from any church" story went on 2026-08-07: at this point in the page it is excess — a
+         reader is deciding whether to get the app, not planning around a blocked domain. The install-SAFETY
+         line stays, in one sentence, because dropping it would leave the site with no guidance at all on
+         where it is safe to install from. -->
+    <p class="sx-note" style="text-align:center">Install from a TrinityOne address you asked for — this page, or your own church's. A copy someone sends you as a file can be changed, and your phone will not warn you the first time you install it.</p>
   </div>
 </section>
 
