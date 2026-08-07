@@ -62,6 +62,42 @@ window.HelpData = {
       ],
     },
     {
+      id: 'faq',
+      illo: 'qr',
+      title: 'Questions people actually ask',
+      summary: 'The handful of things that catch people out — answered plainly, including the ones with an awkward answer.',
+      minutes: 4,
+      star: true,
+      blocks: [
+        // 2026-08-07, owner: the NIV answer moved here off the marketing page, and the rest were gathered from
+        // the places people genuinely get stuck. Every answer below is checked against what the code actually
+        // does — the value of a FAQ is that it is the one place allowed to give the awkward answer.
+        { type: 'p', text: 'If something here does not match what you are seeing, ask a steward — do not assume you have broken it.' },
+
+        { type: 'list', items: [
+          { lead: 'Why isn’t the NIV (or ESV, or NLT) here?', text: 'Because they are not free to give away. Those translations are owned by publishers who charge for the right to include them in an app, per person, every year — and we would have to pass that on to your church. TrinityOne is free and stays free, so it ships the translations that are free to share: the WEB, the KJV, the ASV and over a thousand more, in many languages. If your church reads the NIV on a Sunday, bring your own Bible and use TrinityOne for everything around it. We would rather say this plainly than quietly charge you for it.' },
+
+          { lead: 'I’ve got the app, but I can’t find my church.', text: 'There is no public list of churches to search — that is deliberate, because a searchable directory of congregations is exactly the thing some churches cannot afford to have. You join with the link, QR code or joining code your church shares. If you do not have one, ask whoever invited you, or anyone already using it at your church.' },
+
+          { lead: 'It says “waiting for approval”. How long?', text: 'A steward usually lets people in within a day. Leave the app open and you will see it happen. If you close it, nothing is lost — but the app cannot notify you yet, so check back rather than waiting for a buzz.' },
+
+          { lead: 'Can my church leaders read my private messages?', text: 'No — one-to-one messages are encrypted, so the server holds only scrambled text. But it does see THAT you and another person messaged, and when. Church group rooms are different: unless your church turned on encryption for a room, the server can read what is written there. The app says so at the top of every room, and it is worth believing it.' },
+
+          { lead: 'I lost my 12 words and my phone. Can a steward fix it?', text: 'Partly, and it is important to know which part. A steward can put you back in your place — your name, your church, your groups — by moving your seat onto a new account. What cannot come back is anything that was locked to the old account: your old private messages, and any care records sealed to you. Those went with the words. This is the reason we make a fuss about writing them down.' },
+
+          { lead: 'Why can’t I message this person?', text: 'If either of you is a young person, the church decides who may message whom: a child can message their own parent, their leaders, and adults the church has cleared for youth work — and nobody else. It works both ways, so an adult who is not cleared cannot start a conversation with a child either. It is enforced by the server, not just hidden in the app, so it holds even on a modified phone.' },
+
+          { lead: 'Do I need to be online?', text: 'Not for the Bible — it is on your phone and works with no signal at all, including on a plane or in a basement. Anything involving other people (messages, rotas, care) needs a connection, and anything you write while offline is kept and sent when you are back.' },
+
+          { lead: 'What is a “relay”, and do I need one?', text: 'The small server that carries your church’s messages. As a member you never touch it — your church is on one already. Churches can run their own if they want everything on hardware they control, and that is the only reason the word appears anywhere.' },
+
+          { lead: 'Someone sent me the app as a file. Should I install it?', text: 'Not unless you can check where they got it. Install from an address you asked for — the TrinityOne site, or your own church’s. A changed copy looks exactly the same as a real one, and your phone will not warn you the first time you install it.' },
+        ] },
+
+        { type: 'callout', tone: 'sage', text: 'Nothing here is a trick question. If an answer above worries you, that is a good reason to talk to your church rather than to stop using it — most of these have a simple next step.' },
+      ],
+    },
+    {
       id: 'name',
       illo: 'face',
       title: 'Setting up your name & picture',
