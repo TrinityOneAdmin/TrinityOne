@@ -17,10 +17,15 @@
 // person would tap. Mind the CURLY apostrophe in the app's copy — "I’m new here", not "I'm new here"; the
 // straight one silently matches nothing.
 import { WebSocket } from 'ws';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const [url, prefix, ...clicks] = process.argv.slice(2);
-const OUT = '/tmp/claude-1000/-mnt-storage-projects-TrinityOne/d0872c7b-e1b8-4fe5-a4dc-ba18aff4b18a/scratchpad/shots/';
+// Output dir: JOURNEY_OUT if set, else a temp dir. This used to be one session's scratchpad path, which
+// meant the probe wrote nowhere for anyone else and died on the first screenshot.
+const OUT = process.env.JOURNEY_OUT || join(tmpdir(), 'trinity-journey-shots');
+mkdirSync(OUT, { recursive: true });
 
 const list = await (await fetch('http://127.0.0.1:9333/json/list')).json();
 const page = list.find(p => p.type === 'page');

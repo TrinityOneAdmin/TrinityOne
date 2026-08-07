@@ -91,7 +91,7 @@ window.HelpData = {
 
           { lead: 'What is a “relay”, and do I need one?', text: 'The small server that carries your church’s messages. As a member you never touch it — your church is on one already. Churches can run their own if they want everything on hardware they control, and that is the only reason the word appears anywhere.' },
 
-          { lead: 'Someone sent me the app as a file. Should I install it?', text: 'Not unless you can check where they got it. Install from an address you asked for — the TrinityOne site, or your own church’s. A changed copy looks exactly the same as a real one, and your phone will not warn you the first time you install it.' },
+          { lead: 'Someone sent me the app as a file. Should I install it?', text: 'No — not even from someone you trust. Download it yourself from the TrinityOne site or your own church’s address. A changed copy looks exactly the same as a real one, and your phone cannot tell the difference the first time you install it. The person who sent it to you may not know theirs was tampered with.' },
         ] },
 
         { type: 'callout', tone: 'sage', text: 'Nothing here is a trick question. If an answer above worries you, that is a good reason to talk to your church rather than to stop using it — most of these have a simple next step.' },

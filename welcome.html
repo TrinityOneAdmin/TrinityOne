@@ -125,18 +125,15 @@
   .sx-act:hover { border-color: var(--clay); transform: translateY(-1px); }
   .sx-act b { display: block; font-size: 14px; font-weight: 700; }
   .sx-act span { display: block; font-size: 12.5px; color: var(--ink-3); line-height: 1.4; margin-top: 1px; }
-  .sx-act--go { background: var(--clay); border-color: var(--clay); }
+  /* CONTRAST, measured not eyeballed. On --clay these were 4.36:1 (the bold label) and 3.46:1 (the sub-label).
+     14px/700 is not WCAG "large text", so both needed 4.5. Moving the fill to --clay-deep takes them to
+     6.47:1 and 4.92:1 without changing the button's colour family. */
+  .sx-act--go { background: var(--clay-deep); border-color: var(--clay-deep); }
   .sx-act--go b, .sx-act--go span { color: #fff; }
   .sx-act--go span { color: rgba(255,255,255,.82); }
   .sx-act--go:hover { border-color: var(--clay-deep, var(--clay)); }
 
   @media (max-width: 720px) { .sx-grid--2 { grid-template-columns: 1fr; } }
-  .sx-details { margin-top: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overflow: hidden; }
-  .sx-details summary { cursor: pointer; padding: 16px 20px; font-weight: 700; font-size: 15.5px; list-style: none; }
-  .sx-details summary::-webkit-details-marker { display: none; }
-  .sx-details summary::after { content: ' ▾'; color: var(--ink-3); }
-  .sx-details[open] summary::after { content: ' ▴'; }
-  .sx-details .sx-body { padding: 0 20px 18px; font-size: 15px; line-height: 1.62; color: var(--ink-2); }
   .sx-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 34px; }
   .sx-note { max-width: 700px; margin: 22px auto 0; font-size: 15px; line-height: 1.6; color: var(--ink-2); background: color-mix(in oklab, var(--clay) 8%, var(--surface)); border: 1px solid color-mix(in oklab, var(--clay) 26%, transparent); border-radius: 14px; padding: 14px 17px; }
 
@@ -189,7 +186,6 @@
   .step-ic { width: 60px; height: 60px; border-radius: 17px; display: flex; align-items: center; justify-content: center; margin-bottom: 22px; }
   .step h3 { font-family: var(--font-display); font-weight: 700; font-size: 22px; margin: 0 0 10px; letter-spacing: -.3px; }
   .step p { margin: 0; color: var(--ink-2); font-size: 16.5px; line-height: 1.6; }
-  .step .gloss { margin-top: 12px; font-size: 14.5px; color: var(--ink-3); line-height: 1.55; font-style: italic; }
 
   /* ── Benefits ── */
   .benefits { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 50px; max-width: 880px; margin-left: auto; margin-right: auto; }
@@ -197,7 +193,7 @@
   .benefit .pic { width: 54px; height: 54px; border-radius: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .benefit h3 { font-family: var(--font-display); font-weight: 700; font-size: 20px; margin: 2px 0 7px; }
   .benefit p { margin: 0; color: var(--ink-2); font-size: 16px; line-height: 1.55; }
-  .soon-pill { display: inline-flex; align-items: center; gap: 6px; vertical-align: 3px; font-family: var(--font-ui); font-weight: 800; font-size: 10.5px; letter-spacing: .6px; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: var(--gold-tint); color: #8a6717; border: 1px solid color-mix(in oklab, var(--gold) 38%, transparent); }
+  .soon-pill { display: inline-flex; align-items: center; gap: 6px; vertical-align: 3px; font-family: var(--font-ui); font-weight: 800; font-size: 10.5px; letter-spacing: .6px; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: var(--gold-tint); color: #6E5210; border: 1px solid color-mix(in oklab, var(--gold) 38%, transparent); }
   .soon-pill::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--gold); }
 
   /* ── Mission (both ends of the church) ── */
@@ -224,8 +220,6 @@
   .flow .diagram .flow-narrow { max-width: 340px; margin: 0 auto; }
 
   /* ── Yours line ── */
-  .yours { text-align: center; padding: 70px 28px; }
-  .yours .line { font-family: var(--font-serif); font-size: clamp(24px,3.4vw,34px); line-height: 1.4; color: var(--ink); max-width: 700px; margin: 18px auto 0; text-wrap: pretty; }
 
   /* ── Final CTA ── */
   .final { text-align: center; padding: 92px 28px; position: relative; }
@@ -452,7 +446,7 @@
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill" style="background:rgba(255,255,255,.12);color:var(--gold-soft)">Made for the Church, everywhere</span></div>
     <h2>One app, for the whole family of God</h2>
-    <p class="intro">From believers gathering quietly where it isn't safe to be online, to a church with a full Sunday rota and online giving. The same app, kept private to your church.</p>
+    <p class="intro">From believers gathering quietly where it isn't safe to be online, to a church with a full Sunday rota and a serving team. The same app, kept private to your church.</p>
     <div class="mission-two">
       <div class="m-card">
         <div class="pic" style="background:rgba(224,184,96,.16);color:var(--gold-soft)"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="M12 9v3.5M12 15.5h.01"/></svg></div>
@@ -554,16 +548,10 @@
       </g>
     </svg>
   </div>
-  <p style="text-align:center;margin:16px auto 0"><a href="#why" style="font-family:var(--font-ui);font-weight:700;font-size:14.5px;color:var(--clay-ink);text-decoration:none;border-bottom:1px solid color-mix(in oklab, var(--clay) 35%, transparent);padding-bottom:1px">Why a relay? →</a></p>
+  <p style="text-align:center;margin:16px auto 0"><a href="help.html#faq" style="font-family:var(--font-ui);font-weight:700;font-size:14.5px;color:var(--clay-ink);text-decoration:none;border-bottom:1px solid color-mix(in oklab, var(--clay) 35%, transparent);padding-bottom:1px">Why a relay? →</a></p>
   <p class="dcaption">The leader sets the church up and it flows into your private home. Members connect to that same home to read along and take part.</p>
 </section>
 
-<!-- IT'S YOURS -->
-<section class="yours">
-  <div class="wrap">
-    <svg class="halo" style="font-size:54px;color:var(--ink);--spark:var(--gold)"><use href="#to-halo" /></svg>
-  </div>
-</section>
 
 <!-- ══ WHY ══ folded in from why.html. The opening is the strongest writing on the site and is kept verbatim. -->
 <section class="sx" id="why" style="background:var(--paper-soft);border-top:1px solid var(--line);border-bottom:1px solid var(--line)">
@@ -578,7 +566,7 @@
     </div>
     <div class="sx-grid">
       <div class="sx-card"><h3>Not a platform. A protocol.</h3><p>A platform is something you <b>join</b> — a company owns the servers, holds your data, sets the rules, and can lock you out tomorrow. A protocol is something you <b>run</b>, like email. TrinityOne is a protocol: you hold your own keys, you can host it yourself, and there is no "in" for anyone to shut you out of.</p></div>
-      <div class="sx-card"><h3>Private by design</h3><p>No email or phone number to sign up. Direct messages are encrypted, group rooms can be, the member roster is sealed, and safeguarding for children is enforced by the server — not just hidden in the app.</p></div>
+      <div class="sx-card"><h3>Private by design</h3><p>No email or phone number to sign up. Direct messages are encrypted, group rooms can be, your members' names are sealed so the relay stores only ciphertext it cannot read, and safeguarding for children is enforced by the server — not just hidden in the app.</p></div>
       <div class="sx-card"><h3>Not two products. One Church.</h3><p>A church with steady internet and no fear of the door can run TrinityOne on its own small computer — and from that same box offer a home to churches that could never run one. Bandwidth you already pay for becomes somewhere else's Sunday.</p></div>
     </div>
     <div class="sx-actions">
@@ -598,7 +586,7 @@
     <h2>Everything your church does, in one place</h2>
     <p class="sx-intro">Everything below works today. Nothing here is a plan.</p>
     <div class="sx-grid">
-      <div class="sx-card"><h3>The Bible</h3><p>A full Bible the moment you open the app, in clean book-quality type, working entirely offline. Tap any word for its original-language root, and highlight like a real marker. Over a thousand translations to download.</p></div>
+      <div class="sx-card"><h3>The Bible</h3><p>A full Bible the moment you open the app, in clean book-quality type, working entirely offline. Highlight like a real marker, and add the Strong's edition if you want original-language roots. Over a thousand translations to download.</p></div>
       <div class="sx-card"><h3>The conversations that keep a church close</h3><p>Group rooms for your small groups and teams, announcement channels, and private messages. Prayer requests that people actually answer.</p></div>
       <div class="sx-card"><h3>The rota in your pocket</h3><p>See when you're next on, accept or ask a teammate to swap, and set the days you're away. On Android, reminders reach you with the app closed.</p></div>
       <div class="sx-card"><h3>The whole church's week, in one place</h3><p>Services, socials and meetings on one calendar, with RSVPs — so nobody misses the thing that was only mentioned once from the front.</p></div>
@@ -621,13 +609,13 @@
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill" style="background:rgba(255,255,255,.12);color:var(--gold-soft)">For churches</span></div>
     <h2>Free for your church — at any size, for good.</h2>
-    <p class="sx-intro">Rotas, the member list, groups, the calendar, giving and safeguarding — the whole life of your church, with no subscription and no per-member cap. It runs on infrastructure you hold the keys to, which is why nobody can start charging you for it later.</p>
+    <p class="sx-intro">Rotas, the member list, groups, the calendar and safeguarding — the whole life of your church, with no subscription and no per-member cap. You can move it onto your own hardware at any time, which is why nobody can start charging you for it later.</p>
     <div class="sx-grid sx-grid--2">
       <div class="sx-card sx-price" style="background:rgba(255,255,255,.07)">
         <h3>Free — for good</h3>
         <p>No subscription, no per-member fee, no tier to upgrade to. There's no company in the middle to bill you.</p>
       </div>
-      <div class="sx-card"><h3>Your own relay — optional</h3><p>Your church runs on TrinityOne's shared relays out of the box, with nothing to set up. Want a copy of every event on hardware you control? Run the free Relay app on any Mac, Windows or Linux machine. It always falls back to the shared relays.</p></div>
+      <div class="sx-card"><h3>Your own relay — optional</h3><p>Your church runs on TrinityOne's shared relays out of the box, with nothing to set up. Want a copy of every event on hardware you control? Run the free Relay app on any Mac, Windows or Linux machine. It falls back to the shared relays unless your church chooses to run only its own.</p></div>
       <div class="sx-card"><h3>A community you can keep safe</h3><p>Mark who is a child and who is cleared for youth work, and the rules apply automatically — enforced by the relay rather than the app. Invite-only groups, and a blocklist only the owner can write.</p></div>
       <div class="sx-card"><h3>The admin, handled</h3><p>Joining codes and a printable invite poster, member approval, serving rotas, the calendar, and a treasurer's ledger with quarterly statements that share totals without naming anyone.</p></div>
     </div>
@@ -674,7 +662,11 @@
         <div class="sx-acts">
           <a class="sx-act sx-act--go" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe"><b>Windows</b><span>Installer (.exe)</span></a>
           <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg"><b>macOS</b><span>Apple silicon (.dmg)</span></a>
-          <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage"><b>Linux</b><span>AppImage — or the Debian package</span></a>
+          <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage"><b>Linux</b><span>AppImage</span></a>
+            <!-- CI builds `deb,appimage` and publishes both (relay-desktop.yml). The page named the
+                 Debian package in prose and linked only the AppImage, so the one reader who wanted it
+                 had nowhere to click. -->
+            <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.deb"><b>Linux</b><span>Debian package (.deb)</span></a>
         </div>
       </div>
     </div>
@@ -723,14 +715,14 @@
     <h2>Moving across, without the upheaval</h2>
     <p style="color:var(--ink-2);font-size:15.5px;line-height:1.6;margin:0">Start with one group, keep your current tools running alongside, and move at your own pace. Because it's self-custodial, your data is always yours to take.</p>
     <ol>
-      <li><b>Start with one group.</b> Your leadership team or a single life group, for a week or two. Most of TrinityOne turns on and off under <b>Settings &rarr; Features</b>, so you can begin with just chat and a Bible.</li>
-      <li><b>Re-create your groups.</b> In the console &rarr; <b>Groups</b>, make a room for each one: <i>open</i> for anything church-wide, <i>invite-only</i> for a closed group.</li>
+      <li><b>Start with one group.</b> Your leadership team or a single life group, for a week or two. In the console, <b>Settings &rarr; Features</b> switches Community, the Library and Kids check-in on and off, so you can start small.</li>
+      <li><b>Re-create your groups.</b> In the console &rarr; <b>Groups</b>, make a room for each one: leave it open for anything church-wide, or tick <b>Invite-only</b> for a closed group.</li>
       <li><b>Bring your people across.</b> Drop your join link into each existing WhatsApp or Facebook group; for anyone not in those, print the invite poster — one QR the whole room can scan.</li>
-      <li><b>Move your records.</b> Giving history imports from the CSV your current software exports. Your directory fills itself in, because everyone arrived already named.</li>
+      <li><b>Move your records.</b> Your member list imports from the CSV your current software exports, and the treasurer's ledger imports a bank statement. Your directory fills itself in, because everyone arrived already named.</li>
       <li><b>Go live, gently.</b> Keep the old tool read-only for a season if it helps people settle. There is no moment where everything has to switch at once.</li>
     </ol>
     <div class="sw-two">
-      <div class="sw-keep"><b>&check; Comes with you</b><ul><li>Your groups, with more control</li><li>Your people, by their real names</li><li>Giving records &amp; statements</li><li>Rotas, events and rooms</li></ul></div>
+      <div class="sw-keep"><b>&check; Comes with you</b><ul><li>Your groups, with more control</li><li>Your people, by their real names</li><li>The treasurer's ledger and statements</li><li>Rotas, events and rooms</li></ul></div>
       <div class="sw-drop"><b>&times; Stays behind</b><ul><li>Phone numbers (none needed)</li><li>Old chat history and forwards</li><li>Monthly fees</li><li>A company in the middle</li></ul></div>
     </div>
     <p style="font-size:14.5px;color:var(--ink-3);margin:16px 0 0">Leaving the history behind isn't a loss — it's a clean, quiet start. The relationships come; the noise doesn't.</p>
