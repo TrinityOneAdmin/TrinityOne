@@ -423,7 +423,22 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   const [sheet, setSheet] = useSv(null);   // { kind, item }
   const [rosterOpen, setRosterOpen] = useSv(false);
   const [svcExpanded, setSvcExpanded] = useSv(false);   // show all upcoming services vs the first 3
+  const tabEls = React.useRef({});
   useSvE(() => { if (open) { setTab(ctx.servingTab || 'serving'); setSheet(null); setRosterOpen(false); } }, [open]);
+  // ONE place decides where the strip is scrolled: whenever the selected tab changes, for any reason.
+  // The click handler used to own this, so the one path that most needs it never got it — Today's
+  // openServing('care') deep link from the "you're being cared for" banner opened with the selected tab
+  // off the right edge, which is the exact symptom the scroll was added to fix. block:'nearest' keeps
+  // this horizontal; measured, no ancestor and no window scroll moves.
+  useSvE(() => {
+    if (!open) return;
+    const el = tabEls.current[tab];
+    if (!el || !el.scrollIntoView) return;
+    try {
+      const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: still ? 'auto' : 'smooth' });
+    } catch (err) {}
+  }, [tab, open]);
   const pending = ctx.servPending || [];
   const upcoming = ctx.servConfirmed || [];
   const declined = ctx.servDeclined || [];
@@ -459,33 +474,29 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             the right edge — tappable, but its label never readable, and nothing here scrolled. `flex: 1` is
             not the shrink it looks like: a flex item defaults to `min-width: auto`, so these refuse to go
             below their own label width and simply overflowed a container that clipped them.
-            So the strip scrolls, and `1 0 auto` keeps the old behaviour where there IS room — grow to fill a
-            wide screen, never shrink a label to fit a narrow one. Selecting a tab scrolls it fully into
-            view, which is what makes the last tab reachable rather than merely present. */}
-        {/* Two things are needed to keep the 14px inset on BOTH ends, and each fixes a different scroll.
-            The right inset is a spacer rather than padding, because a flex scroll container drops its
-            padding-right at the end of the scroll — the last tab would sit flush against the screen edge
-            while the first keeps its inset. A real child cannot be dropped. That covers a finger swipe.
-            scroll-padding covers the other one: scrollIntoView aligns the BUTTON to the nearest edge and
-            reads straight past a spacer, so without it selecting Care parks it flush anyway. */}
-        <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '0 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
+            The strip therefore scrolls. `1 0 0%` + `min-width: max-content` is the pair that does it without
+            a regression: the 0% basis divides free space EQUALLY (a plain `1 0 auto` basis is the label, so
+            Calendar came out 16% wider than Care wherever there was room, and the Serving tab's width moved
+            whenever its pending badge appeared), while max-content still refuses to shrink a label — which is
+            what preserves the overflow this whole change exists for.
+            padding-top is 4, not 0: overflow-x makes this a scroll container, which clips paint to the
+            padding box, and the focus ring sits 4px above the border box. At 0 the top of the ring was
+            sliced off for keyboard and switch users.
+            Two more things keep the 14px inset on BOTH ends, each for a different scroll. The right inset is
+            a spacer child rather than padding, because a flex scroll container drops its padding-right at the
+            end of a swipe. It is 10px, not 14: `gap: 4` applies before it too, and 4 + 10 is the 14 the left
+            side gets. scroll-padding covers the other scroll — scrollIntoView aligns the BUTTON to the
+            nearest edge and reads straight past a spacer. */}
+        <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '4px 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
           {[['serving', 'Serving', 'hand'], ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
             const on = tab === k;
-            const pick = (e) => {
-              setTab(k);
-              const el = e.currentTarget;
-              try {
-                const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-                el.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: still ? 'auto' : 'smooth' });
-              } catch (err) {}
-            };
             return (
-              <button key={k} onClick={pick} style={{ flex: '1 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
+              <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
                 <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
               </button>
             );
           })}
-          <div aria-hidden="true" style={{ flex: '0 0 14px' }} />
+          <div aria-hidden="true" style={{ flex: '0 0 10px' }} />
         </div>
       </div>
 
