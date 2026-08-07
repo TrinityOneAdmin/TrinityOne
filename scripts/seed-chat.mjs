@@ -6,7 +6,7 @@
 // only ever talk about the church this machine invented. Messages are signed by the MEMBERS, not the church —
 // which is what makes a room look alive rather than broadcast.
 //
-// A chat message is a kind-1 carrying ['t', 'trinityone'], ['t', <groupId>] and ['church', <churchpub>] —
+// A chat message is a kind-1 carrying ['t', 'trinityone'], ['t', <groupId>] and ['p', <churchpub>] —
 // the same shape src/fellowship.src.js sendMessage() writes.
 //
 // Timestamps are spread backwards over several days, because a room where forty messages share one second
@@ -91,7 +91,10 @@ for (const [groupId, who, hoursAgo, text] of SCRIPT) {
   const evt = finalizeEvent({
     kind: 1,
     created_at: now() - Math.round(hoursAgo * 3600),
-    tags: [['t', NET], ['t', groupId], ['church', CP]],
+    // ['p', churchPub] — NOT ['church', …]. subscribeGroup() drops any message whose tags lack a `p` tag
+    // matching the active church, so a 'church' tag publishes fine and then renders as "No messages yet".
+    // Matches sendMessage() in src/fellowship.src.js.
+    tags: [['t', NET], ['t', groupId], ['p', CP]],
     content: text,
   }, sk);
   const [good, why] = await publish(w, evt, sk);

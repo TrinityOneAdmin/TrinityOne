@@ -52,6 +52,7 @@ scripts/.seed-members.json
 # a church SECRET key — disposable, but never commit it
 scripts/.seed-church.json
 scripts/.seed-carekey.json
+scripts/.seed-namekey.json
 .secrets/
 
 # ── relay runtime data: DEFAULT-DENY. ARCHITECTURE-AUDIT-2026-07-30 ────────────────────────────────────────
