@@ -73,6 +73,11 @@
   /* nav */
   nav.top { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--paper) 86%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line-2); }
   nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 74px; max-width: 1280px; }
+  /* The site is one scroll now, so EVERY nav link is an in-page anchor and every jump lands underneath a
+     sticky 74px nav — the section's own heading is the part it hides, which is the one line the reader
+     needed. The target has to reserve that room itself. Nav height plus air; it does not change by
+     breakpoint, so one value covers every width. */
+  section[id] { scroll-margin-top: 92px; }
   .wm-sm { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: -.3px; text-decoration: none; }
   .wm-sm .one { color: var(--clay); }
   nav .links { display: flex; gap: 28px; margin-left: 20px; }
@@ -678,7 +683,12 @@
          reader is deciding whether to get the app, not planning around a blocked domain. The install-SAFETY
          line stays, in one sentence, because dropping it would leave the site with no guidance at all on
          where it is safe to install from. -->
-    <p class="sx-note" style="text-align:center">Install from a TrinityOne address you asked for — this page, or your own church's. A copy someone sends you as a file can be changed, and your phone will not warn you the first time you install it.</p>
+    <!-- Says the same thing as before, to someone who has never thought about where an app comes from. The
+         old wording ("a TrinityOne address you asked for", "your phone will not warn you") described the
+         mechanism and left the reader to work out what to DO. Forwarding an app file over WhatsApp is
+         normal and friendly in much of the world this is built for, so the instruction has to be plain and
+         it has to name the trusted friend, who is exactly who it will come from. -->
+    <p class="sx-note" style="text-align:center">Download the app from this page, or from your church's own TrinityOne address. If someone sends you the app as a file — even someone you trust — don't install it. A file can be changed on its way to you, and your phone can't tell the difference the first time.</p>
   </div>
 </section>
 
