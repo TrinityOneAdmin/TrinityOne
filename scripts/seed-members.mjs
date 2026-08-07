@@ -25,7 +25,7 @@ import { v2 as nip44v2 } from 'nostr-tools/nip44';
 const [, , CHURCH_ARG, COUNT_ARG, RELAY_ARG] = process.argv;
 if (!CHURCH_ARG) { console.error('usage: node scripts/seed-members.mjs <church-npub-or-hex> [count] [relay-url]'); process.exit(2); }
 
-const COUNT = Math.max(1, Math.min(60, parseInt(COUNT_ARG || '10', 10)));
+const COUNT = Math.max(1, Math.min(200, parseInt(COUNT_ARG || '10', 10)));   // 60 -> 200 for a congregation-sized seed (2026-08-07)
 const RELAY = RELAY_ARG || 'wss://app.trinityone.church/relay';
 const cp = /^[0-9a-f]{64}$/i.test(CHURCH_ARG) ? CHURCH_ARG.toLowerCase() : (() => {
   const d = nip19decode(CHURCH_ARG); if (d.type !== 'npub') throw new Error('not an npub'); return d.data;
@@ -41,6 +41,26 @@ const NAMES = [
   'David Chen', 'Ruth Blackwood-Hayes', 'Samuel Okonkwo', 'Hannah Bright', 'Josef Nowak',
   'Aisha Rahman', 'Peter Vaughan', 'Naomi Fitzgerald', 'Michael Osei', 'Elena Petrova',
   'Jonathan Reid', 'Bea Lindqvist', 'Caleb Mwangi', 'Sarah Ellison', 'Andrzej Kowalczyk',
+  'Eunice Mbeki', 'Harold Prentice', 'Fiona Gallagher', 'Ibrahim Sesay', 'Clara Nkemdirim',
+  'Douglas Menzies', 'Rosa Iglesias', 'Nathan Whitcombe', 'Yewande Balogun', 'Alan Trethewey',
+  'Miriam Katz', 'Oliver Sandford', 'Blessing Uche', 'Katarzyna Zielinska', 'Frank Ellery',
+  'Deborah Ntuli', 'Stephen Pargeter', 'Amara Chukwu', 'Louise Hammond', 'Rafael Duarte',
+  'Joy Abimbola', 'Malcolm Fairweather', 'Sunita Kapoor', 'Colin Barraclough', 'Esther Danquah',
+  'Patrick Neary', 'Wendy Strachan', 'Emeka Nwosu', 'Marianne Lefevre', 'Gordon Aitken',
+  'Chidinma Eze', 'Roger Pemberton', 'Anneke de Vries', 'Simon Braithwaite', 'Folake Ogunleye',
+  'Vera Kowalski', 'Duncan Shaw', 'Rebekah Lyle', 'Anthony Marchetti', 'Grace Wanjiru',
+  'Nigel Farrow', 'Beatrice Nyong', 'Callum Rennie', 'Sofia Marchetti', 'Kwame Boateng',
+  'Judith Oyelaran', 'Barry Considine', 'Lydia Chukwuma', 'Ewan MacAllister', 'Adaeze Obi',
+  'Trevor Sillitoe', 'Halima Yusuf', 'Gareth Pryce', 'Ingrid Halvorsen', 'Obinna Madu',
+  'Pauline Rutherford', 'Ezra Kimani', 'Bernadette Quinn', 'Lars Andersen', 'Temitope Alabi',
+  'Howard Beckwith', 'Nadia Haddad', 'Iain Cruickshank', 'Chiamaka Nnaji', 'Roy Stapleton',
+  'Sylvia Mensah', 'Gerald Tomlinson', 'Anita Bergstrom', 'Femi Adekunle', 'Moira Baird',
+  'Clive Hartnell', 'Zainab Bello', 'Neil Ferguson', 'Cecilia Oduya', 'Martin Rowbotham',
+  'Precious Ademola', 'Alistair Cummins', 'Ngozi Anyanwu', 'Gwen Treloar', 'Bartek Wysocki',
+  'Lorraine Fitzsimmons', 'Kofi Asante', 'Sheila Ashworth', 'Dominik Sobczak', 'Bisi Falana',
+  'Raymond Doughty', 'Mercy Wairimu', 'Angus Kerr', 'Halina Mazur', 'Chinedu Okafor',
+  'Barbara Ledbetter', 'Yusuf Adamu', 'Fern Caldwell', 'Piotr Lewandowski', 'Ifeoma Nzeribe',
+  'Stuart Pennington', 'Abigail Ntim', 'Leonard Fairbrother', 'Nkechi Umeh', 'Vivien Sackville',
 ];
 
 const conn = () => new Promise((res, rej) => {
