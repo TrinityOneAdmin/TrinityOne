@@ -43,6 +43,10 @@
       p.classList.toggle('is-on', on);
       p.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    // "The Bible" carries a permanent emphasis (is-heart) as the resting state. Once something IS selected,
+    // two highlighted pills read as two selections — so the resting emphasis stands down while a choice is
+    // active, and comes back on reset.
+    wrap.classList.add('has-selection');
   }
   function reset() {
     if (current === null) return;
@@ -50,6 +54,7 @@
     img.setAttribute('src', base);
     img.setAttribute('alt', baseAlt);
     pills.forEach(function (p) { p.classList.remove('is-on'); p.setAttribute('aria-pressed', 'false'); });
+    wrap.classList.remove('has-selection');
   }
 
   pills.forEach(function (p) {

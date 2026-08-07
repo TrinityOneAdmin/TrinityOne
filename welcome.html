@@ -160,6 +160,7 @@
   .feat-pills span[data-shot]:hover { border-color: color-mix(in oklab, var(--clay) 45%, var(--line)); transform: translateY(-1px); }
   .feat-pills span[data-shot]:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
   .feat-pills span.is-on { color: var(--clay-ink); font-weight: 700; background: var(--clay-soft); border-color: color-mix(in oklab, var(--clay) 40%, var(--line)); }
+  .feat-pills.has-selection span.is-heart:not(.is-on) { color: var(--ink-2); font-weight: 600; background: var(--surface); border-color: var(--line); }
   @media (prefers-reduced-motion: reduce) { .feat-pills span[data-shot] { transition: none; } .feat-pills span[data-shot]:hover { transform: none; } }
 
 
