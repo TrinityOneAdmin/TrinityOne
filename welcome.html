@@ -156,6 +156,12 @@
   .feat-pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 0; }
   .feat-pills span { font-family: var(--font-ui); font-weight: 600; font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); padding: 7px 13px; border-radius: 999px; box-shadow: var(--shadow-sm); }
   .feat-pills span.is-heart { color: var(--clay-ink); font-weight: 700; background: var(--clay-soft); border-color: color-mix(in oklab, var(--clay) 24%, var(--line)); }
+  .feat-pills span[data-shot] { cursor: pointer; transition: border-color .15s, transform .15s, background .15s; }
+  .feat-pills span[data-shot]:hover { border-color: color-mix(in oklab, var(--clay) 45%, var(--line)); transform: translateY(-1px); }
+  .feat-pills span[data-shot]:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
+  .feat-pills span.is-on { color: var(--clay-ink); font-weight: 700; background: var(--clay-soft); border-color: color-mix(in oklab, var(--clay) 40%, var(--line)); }
+  @media (prefers-reduced-motion: reduce) { .feat-pills span[data-shot] { transition: none; } .feat-pills span[data-shot]:hover { transform: none; } }
+
 
   /* phone mockup (ported from welcome.html) */
   .phone-stage { display: flex; justify-content: center; align-items: center; position: relative; }
@@ -309,8 +315,11 @@
            contained none of private / safe / secure / encrypted / no account. For an audience whose first
            question is safety, that is a long wait, so it is now the second sentence. -->
       <p class="sub">God's Word at the heart of it all — and around it, everything your church needs to live it out together: sermons, reading plans, devotionals, prayer, serving rotas, and caring for one another, in one app. Private to your church — no account, no password.</p>
-      <div class="feat-pills" aria-label="What's inside">
-        <span class="is-heart">The Bible</span><span>Sermons</span><span>Reading plans</span><span>Devotionals</span><span>Prayer</span><span>Serving rotas</span><span>Care</span>
+      <!-- Each pill with a data-shot swaps the phone beside it for a REAL screen from a real phone. Sermons
+           and Devotionals have no data-shot yet: there is no distinct screen for either, and pointing them at
+           an unrelated one would be a small lie in the exact place the page claims to show you the product. -->
+      <div class="feat-pills" data-pills aria-label="What's inside — tap to see it">
+        <span class="is-heart" data-shot="app-bible.webp" data-label="the Bible">The Bible</span><span>Sermons</span><span data-shot="app-library.webp" data-label="reading plans">Reading plans</span><span>Devotionals</span><span data-shot="app-prayer.webp" data-label="prayer requests">Prayer</span><span data-shot="app-serving.webp" data-label="the serving rota">Serving rotas</span><span data-shot="app-care.webp" data-label="practical care">Care</span>
       </div>
       <div class="cta">
         <a href="#start" class="to-btn to-btn--clay">Start a church</a>
@@ -326,9 +335,10 @@
       <p class="need">Joining a church? Have the invite link or code from your church to hand — that's what connects you to them.</p>
     </div>
     <div class="phone-stage">
-      <div class="phone-embed"><picture>
-        <source srcset="welcome-app-today.avif" type="image/avif" />
-        <img src="welcome-app-today.webp" alt="The TrinityOne app — the Today screen" width="280" height="604" style="width:280px;height:604px;object-fit:cover" loading="lazy" decoding="async" /></picture></div>
+      <!-- No <picture>/avif here any more: pills.js swaps `src` directly, and a <source> would keep winning
+           over the swapped src, so every pill would show the Today screen and look broken. One format, one
+           element, one source of truth. Not lazy either — it is the hero image and it is what a pill changes. -->
+      <div class="phone-embed"><img id="appShot" src="welcome-app-today.webp" alt="The TrinityOne app — the Today screen" width="280" height="604" style="width:280px;height:604px;object-fit:cover" decoding="async" /></div>
     </div>
   </div>
 </header>
@@ -717,6 +727,7 @@
   </div>
 </div>
 <script src="switching.js"></script>
+<script src="pills.js"></script>
 <script src="android-cta.js"></script>
 </body>
 </html>
