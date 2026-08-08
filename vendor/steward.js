@@ -15145,6 +15145,12 @@ zoo`.split("\n");
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
   var PENDING_WRITE = "write";
   var PENDING_REMOVE = "remove";
+  function _bootKeyState() {
+    if (lsGet(KEY_LS)) return "plaintext";
+    if (lsGet(ENC_LS)) return "locked";
+    if (lsGet(ENC_PENDING_LS)) return "interrupted";
+    return "none";
+  }
   var _encIsMarker = (raw) => {
     try {
       const o = JSON.parse(raw);
@@ -15453,6 +15459,11 @@ zoo`.split("\n");
       try {
         localStorage.removeItem(ENC_PENDING_LS);
       } catch {
+      }
+      try {
+        if (!lsGet(ENC_LS)) window.Steward.locked = false;
+        window.dispatchEvent(new CustomEvent("steward-key"));
+      } catch (e) {
       }
       return true;
     }
@@ -15805,15 +15816,20 @@ zoo`.split("\n");
         window.Steward.locked = false;
         return true;
       }
-      const m = lsGet(KEY_LS);
+      const boot = _bootKeyState();
+      const m = boot === "plaintext" ? lsGet(KEY_LS) : null;
       if (m) {
         setKey(m);
         _setNeedsPin(true);
         window.Steward.locked = false;
         return true;
       }
-      if (lsGet(ENC_LS)) {
+      if (boot === "locked") {
         migrateEncToSecure();
+        window.Steward.locked = true;
+        return false;
+      }
+      if (boot === "interrupted") {
         window.Steward.locked = true;
         return false;
       }

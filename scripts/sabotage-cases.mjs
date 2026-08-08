@@ -43,4 +43,30 @@ export const CASES = [
     replace: `    if (false) { await rememberClear(); return null; }`,
     test: 'scripts/remember-account-binding.test.mjs',
   },
+  {
+    name: 'boot-key: interrupted write reported as "no key"',
+    file: 'src/steward.src.js',
+    // the pre-fix behaviour: nothing consults the breadcrumb, so the console offers "Set up a new church"
+    find: `  if (lsGet(ENC_PENDING_LS)) return 'interrupted';   // a key may be in the store with its marker unwritten`,
+    replace: ``,
+    test: 'scripts/console-boot-key-state.test.mjs',
+  },
+  {
+    name: 'boot-key: a stale crumb outranks a settled key',
+    file: 'src/steward.src.js',
+    // the plausible careless ordering — checking the unsettled case before the settled one, which would put a
+    // device that demonstrably HAS a key onto the interrupted path
+    find: `  if (lsGet(ENC_LS)) return 'locked';                // settled: a key is here, PIN-locked
+  if (lsGet(ENC_PENDING_LS)) return 'interrupted';   // a key may be in the store with its marker unwritten`,
+    replace: `  if (lsGet(ENC_PENDING_LS)) return 'interrupted';
+  if (lsGet(ENC_LS)) return 'locked';`,
+    test: 'scripts/console-boot-key-state.test.mjs',
+  },
+  {
+    name: 'boot-key: the plaintext migration path is skipped',
+    file: 'src/steward.src.js',
+    find: `  if (lsGet(KEY_LS)) return 'plaintext';             // legacy seed on disk — load it and force a PIN`,
+    replace: ``,
+    test: 'scripts/console-boot-key-state.test.mjs',
+  },
 ];

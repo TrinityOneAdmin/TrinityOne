@@ -855,6 +855,25 @@ const ENC_PENDING_LS = 'trinityone.steward.church-key.removing';
 // exposure the next removeKey/removeLock will clear, while a deleted key is a church that no longer exists.
 const PENDING_WRITE = 'write';
 const PENDING_REMOVE = 'remove';
+// What key state does this device boot into? Pure over localStorage, so init() can decide BEFORE the first
+// render — and so it can be driven in a test, which the inline version could not be.
+//
+// 'interrupted' is the one that matters. encBlobRemoveResume() settles a half-finished key write or removal,
+// but it is async and init() is not, so by the time it knows the answer the console has already drawn.
+// Without this the console reported "no key" and offered "Set up a new church" over a church key sitting in
+// the Keystore awaiting adoption — and creating one overwrote it.
+//
+// It does not try to guess the DIRECTION of an interrupted operation, because that is unknowable:
+// encBlobRemove() clears the marker up front and encBlobWrite() sets it only after the store write, so both
+// interruptions leave marker-absent + breadcrumb, byte-identical. It answers "something is unsettled", and
+// the console treats that as locked — an unlock screen cannot destroy anything, and the resume clears the
+// breadcrumb and re-announces either way, so a stale crumb costs one screen rather than a church key.
+function _bootKeyState() {
+  if (lsGet(KEY_LS)) return 'plaintext';             // legacy seed on disk — load it and force a PIN
+  if (lsGet(ENC_LS)) return 'locked';                // settled: a key is here, PIN-locked
+  if (lsGet(ENC_PENDING_LS)) return 'interrupted';   // a key may be in the store with its marker unwritten
+  return 'none';
+}
 
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
 // Does this look like a church-key blob at all? Used when finishing an INTERRUPTED WRITE, where module state is
@@ -1218,6 +1237,14 @@ async function encBlobRemoveResume() {
       }
     } catch (e) { console.warn('[steward] could not settle an interrupted key write', e); return false; }
     try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+    // init() has already drawn the console by now — it is synchronous and this is not, so it answered
+    // 'interrupted' and left the device locked rather than offering "Set up a new church" over a key it
+    // could not yet see. Now we know. Re-announce so the UI settles without needing a restart: a device that
+    // turned out to have a key stays locked, and one that did not returns to setup.
+    try {
+      if (!lsGet(ENC_LS)) window.Steward.locked = false;
+      window.dispatchEvent(new CustomEvent('steward-key'));
+    } catch (e) {}
     return true;
   }
   // Module state is gone after a restart, so recover the intent from what localStorage says: a marker means a
@@ -1741,20 +1768,27 @@ window.Steward = {
       lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
       _setNeedsPin(true); window.Steward.locked = false; return true;
     }
-    const m = lsGet(KEY_LS);
+    const boot = _bootKeyState();
+    const m = boot === 'plaintext' ? lsGet(KEY_LS) : null;
     if (m) {
       // SECURITY-AUDIT-2026-06-25 Critical-2: legacy plaintext seed on disk. Load into memory, mark
       // as needing migration. The forced PIN modal will appear on the next render; setPin() will
       // atomically replace KEY_LS with ENC_LS.
       setKey(m); _setNeedsPin(true); window.Steward.locked = false; return true;
     }
-    if (lsGet(ENC_LS)) {
+    if (boot === 'locked') {
       // S6: fire-and-forget the one-time move into the hardware store. Deliberately NOT awaited — init() is
       // synchronous and the lock state below does not depend on WHERE the blob lives, only that one exists.
       // migrateEncToSecure() is a no-op unless it can read the blob back out, so the worst case is that this
       // device simply stays as it was and tries again next boot.
       migrateEncToSecure();
       window.Steward.locked = true; return false;   // PIN-locked — needs unlock(), no key in memory
+    }
+    if (boot === 'interrupted') {
+      // A key write or removal was cut off. encBlobRemoveResume() above will settle it, but not before this
+      // returns — so refuse to claim the device is empty. Locked shows an unlock screen instead of "Set up a
+      // new church", and the resume re-announces once it knows.
+      window.Steward.locked = true; return false;
     }
     return false;
   },
