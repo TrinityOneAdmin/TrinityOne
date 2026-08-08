@@ -18,7 +18,20 @@
 
   var base = img.getAttribute('src');
   var baseAlt = img.getAttribute('alt');
+  // TWO VARIABLES, BECAUSE THEY ANSWER TWO QUESTIONS. `current` is what the phone is SHOWING, which a hover
+  // or a focus may change on its way past. `pinned` is what the reader has actually CHOSEN, and only a click
+  // or Enter writes it.
+  //
+  // Collapsing them into one is what broke every pill on every device. A tap fires focus BEFORE click: focus
+  // called show(), which set `current`, and the click that caused it then found current === this pill's shot
+  // and called reset(). So a tap showed the screen and immediately hid it again — measured on real touch
+  // input, all seven pills, nothing but the resting image. A hovering pointer had the same fault by a
+  // different door: mouseenter set `current`, so the click always took the reset branch too.
+  //
+  // The earlier repair — drop the focus listener — fixed touch and left desktop broken, because it treated
+  // the symptom on one input and not the confusion underneath.
   var current = null;
+  var pinned = null;
 
   // Decode ahead of the first interaction so the swap is instant rather than a flash of nothing. Sequential,
   // not parallel: this is a thin-pipe product and eight images at once is exactly the burst we tell churches
@@ -61,28 +74,49 @@
     } catch (e) {}
   }
   function reset() {
-    if (current === null) return;
+    if (current === null && pinned === null) return;
     current = null;
+    pinned = null;
     img.setAttribute('src', base);
     img.setAttribute('alt', baseAlt);
     pills.forEach(function (p) { p.classList.remove('is-on'); p.setAttribute('aria-pressed', 'false'); });
     wrap.classList.remove('has-selection');
   }
 
+  // Put back the chosen screen after a preview that was not committed.
+  function restore() {
+    var chosen = pills.filter(function (p) { return p.getAttribute('data-shot') === pinned; })[0];
+    if (chosen) { current = null; show(chosen); }
+  }
+
   pills.forEach(function (p) {
     p.setAttribute('role', 'button');
     p.setAttribute('tabindex', '0');
     p.setAttribute('aria-pressed', 'false');
-    p.addEventListener('click', function () { current === p.getAttribute('data-shot') ? reset() : show(p); });
+    // Choosing compares against `pinned`, never against what happens to be on screen — otherwise the focus
+    // or hover that immediately precedes a click makes every first choice read as "you already had this one".
+    var choose = function () {
+      if (pinned === p.getAttribute('data-shot')) { reset(); return; }
+      show(p);
+      pinned = p.getAttribute('data-shot');
+    };
+    p.addEventListener('click', choose);
     p.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); current === p.getAttribute('data-shot') ? reset() : show(p); }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); }
     });
+    // Focus PREVIEWS. Tabbing across the row shows each screen as you pass, and Enter commits the one you
+    // stopped on — but arriving does not choose, so tabbing away from an unchosen pill puts back whatever was
+    // chosen before rather than stranding the reader on a screen they never picked.
     p.addEventListener('focus', function () { show(p); });
+    p.addEventListener('blur', function () { if (pinned === null) reset(); else if (pinned !== current) restore(); });
   });
 
   // Hover preview only where hovering is a real thing — on touch, `mouseenter` fires on tap and would fight
   // the click handler.
   if (window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
-    pills.forEach(function (p) { p.addEventListener('mouseenter', function () { show(p); }); });
+    pills.forEach(function (p) {
+      p.addEventListener('mouseenter', function () { show(p); });
+      p.addEventListener('mouseleave', function () { if (pinned === null) reset(); else if (pinned !== current) restore(); });
+    });
   }
 })();
