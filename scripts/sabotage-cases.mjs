@@ -92,4 +92,34 @@ export const CASES = [
     replace: `  const a = gotG.slice(), b = wantG.slice();`,
     test: 'scripts/guardians-unknown.test.mjs',
   },
+  {
+    name: 'safety: a failed audience lookup reported as a full send',
+    file: 'src/fellowship.src.js',
+    // the pre-fix behaviour: "could not read the team" and "there is no team" collapse into one answer
+    find: `  return { readers: clean, narrowed: !Array.isArray(group) };`,
+    replace: `  return { readers: clean, narrowed: false };`,
+    test: 'scripts/safety-audience-narrowing.test.mjs',
+  },
+  {
+    name: 'safety: every church without a care team warned needlessly',
+    file: 'src/fellowship.src.js',
+    // the over-correction: a church that genuinely has no team is told the send was degraded
+    find: `  return { readers: clean, narrowed: !Array.isArray(group) };`,
+    replace: `  return { readers: clean, narrowed: !(Array.isArray(group) && group.length) };`,
+    test: 'scripts/safety-audience-narrowing.test.mjs',
+  },
+  {
+    name: 'safety: the church key stops being an unconditional reader',
+    file: 'src/fellowship.src.js',
+    find: `  const readers = [cp];`,
+    replace: `  const readers = [];`,
+    test: 'scripts/safety-audience-narrowing.test.mjs',
+  },
+  {
+    name: 'safety: an unreadable care roster reads as an empty one',
+    file: 'src/fellowship.src.js',
+    find: `    } catch (e) { return null; }   // could not READ the roster — not the same as a church with nobody on it`,
+    replace: `    } catch (e) { return []; }`,
+    test: 'scripts/safety-audience-narrowing.test.mjs',
+  },
 ];

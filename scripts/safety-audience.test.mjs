@@ -25,8 +25,13 @@ test('a reply is never sealed to one phone alone', () => {
   assert.ok(!/_dmEncrypt\(sk,\s*check\.by,\s*body\)/.test(fn),
     'markSafe seals only to the check\'s starter again — with a delegated steward that is one volunteer\'s ' +
     'browser, and "I need help" is unreadable by the church');
-  assert.match(fn, /readers\s*=\s*\[cp\]/,
-    'the church key is no longer an unconditional reader — the answers vanish with the starter\'s phone');
+  // The unconditional church key moved into _safeReaders when the audience resolution stopped swallowing
+  // its own failures. It is asserted BEHAVIOURALLY in safety-audience-narrowing.test.mjs ("the church key is
+  // unconditional"); this only checks markSafe still routes through the helper, because a source-text match
+  // cannot tell a working reader list from a decorative one.
+  assert.match(fn, /_safeReaders\(/,
+    'markSafe builds its reader list inline again — that is where the swallowed audience lookup lived, and ' +
+    'where a failure silently became a narrower send reported as delivered');
   assert.match(fn, /v:\s*2/, 'the multi-reader envelope is gone');
 });
 

@@ -654,7 +654,12 @@ function SafetyDock({ ctx, onOpenToday }) {
     let ok = false;
     try { ok = await window.Fellowship.markSafe(check, s, ''); } catch (e) {}
     setSending(false);
-    if (ok) { safetyAck(check.id, s); setAnswered(s); } else setErr('Couldn’t send — try again.');
+      // 'narrow' means delivered, but we could not resolve the audience the steward chose — so it reached
+      // the church leader and not (yet) the team it was addressed to. Saying so is the whole point: what
+      // this replaces reported a full delivery that never happened.
+      const NARROW = 'Sent to your church leader. Your church’s team list hasn’t loaded yet, so they may not see it straight away.';
+    if (ok) { safetyAck(check.id, s); setAnswered(s); if (ok === 'narrow') setErr(NARROW); }
+    else setErr('Couldn’t send — try again.');
   };
   const btn = (extra) => ({ flex: 1, height: 40, border: 'none', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14, color: '#fff', ...extra });
   return (
@@ -755,7 +760,11 @@ function SafetyBanner({ ctx, persistent }) {
     let ok = false;
     try { ok = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
     setSending(false);
-    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery; expand so the confirmation is seen
+    // 'narrow' means delivered, but we could not resolve the audience the steward chose — so it reached
+    // the church leader and not (yet) the team it was addressed to. Saying so is the whole point: what
+    // this replaces reported a full delivery that never happened.
+    const NARROW = 'Sent to your church leader. Your church’s team list hasn’t loaded yet, so they may not see it straight away.';
+    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); if (ok === 'narrow') setErr(NARROW); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery; expand so the confirmation is seen
   };
   const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
   const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });

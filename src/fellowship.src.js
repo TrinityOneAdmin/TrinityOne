@@ -291,13 +291,33 @@ function _openSealed(o, authorPub) {
   try { const mine = o && o.keys && o.keys[pub]; if (!mine) return null; const kh = nip44d(mine, nip44ck(sk, authorPub)); return JSON.parse(nip44d(o.enc, _unhex(kh))); } catch (e) { return null; }
 }
 // Fetch the church's published care-team recipient roster (careteam:<cp> → [pubkeys]).
+// Who may open a safety-check reply, and did we actually resolve the audience the check promised?
+//
+// `group` NULL means we could not establish an answer — the care-team query failed, or the stewards document
+// has not arrived yet. That is NOT the same as a church with nobody on that team, and the difference matters:
+// the audience is what the steward chose when they started the check, and a member replying "I need help" is
+// told it reached those people. Sealing narrower and reporting success is the one failure this feature cannot
+// afford, so the caller is handed `narrowed` and must say so rather than swallow it.
+//
+// The church key is unconditional. A reply only one volunteer's phone can open is a reply that disappears
+// with that phone, and this is the feature where that phone is most likely to be lost — so a failed lookup
+// degrades the reach rather than losing the disclosure.
+function _safeReaders(cp, by, group) {
+  const readers = [cp];
+  if (Array.isArray(group)) readers.push(...group);
+  if (by) readers.push(by);
+  const clean = [...new Set(readers.map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))];
+  return { readers: clean, narrowed: !Array.isArray(group) };
+}
 async function _fetchCareTeam(cp) {
   try {
     const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CARETEAM_D + cp] }]);
     let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
     if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean); }
-  } catch (e) {}
-  return [];
+    } catch (e) { return null; }   // could not READ the roster — not the same as a church with nobody on it
+    // Queried successfully and there is no care-team document: this church has not named one. That is a
+    // real answer, and callers may seal accordingly.
+    return [];
 }
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
@@ -3223,13 +3243,24 @@ window.Fellowship = {
     // The church key is unconditional: a reply that only one volunteer's phone can open is a reply that
     // disappears with that phone, and this is the feature where that phone is most likely to be lost.
     const aud = (check.audience === 'care') ? 'care' : 'stewards';
-    let readers = [cp];
+    // Resolve the audience the steward chose, keeping "could not read it" separate from "this church has
+    // nobody on that team". The old code wrapped both in one swallowing catch, so a failure sealed the reply
+    // to the church key and the initiator and still reported delivery. The stewards branch did not even
+    // throw: _churchRoster.get() is simply undefined until the stewards document arrives.
+    let group = null;
     try {
-      if (aud === 'care') { const team = await _fetchCareTeam(cp); readers = readers.concat(team || []); }
-      else { const st = _churchRoster.get(cp); if (st) readers = readers.concat([...st]); }
-    } catch (e) {}
-    if (check.by) readers.push(check.by);   // whoever started it can always read their own roll-call
-    readers = [...new Set(readers.map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))];
+      if (aud === 'care') group = await _fetchCareTeam(cp);   // null on a failed read, [] if there is no team
+      else { const st = _churchRoster.get(cp); group = st ? [...st] : null; }   // undefined = not arrived yet
+    } catch (e) { group = null; }
+    // One retry for the stewards case: that roster arrives on a live subscription, so "not yet" is usually
+    // a race with the boot rather than a real failure, and re-reading it a beat later fixes the common case
+    // instead of merely reporting it.
+    if (group === null && aud !== 'care') {
+      await new Promise(r => setTimeout(r, 1200));
+      try { const st = _churchRoster.get(cp); group = st ? [...st] : null; } catch (e) {}
+    }
+    const picked = _safeReaders(cp, check.by, group);
+    let readers = picked.readers;
     const to = {};
     for (const r of readers) { try { to[r] = _dmEncrypt(sk, r, body); } catch (e) {} }
     if (!Object.keys(to).length) return false;
@@ -3238,7 +3269,12 @@ window.Fellowship = {
     // Return TRUE only on a real relay ACK. The member's "you're safe" confirmation must reflect DELIVERY —
     // a false "help is coming" when the send actually failed (offline / dead relay, the target environment) is
     // the worst failure this feature can have. Promise.any resolves iff ≥1 relay accepted the event.
-    try { await _publishAny(churchRelays(), evt); return true; } catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
+    // Truthy on delivery, as before — but 'narrow' rather than true when we could not resolve the audience
+    // the check promised. Truthy keeps every existing caller working; the extra state lets the screen tell
+    // the member their reply reached their church leader and not yet the team it was addressed to, which
+    // is the difference between a degraded send and the silent one this replaces.
+    try { await _publishAny(churchRelays(), evt); return picked.narrowed ? 'narrow' : true; }
+    catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
   },
   // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
   // H3: "I don't need help that day" is RECIPIENT-ONLY, and the relay enforces it — but it can no longer

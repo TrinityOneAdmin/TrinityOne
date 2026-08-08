@@ -6067,6 +6067,13 @@
       return null;
     }
   }
+  function _safeReaders(cp, by, group) {
+    const readers = [cp];
+    if (Array.isArray(group)) readers.push(...group);
+    if (by) readers.push(by);
+    const clean3 = [...new Set(readers.map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))];
+    return { readers: clean3, narrowed: !Array.isArray(group) };
+  }
   async function _fetchCareTeam(cp) {
     try {
       const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CARETEAM_D + cp] }]);
@@ -6079,6 +6086,7 @@
         if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean);
       }
     } catch (e) {
+      return null;
     }
     return [];
   }
@@ -9866,19 +9874,26 @@
       if (!sk || !cp || !check || !check.by) return false;
       const body = JSON.stringify({ status: status === "help" ? "help" : "safe", note: String(note || "").trim().slice(0, 240), at: Math.floor(Date.now() / 1e3), checkId: check.id });
       const aud = check.audience === "care" ? "care" : "stewards";
-      let readers = [cp];
+      let group = null;
       try {
-        if (aud === "care") {
-          const team = await _fetchCareTeam(cp);
-          readers = readers.concat(team || []);
-        } else {
+        if (aud === "care") group = await _fetchCareTeam(cp);
+        else {
           const st = _churchRoster.get(cp);
-          if (st) readers = readers.concat([...st]);
+          group = st ? [...st] : null;
         }
       } catch (e) {
+        group = null;
       }
-      if (check.by) readers.push(check.by);
-      readers = [...new Set(readers.map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))];
+      if (group === null && aud !== "care") {
+        await new Promise((r) => setTimeout(r, 1200));
+        try {
+          const st = _churchRoster.get(cp);
+          group = st ? [...st] : null;
+        } catch (e) {
+        }
+      }
+      const picked = _safeReaders(cp, check.by, group);
+      let readers = picked.readers;
       const to = {};
       for (const r of readers) {
         try {
@@ -9891,7 +9906,7 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SAFE_D + cp], ["t", NET], ["church", cp], ["p", check.by]], content: ct }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-        return true;
+        return picked.narrowed ? "narrow" : true;
       } catch (e) {
         console.warn("[fellowship] markSafe publish failed", e);
         return false;
