@@ -888,8 +888,16 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
       <button onClick={() => setForgot(f => !f)} style={{ marginTop: 6, background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Forgot your PIN?</button>
       {forgot ? (
         <div style={{ width: 'min(320px, 100%)', margin: '10px auto 0' }}>
+            {/* Ask the device whether it CAN check a phrase before promising anything. A phone whose PIN was
+                set before the account started being recorded on the blob has nothing to compare against and
+                will refuse — correctly, since guessing would let a valid phrase that is not this member's
+                replace the account they meant to open. Printing the promise unconditionally meant those
+                members typed their 12 words only to learn it was for nothing, which is a worse dead end
+                than the start-from-scratch copy it replaced. */}
           <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', lineHeight: 1.5 }}>
-            Your PIN can’t be reset — not even by us. But your 12 words will open this account right here: type them below and nothing else is lost.
+              {(window.TrinityIdentity && window.TrinityIdentity.canRecoverWithWords && window.TrinityIdentity.canRecoverWithWords())
+                ? 'Your PIN can\u2019t be reset \u2014 not even by us. But your 12 words will open this account right here: type them below and nothing else is lost.'
+                : 'Your PIN can\u2019t be reset \u2014 not even by us. And this phone can\u2019t check whose 12 words are typed here, so it won\u2019t risk replacing the account: it was locked before it began recording which account it holds. Your 12 words still work \u2014 they will open this account on another device.'}
           </div>
           <textarea value={words} onChange={e => { setWords(e.target.value); setWordsErr(''); }} rows={3}
             placeholder="word one  word two  word three …" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"

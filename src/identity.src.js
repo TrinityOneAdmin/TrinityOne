@@ -176,6 +176,23 @@ async function rememberClear() {
 // WHOSE encrypted blob is on this device? Written by setPin. Absent on a device whose PIN predates this, and
 // on the two recovery paths that rebuild the marker without knowing the account — callers must read that as
 // "cannot prove it", never as "must be fine".
+// WHICH ACCOUNT is on this phone, for the purpose of checking a typed recovery phrase against it?
+//
+// Two references, and a locked boot is why there are two. PUB_KEY is written by apply(), which runs whenever
+// an identity loads — but NOT on a boot that is still PIN-locked, which is precisely when a member reaches
+// for their 12 words. So a device that had a PIN set and never unlocked since had nothing to compare
+// against, and the forgot-PIN panel promised a recovery the phone would then refuse.
+//
+// setPin now records the owner on the encrypted blob's own marker (finding 2), and that survives a locked
+// boot. Devices whose PIN predates that still have neither, and for them the honest answer is an empty
+// string — the caller must treat "no reference" as "cannot check", never as "must be fine". Guessing would
+// let a valid phrase that is NOT this member's replace the account they meant to open.
+function _recoveryReference() {
+  let have = '';
+  try { have = localStorage.getItem(PUB_KEY) || ''; } catch (e) {}
+  if (!have) { try { have = encOwnerPub() || ''; } catch (e) {} }
+  return have;
+}
 function encOwnerPub() {
   try { const o = JSON.parse(localStorage.getItem(ENC_KEY) || 'null'); return (o && o.pub) || null; } catch (e) { return null; }
 }
@@ -425,10 +442,14 @@ window.TrinityIdentity = {
   // Does this phrase belong to the account already on this phone? Returns 'match' | 'different' | 'unknown'.
   // 'unknown' means we have no stored public key to compare against (an identity created before 2026-08-05),
   // and the caller must treat it as 'different' — refusing to guess is the whole point.
+    // Can this device check a recovery phrase at all? The panel asks BEFORE it promises anything, so a
+    // member on a device with no reference is told the truth rather than typing their 12 words and learning
+    // afterwards that it was for nothing.
+    canRecoverWithWords() { return !!_recoveryReference(); },
   whoseMnemonic(words) {
     const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
-    let have = ''; try { have = localStorage.getItem(PUB_KEY) || ''; } catch (e) {}
+      const have = _recoveryReference();
     if (!have) return 'unknown';
     let got = ''; try { got = (deriveProfile(m) || {}).pubkey || ''; } catch (e) { return 'different'; }
     return got && got === have ? 'match' : 'different';

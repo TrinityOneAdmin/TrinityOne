@@ -12052,6 +12052,20 @@ zoo`.split("\n"));
       console.warn("[identity] remember clear failed", e);
     }
   }
+  function _recoveryReference() {
+    let have = "";
+    try {
+      have = localStorage.getItem(PUB_KEY) || "";
+    } catch (e) {
+    }
+    if (!have) {
+      try {
+        have = encOwnerPub() || "";
+      } catch (e) {
+      }
+    }
+    return have;
+  }
   function encOwnerPub() {
     try {
       const o = JSON.parse(localStorage.getItem(ENC_KEY) || "null");
@@ -12322,14 +12336,16 @@ zoo`.split("\n"));
     // Does this phrase belong to the account already on this phone? Returns 'match' | 'different' | 'unknown'.
     // 'unknown' means we have no stored public key to compare against (an identity created before 2026-08-05),
     // and the caller must treat it as 'different' — refusing to guess is the whole point.
+    // Can this device check a recovery phrase at all? The panel asks BEFORE it promises anything, so a
+    // member on a device with no reference is told the truth rather than typing their 12 words and learning
+    // afterwards that it was for nothing.
+    canRecoverWithWords() {
+      return !!_recoveryReference();
+    },
     whoseMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
-      let have = "";
-      try {
-        have = localStorage.getItem(PUB_KEY) || "";
-      } catch (e) {
-      }
+      const have = _recoveryReference();
       if (!have) return "unknown";
       let got = "";
       try {

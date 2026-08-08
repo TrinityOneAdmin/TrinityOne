@@ -122,4 +122,22 @@ export const CASES = [
     replace: `    } catch (e) { return []; }`,
     test: 'scripts/safety-audience-narrowing.test.mjs',
   },
+  {
+    name: 'recovery: a locked device loses its only reference',
+    file: 'src/identity.src.js',
+    // the pre-fix behaviour: only the reference apply() writes, which a locked boot never runs
+    find: `  if (!have) { try { have = encOwnerPub() || ''; } catch (e) {} }`,
+    replace: ``,
+    test: 'scripts/recovery-reference.test.mjs',
+  },
+  {
+    name: 'recovery: no reference is treated as "must be fine"',
+    file: 'src/identity.src.js',
+    // the dangerous over-correction: answer something so the comparison always runs
+    find: `  return have;
+}`,
+    replace: `  return have || 'unknown';
+}`,
+    test: 'scripts/recovery-reference.test.mjs',
+  },
 ];
