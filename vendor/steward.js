@@ -15669,6 +15669,12 @@ zoo`.split("\n");
     if (b === churchHex) return false;
     return String(a) > String(b);
   }
+  function _guardiansDiffer(gotG, wantG) {
+    if (!Array.isArray(wantG)) return false;
+    if (!Array.isArray(gotG)) return !!wantG.length;
+    const a = gotG.slice().sort(), b = wantG.slice().sort();
+    return a.length !== b.length || a.some((v, i3) => v !== b[i3]);
+  }
   async function _clearancesMatching(pubs, wantFor) {
     if (!pubs.length || !sk || !_isRelayAuthed() || _viewingNetwork()) return null;
     const readFrom = _connectedRelays();
@@ -15741,9 +15747,8 @@ zoo`.split("\n");
             if (!needHere) {
               const w = wantFor(p);
               const minorWrong = !got || !!got.minor !== !!w.minor;
-              const gotG = Array.isArray(got && got.guardians) ? got.guardians.slice().sort() : null;
-              const wantG = (w.guardians || []).slice().sort();
-              const guardiansWrong = !got || gotG === null ? !!wantG.length : gotG.length !== wantG.length || gotG.some((v, i3) => v !== wantG[i3]);
+              const gotG = Array.isArray(got && got.guardians) ? got.guardians : null;
+              const guardiansWrong = _guardiansDiffer(gotG, w.guardians);
               if (minorWrong || !!got.cleared !== !!w.cleared || guardiansWrong) {
                 needHere = true;
                 contentWrong = true;
@@ -17712,7 +17717,8 @@ zoo`.split("\n");
         }
       } catch (e) {
       }
-      const guardsFor = (h) => gmap.get(h) || [];
+      const guardsKnown = guardians !== null;
+      const guardsFor = (h) => guardsKnown ? gmap.get(h) || [] : void 0;
       const sameList = (x, y) => {
         const a = x || [], b = y || [];
         return a.length === b.length && a.every((v, i3) => v === b[i3]);

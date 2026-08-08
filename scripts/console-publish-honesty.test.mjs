@@ -128,7 +128,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // would assert my description of when that refusal fires rather than the console's.
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   assert.ok(skewDecl && futureDecl, 'the future-date guard is gone from the bundle — re-anchor this test');
-  const matching = skewDecl + futureDecl + netViewDecl + guards + grab('async function _clearancesMatching(')
+  const matching = skewDecl + futureDecl + netViewDecl + guards + grab('function _guardiansDiffer(') + grab('async function _clearancesMatching(')
     // The cross-author ranking rule lives beside it and is called from inside it. Unlifted, the call
     // throws ReferenceError into _clearancesMatching's own catch, which returns null — "could not
     // check" — so the harness would quietly measure the no-read path and skip nothing.

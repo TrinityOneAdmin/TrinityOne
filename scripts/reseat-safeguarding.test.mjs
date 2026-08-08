@@ -168,6 +168,7 @@ function consoleSide() {
     + grab(STEWARD, 'var _beatsDoc = ') + ';\n'
     + grab(STEWARD, 'function _memberHonours(') + grab(STEWARD, 'function _topWeMustAnswer(')
     + grab(STEWARD, 'function _newestByD(') + grab(STEWARD, 'function _connectedRelays(')
+    + grab(STEWARD, 'function _guardiansDiffer(')
     + grab(STEWARD, 'async function _clearancesMatching(') + grab(STEWARD, 'function _clearanceOutranks(')
     + grab(STEWARD, 'async function _publishToRelays(evt, urls)');
   const methods = [

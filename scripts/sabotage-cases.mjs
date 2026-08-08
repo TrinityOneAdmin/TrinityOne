@@ -69,4 +69,27 @@ export const CASES = [
     replace: ``,
     test: 'scripts/console-boot-key-state.test.mjs',
   },
+  {
+    name: 'guardians: unknown map read as "no parents"',
+    file: 'src/steward.src.js',
+    // the pre-fix behaviour: an absent map becomes an empty list for every child
+    find: `  if (!Array.isArray(wantG)) return false;`,
+    replace: `  if (!Array.isArray(wantG)) wantG = [];`,
+    test: 'scripts/guardians-unknown.test.mjs',
+  },
+  {
+    name: 'guardians: a removed parent stops reaching the child',
+    file: 'src/steward.src.js',
+    // over-correcting the other way — never write guardians at all, so unlinkParent goes nowhere
+    find: `  if (!Array.isArray(gotG)) return !!wantG.length;`,
+    replace: `  if (!Array.isArray(gotG)) return false;`,
+    test: 'scripts/guardians-unknown.test.mjs',
+  },
+  {
+    name: 'guardians: order treated as a change (churn on every pass)',
+    file: 'src/steward.src.js',
+    find: `  const a = gotG.slice().sort(), b = wantG.slice().sort();`,
+    replace: `  const a = gotG.slice(), b = wantG.slice();`,
+    test: 'scripts/guardians-unknown.test.mjs',
+  },
 ];

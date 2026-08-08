@@ -123,6 +123,10 @@ function consoleSide(ws) {
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   const matching = skewDecl + futureDecl + netViewDecl
     + grabMethod(STEWARD, 'var _beatsDoc = ') + ';\n' + grabMethod(STEWARD, 'function _memberHonours(') + grabMethod(STEWARD, 'function _topWeMustAnswer(')
+    // _guardiansDiffer lives beside it and decides whether a stale parent link is a reason to write.
+    // Unlifted it throws ReferenceError into _clearancesMatching's own catch, which returns null —
+    // "could not check" — and the harness silently measures the no-write path.
+    + grabMethod(STEWARD, 'function _guardiansDiffer(')
     + grabMethod(STEWARD, 'async function _clearancesMatching(')
     + grabMethod(STEWARD, 'function _clearanceOutranks(');
   const decName = (matching.match(/\b(decrypt\d*)\(/) || [])[1];

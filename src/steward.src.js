@@ -1553,6 +1553,23 @@ function _clearanceOutranks(a, b, churchHex) {
 // Used twice, deliberately sharing one implementation: to SKIP redundant writes before publishing, and to
 // VERIFY before telling a steward that a child did not receive their record. Two copies of this logic would
 // drift, and the second copy is the one that decides whether a safeguarding alarm is true.
+// Does the stored guardian list differ from what the church intends for this child?
+//
+// `want` NOT BEING AN ARRAY MEANS "I DO NOT KNOW". The guardian map arrives on a subscription, and until it
+// does the screen holds {} — indistinguishable from "this church has confirmed no parent links". Treating
+// unknown as empty is not a harmless over-write: since the parent link became part of the clearance
+// comparison (2026-08-04) it makes every child differ, so the back-fill rewrites them all with an empty
+// guardian list. On the child's phone myGuardians goes empty, `linked` in canDMPeer goes false, and the child
+// can no longer message their own parent — the exact thing 650e0ab exists to deliver.
+//
+// Not knowing is never a reason to write. An empty ARRAY still is: that is the church actively saying this
+// child has no parents, which is how a removed parent reaches the child's phone.
+function _guardiansDiffer(gotG, wantG) {
+  if (!Array.isArray(wantG)) return false;
+  if (!Array.isArray(gotG)) return !!wantG.length;
+  const a = gotG.slice().sort(), b = wantG.slice().sort();
+  return a.length !== b.length || a.some((v, i) => v !== b[i]);
+}
 async function _clearancesMatching(pubs, wantFor) {
   if (!pubs.length || !sk || !_isRelayAuthed() || _viewingNetwork()) return null;
   const readFrom = _connectedRelays();
@@ -1692,10 +1709,10 @@ async function _clearancesMatching(pubs, wantFor) {
             //
             // Deliberately NOT minorBad: a stale parent link does not mean the child's app thinks they are an
             // adult, and AUDIT-9 exists because that banner over-claimed once already.
-            const gotG = Array.isArray(got && got.guardians) ? got.guardians.slice().sort() : null;
-            const wantG = (w.guardians || []).slice().sort();
-            const guardiansWrong = !got || gotG === null ? !!wantG.length
-              : (gotG.length !== wantG.length || gotG.some((v, i) => v !== wantG[i]));
+            const gotG = Array.isArray(got && got.guardians) ? got.guardians : null;
+            // NOT `w.guardians || []` — that turned "the map has not loaded yet" into "this child has no
+            // parents" and emptied every child's list. _guardiansDiffer treats a non-array want as unknown.
+            const guardiansWrong = _guardiansDiffer(gotG, w.guardians);
             if (minorWrong || !!got.cleared !== !!w.cleared || guardiansWrong) {
               needHere = true; contentWrong = true;
               if (minorWrong && w.minor) minorBad.add(h);
@@ -3277,7 +3294,16 @@ window.Steward = {
           Array.from(new Set((src[k] || []).map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))).sort());
       }
     } catch (e) {}
-    const guardsFor = (h) => gmap.get(h) || [];
+    // UNKNOWN vs EMPTY. A caller that has not yet received the guardian map passes null/undefined; a caller
+    // that knows the church has no parent links passes {}. The first must not be read as the second — doing
+    // so rewrites every child with an empty guardian list and cuts them off from their own parent. So an
+    // absent map yields `undefined` per child, which _guardiansDiffer treats as "do not touch".
+    // NULL means "I do not know the parent links" — the caller had not received the map yet. Omitting the
+    // argument keeps its long-standing meaning ("no guardian data to sync", behaves as {}), because several
+    // callers and every existing test do exactly that, and changing what silence means would have quietly
+    // disabled guardian sync everywhere. Only an explicit null says "do not touch these".
+    const guardsKnown = guardians !== null;
+    const guardsFor = (h) => (guardsKnown ? (gmap.get(h) || []) : undefined);
     const sameList = (x, y) => { const a = x || [], b = y || []; return a.length === b.length && a.every((v, i) => v === b[i]); };
     const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }; };
     const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared && sameList(a.guardians, b.guardians);
