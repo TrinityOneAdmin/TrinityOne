@@ -236,8 +236,10 @@ test('the backfill cannot fire before the safeguarding lists have loaded', () =>
   assert.ok(guard < call, 'the loaded-guard must come before the publish');
 
   const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
-  const sub = S.indexOf('subscribeSafeguard(onLists)');
-  const sbody = S.slice(sub, sub + 3000);
+  // fnBody, NOT a fixed window. This used to slice 3000 characters forward, and subscribeSafeguard grew past
+  // it the moment the guardian map moved onto this subscription — at which point the assertions below still
+  // ran, still passed, and no longer read the end of the function. test-windows.test.mjs caught it.
+  const sbody = fnBody(S, 'subscribeSafeguard(onLists)');
   // `loaded` must mean the minors DOCUMENT arrived — not that a subscription ended. EOSE fires on a 4.4s
   // client timeout, on a dropped relay, and before NIP-42 auth lands, and the minors doc is served only to an
   // authenticated reader. Treating that as "this church has no children" sealed every child an adult
@@ -245,8 +247,17 @@ test('the backfill cannot fire before the safeguarding lists have loaded', () =>
   // esbuild reformats that one-liner across several lines, so match within the branch rather than on one line
   const minorsAt = sbody.indexOf('MINORS_D + pub)');
   assert.notEqual(minorsAt, -1, 'the minors branch is gone from the shipped console');
-  assert.match(sbody.slice(minorsAt, minorsAt + 500), /loaded = true/,
-    'loaded is not tied to the minors document actually arriving');
+  assert.match(sbody.slice(minorsAt, minorsAt + 500), /sawMinors = true/,
+    'loaded is not tied to the minors document actually arriving — an unauthenticated read would look like ' +
+    'a church with no children');
+  // …and since 2026-08-09 the guardian map rides the same subscription, so `loaded` must ALSO wait for eose:
+  // the minors document proves we are authenticated, eose proves delivery is complete, and only both together
+  // license reading an absent guardians document as "this church has confirmed no parent links". Without the
+  // second half the back-fill cannot tell that from "it has not arrived", and guessing emptied children's
+  // parent lists.
+  assert.match(sbody, /sawMinors && sawEose/,
+    'loaded no longer requires BOTH an authenticated answer and a complete one, so the clearance back-fill ' +
+    'can run against a guardian map that has not arrived');
   assert.doesNotMatch(sbody, /oneose\(\)\s*\{\s*loaded = true/,
     'EOSE still sets loaded, so an unauthenticated or timed-out read looks like a church with no children');
   assert.match(D, /relayAuthed\(\)\)\) return;/,

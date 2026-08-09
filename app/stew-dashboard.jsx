@@ -3432,18 +3432,15 @@ function DashMembers() {
     // `guardians: []` onto every member it touched. That is the path that seals children who have no clearance
     // yet, and an empty ARRAY is worse than a missing key: it suppresses the steward fallback in the member
     // engine too. Found by the adversarial review, 2026-08-04.
-    // NOT `guardians || {}`. The hook starts as {} and an empty object is a positive claim that this church
-    // has confirmed no parent links — passing it through before the map arrived is what rewrote every child
-    // with an empty guardian list and cut them off from their own parent.
+    // sg.guardians, NOT the separate hook. The guardian map now rides the same subscription as the minors
+    // list, so `sg.loaded` — which this effect already waits for — covers it: the minors document proves we
+    // are authenticated, eose proves delivery is complete, and only then is an absent guardians document
+    // honestly "this church has confirmed no parent links".
     //
-    // An empty map is treated as UNKNOWN here rather than as "none", which needs no loaded flag and no extra
-    // subscription. The case that would justify writing an empty list — a parent the church has REMOVED —
-    // never comes through this back-fill: unlinkParent calls refreshClearances itself with the new map in
-    // hand. So the only thing an empty map can mean to this code path is "nothing to sync, or nothing known
-    // yet", and both of those are the same instruction: leave the guardian lists alone. Explicit null,
-    // not undefined: omitting the argument keeps its old meaning for every other caller.
-    const guardsKnown = guardians && Object.keys(guardians).length > 0;
-    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || [], guardsKnown ? guardians : null))
+    // Before that, this code could not tell "not arrived" from "none", and every attempt to paper over it
+    // made things worse: passing {} blanked every child's parent link, and treating empty as unknown blocked
+    // the removals that must reach them. There is nothing to guess now, so nothing guesses.
+    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || [], sg.guardians || {}))
       // `pending` releases the marker WITHOUT a banner: those members needed no write, so there is nothing to
       // warn about — but the read that would have proved them settled never finished, so the run is not
       // complete and the next visit must look again. AUDIT-9.

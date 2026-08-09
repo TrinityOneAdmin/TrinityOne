@@ -17544,9 +17544,10 @@ zoo`.split("\n");
       return isPhotoSuppressed(memberPub, _noPhoto);
     },
     subscribeSafeguard(onLists) {
-      let minors = [], approved = [], nophoto = [];
-      let tMinors = 0, tApproved = 0, tNophoto = 0;
-      let loaded = false;
+      let minors = [], approved = [], nophoto = [], guardians = {};
+      let tMinors = 0, tApproved = 0, tNophoto = 0, tGuardians = 0;
+      let sawMinors = false, sawEose = false;
+      const isLoaded = () => sawMinors && sawEose;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -17555,13 +17556,13 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tMinors) return;
             tMinors = e.created_at;
-            loaded = true;
+            sawMinors = true;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, nophoto, loaded });
+            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -17571,7 +17572,7 @@ zoo`.split("\n");
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, nophoto, loaded });
+            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -17582,7 +17583,17 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, nophoto, loaded });
+            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
+          } else if (d === GUARDIANS_D + pub) {
+            if (!_byChurch(e)) return;
+            if (e.created_at < tGuardians) return;
+            tGuardians = e.created_at;
+            try {
+              guardians = JSON.parse(e.content).links || {};
+            } catch {
+              guardians = {};
+            }
+            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -17592,7 +17603,8 @@ zoo`.split("\n");
         // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
-          onLists({ minors, approved, nophoto, loaded });
+          sawEose = true;
+          onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
         }
       });
       return () => {
@@ -17717,7 +17729,8 @@ zoo`.split("\n");
         }
       } catch (e) {
       }
-      const guardsKnown = guardians !== null;
+      const guardsUnknown = guardians === null;
+      const guardsKnown = !guardsUnknown;
       const guardsFor = (h) => guardsKnown ? gmap.get(h) || [] : void 0;
       const sameList = (x, y) => {
         const a = x || [], b = y || [];
@@ -17740,6 +17753,7 @@ zoo`.split("\n");
         }
         return true;
       });
+      if (guardsUnknown) return { results: [], failed: 0, skipped: 0, pending: pubs.length, total: pubs.length, unverified: true };
       const already = await _clearancesMatching(pubs, want);
       if (already) {
         pubs = pubs.filter((p) => {

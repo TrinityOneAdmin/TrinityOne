@@ -559,10 +559,7 @@ async function storedBody(pub) {
 //
 // This drives the real refreshClearances over the real relay and DECRYPTS what a child's phone would read.
 // The first fix passes every assertion in guardians-unknown.test.mjs and fails this one.
-test('a write for another reason does not blank a child’s parent link',
-  { todo: 'OPEN DEFECT, not a flake. See the note above: the fix needs subscribeSafeguard and '
-        + 'subscribeGuardians merged so "loaded" covers the guardian map, which is more than a patch.' },
-  async () => {
+test('a write for another reason does not blank a child’s parent link', async () => {
   // FRESH KEYS, not members[n]. Every member in the shared roster already has a clearance from the 150-strong
   // test above, and publishClearance writes only to relays that are MISSING the document — so a fixture built
   // on a used member writes to nobody and silently proves nothing. That cost an hour: the failure presented as

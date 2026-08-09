@@ -140,4 +140,22 @@ export const CASES = [
 }`,
     test: 'scripts/recovery-reference.test.mjs',
   },
+  {
+    name: 'guardians: loaded stops waiting for a complete answer',
+    file: 'src/steward.src.js',
+    // the pre-fix semantics: the minors doc alone licenses the back-fill, so it can run against a guardian
+    // map that has not arrived — which is what emptied children's parent lists
+    find: `    const isLoaded = () => sawMinors && sawEose;`,
+    replace: `    const isLoaded = () => sawMinors;`,
+    test: 'scripts/relay-clearance.test.mjs',
+  },
+  {
+    name: 'guardians: the map stops riding the safeguard subscription',
+    file: 'src/steward.src.js',
+    // drop the whole branch — that is what a revert would look like, and it is what the document-count and
+    // owner-only assertions in steward-newest-wins actually measure
+    find: `        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }`,
+    replace: ``,
+    test: 'scripts/steward-newest-wins.test.mjs',
+  },
 ];

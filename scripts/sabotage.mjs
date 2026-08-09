@@ -40,6 +40,23 @@ for (const f of ['package.json', 'index.html', 'steward.html', 'engine.js']) {
 }
 try { symlinkSync(join(ROOT, 'node_modules'), join(SANDBOX, 'node_modules')); } catch (e) {}
 
+// REBUILD THE BUNDLE THE TEST ACTUALLY READS. Mutating src/ proves nothing about a test that lifts from
+// vendor/ — and several do, because vendor/ is what the APK and the console load. Without this the runner
+// reports a confident "ok" for a guard that never saw the mutation at all; it scored two that way the first
+// time this was tried. esbuild is reached through the symlinked node_modules, so the sandbox rebuilds the
+// same way the repo does.
+const BUILD_FOR = {
+  'src/steward.src.js': 'scripts/build-steward.sh',
+  'src/identity.src.js': 'scripts/build-identity.sh',
+  'src/fellowship.src.js': 'scripts/build-fellowship.sh',
+};
+const rebuild = (file) => {
+  const script = BUILD_FOR[file];
+  if (!script) return true;
+  try { execSync('bash ' + script, { cwd: SANDBOX, stdio: 'pipe', timeout: 120000 }); return true; }
+  catch (e) { return false; }
+};
+
 const runTest = (testFile) => {
   try {
     execFileSync(process.execPath, ['--test', testFile], { cwd: SANDBOX, stdio: 'pipe', timeout: 240000 });
@@ -58,6 +75,11 @@ for (const c of cases) {
 
   // 1. HEALTHY: the guard must pass before we break anything. If it does not, the case is mis-specified and
   //    a later red tells us nothing.
+  if (!rebuild(c.file)) {
+    rows.push([c.name, 'BUILD-FAILED', 'could not rebuild the bundle in the sandbox before the baseline run']);
+    bad++;
+    continue;
+  }
   const healthy = runTest(c.test);
   if (!healthy.passed) {
     rows.push([c.name, 'BROKEN-BASELINE', 'the test fails BEFORE sabotage — fix the test or the code first']);
@@ -73,8 +95,10 @@ for (const c of cases) {
     continue;
   }
   writeFileSync(target, original.split(c.find).join(c.replace));
-  const broken = runTest(c.test);
+  const built = rebuild(c.file);
+  const broken = built ? runTest(c.test) : { passed: false };
   writeFileSync(target, original);
+  rebuild(c.file);   // leave the sandbox consistent for the next case
 
   if (broken.passed) {
     rows.push([c.name, 'BLIND GUARD', 'the fix was removed and the test still passed — nothing is watching this']);

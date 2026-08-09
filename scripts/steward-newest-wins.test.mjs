@@ -26,7 +26,7 @@ const REPLACEABLE_DOCS = {
   subscribeStewards: 1,     // delegated access; revocation is re-publishing without them
   subscribeGuardians: 1,    // child ↔ parent links
   subscribeJoinPolicy: 1,   // whether joining needs approval at all
-  subscribeSafeguard: 3,    // minors + approved + nophoto ride one subscription, so THREE timestamps:
+  subscribeSafeguard: 4,    // minors + approved + nophoto + guardians ride one subscription, so FOUR
                             // one shared clock would let a fresh minors doc suppress a current approved doc
 };
 
@@ -76,7 +76,10 @@ test('the guard is a real comparison against a tracked timestamp, not a constant
 // The correct signer per doc must mirror the relay's accept() exactly, so the wrong guard is as bad as none.
 const OWNER_ONLY = ['subscribeBlocked', 'subscribeStewards', 'subscribeGuardians'];       // church key only
 const STEWARD_WRITABLE = ['subscribeJoinPolicy', 'subscribeAdmitted'];                     // church OR a rostered steward
-// subscribeSafeguard carries all three: minors/approved owner-only, nophoto steward-writable.
+// subscribeSafeguard carries all four: minors/approved/guardians owner-only, nophoto steward-writable.
+// Guardians joined it 2026-08-09 — it used to have its own subscription with byte-identical filters,
+// which meant `loaded` could say nothing about whether the parent-link map had arrived, and the
+// clearance back-fill guessed. Guessing emptied children's guardian lists.
 
 test('every authority handler drops future-dated events (no forgery can pin)', () => {
   for (const name of Object.keys(REPLACEABLE_DOCS)) {
@@ -97,7 +100,9 @@ test('owner-only docs require the church key; steward-writable also accept a ros
   }
   // safeguard: minors+approved gated by _byChurch, nophoto by _byChurchOrSteward
   const sg = handlerBody('subscribeSafeguard');
-  assert.equal((sg.match(/_byChurch\(e\)/g) || []).length, 2, 'safeguard: minors + approved must each require the church key');
+  assert.equal((sg.match(/_byChurch\(e\)/g) || []).length, 3,
+    'safeguard: minors + approved + guardians must each require the church key — a steward able to write ' +
+    'the guardian map could name themselves a child\'s parent');
   assert.match(sg, /_byChurchOrSteward\(e\)/, 'safeguard: nophoto is steward-writable and must accept a rostered steward');
 });
 

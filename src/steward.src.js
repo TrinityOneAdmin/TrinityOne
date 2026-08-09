@@ -3099,26 +3099,38 @@ window.Steward = {
   // while the button beside it promised "your church sees their symbol/initial". Kept as a module-level set
   // fed by subscribeSafeguard, deliberately the same shape as the member app's, so the two cannot drift.
   photoSuppressed(memberPub) { return isPhotoSuppressed(memberPub, _noPhoto); },
-  subscribeSafeguard(onLists) {   // onLists({ minors:[…], approved:[…], nophoto:[…] })
-    let minors = [], approved = [], nophoto = [];
+  subscribeSafeguard(onLists) {   // onLists({ minors, approved, nophoto, guardians, loaded })
+    let minors = [], approved = [], nophoto = [], guardians = {};
     // NEWEST WINS, per document. These are three separate replaceable docs riding one subscription, so they
     // need three timestamps: a single shared one would let a fresh minors list suppress a perfectly current
     // approved list that simply happened to arrive after it. Safeguarding lists are the worst place to let a
     // stale copy from a lagging relay win — it would quietly reinstate a child-protection state the church
     // has already changed.
-    let tMinors = 0, tApproved = 0, tNophoto = 0;
+    let tMinors = 0, tApproved = 0, tNophoto = 0, tGuardians = 0;
     // `loaded` says the relay has ANSWERED, not that the lists are non-empty. The clearance backfill must
     // not run before it: sealing every member a 'not a minor' clearance from lists that had simply not
     // arrived yet would strip child status from every child in the church. AUDIT-2026-07-27.
-    let loaded = false;
+    let sawMinors = false, sawEose = false;
+    // LOADED MEANS THE GUARDIAN MAP IS KNOWN TOO, and that needs both halves. The minors document proves we
+    // are AUTHENTICATED (it is served to nobody else), and eose proves the stored set has been delivered in
+    // full. Only together do they license reading an absent guardians document as "this church has confirmed
+    // no parent links" rather than "it has not arrived yet".
+    //
+    // The guardian map rides here rather than on its own subscription because the two used byte-identical
+    // filters — so a separate subscription could never tell the caller anything about THIS one's progress,
+    // and the back-fill was left guessing. Guessing is what emptied children's parent lists. It also returns
+    // a subscription slot, against a cap this codebase has been bitten by before.
+    const isLoaded = () => sawMinors && sawEose;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; loaded = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, loaded }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -3126,7 +3138,7 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { onLists({ minors, approved, nophoto, loaded }); },
+      oneose() { sawEose = true; onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -3302,7 +3314,18 @@ window.Steward = {
     // argument keeps its long-standing meaning ("no guardian data to sync", behaves as {}), because several
     // callers and every existing test do exactly that, and changing what silence means would have quietly
     // disabled guardian sync everywhere. Only an explicit null says "do not touch these".
-    const guardsKnown = guardians !== null;
+    // NULL MEANS "I DO NOT KNOW THE PARENT LINKS", and the only safe response is to write nothing at all.
+    //
+    // No caller passes null any more: the guardian map rides the safeguarding subscription now, so the screen
+    // waits for `loaded` and then always knows. This is the backstop for a future caller that does not — and
+    // it has to exist, because publishClearance collapses a missing guardian list to [] and writes it, so a
+    // write triggered for ANY other reason would blank a child. Holding back is free: `pending` already means
+    // "no write, no alarm, look again next visit".
+    //
+    // Omitting the argument keeps its long-standing meaning ("no guardian data to sync", behaves as {}) —
+    // several callers and tests do that, and changing what silence means would disable guardian sync widely.
+    const guardsUnknown = guardians === null;
+    const guardsKnown = !guardsUnknown;
     const guardsFor = (h) => (guardsKnown ? (gmap.get(h) || []) : undefined);
     const sameList = (x, y) => { const a = x || [], b = y || []; return a.length === b.length && a.every((v, i) => v === b[i]); };
     const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }; };
@@ -3344,6 +3367,7 @@ window.Steward = {
     // write amplification back at exactly the moment the link is worst. The residual is that a relay which
     // was down at write time still needs reconciling when it returns; that is what the _clearanceSent clear
     // on a connection change below is for, and a full per-relay outbox is the real cure.
+    if (guardsUnknown) return { results: [], failed: 0, skipped: 0, pending: pubs.length, total: pubs.length, unverified: true };
     const already = await _clearancesMatching(pubs, want);
     // A SKIP REQUIRES A FINISHED READ, and the comment that used to sit here — "a partial read simply proves
     // less, so the worst it can do is republish" — was true until read-before-write started asking whether
