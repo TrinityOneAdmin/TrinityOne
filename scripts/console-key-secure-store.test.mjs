@@ -66,9 +66,13 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
     assert.ok(m, name + ' is gone from the bundle — re-anchor this test, or rebuild: bash scripts/build-steward.sh');
     return 'var ' + name + ' = ' + m[1];
   };
-  const parts = ['let _encIntent = { have: null }, _encConverging = null', constFrom('PENDING_WRITE'), constFrom('PENDING_REMOVE')]
+    // _encResumeStuck and _encBlobRemoveResumeWork joined the module when the resume was wrapped so that
+    // EVERY exit announces its outcome — the announce used to cover only the write path, so an
+    // interrupted REMOVAL left the console locked with no key and no PIN. Unlifted, it ReferenceErrors.
+    const parts = ['let _encIntent = { have: null }, _encConverging = null', 'let _encResumeStuck = false',
+                   constFrom('PENDING_WRITE'), constFrom('PENDING_REMOVE')]
     .concat(['_secureStore', '_encIsMarker', '_looksLikeKeyBlob', 'encBlobRaw', '_encBound', '_encAfter', 'encBlobWrite', '_encConverge', 'encBlobRemove',
-             'encBlobRemoveResume', 'migrateEncToSecure'].map(lift)).join(';\n')
+             '_encBlobRemoveResumeWork', 'encBlobRemoveResume', 'migrateEncToSecure'].map(lift)).join(';\n')
     // Replace ONLY the module load. esbuild inlines the dynamic import as
     // `Promise.resolve().then(() => (init_esm(), esm_exports))`, which cannot resolve outside a browser — so
     // this hands back the stub module instead. _secureStore()'s OWN body still runs, which is the point: the

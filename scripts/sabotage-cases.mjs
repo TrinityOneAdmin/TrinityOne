@@ -158,4 +158,21 @@ export const CASES = [
     replace: ``,
     test: 'scripts/steward-newest-wins.test.mjs',
   },
+  {
+    name: 'console: only the write path announces (the removal dead end)',
+    file: 'src/steward.src.js',
+    // the pre-fix shape: the announce sits inside the adopt path instead of wrapping every exit
+    find: `      window.dispatchEvent(new CustomEvent('steward-key'));`,
+    replace: ``,
+    test: 'scripts/console-legacy-breadcrumb.test.mjs',
+  },
+  {
+    name: 'console: an unreadable keystore silently clears the lock',
+    file: 'src/steward.src.js',
+    // the dangerous over-correction: treat "could not read" as "there is no key", which offers to create one
+    // over a church key that may still be present
+    find: `      if (_encResumeStuck) {`,
+    replace: `      if (false) {`,
+    test: 'scripts/console-legacy-breadcrumb.test.mjs',
+  },
 ];

@@ -1183,7 +1183,37 @@ async function encBlobRemove() {
 }
 // Finish an operation that was cut off — by the reload racing it, a hung bridge call, or the app being
 // killed. Safe on every boot: does nothing without the breadcrumb.
+// Did the resume reach no conclusion at all? Set only by the catch below — the Keystore bridge threw or
+// timed out — and it is the one outcome where we must NOT tell the console the device is empty.
+let _encResumeStuck = false;
+
+// EVERY exit announces. init() decides the boot key state synchronously and this does not, so init() answers
+// 'interrupted' and leaves the console locked rather than offering "Set up a new church" over a key it cannot
+// yet see. That is only safe if the console is told the answer once it is known — and the announce used to
+// sit before ONE of six returns, the write/adopt path. An interrupted REMOVAL took a different exit, so a
+// steward who removed their church key and was cut off mid-operation came back to "Console locked" over a
+// device with no key and no PIN: Steward.unlock() returns true without clearing `locked`, the submit handler
+// bails, and the button sticks on "Unlocking…" for ever with no way out but a manual reload.
+//
+// Wrapping the worker means a future exit inherits the announce instead of having to remember it.
 async function encBlobRemoveResume() {
+  _encResumeStuck = false;
+  try { return await _encBlobRemoveResumeWork(); }
+  finally {
+    try {
+      if (_encResumeStuck) {
+        // We could not read the store, so we do not know whether a key is there. Stay locked — offering to
+        // create one could overwrite a church key — but say so, because silence here is the dead end.
+        window.Steward.keyStoreStuck = true;
+      } else if (!lsGet(ENC_LS)) {
+        window.Steward.locked = false;   // settled, and there is genuinely no key: back to setup
+      }
+      window.dispatchEvent(new CustomEvent('steward-key'));
+    } catch (e) {}
+  }
+}
+
+async function _encBlobRemoveResumeWork() {
   const pending = lsGet(ENC_PENDING_LS);
   if (!pending) return false;
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
@@ -1235,16 +1265,8 @@ async function encBlobRemoveResume() {
           try { window.dispatchEvent(new CustomEvent('steward-key-resumed')); } catch (e) {}
         }
       }
-    } catch (e) { console.warn('[steward] could not settle an interrupted key write', e); return false; }
+    } catch (e) { console.warn('[steward] could not settle an interrupted key write', e); _encResumeStuck = true; return false; }
     try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
-    // init() has already drawn the console by now — it is synchronous and this is not, so it answered
-    // 'interrupted' and left the device locked rather than offering "Set up a new church" over a key it
-    // could not yet see. Now we know. Re-announce so the UI settles without needing a restart: a device that
-    // turned out to have a key stays locked, and one that did not returns to setup.
-    try {
-      if (!lsGet(ENC_LS)) window.Steward.locked = false;
-      window.dispatchEvent(new CustomEvent('steward-key'));
-    } catch (e) {}
     return true;
   }
   // Module state is gone after a restart, so recover the intent from what localStorage says: a marker means a

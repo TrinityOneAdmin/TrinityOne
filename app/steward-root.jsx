@@ -575,6 +575,17 @@ function StewardUnlock() {
     // opened by any passphrase. Saying "wrong PIN" there would send the steward round the retry loop for ever
     // while the real answer (restore from your 12 words) is never offered. It is also not a failed attempt, so
     // it must not count towards the lockout.
+    // The Keystore did not answer when we tried to settle an interrupted key operation, so we cannot tell
+    // whether a key is even here. unlock() returns TRUE in that state without clearing `locked`, which left
+    // this button stuck on "Unlocking…" for ever with nothing said — the dead end an interrupted "remove
+    // this church" walked straight into. Name it, and point away from the one action that could destroy a
+    // key that may still be present.
+    if (window.Steward.keyStoreStuck) {
+      setBusy(false); setPin('');
+      setLostKey(true);
+      setErr('This computer’s secure storage isn’t responding, so the console can’t tell whether a church key is stored here. Restart the console to try again — and if it keeps happening, restore from your 12 words rather than setting up a new church, which would replace a key that may still be there.');
+      return;
+    }
     if (window.Steward.deviceKeyLost) {
       setBusy(false); setPin('');
       setLostKey(true);

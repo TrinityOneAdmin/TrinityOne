@@ -45,7 +45,7 @@ function grab(src, sig) {
 }
 
 // Drive the SHIPPED encBlobRemoveResume on a fresh-boot device that holds a blob and a breadcrumb.
-function boot({ pending, storeHas = true }) {
+function boot({ pending, storeHas = true, storeThrows = false }) {
   const ls = new Map();
   ls.set('trinityone.steward.church-key.removing', pending);
   const blob = JSON.stringify({ ct: 'CIPHER', iv: 'iv', salt: 'salt' });
@@ -64,13 +64,22 @@ function boot({ pending, storeHas = true }) {
     _encIsMarker: (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } },
     _looksLikeKeyBlob: (raw) => { try { const o = JSON.parse(raw); return !!(o && o.ct && o.iv && o.salt); } catch { return false; } },
     _encBound: (p) => p,
-    _secureStore: async () => ({ S: { get: async () => (storeHas ? blob : null) } }),
+    // storeThrows models the Keystore bridge timing out — the case where the resume reaches NO conclusion,
+    // which must keep the lock (a key may be there) while saying so, rather than silently.
+    _secureStore: async () => { if (storeThrows) throw new Error('keystore did not answer'); return { S: { get: async () => (storeHas ? blob : null) } }; },
     _encConverge: async () => {},
     console: { warn() {} },
     window: { Steward, dispatchEvent: (e) => events.push(e && e.type), CustomEvent: class { constructor(t) { this.type = t; } } },
   };
   const names = Object.keys(scope);
-  const body = grab(STEWARD, 'async function encBlobRemoveResume()');
+  // encBlobRemoveResume is now a thin wrapper whose only job is to announce the outcome on EVERY exit — the
+  // announce used to sit before one of six returns, and an interrupted REMOVAL took a different one. Lift
+  // both, plus the stuck flag the wrapper reads, or the call throws ReferenceError into nothing.
+  const stuckDecl = (STEWARD.match(/(?:var|let) _encResumeStuck = [^\n]*\n/) || [])[0];
+  assert.ok(stuckDecl, 'the resume stuck-flag is gone — re-anchor this test');
+  const body = stuckDecl
+    + grab(STEWARD, 'async function _encBlobRemoveResumeWork()')
+    + '\n' + grab(STEWARD, 'async function encBlobRemoveResume()');
   const fn = new Function(...names, body + '\nreturn encBlobRemoveResume;')(...names.map(n => scope[n]));
   return { run: fn, Steward, ls, events };
 }
@@ -111,4 +120,41 @@ test('the console surfaces it to the steward', () => {
   assert.match(stripComments(ROOT), /keyResumedUnknown/,
     'the engine records that a church key was adopted from an unknown-direction operation and no screen ever ' +
     'shows it, so the steward cannot act on the one fact only they hold');
+});
+
+// ── THE DIRECTION THIS FILE NEVER COVERED (re-review 2026-08-08) ──────────────────────────────────────────
+//
+// init() decides the boot key state synchronously and the resume does not, so init() answers 'interrupted'
+// and leaves the console LOCKED rather than offering "Set up a new church" over a key it cannot yet see. That
+// is only safe if the console is told the answer once it is known — and the announce sat before ONE of six
+// returns, the write/adopt path.
+//
+// An interrupted REMOVAL took a different exit. The steward came back to "Console locked" over a device with
+// no key and no PIN; Steward.unlock() returns true in that state without clearing `locked`, so the submit
+// handler bails and the button sticks on "Unlocking…" for ever, with no escape but a manual reload. On main
+// this same state showed the setup screen, which for a deliberate removal was correct — so it was a
+// regression, not merely a gap.
+test('an interrupted REMOVAL hands the console back, rather than locking it out', async () => {
+  const b = boot({ pending: 'remove', storeHas: false });
+  await b.run();
+  assert.equal(b.events.includes('steward-key'), true,
+    'the removal path settled without telling the console. init() left it locked over a device that turns ' +
+    'out to have no key, and nothing ever says otherwise — the unlock box cannot be satisfied and the ' +
+    'steward has no way back to setup');
+  assert.equal(b.Steward.locked, false,
+    'the console stayed locked after a completed removal. There is no key and no PIN: this is a dead end');
+  // Deliberately NOT asserting the breadcrumb is cleared here: _encConverge is stubbed to a no-op in this
+  // harness and that is what clears it in the real path, so the assertion would measure the stub.
+});
+
+test('a store that will not answer keeps the lock, but says so', async () => {
+  const b = boot({ pending: 'write', storeThrows: true });
+  await b.run();
+  assert.equal(b.Steward.locked, undefined,
+    'the resume cleared the lock after failing to read the store — it does not know whether a key is there, ' +
+    'and offering "Set up a new church" could overwrite a church key');
+  assert.equal(b.Steward.keyStoreStuck, true,
+    'the console was left locked with nothing said, which is the dead end this whole change exists to ' +
+    'remove: the steward needs to be told the storage did not answer');
+  assert.equal(b.events.includes('steward-key'), true, 'the UI was never re-rendered, so nothing can surface it');
 });

@@ -15418,7 +15418,24 @@ zoo`.split("\n");
     }
     await _encConverge();
   }
+  var _encResumeStuck = false;
   async function encBlobRemoveResume() {
+    _encResumeStuck = false;
+    try {
+      return await _encBlobRemoveResumeWork();
+    } finally {
+      try {
+        if (_encResumeStuck) {
+          window.Steward.keyStoreStuck = true;
+        } else if (!lsGet(ENC_LS)) {
+          window.Steward.locked = false;
+        }
+        window.dispatchEvent(new CustomEvent("steward-key"));
+      } catch (e) {
+      }
+    }
+  }
+  async function _encBlobRemoveResumeWork() {
     const pending = lsGet(ENC_PENDING_LS);
     if (!pending) return false;
     if (!_isNative()) {
@@ -15454,16 +15471,12 @@ zoo`.split("\n");
         }
       } catch (e) {
         console.warn("[steward] could not settle an interrupted key write", e);
+        _encResumeStuck = true;
         return false;
       }
       try {
         localStorage.removeItem(ENC_PENDING_LS);
       } catch {
-      }
-      try {
-        if (!lsGet(ENC_LS)) window.Steward.locked = false;
-        window.dispatchEvent(new CustomEvent("steward-key"));
-      } catch (e) {
       }
       return true;
     }
