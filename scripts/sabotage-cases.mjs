@@ -214,4 +214,19 @@ export const CASES = [
     replace: `  if (elapsed > 0) { rl.t = now; }`,
     test: 'scripts/relay-scan-budget.test.mjs',
   },
+  {
+    name: 'profiles: a full cache silently loses everything again',
+    file: 'src/fellowship.src.js',
+    // the pre-fix write: one attempt, and the failure swallowed
+    find: `    if (_writeProfiles(profiles)) return;`,
+    replace: `    if (_writeProfiles(profiles)) return; return;`,
+    test: 'scripts/profile-cache-quota.test.mjs',
+  },
+  {
+    name: 'profiles: names are shed instead of photos',
+    file: 'src/fellowship.src.js',
+    find: `    for (const k of Object.keys(profiles)) { const v = profiles[k] || {}; lean[k] = { ...v, picture: '' }; }`,
+    replace: `    for (const k of Object.keys(profiles)) { const v = profiles[k] || {}; lean[k] = { ...v, name: '' }; }`,
+    test: 'scripts/profile-cache-quota.test.mjs',
+  },
 ];

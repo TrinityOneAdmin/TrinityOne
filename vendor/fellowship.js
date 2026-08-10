@@ -6407,15 +6407,43 @@
   }
   var _mayCache = () => !!sk;
   var _profSaveT = null;
+  function _writeProfiles(obj) {
+    try {
+      localStorage.setItem(PROFILES_KEY, JSON.stringify(obj));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  var _profShedWarned = false;
   function saveProfiles() {
     if (!_mayCache()) return;
     if (_profSaveT) return;
     _profSaveT = setTimeout(() => {
       _profSaveT = null;
-      try {
-        localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
-      } catch {
+      if (_writeProfiles(profiles)) return;
+      const lean = {};
+      for (const k of Object.keys(profiles)) {
+        const v = profiles[k] || {};
+        lean[k] = { ...v, picture: "" };
       }
+      if (_writeProfiles(lean)) {
+        if (!_profShedWarned) {
+          _profShedWarned = true;
+          console.warn("[fellowship] profile cache full \u2014 keeping names, dropping cached photos");
+        }
+        return;
+      }
+      const keys = Object.keys(lean);
+      for (let keep = Math.floor(keys.length / 2); keep >= 50; keep = Math.floor(keep / 2)) {
+        const cut = {};
+        for (const k of keys.slice(-keep)) cut[k] = lean[k];
+        if (_writeProfiles(cut)) {
+          console.warn("[fellowship] profile cache full \u2014 kept the " + keep + " most recent names only");
+          return;
+        }
+      }
+      console.warn("[fellowship] profile cache could not be written at all \u2014 names will be refetched every launch");
     }, 800);
   }
   var MEMBERS_KEY = "trinityone.members.";

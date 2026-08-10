@@ -695,10 +695,46 @@ try { const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || '{}'); if (c &&
 // caches is untouched — a member who unlocks still gets their instant paint.)
 const _mayCache = () => !!sk;
 let _profSaveT = null;
+// NAMES ALWAYS, PHOTOS IF THEY FIT — and never fail silently.
+//
+// Avatars are stored INSIDE the profile as a data: URI (deliberately: a remote image URL would beacon every
+// member's IP to whoever hosts it). At the app's own 256px WebP that is roughly 9 KB each, so a church of
+// ~500 puts this cache over the browser's ~5 MB limit for the whole origin.
+//
+// The old write was `try { setItem(...) } catch {}`. Over the limit that throws, the catch swallows it, and
+// NOTHING is persisted — not the photos, not the names. Every launch then refetches every member's profile
+// over the network. That is the worst outcome for exactly the churches this product is for: a thin, paid
+// pipe, and the app is quietly re-downloading megabytes on every open, for ever, with no error anywhere.
+//
+// So shed the expendable part rather than losing everything. Names, handles and "about" are tiny and are what
+// make the roster readable offline; photos are decoration. If the full write fails we drop the photos and
+// write again, and say so once — a cache that silently stopped working is the thing that hid this.
+function _writeProfiles(obj) {
+  try { localStorage.setItem(PROFILES_KEY, JSON.stringify(obj)); return true; } catch (e) { return false; }
+}
+let _profShedWarned = false;
 function saveProfiles() {
   if (!_mayCache()) return;
   if (_profSaveT) return;
-  _profSaveT = setTimeout(() => { _profSaveT = null; try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)); } catch {} }, 800);
+  _profSaveT = setTimeout(() => {
+    _profSaveT = null;
+    if (_writeProfiles(profiles)) return;
+    const lean = {};
+    for (const k of Object.keys(profiles)) { const v = profiles[k] || {}; lean[k] = { ...v, picture: '' }; }
+    if (_writeProfiles(lean)) {
+      if (!_profShedWarned) { _profShedWarned = true; console.warn('[fellowship] profile cache full — keeping names, dropping cached photos'); }
+      return;
+    }
+    // Still too big without photos: this church has more members than the browser will hold at all. Keep the
+    // names we can and drop the rest rather than persisting nothing — a partial roster beats a cold start.
+    const keys = Object.keys(lean);
+    for (let keep = Math.floor(keys.length / 2); keep >= 50; keep = Math.floor(keep / 2)) {
+      const cut = {};
+      for (const k of keys.slice(-keep)) cut[k] = lean[k];
+      if (_writeProfiles(cut)) { console.warn('[fellowship] profile cache full — kept the ' + keep + ' most recent names only'); return; }
+    }
+    console.warn('[fellowship] profile cache could not be written at all — names will be refetched every launch');
+  }, 800);
 }
 
 // cache the resolved church member roster + count per church, so the People list and the member count
