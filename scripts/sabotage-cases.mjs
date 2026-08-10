@@ -183,4 +183,13 @@ export const CASES = [
     replace: ``,
     test: 'scripts/safety-audience-narrowing.test.mjs',
   },
+  {
+    name: 'safety: the main banner loses its narrowing caveat again',
+    file: 'app/screens-today.jsx',
+    // exactly what happened twice: route a narrowed send into the send-failure error string, which the
+    // answered view does not render
+    find: `setCollapsed(false); if (ok === 'narrow') setNarrow(true); }`,
+    replace: `setCollapsed(false); if (ok === 'narrow') setErr('narrowed'); }`,
+    test: 'scripts/safety-audience.test.mjs',
+  },
 ];

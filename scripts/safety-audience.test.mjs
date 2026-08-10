@@ -59,3 +59,26 @@ test('the member is told who will actually read it', () => {
   assert.match(TODAY, /relay can see that you replied/,
     'the member is not told the relay sees THAT they replied — this product does not overclaim');
 });
+
+// EVERY SURFACE THAT SENDS MUST BE ABLE TO SHOW THE CAVEAT. This has now been got wrong three times.
+//
+// markSafe answers 'narrow' when it could not resolve the audience the steward chose — the reply reached the
+// church leader but not the team it was addressed to. Twice the handling was written as `setErr(...)` into a
+// component that had ALREADY switched to its answered branch, where the error string is never rendered. The
+// first miss was caught in review; the second survived a commit whose own message criticised the first.
+//
+// So this counts. Every place that calls markSafe must route a 'narrow' result into state the answered view
+// actually draws, and none may route it into the send-failure error string.
+test('every surface that sends a safety reply can show a narrowed one', () => {
+  const senders = (TODAY.match(/Fellowship\.markSafe\(/g) || []).length;
+  assert.ok(senders >= 2, 'the safety surfaces moved — re-anchor this test (expected the dock and the banner)');
+  const renders = (TODAY.match(/if \(ok === 'narrow'\) setNarrow\(true\)/g) || []).length;
+  assert.equal(renders, senders,
+    `${senders} places send a safety reply but only ${renders} can tell the member it reached fewer people ` +
+    'than the check promised. The missing one shows "You told your church you\'re safe" with no caveat, and ' +
+    'the care team never hears about it');
+  assert.doesNotMatch(TODAY, /if \(ok === 'narrow'\) setErr\(/,
+    'a narrowed send is being reported through the send-FAILURE error string. Both surfaces switch to an ' +
+    'answered view the moment the send succeeds, and that view does not render it — which is exactly how ' +
+    'this was missed twice');
+});
