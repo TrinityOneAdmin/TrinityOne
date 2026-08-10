@@ -679,10 +679,6 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore }) 
         {/* Give feedback (a silent copy left users unsure it worked) AND — key for a shared/monitored phone — overwrite
             the clipboard after 60s so the recovery phrase doesn't linger there for a keyboard app / clipboard sync to lift. */}
         <button onClick={() => { if (navigator.clipboard && words.length) { navigator.clipboard.writeText(words.join(' ')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 8000); setTimeout(() => { try { navigator.clipboard.writeText(' '); } catch (e) {} }, 60000); }).catch(() => {}); } }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: copied ? 'var(--sage)' : 'var(--ink-2)', padding: '10px', borderRadius: 12, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 16 }}>{copied ? 'Copied ✓ — paste it somewhere safe now (clears in 1 min)' : 'Copy the 12 words'}</button>
-        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 11, cursor: 'pointer', padding: '2px 2px' }}>
-          <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1, accentColor: 'var(--clay)', flexShrink: 0 }} />
-          <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
-        </label>
       </div>
       </React.Fragment>) : step === 2 ? (<React.Fragment>
       {/* STEP 2 — confirm a couple of words */}
@@ -729,6 +725,17 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore }) 
           <button onClick={() => { setRestoring(true); setRErr(''); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--clay)' }}>I already have an account — restore it</button>
           <button onClick={onSkip} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip setup for now</button>
         </React.Fragment>) : step === 1 ? (<React.Fragment>
+          {/* THE ACKNOWLEDGEMENT LIVES WITH THE BUTTON IT CONTROLS, and in the pinned footer rather than the
+              scrolling body. Below the fold it was invisible on a phone: Continue sat there disabled with no
+              explanation, while "I'll back these up later" was visible right underneath it. Measured at
+              360x730 — the tick box laid out past the bottom of the scroll area, so the only two things a
+              member could see were a dead button and the way out of the ceremony. Present since 2026-06-19.
+              Being one tap from losing an account for ever is not a place to make someone hunt for the
+              control that keeps it. */}
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 11, cursor: 'pointer', padding: '0 2px 12px' }}>
+            <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1, accentColor: 'var(--clay)', flexShrink: 0 }} />
+            <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
+          </label>
           <button onClick={() => setStep(2)} disabled={!ack} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ack ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
           <button onClick={() => setStep(3)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
         </React.Fragment>) : step === 2 ? (<React.Fragment>
