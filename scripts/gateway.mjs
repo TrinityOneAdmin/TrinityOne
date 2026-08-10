@@ -3698,6 +3698,35 @@ const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (memb
 // a thin pipe, short enough to stay under nostr-tools' own EOSE timeout so a client that never authenticates
 // still gets a real EOSE from us rather than its own synthetic one. See the REQ handler.
 const EOSE_AUTH_GRACE_MS = 2500;
+// PER-CONNECTION SCAN ALLOWANCE, refilled over time.
+//
+// A REQ whose filters cannot use an index falls back to scanning rows, and that work happens synchronously on
+// the thread serving every other church. Two bounds already existed — at most 32 filters per REQ, and a
+// 300,000-row budget shared across them — which caps ONE request. Measured on a 300k-event store:
+// 32 crafted filters = 1,180 ms; a normal indexed read = 2 ms.
+//
+// What was missing is a bound across requests. The inbound rate limit is 100 messages/second, which is sized
+// for cheap messages (it exists because signature checking is CPU-heavy), so one socket could ask for roughly
+// two minutes of scanning per second. This allowance is the missing half: it bounds total scan work per
+// CONNECTION per second, so the cost of asking again is what stops a flood, not the cost of asking once.
+//
+// Anonymous sockets get far less than authenticated ones. The expensive shape is reachable before anyone has
+// proved who they are, and an authenticated member is accountable — we know who to block. A church's own
+// members keep the generous allowance, so legitimate deep reads (a quiet group's history behind a chatty
+// one) are unaffected; the comment in event-store.mjs explains why truncating those silently is data loss.
+const SCAN_ROWS_PER_SEC_AUTHED = 300000;
+const SCAN_ROWS_PER_SEC_ANON = 25000;
+function scanAllowance(ws) {
+  const now = Date.now();
+  const cap = ws._auth ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;
+  if (!ws._scanRL) ws._scanRL = { left: cap, t: now, cap };
+  const rl = ws._scanRL;
+  if (rl.cap !== cap) { rl.cap = cap; rl.left = Math.min(Math.max(rl.left, 0), cap); }   // AUTH raises it mid-connection
+  const elapsed = now - rl.t;
+  if (elapsed > 0) { rl.left = Math.min(cap, rl.left + Math.floor(elapsed / 1000 * cap)); rl.t = now; }
+  return rl;
+}
+
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
 // Aggregate events one REQ may materialize+serialize across all its filters (DoS ceiling; real reads are far
 // smaller). PERF/audit-2026-07-24: was 20000 — roughly 40-60 MB of V8 heap for a SINGLE in-flight REQ once
@@ -3826,7 +3855,9 @@ wss.on('connection', (ws, req) => {
       // messages withheld from non-members per NIP-42)
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
       let _reqEvents = 0;
-      const _scanBudget = { left: 300000 };   // shared across ALL filters of this REQ: caps total fallback-scan rows so a crafted many-filter/multi-letter-tag REQ can't freeze the loop (E1)
+      // Drawn from this CONNECTION's rolling allowance, not minted fresh per request — a per-request
+      // budget bounds one question, not a thousand of them.
+      const _scanBudget = scanAllowance(ws);
       // SECURITY-AUDIT-2026-07-20 C1: this branch used to carry a SECOND hand-maintained copy of canRead's
       // private-d-prefix list, purely to decide whether to challenge. Two lists that must agree is one list
       // too many — they had already drifted (canRead gated GUARDNOTICE_D, this one didn't), and every fix to
@@ -3905,7 +3936,10 @@ wss.on('connection', (ws, req) => {
           const mine = subs.get(ws);
           // SECURITY-AUDIT-2026-07-18 M1: ONE replay budget shared across ALL subs of this connection — was created
           // per-sub, so a connection holding the max subs could drive subs×300k row-parses on a single cheap AUTH.
-          const _replayBudget = { left: 300000 };
+          // Same allowance as a fresh REQ. This path runs right after a successful AUTH and replays what the
+          // connection could not read before, so it is the one scan a legitimate member most needs to
+          // complete — and by now they are authenticated, which is exactly when the cap is generous.
+          const _replayBudget = scanAllowance(ws);
           if (mine) for (const [subId, filters] of mine) {
             const seen = new Set();
             for (const f of filters) for (const e of store.query(f, _replayBudget)) {

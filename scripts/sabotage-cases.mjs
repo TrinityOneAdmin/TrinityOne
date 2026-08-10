@@ -192,4 +192,26 @@ export const CASES = [
     replace: `setCollapsed(false); if (ok === 'narrow') setErr('narrowed'); }`,
     test: 'scripts/safety-audience.test.mjs',
   },
+  {
+    name: 'relay: the scan budget is minted per request again',
+    file: 'scripts/gateway.mjs',
+    // the pre-fix shape: a fresh allowance for every REQ, so asking again costs nothing
+    find: `      const _scanBudget = scanAllowance(ws);`,
+    replace: `      const _scanBudget = { left: 300000 };`,
+    test: 'scripts/relay-scan-budget.test.mjs',
+  },
+  {
+    name: 'relay: a stranger gets a member-sized allowance',
+    file: 'scripts/gateway.mjs',
+    find: `const SCAN_ROWS_PER_SEC_ANON = 25000;`,
+    replace: `const SCAN_ROWS_PER_SEC_ANON = 300000;`,
+    test: 'scripts/relay-scan-budget.test.mjs',
+  },
+  {
+    name: 'relay: the allowance never refills (a member locked out)',
+    file: 'scripts/gateway.mjs',
+    find: `  if (elapsed > 0) { rl.left = Math.min(cap, rl.left + Math.floor(elapsed / 1000 * cap)); rl.t = now; }`,
+    replace: `  if (elapsed > 0) { rl.t = now; }`,
+    test: 'scripts/relay-scan-budget.test.mjs',
+  },
 ];
