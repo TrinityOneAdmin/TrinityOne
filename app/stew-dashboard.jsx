@@ -3107,6 +3107,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [done, setDone] = React.useState(false);
+  // What the engine says ACTUALLY moved. The screen used to assert the whole list unconditionally, having
+  // discarded this. HANDOFF-2026-08-05 §4.2.
+  const [res, setRes] = React.useState(null);
   const reseats = window.useStewardReseats ? window.useStewardReseats() : [];
   const newPub = window.Steward && window.Steward.parseMemberKey ? window.Steward.parseMemberKey(text) : null;
   const same = newPub && newPub === member;
@@ -3117,11 +3120,14 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
     try {
       // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
       // while the church still showed two of them; this order fails the safer way round.
-      await window.Steward.reseatMember(member, newPub, {
+      // KEEP THE RESULT. Every write in there can be refused without throwing, and this screen makes claims
+      // about all of them — including the stolen-phone block, which it never mentioned at all.
+      const r = await window.Steward.reseatMember(member, newPub, {
         name: realName || '', reseats, admitted: admittedList,
         minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow,
         blocked: blockedNow, blockOld: taken,
       });
+      setRes(r || {});
       setDone(true);
     } catch (e) { setErr((e && e.message) || 'Couldn’t save that — try again.'); }
     setBusy(false);
@@ -3138,12 +3144,28 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             membership is a list of pubkeys on each group document; a re-seat does not rewrite those, so the
             new key is not in them. Telling the steward now costs one sentence; leaving them to find out means
             the member sits outside their own small group wondering why. AUDIT-2026-07-26 CRITICAL 3. */}
+        {/* NAME ONLY WHAT LANDED. Each of these is a separate church write that can be refused without
+            throwing, and this paragraph used to assert all of them from the fact that the call returned.
+            A re-seat that is refused halfway now throws, so reaching this screen means the seat moved — but
+            the clearance re-seal is deliberately non-fatal, so it is the one that still has to be reported. */}
         <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 14px' }}>
-          {isMinor ? <React.Fragment>Their <b>child marking, youth clearance and parent link</b> moved across with
-          them, and their new phone has been told. </React.Fragment> : null}
+          {res && (res.minorCarried || res.clearedCarried || res.guardiansCarried) ? <React.Fragment>Their <b>{[
+            res.minorCarried ? 'child marking' : null,
+            res.clearedCarried ? 'youth clearance' : null,
+            res.guardiansCarried ? 'parent link' : null,
+          ].filter(Boolean).reduce((a, s, i, arr) => i === 0 ? s : (i === arr.length - 1 ? a + ' and ' + s : a + ', ' + s), '')}</b> moved across with
+          them{res.failed && res.failed.includes('clearance') ? ', though their new phone has not confirmed it yet — it should pick it up shortly' : ', and their new phone has been told'}. </React.Fragment> : null}
           One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
           again. Ordinary groups need nothing — they are already back in those.
         </p>
+        {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
+            thief reading the church for ever, and the screen said nothing either way. It can only be true
+            now: a refused block throws before anything else is written. */}
+        {res && res.blockedOld ? (
+          <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-2)', fontWeight: 700, margin: '0 0 14px' }}>
+            Their old phone is <b>blocked</b> — it can no longer read this church.
+          </p>
+        ) : null}
         <button onClick={onClose} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: '10px 14px' }}>Close</button>
       </React.Fragment>) : (<React.Fragment>
         <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '4px 0 10px' }}>
@@ -3349,7 +3371,10 @@ function DashMembers() {
   // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
   // instead of the church's list of children, which the relay no longer serves to ordinary members.
   // AUDIT-2026-07-27. Best-effort and deliberately not awaited: the list write is the authoritative one.
-  const _reseal = (mins, appr, who) => { try { if (window.Steward.refreshClearances) window.Steward.refreshClearances(who, mins, appr); } catch (e) {} };
+  // `guards` defaults to the CURRENT map, but every caller that CHANGES a parent link must pass the NEW one —
+  // the child's sealed clearance is the only place they can learn who their confirmed parents are, so a link
+  // that never re-seals never reaches them. UX audit 2026-08-04.
+  const _reseal = (mins, appr, who, guards) => { try { if (window.Steward.refreshClearances) window.Steward.refreshClearances(who, mins, appr, guards || guardians); } catch (e) {} };
   // BACKFILL — every child marked BEFORE sealed clearances existed had no clearance doc at all. The four
   // toggles below only re-seal the member they touch, and the relay had already stopped serving the minors
   // list to ordinary members, so those children's apps read an empty list and concluded they were adults.
@@ -3370,7 +3395,7 @@ function DashMembers() {
     try { if (!(window.Steward.relayAuthed && window.Steward.relayAuthed())) return; } catch (e) { return; }
     if (window.Steward.actingChurch) return;   // a delegated console signs with its own church key
     if (!members.length) return;
-    const sig = [window.Steward.churchPub || '', (sg.minors || []).join(','), (sg.approved || []).join(','),
+    const sig = [window.Steward.churchPub || '', (sg.minors || []).join(','), (sg.approved || []).join(','), Object.keys(guardians || {}).sort().map(k => k + ':' + (guardians[k] || []).slice().sort().join('|')).join(';'),
       members.map(m => m.pubkey).sort().join(',')].join('|');
     if (clearanceBackfillDone === sig) return;   // idempotent: the roster re-emits on every tick
     // CLAIM THE SIGNATURE SYNCHRONOUSLY, before anything is awaited. HANDOFF-2026-07-31 (3).
@@ -3402,7 +3427,20 @@ function DashMembers() {
     // OWN claim: if the roster moved on and a later signature has already claimed the marker, blanking it here
     // would discard that newer run's result and re-publish it from scratch.
     const release = () => { clearanceBackfillFailedAt = Date.now(); if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
-    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || []))
+    // `guardiansNow`, NOT `sg.guardians` — subscribeSafeguard emits { minors, approved, nophoto, loaded } and has
+    // no guardians key at all, so the original read was always undefined and this back-fill sealed
+    // `guardians: []` onto every member it touched. That is the path that seals children who have no clearance
+    // yet, and an empty ARRAY is worse than a missing key: it suppresses the steward fallback in the member
+    // engine too. Found by the adversarial review, 2026-08-04.
+    // sg.guardians, NOT the separate hook. The guardian map now rides the same subscription as the minors
+    // list, so `sg.loaded` — which this effect already waits for — covers it: the minors document proves we
+    // are authenticated, eose proves delivery is complete, and only then is an absent guardians document
+    // honestly "this church has confirmed no parent links".
+    //
+    // Before that, this code could not tell "not arrived" from "none", and every attempt to paper over it
+    // made things worse: passing {} blanked every child's parent link, and treating empty as unknown blocked
+    // the removals that must reach them. There is nothing to guess now, so nothing guesses.
+    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || [], sg.guardians || {}))
       // `pending` releases the marker WITHOUT a banner: those members needed no write, so there is nothing to
       // warn about — but the read that would have proved them settled never finished, so the run is not
       // complete and the next visit must look again. AUDIT-9.
@@ -3429,8 +3467,13 @@ function DashMembers() {
   const idOf = (pk) => npubByPub[pk] ? shortNpub(npubByPub[pk]) : ((pk || '').slice(0, 16) + '…');
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = (r) => {
-    window.Steward.setGuardians({ ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] });
-    if (!minorsSet.has(r.child)) { const next = [...(sg.minors || []), r.child]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [r.child]); }   // a linked child is a minor
+    const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
+    window.Steward.setGuardians(nextG);
+    // Re-seal UNCONDITIONALLY. This used to run only when the child was not already marked a minor, so linking
+    // a parent to an already-marked child never reached that child's phone at all.
+    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];   // a linked child is a minor
+    if (!minorsSet.has(r.child)) window.Steward.setMinors(nextM);
+    _reseal(nextM, sg.approved || [], [r.child], nextG);
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
@@ -3442,8 +3485,11 @@ function DashMembers() {
   const delegated = !!(window.Steward && window.Steward.actingChurch);
   const linkParent = (childPub, parentPub) => {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
-    window.Steward.setGuardians({ ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] });
-    if (!minorsSet.has(childPub)) { const next = [...(sg.minors || []), childPub]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [childPub]); }   // a linked child is a minor
+    const nextG = { ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] };
+    window.Steward.setGuardians(nextG);
+    const nextM = minorsSet.has(childPub) ? (sg.minors || []) : [...(sg.minors || []), childPub];   // a linked child is a minor
+    if (!minorsSet.has(childPub)) window.Steward.setMinors(nextM);
+    _reseal(nextM, sg.approved || [], [childPub], nextG);   // unconditional — see approveGuardian
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
     if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
   };
@@ -3451,6 +3497,9 @@ function DashMembers() {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
     const next = { ...guardians }; if (cur.length) next[childPub] = cur; else delete next[childPub];
     window.Steward.setGuardians(next);
+    // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
+    // and goes on treating a removed adult as a parent it may always message.
+    _reseal(sg.minors || [], sg.approved || [], [childPub], next);
   };
   // joining: when approval is on, members who haven't been admitted yet are pending requests
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
@@ -3830,7 +3879,13 @@ function StewBackupModal({ church, onClose }) {
     : pass.length < 8 ? { t: 'OK', c: 'var(--gold)' }
     : { t: 'Strong', c: 'var(--sage)' };
   const make = async () => {
-    if (pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12)) { setErr('Use at least 4 characters (a numeric PIN is fine).'); return; }
+    // READ the floor, do not restate it — backup.jsx says "THE FLOOR LIVES HERE, not in the screens", and this
+    // screen restated it as 4 while enforcing 12. A steward typing 4-11 characters was told to type at least
+    // 4 and refused, in a loop, on the one flow that saves the church key to a file. Mirror checkPass's
+    // all-digit rule too, or a 12-digit PIN passes the button and dies in a toast. UX audit 2026-08-04.
+    const _min = (window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12;
+    if (pass.length < _min) { setErr('Use at least ' + _min + ' characters. Four random words is ideal — easier to remember than a code, and far harder to guess.'); return; }
+    if (/^\d+$/.test(pass) && pass.length < 20) { setErr('An all-numbers code is quick to guess, even a long one. Add words or letters — four random words is ideal.'); return; }
     setBusy(true); setErr('');
     try {
       const obj = window.TrinityBackup.collectSteward();
@@ -3867,20 +3922,20 @@ function StewBackupModal({ church, onClose }) {
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Passphrase or PIN</div>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Passphrase</div>
         <div style={{ display: 'flex', gap: 9 }}>
-          <input value={pass} onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="a memorable passphrase, or a PIN" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <input value={pass} onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="four random words, or 12+ characters" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
           <button onClick={() => setShow(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px' }}>{show ? 'Hide' : 'Show'}</button>
         </div>
         {strength ? <div style={{ fontSize: 12, color: strength.c, fontWeight: 600, marginTop: 7 }}>{strength.t}{strength.c === 'var(--clay)' ? ' · longer is safer' : ''}</div> : null}
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', margin: '16px 0 18px' }}>
           <Icon name="shield" size={16} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Store it with the file.</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Keep it somewhere separate from the file: together, they are one thing, not two.</div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={make} disabled={busy || done || pass.length < 4 || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
+          <button onClick={make} disabled={busy || done || pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
             <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? 'Saved' : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
         </div>
       </div>
@@ -5000,7 +5055,11 @@ function PinModal({ action, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={remove ? 'Remove console PIN' : change ? 'Change console PIN' : 'Lock with a PIN'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 400, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 4 }}>{remove ? 'Remove console PIN' : change ? 'Change console PIN' : 'Lock with a PIN'}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16 }}>{remove
-          ? 'Enter your current PIN to remove the lock. The key goes back to being stored unlocked on this device.'
+          // K3: this said the stored key "is DELETED from this device" and is "only held in memory" until a
+          // new PIN is set. That was true, and it was the danger — removeLock no longer destroys the key
+          // first. Saying so still matters, because it tells a steward whose console closes mid-way that
+          // their old PIN is the way back in, rather than leaving them thinking the church is gone.
+          ? 'Enter your current PIN to remove the lock. Nothing is kept unlocked, and you’ll be asked to set a new PIN straight away. If you close the console before you do, your current PIN still works — so the church key is never left with nowhere to live.'
           : 'Encrypts the church key on this device. You’ll enter it to open the console; it auto-locks after 10 minutes idle. Don’t forget it — without it (or the 12-word phrase) this device can’t open the church.'}</div>
         <input type="password" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && remove) save(); }} placeholder={remove ? 'Current PIN' : 'New PIN or passphrase'} autoComplete="off" style={inp} />
         {!remove ? <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" autoComplete="off" style={inp} /> : null}
@@ -5188,17 +5247,24 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const adoptScanned = (payload) => {
     setScanning(false);
     if (!payload) return;
-    if (!window.confirm('Restore this church onto this device?\n\nThis replaces the church key currently held here — make sure it’s backed up. The console will reload.')) return;
-    try { window.Steward.adoptChurch(payload); window.location.reload(); }
+    if (!window.confirm('Restore this church onto this device?\n\nThis replaces the church key currently held here — make sure it’s backed up. You’ll be asked to set a PIN.')) return;
+    // NO reload here. adoptChurch → restoreKey keeps the seed in MEMORY ONLY and sets needsPin, so the
+    // forced-PIN modal can encrypt and persist it; a reload throws that memory away and leaves the device
+    // with no key at all (restoreKey has already cleared the old one). StewardRoot swaps StewDashboard for
+    // StewardForcedPin on the needsPin event and remounts it after, which is the refresh the reload was for.
+    try { window.Steward.adoptChurch(payload); }
     catch (e) { window.alert('That QR isn’t a valid church handoff.'); }
   };
   const doRestore = () => {
     setRestoreErr('');
     // confirm BEFORE we replace anything — restoreKey overwrites + persists the church key on this device
-    if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — make sure its recovery phrase is backed up first.\n\nContinue and reload?')) return;
+    if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — make sure its recovery phrase is backed up first.\n\nContinue?')) return;
     try {
+      // NO reload — see adoptScanned. restoreKey() deliberately does NOT persist: the seed lives in memory
+      // until the forced-PIN modal encrypts it, and restoreKey has ALREADY removed the previous key from
+      // localStorage and the hardware store. Reloading here dropped the only copy, so the console came back
+      // to "Set up a new church" having destroyed the old key and kept nothing. Found on-device 2026-08-04.
       window.Steward.restoreKey(restorePhrase);
-      window.location.reload();
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
   const restoreFromFile = (e) => {
@@ -5206,9 +5272,10 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     const p = window.prompt('Enter the passphrase for this backup file:'); if (p == null) return;
     window.TrinityBackup.readFile(f).then(t => window.TrinityBackup.decryptStr(t, p)).then(obj => {
       // confirm BEFORE applySteward replaces the on-device key
-      if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — back it up first.\n\nRestore from the file and reload?')) return;
+      if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — back it up first.\n\nRestore from the file?')) return;
+      // NO reload — applySteward() calls the same restoreKey() (and removes church-key.enc itself), so the
+      // restored seed is memory-only until the forced-PIN modal persists it. See doRestore above.
       window.TrinityBackup.applySteward(obj);
-      window.location.reload();
     }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
   };
   return (

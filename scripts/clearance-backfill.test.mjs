@@ -90,10 +90,10 @@ function consoleSide(ws) {
   // what is under test here — shim it onto the same single-socket publish, exactly as `publish` itself is.
   const _publishToRelays = (evt) => publish(evt);
   const pubClearance = grabMethod(STEWARD, 'publishClearance(memberPub, status, urls)');
-  const refresh = grabMethod(STEWARD, 'refreshClearances(memberPubs, minors, approved)');
+  const refresh = grabMethod(STEWARD, 'refreshClearances(memberPubs, minors, approved, guardians)');
   // refreshClearances is now a thin serialising wrapper around _refreshClearancesNow — lift both, and anchor
   // the inner one on `async ` because its first textual occurrence is the CALL inside the wrapper.
-  const refreshNow = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
+  const refreshNow = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   // esbuild renames the nip44 imports (encrypt3 / getConversationKey today). Binding the names I EXPECTED
   // instead of the ones it uses made every publish throw inside publishClearance's own try/catch and return
   // null — 150 nulls, nothing on the wire, indistinguishable from the bug under test. Detect them, and fail
@@ -123,6 +123,10 @@ function consoleSide(ws) {
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   const matching = skewDecl + futureDecl + netViewDecl
     + grabMethod(STEWARD, 'var _beatsDoc = ') + ';\n' + grabMethod(STEWARD, 'function _memberHonours(') + grabMethod(STEWARD, 'function _topWeMustAnswer(')
+    // _guardiansDiffer lives beside it and decides whether a stale parent link is a reason to write.
+    // Unlifted it throws ReferenceError into _clearancesMatching's own catch, which returns null —
+    // "could not check" — and the harness silently measures the no-write path.
+    + grabMethod(STEWARD, 'function _guardiansDiffer(')
     + grabMethod(STEWARD, 'async function _clearancesMatching(')
     + grabMethod(STEWARD, 'function _clearanceOutranks(');
   const decName = (matching.match(/\b(decrypt\d*)\(/) || [])[1];
@@ -262,7 +266,7 @@ test('a failure reaches a screen', async () => {
   // Brace-matched on the INNER function, not a fixed window from the wrapper. refreshClearances is now a short
   // serialising shim, so `slice(at, at + 2600)` reads past it into the neighbouring method and asserts nothing
   // about the code it names — the fixed-window trap this repo keeps re-learning.
-  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
+  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   assert.match(fn, /steward-write-blocked/,
     'a partial safeguarding back-fill is still silent — the children it missed stay missed and nobody is told');
 });
@@ -326,7 +330,7 @@ function backfillEffect() {
     let clearanceBackfillFailedAt = 0;
     let clearanceBackfillLastSig = '';
     const CLEARANCE_RETRY_MS = 60000;
-    const effect = (sg, members) => ${body};
+    const effect = (sg, members, guardians) => ${body};
     return { effect, peek: () => clearanceBackfillDone, failedAt: () => clearanceBackfillFailedAt };
   `)({ Steward }, { now: () => clock });
   return {
@@ -486,7 +490,7 @@ test('the guard is claimed synchronously, before anything is awaited', () => {
 });
 
 test('the batching is paced under the relay cap, and bounded', () => {
-  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
+  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   const batch = Number((fn.match(/BATCH = (\d+)/) || [])[1]);
   const gap = Number((fn.match(/GAP_MS = (\d+)/) || [])[1]);
   assert.ok(batch > 0 && gap > 0, 'the pacing constants are gone — re-anchor this test');
@@ -494,4 +498,103 @@ test('the batching is paced under the relay cap, and bounded', () => {
     `pacing is ${(batch * 1000) / gap}/s, at or above the relay's 100/s cap — messages will be dropped with no reply`);
   assert.match(fn, /Promise\.race/,
     'the await is unbounded, so one publish the relay never answers stalls the rest of the roster');
+});
+
+// Read one member's stored clearance and hand back the decrypted body, so a test can assert what a CHILD'S
+// PHONE would actually read rather than that a document exists.
+async function storedBody(pub) {
+  const w = await conn();
+  let body = null;
+  await new Promise(res => {
+    const on = d => {
+      const m = JSON.parse(d);
+      if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, church.sk)]));
+      if (m[0] === 'EVENT' && m[1] === 'b') {
+        try { body = JSON.parse(nip44v2.decrypt(m[2].content, nip44v2.utils.getConversationKey(church.sk, pub))); } catch (x) {}
+      }
+      if (m[0] === 'EOSE' && m[1] === 'b') { w.off('message', on); res(); }
+    };
+    w.on('message', on);
+    w.send(JSON.stringify(['REQ', 'b', { kinds: [30078], '#d': [CLEAR_D + pub] }]));
+    setTimeout(res, 8000);
+  });
+  w.close();
+  return body;
+}
+
+// ── OPEN DEFECT (re-review 2026-08-08, finding against commit 6a117cb) ────────────────────────────────────
+//
+// _guardiansDiffer stopped an unloaded guardian map being the REASON to write. It does NOT stop a write
+// happening for some other reason and blanking the parent link on the way past: publishClearance collapses a
+// missing list with `(status && status.guardians || [])` and writes `guardians: guards` unconditionally. The
+// nastiest route is per-relay — relay A holds [dad], relay B lacks the document, the targeted write to B
+// publishes a NEWER clearance with an empty list, and newest-wins carries the blank to the child's phone.
+//
+// This test drives the real refreshClearances over a real relay and DECRYPTS what a child's phone would read.
+// It is marked `todo` because it is a genuine unfixed defect, not because it is unreliable — a green suite
+// that hid it would be the exact failure this whole review exists to stop.
+//
+// WHAT I TRIED, AND WHY IT IS NOT IN THE TREE. Carrying the stored guardians forward from the read, and
+// holding back any member whose copy could not be opened. It broke "a change of parent link is re-sealed, so
+// the child actually learns" — the hold-back also blocks legitimate re-seals — and the carry-forward still
+// blanked, because a copy that decodes WITHOUT a guardians field is indistinguishable from one whose field
+// was never reached. Reverted rather than left half-done.
+//
+// THE ACTUAL FIX, which is a change and not a patch: merge subscribeSafeguard and subscribeGuardians. They
+// use byte-identical relay filters, so one subscription can deliver { minors, approved, nophoto, guardians,
+// loaded } where `loaded` means "the minors document arrived (so we are authenticated) AND eose (so the
+// stored set is complete)". Then the guardian map is genuinely KNOWN — empty meaning the church has no parent
+// links, not "it has not arrived" — and none of the guessing above is needed. It also drops a subscription,
+// which matters against the 64-sub cap this codebase has already been bitten by.
+//
+// Do NOT "fix" this by gating the whole back-fill on a guardians-loaded flag: a guardians document only
+// exists once a steward has confirmed a parent link, so most churches have none, and the back-fill would
+// silently never run for them while its purpose is sealing minor:true clearances for children who have none.
+//
+// THE DEFECT THE FIRST GUARDIANS FIX LEFT BEHIND (re-review, 2026-08-08).
+//
+// _guardiansDiffer stopped an unloaded guardian map being the REASON to write. It did not stop a write
+// happening for some OTHER reason and blanking the parent link on the way past: publishClearance collapses a
+// missing list with `(status && status.guardians || [])` and then writes `guardians: guards` unconditionally.
+//
+// This drives the real refreshClearances over the real relay and DECRYPTS what a child's phone would read.
+// The first fix passes every assertion in guardians-unknown.test.mjs and fails this one.
+test('a write for another reason does not blank a child’s parent link', async () => {
+  // FRESH KEYS, not members[n]. Every member in the shared roster already has a clearance from the 150-strong
+  // test above, and publishClearance writes only to relays that are MISSING the document — so a fixture built
+  // on a used member writes to nobody and silently proves nothing. That cost an hour: the failure presented as
+  // "the fix does not work" when it was the fixture that never ran.
+  const child = K().pub;
+  const dad = K().pub;
+  const w = await conn();
+  const side = consoleSide(w);
+
+  // 1. the church knows this child's parent, and seals it
+  await side.api.refreshClearances([child], [child], [], { [child]: [dad] });
+  await sleep(500);
+  const before = await storedBody(child);
+  assert.deepEqual(before && before.guardians, [dad],
+    'the fixture never established a parent link, so the rest of this test proves nothing');
+
+  // 2. now the guardian map has NOT loaded (null), and something else changes — this child stops being
+  //    marked a minor, which is a real reason to write.
+  await side.api.refreshClearances([child], [], [], null);
+  await sleep(600);
+  const after = await storedBody(child);
+  w.close();
+
+  // THE INVARIANT IS "PRESERVED OR UNTOUCHED", NOT "REWRITTEN". With the map unknown there are two honest
+  // outcomes: carry the stored parent link forward into the new record, or hold the member back entirely and
+  // look again next visit (which is what `pending` is for, and the map will have arrived by then). Both leave
+  // the child able to message their parent. The one outcome that is not acceptable is an empty list, because
+  // that copy is NEWER and newest-wins carries the blank to every relay and then to the child's phone.
+  //
+  // Asserting "the write must happen" instead would have forced the unsafe branch: a member whose own copy
+  // this console could not decrypt has no source for their parent link at all, and writing them means
+  // guessing.
+  assert.ok(after, 'the child\'s clearance vanished entirely — worse than either acceptable outcome');
+  assert.deepEqual(after.guardians, [dad],
+    'THE BUG: the guardian map had not loaded, an unrelated change forced a write, and the child was ' +
+    'republished with no parents. On their phone myGuardians goes empty and they can no longer message ' +
+    'their own parent — and because this copy is NEWER, newest-wins carries the blank to every relay');
 });

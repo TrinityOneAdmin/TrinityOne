@@ -18,6 +18,10 @@ import { SimplePool } from 'nostr-tools/pool';
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
+// Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
+// (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
+import { validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
@@ -770,6 +774,33 @@ function setKey(mnemonic) {
   try { Promise.resolve().then(() => { try { window.Steward.publishRelayList && window.Steward.publishRelayList(); } catch {} }); } catch {}
 }
 
+// Everything in this module that is scoped to ONE church, cleared in one place.
+//
+// Why it exists: this state used to be reset in exactly one path (setActiveIdentity), and everywhere else it
+// survived on the strength of `window.location.reload()` wiping the module. When the reload was removed from
+// the restore routes (2026-08-04) the state carried across a WHOLE-KEY replacement, and the roster effect then
+// republished church A's name/care/media rings as church B's envelopes — replaceable events, so B's originals
+// were overwritten on the relay, B's sealed names and care needs stopped opening for good, and A's keys were
+// handed to B's congregation. The name-key half of that had already happened once (AUDIT-2026-07-27) and was
+// fixed for identity SWITCHING only; the same hole stayed open for key REPLACEMENT.
+//
+// So: one function, called from both. Adding a per-church global without adding it here is the bug.
+function _resetChurchScopedState() {
+  lastProfile = {}; _profileLoaded = false;
+  _clearanceSent.clear();
+  _careRoster = new Set(); _careRosterKnown = false;
+  _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+  _applyNoPhotoList([]);
+  // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
+  // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
+  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
+  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false;
+  // NIP-42 is bound to the key that signed the challenge. These sockets authed as the PREVIOUS church and will
+  // not be re-challenged while they stay open, so _isRelayAuthed() would answer true for a church that has
+  // never proved itself — the exact false-true the comment above it warns "silently destroys a church's keys".
+  _authedRelays.clear();
+}
+
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
 // locked console holds NO usable key until unlocked, so a stolen device / copied localStorage is inert.
 //
@@ -810,8 +841,47 @@ function setKey(mnemonic) {
 const ENC_LS = 'trinityone.steward.church-key.enc';
 // Breadcrumb: a hardware-store removal was started and has not been confirmed finished. See encBlobRemove().
 const ENC_PENDING_LS = 'trinityone.steward.church-key.removing';
+// The breadcrumb records WHICH DIRECTION was unfinished, not merely that something was.
+//
+// It used to be the bare string '1', written by encBlobRemove AND by both failure branches of _encConverge —
+// including failures belonging to a WRITE. On the next boot _encIntent is back to its module default
+// ({have:null}), so encBlobRemoveResume resolved every breadcrumb as a removal and converged toward "no key".
+// A PIN set while the Keystore was slow therefore left the blob in the hardware store, no marker in
+// localStorage, and a breadcrumb — and the next launch DELETED the church key and showed "Set up a new
+// church". Adversarial review 2026-08-04; reachable on a brand-new church too, where the steward may well
+// have skipped the 12-word backup.
+//
+// Legacy '1' is treated as UNKNOWN, never as a removal: an orphaned ciphertext in the Keystore is an at-rest
+// exposure the next removeKey/removeLock will clear, while a deleted key is a church that no longer exists.
+const PENDING_WRITE = 'write';
+const PENDING_REMOVE = 'remove';
+// What key state does this device boot into? Pure over localStorage, so init() can decide BEFORE the first
+// render — and so it can be driven in a test, which the inline version could not be.
+//
+// 'interrupted' is the one that matters. encBlobRemoveResume() settles a half-finished key write or removal,
+// but it is async and init() is not, so by the time it knows the answer the console has already drawn.
+// Without this the console reported "no key" and offered "Set up a new church" over a church key sitting in
+// the Keystore awaiting adoption — and creating one overwrote it.
+//
+// It does not try to guess the DIRECTION of an interrupted operation, because that is unknowable:
+// encBlobRemove() clears the marker up front and encBlobWrite() sets it only after the store write, so both
+// interruptions leave marker-absent + breadcrumb, byte-identical. It answers "something is unsettled", and
+// the console treats that as locked — an unlock screen cannot destroy anything, and the resume clears the
+// breadcrumb and re-announces either way, so a stale crumb costs one screen rather than a church key.
+function _bootKeyState() {
+  if (lsGet(KEY_LS)) return 'plaintext';             // legacy seed on disk — load it and force a PIN
+  if (lsGet(ENC_LS)) return 'locked';                // settled: a key is here, PIN-locked
+  if (lsGet(ENC_PENDING_LS)) return 'interrupted';   // a key may be in the store with its marker unwritten
+  return 'none';
+}
 
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
+// Does this look like a church-key blob at all? Used when finishing an INTERRUPTED WRITE, where module state is
+// gone and the only evidence is whatever the hardware store happens to hold. Adopting that unconditionally is
+// not safe: the store may hold a half-written or corrupted value, and writing the marker over it makes
+// localStorage claim a key that will never decrypt — the "correct PIN rejected for ever" state, which is worse
+// than reporting no key. The random-interleaving fuzz caught exactly that on the first version of this guard.
+const _looksLikeKeyBlob = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.ct && o.iv && o.salt); } catch { return false; } };
 // NEVER return the Capacitor plugin object itself from an async function. `Capacitor.Plugins.SecureStorage` is a
 // PROXY: every property access becomes a native call, so when the await machinery probes the returned value for
 // `.then` — which it does for anything a promise resolves to — the proxy forwards `then` to Android. Found on a
@@ -947,7 +1017,11 @@ async function encBlobRaw() {
 async function encBlobWrite(str) {
   // INTENT FIRST, synchronously. Everything after this line can be interrupted, hang, or land late. This
   // cannot, which is why every converge pass can trust it.
-  if (_isNative()) _encIntent = { have: str };
+  //
+  // The breadcrumb goes down here too, saying WRITE. _encIntent is module state and does not survive the app
+  // being killed; the breadcrumb does, and without a direction on it the next boot resolved an interrupted
+  // write as a removal and deleted the key. A successful converge clears it.
+  if (_isNative()) { _encIntent = { have: str }; try { lsSet(ENC_PENDING_LS, PENDING_WRITE); } catch {} }
   if (_isNative()) {
     try {
       const { S } = await _secureStore();
@@ -1083,14 +1157,14 @@ function _encConverge() {
         // Did not reach the intent. Keep the breadcrumb so a later pass or boot tries again, and never leave
         // localStorage claiming a key the store does not hold — "no key on this device" is recoverable from
         // the phrase; "correct PIN rejected for ever" is not.
-        try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+        try { lsSet(ENC_PENDING_LS, want ? PENDING_WRITE : PENDING_REMOVE); } catch {}
         if (actual === null) { try { localStorage.removeItem(ENC_LS); } catch {} }
       }
     } catch (e) {
       // Could not reach the store, or a call outran its bound. We know nothing for certain, so change nothing
       // beyond guaranteeing another attempt.
       console.warn('[steward] could not converge the church key', e);
-      try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+      try { lsSet(ENC_PENDING_LS, want ? PENDING_WRITE : PENDING_REMOVE); } catch {}
     }
   };
   _encConverging = (_encConverging || Promise.resolve()).then(run, run);
@@ -1102,16 +1176,99 @@ async function encBlobRemove() {
   // removal is always finishable; the marker is cleared at once so the console stops offering to unlock a
   // church it is forgetting.
   if (_isNative()) _encIntent = { have: null };
-  try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+  try { lsSet(ENC_PENDING_LS, PENDING_REMOVE); } catch {}
   try { localStorage.removeItem(ENC_LS); } catch {}
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return; }
   await _encConverge();
 }
 // Finish an operation that was cut off — by the reload racing it, a hung bridge call, or the app being
 // killed. Safe on every boot: does nothing without the breadcrumb.
+// Did the resume reach no conclusion at all? Set only by the catch below — the Keystore bridge threw or
+// timed out — and it is the one outcome where we must NOT tell the console the device is empty.
+let _encResumeStuck = false;
+
+// EVERY exit announces. init() decides the boot key state synchronously and this does not, so init() answers
+// 'interrupted' and leaves the console locked rather than offering "Set up a new church" over a key it cannot
+// yet see. That is only safe if the console is told the answer once it is known — and the announce used to
+// sit before ONE of six returns, the write/adopt path. An interrupted REMOVAL took a different exit, so a
+// steward who removed their church key and was cut off mid-operation came back to "Console locked" over a
+// device with no key and no PIN: Steward.unlock() returns true without clearing `locked`, the submit handler
+// bails, and the button sticks on "Unlocking…" for ever with no way out but a manual reload.
+//
+// Wrapping the worker means a future exit inherits the announce instead of having to remember it.
 async function encBlobRemoveResume() {
-  if (!lsGet(ENC_PENDING_LS)) return false;
+  _encResumeStuck = false;
+  try { return await _encBlobRemoveResumeWork(); }
+  finally {
+    try {
+      if (_encResumeStuck) {
+        // We could not read the store, so we do not know whether a key is there. Stay locked — offering to
+        // create one could overwrite a church key — but say so, because silence here is the dead end.
+        window.Steward.keyStoreStuck = true;
+      } else if (!lsGet(ENC_LS)) {
+        window.Steward.locked = false;   // settled, and there is genuinely no key: back to setup
+      }
+      window.dispatchEvent(new CustomEvent('steward-key'));
+    } catch (e) {}
+  }
+}
+
+async function _encBlobRemoveResumeWork() {
+  const pending = lsGet(ENC_PENDING_LS);
+  if (!pending) return false;
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
+  // A removal is the ONLY direction this function may finish. An interrupted WRITE — and a legacy '1', whose
+  // direction was never recorded — must never be resolved by deleting: converging toward `want = null` when
+  // the steward was in fact saving a key is precisely how a set PIN turned into "Set up a new church" on the
+  // next launch. Instead, adopt whatever the store actually holds. If a blob is there the key survived the
+  // interruption and only the marker is missing, so writing the marker finishes the job honestly; if nothing
+  // is there the write never landed, and there is nothing to finish either way.
+  if (pending !== PENDING_REMOVE) {
+    // If this process already KNOWS what was asked for, leave it entirely alone. The live machinery owns that
+    // intent and its own converge passes will settle it; this function exists only to finish work orphaned by
+    // a RESTART. Two earlier attempts here were both wrong: adopting the store's contents as the intent
+    // overrode a newer request with an older blob ("the marker points at a key that is not the one last asked
+    // for"), and scheduling another converge re-entered the chain and hung the runner outright with
+    // "Map maximum size exceeded" — the exact infinite loop _encAfter's on-success-only rule exists to avoid.
+    if (_encIntent.have != null) {
+      // One exception, and it is bookkeeping rather than repair: if localStorage already carries the marker the
+      // device is settled, so this breadcrumb is left over from some earlier, unrelated operation. Drop it
+      // rather than leaving it to be re-examined on every future boot.
+      if (_encIsMarker(lsGet(ENC_LS))) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} }
+      return false;
+    }
+    // Boot case: module state is gone, so the store is the only evidence of what the interrupted write left.
+    try {
+      const { S } = await _encBound(_secureStore());
+      const v = await _encBound(S.get(ENC_LS));
+      // Only adopt something that actually looks like a key. Anything else is a half-written or corrupted
+      // value, and marking it valid would reject the steward's correct PIN for ever — leave it, claim nothing,
+      // and let unlock() report honestly that this device has no key.
+      if (v != null && _looksLikeKeyBlob(String(v))) {
+        _encIntent = { have: String(v) };
+        lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+        // K2, and the resolution is NOT the one the finding proposed. A LEGACY breadcrumb (the bare '1' that
+        // pre-dates PENDING_WRITE/PENDING_REMOVE) carries no direction, and on the old build BOTH an
+        // interrupted removal and an interrupted write left it. The finding suggested resolving legacy by the
+        // marker's absence instead. Measured against main: that does not discriminate. encBlobRemove() clears
+        // the marker up front, and encBlobWrite() on native does not set it until _encConverge() runs AFTER
+        // the store write — so an interrupted write leaves marker-absent + breadcrumb, byte-identical to an
+        // interrupted removal. Treating absence as "removal" would delete the key in exactly the case this
+        // branch was cut to fix.
+        //
+        // So the direction stays unknowable and we keep the safe half: never delete on a guess. What was
+        // wrong was doing it SILENTLY — a steward who asked to remove this church finds it back, PIN-locked,
+        // with nothing said. They know the direction even though the device cannot, so tell them and let them
+        // finish the job. Cleared by removeKey(), and by any later settled state.
+        if (pending !== PENDING_WRITE) {
+          window.Steward.keyResumedUnknown = true;
+          try { window.dispatchEvent(new CustomEvent('steward-key-resumed')); } catch (e) {}
+        }
+      }
+    } catch (e) { console.warn('[steward] could not settle an interrupted key write', e); _encResumeStuck = true; return false; }
+    try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+    return true;
+  }
   // Module state is gone after a restart, so recover the intent from what localStorage says: a marker means a
   // key is wanted (a completed removal clears it), no marker means none is.
   //
@@ -1418,6 +1575,23 @@ function _clearanceOutranks(a, b, churchHex) {
 // Used twice, deliberately sharing one implementation: to SKIP redundant writes before publishing, and to
 // VERIFY before telling a steward that a child did not receive their record. Two copies of this logic would
 // drift, and the second copy is the one that decides whether a safeguarding alarm is true.
+// Does the stored guardian list differ from what the church intends for this child?
+//
+// `want` NOT BEING AN ARRAY MEANS "I DO NOT KNOW". The guardian map arrives on a subscription, and until it
+// does the screen holds {} — indistinguishable from "this church has confirmed no parent links". Treating
+// unknown as empty is not a harmless over-write: since the parent link became part of the clearance
+// comparison (2026-08-04) it makes every child differ, so the back-fill rewrites them all with an empty
+// guardian list. On the child's phone myGuardians goes empty, `linked` in canDMPeer goes false, and the child
+// can no longer message their own parent — the exact thing 650e0ab exists to deliver.
+//
+// Not knowing is never a reason to write. An empty ARRAY still is: that is the church actively saying this
+// child has no parents, which is how a removed parent reaches the child's phone.
+function _guardiansDiffer(gotG, wantG) {
+  if (!Array.isArray(wantG)) return false;
+  if (!Array.isArray(gotG)) return !!wantG.length;
+  const a = gotG.slice().sort(), b = wantG.slice().sort();
+  return a.length !== b.length || a.some((v, i) => v !== b[i]);
+}
 async function _clearancesMatching(pubs, wantFor) {
   if (!pubs.length || !sk || !_isRelayAuthed() || _viewingNetwork()) return null;
   const readFrom = _connectedRelays();
@@ -1545,7 +1719,23 @@ async function _clearancesMatching(pubs, wantFor) {
             // their phone did not know they were a child. It did. Track the minor field separately so the
             // claim is only made about people it is actually true of. AUDIT-9.
             const minorWrong = !got || !!got.minor !== !!w.minor;
-            if (minorWrong || !!got.cleared !== !!w.cleared) {
+            // THE PARENT LINK IS PART OF THE CONTENT, and leaving it out of this comparison made the whole
+            // guardians change inert: this — not same() — is the gate that decides whether a write happens, so
+            // a clearance whose minor/cleared matched was filed as "correct" and skipped no matter how stale
+            // its guardian list was. Measured by the adversarial review: 3 of 3 children skipped when only the
+            // parent changed. Which meant unlinkParent never reached the child (a removed adult stayed a
+            // parent on their phone), linking a parent to an ALREADY-marked child never reached them, and
+            // every child who already existed stayed permanently unfixable. It worked only when `minor` itself
+            // flipped false→true in the same call — the fresh-identity case, which is exactly what the device
+            // test happened to exercise. 2026-08-04.
+            //
+            // Deliberately NOT minorBad: a stale parent link does not mean the child's app thinks they are an
+            // adult, and AUDIT-9 exists because that banner over-claimed once already.
+            const gotG = Array.isArray(got && got.guardians) ? got.guardians : null;
+            // NOT `w.guardians || []` — that turned "the map has not loaded yet" into "this child has no
+            // parents" and emptied every child's list. _guardiansDiffer treats a non-array want as unknown.
+            const guardiansWrong = _guardiansDiffer(gotG, w.guardians);
+            if (minorWrong || !!got.cleared !== !!w.cleared || guardiansWrong) {
               needHere = true; contentWrong = true;
               if (minorWrong && w.minor) minorBad.add(h);
             }
@@ -1617,20 +1807,27 @@ window.Steward = {
       lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
       _setNeedsPin(true); window.Steward.locked = false; return true;
     }
-    const m = lsGet(KEY_LS);
+    const boot = _bootKeyState();
+    const m = boot === 'plaintext' ? lsGet(KEY_LS) : null;
     if (m) {
       // SECURITY-AUDIT-2026-06-25 Critical-2: legacy plaintext seed on disk. Load into memory, mark
       // as needing migration. The forced PIN modal will appear on the next render; setPin() will
       // atomically replace KEY_LS with ENC_LS.
       setKey(m); _setNeedsPin(true); window.Steward.locked = false; return true;
     }
-    if (lsGet(ENC_LS)) {
+    if (boot === 'locked') {
       // S6: fire-and-forget the one-time move into the hardware store. Deliberately NOT awaited — init() is
       // synchronous and the lock state below does not depend on WHERE the blob lives, only that one exists.
       // migrateEncToSecure() is a no-op unless it can read the blob back out, so the worst case is that this
       // device simply stays as it was and tries again next boot.
       migrateEncToSecure();
       window.Steward.locked = true; return false;   // PIN-locked — needs unlock(), no key in memory
+    }
+    if (boot === 'interrupted') {
+      // A key write or removal was cut off. encBlobRemoveResume() above will settle it, but not before this
+      // returns — so refuse to claim the device is empty. Locked shows an unlock screen instead of "Set up a
+      // new church", and the resume re-announces once it knows.
+      window.Steward.locked = true; return false;
     }
     return false;
   },
@@ -1666,7 +1863,15 @@ window.Steward = {
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
     // S6: goes to the hardware store on native, localStorage on web. Awaited, so needsPin is only cleared
     // once the ciphertext is durably somewhere — the plaintext KEY_LS removal below depends on that.
-    await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count
+    const landed = await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count
+    // HONOUR THE ANSWER. encBlobWrite returns true only if the blob durably landed somewhere it can be read
+    // back, and this call used to discard that: on a slow Keystore it reported success, dropped the plaintext
+    // seed and cleared needsPin, leaving the key nowhere localStorage could see it. The comment above already
+    // said the KEY_LS removal "depends on that" — nothing enforced it. Adversarial review 2026-08-04.
+    //
+    // Failing here is safe and recoverable: the seed is still in memory, needsPin is still set, so the forced
+    // PIN modal stays up and says so. Losing the plaintext on a write that did not land is not.
+    if (!landed) return false;
     try { localStorage.removeItem(KEY_LS); } catch {}
     _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
@@ -1692,6 +1897,13 @@ window.Steward = {
     } catch { return false; }
   },
   lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
+    // "seed stays encrypted" is only true once it HAS been encrypted. While needsPin is set — after createKey,
+    // restoreKey, adoptChurch or removeLock — the seed exists nowhere but `currentMnemonic`, so forgetting it
+    // is not locking, it is destroying the church. The 10-minute idle timer in steward-root.jsx fires on a
+    // dep array of [ks.has], which does not change across a restore, so its pre-restore deadline stayed armed
+    // over the forced-PIN screen: walk away for ten minutes and the console came back to "Set up a new
+    // church". Guarded HERE rather than in the timer, so every caller is covered. Adversarial review 2026-08-04.
+    if (needsPin) return;
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
     window.Steward.locked = !!lsGet(ENC_LS);
@@ -1711,16 +1923,26 @@ window.Steward = {
     } catch { return false; }
   },
   // drop the PIN. SECURITY-AUDIT-2026-06-25 Critical-2: NO LONGER writes the plaintext seed back to
-  // localStorage — instead removes the encrypted form and sets needsPin=true. The seed stays in
-  // memory (currentMnemonic); the UI immediately renders the forced PIN modal, requiring the
-  // steward to set a new PIN before any further action. Net effect: there is NO post-removeLock
-  // state where a plaintext seed exists on disk, even transiently.
+  // localStorage — instead sets needsPin=true. The seed stays in memory (currentMnemonic); the UI immediately
+  // renders the forced PIN modal, requiring the steward to set a new PIN before any further action. Net
+  // effect: there is NO post-removeLock state where a plaintext seed exists on disk, even transiently.
+  //
+  // K3, and the third appearance of one shape. This used to `await encBlobRemove()` here — clearing
+  // localStorage AND the hardware store — which left `currentMnemonic` as the only copy of the church key in
+  // existence until the steward finished typing a new PIN. cd67c7a fixed the identical order in restoreKey;
+  // this window is worse, because restoreKey's is however long the modal takes while this one belongs to a
+  // steward who has just been told the lock is gone, with nothing forcing them to finish. An idle auto-lock, a
+  // backgrounded WebView or a crash in that window destroyed the church outright.
+  //
+  // Nothing needed the eager removal: setPin() → encBlobWrite() writes the SAME slot, so completing the flow
+  // overwrites the old ciphertext anyway and S6's at-rest concern is still met. An ABANDONED removal now
+  // leaves the previous key intact and openable with the OLD PIN — the steward keeps their church instead of
+  // losing it. The blob is ciphertext in both cases; nothing is ever kept unlocked.
   async removeLock(pin) {
     if (!currentMnemonic) return false;
     if (lsGet(ENC_LS) && !(await window.Steward.verifyPin(pin))) return false;   // wrong/empty PIN → refuse
-    await encBlobRemove();   // S6: localStorage AND the hardware store, or the next boot finds an orphan blob
     window.Steward.locked = false;
-    _setNeedsPin(true);   // force an immediate re-PIN
+    _setNeedsPin(true);   // force an immediate re-PIN, which overwrites the stored blob
     return true;
   },
   createKey() {
@@ -1909,14 +2131,26 @@ window.Steward = {
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (m.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
-    // SECURITY-AUDIT-2026-06-25 Critical-2: restore does NOT persist plaintext. The seed lives in
-    // memory only; needsPin forces the forced PIN modal before the steward can act. Any existing
-    // PIN-encrypted blob on this device is wiped (it belonged to a different key).
-    // S6: encBlobRemove() clears the hardware store too. Without it the PREVIOUS key's ciphertext would sit
-    // in Keystore after a restore — the exact at-rest exposure this change exists to close, left behind by the
-    // one operation whose comment promises the old blob is wiped.
-    setKey(m); try { localStorage.removeItem(KEY_LS); } catch (e) {}
-    encBlobRemove();
+    // CHECKSUM, not just word count. `privateKeyFromSeedWords` is a bare PBKDF2: any twelve lowercase tokens
+    // derive a perfectly valid key. Without this a single mistyped word destroyed the real church key and
+    // installed a stranger's — and the forced-PIN screen shows no npub or church name, so nothing on screen
+    // contradicted it. The member app has validated since M12 (src/identity.src.js); the console, which holds
+    // the higher-value key, did not. Adversarial review 2026-08-04.
+    if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase — check the spelling of each word.');
+    // ORDER MATTERS, and it used to be backwards. This wiped the previous key from localStorage AND the
+    // hardware store FIRST, leaving the restored seed in memory only until setPin() encrypted it. Anything
+    // that ended the JS context in that window — an idle lock, a backgrounded WebView, a reload, a crash —
+    // left the device with NO church key at all. Deterministic key loss, found on a phone 2026-08-04.
+    //
+    // Nothing needed that eager wipe: setPin() → encBlobWrite() writes the SAME slot, so a successful restore
+    // overwrites the old ciphertext anyway (S6's at-rest concern is still met), and setPin() removes KEY_LS
+    // itself. An ABANDONED restore now leaves the previous key intact and openable, which is the safe
+    // outcome — the steward keeps the church they had instead of losing both.
+    setKey(m);
+    // The active church has just changed to a DIFFERENT one. Everything scoped to the old church must go with
+    // it, or the roster effect republishes church A's name/care/media keys as church B's. `location.reload()`
+    // used to do this by accident; nothing did it on purpose. See _resetChurchScopedState.
+    _resetChurchScopedState();
     _setNeedsPin(true);
     // fire steward-key so the first-run welcome advances to the console (createKey does this too)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
@@ -1932,7 +2166,9 @@ window.Steward = {
     const q = m.match(/[?&#](?:adopt|church)=([^&#\s]+)/);   // also accept a URL form
     if (q) { try { m = decodeURIComponent(q[1]); } catch {} }
     m = m.replace(/^trinityone-church:/i, '').trim();
-    return window.Steward.restoreKey(m);                     // validates + persists; throws on a bad phrase
+    // validates; throws on a bad phrase. Does NOT persist — the seed is memory-only until the forced-PIN
+    // modal encrypts it (see restoreKey). Callers must NOT reload, or the restored key is lost.
+    return window.Steward.restoreKey(m);
   },
   // ---- "Become a steward" handshake: a would-be steward shows this code to a church owner, who scans/pastes
   // it under Delegated stewards to add them. Unlike the church handoff this carries ONLY the public npub of
@@ -2002,6 +2238,7 @@ window.Steward = {
   // synchronously first, so every existing synchronous caller behaves exactly as before.
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
+    window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
@@ -2530,10 +2767,19 @@ window.Steward = {
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
   // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
-  async startSafetyCheck(message) {
+  async startSafetyCheck(message, audience) {
     const cp = actingChurch || pub; if (!sk || !cp) return null;
     const id = 'sc' + now() + Math.random().toString(36).slice(2, 6);
-    const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), at: now(), open: true });   // no `by` — members encrypt to the event SIGNER, not a content field
+    // WHO MAY READ THE REPLIES is chosen by the steward when the check is started, and travels WITH the check
+    // so a member's app seals to exactly that audience — no second setting to drift out of step.
+    //
+    // Before this, every reply was sealed to the event SIGNER alone. With a delegated steward that meant one
+    // volunteer's phone was the only device on earth that could open "I need help", while the screen told the
+    // member "your church's leaders" could see it. The church key is now ALWAYS a recipient as well, so the
+    // answers survive that volunteer being unreachable — which in the emergency this feature exists for is
+    // exactly the phone most likely to be lost. UX audit 2026-08-04.
+    const aud = (audience === 'care') ? 'care' : 'stewards';
+    const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), at: now(), open: true, audience: aud });   // no `by` — members encrypt to the event SIGNER, not a content field
     // SECURITY-AUDIT-2026-07-18: publish() RESOLVES with `false` when every relay rejected (it doesn't throw), so
     // the old try/catch never fired and this returned success even when nothing was sent — in the raid/disaster
     // conditions this feature exists for, the steward believed the church was alerted when it wasn't. Honour the
@@ -2569,7 +2815,18 @@ window.Steward = {
         if (e.id) { if (seenIds.has(e.id)) return; seenIds.add(e.id); }
         try {
           let ck = ckCache.get(e.pubkey); if (!ck) { ck = nip44ck(sk, e.pubkey); ckCache.set(e.pubkey, ck); }
-          const o = JSON.parse(nip44d(e.content, ck));
+          // v2 carries one ciphertext per reader, keyed by pubkey; v1 was a bare string sealed to the check's
+          // starter alone. Read BOTH — a check already running when the multi-reader change shipped still has
+          // v1 replies arriving, and losing those would lose "I need help" from the one window that matters.
+          let payload = e.content;
+          try {
+            const env = JSON.parse(e.content);
+            if (env && env.v === 2 && env.to) {
+              payload = env.to[String(pub || '').toLowerCase()] || env.to[String(window.Steward.pubkey || '').toLowerCase()] || '';
+              if (!payload) return;   // not sealed to us — a reader outside the chosen audience
+            }
+          } catch (e2) {}
+          const o = JSON.parse(nip44d(payload, ck));
           if (checkId && o.checkId && o.checkId !== checkId) return;         // ignore responses to an earlier check
           const prev = byPub.get(e.pubkey); if (prev && prev.at >= (o.at || e.created_at)) return;
           byPub.set(e.pubkey, { pubkey: e.pubkey, status: o.status === 'help' ? 'help' : 'safe', note: String(o.note || ''), at: o.at || e.created_at });
@@ -2864,26 +3121,38 @@ window.Steward = {
   // while the button beside it promised "your church sees their symbol/initial". Kept as a module-level set
   // fed by subscribeSafeguard, deliberately the same shape as the member app's, so the two cannot drift.
   photoSuppressed(memberPub) { return isPhotoSuppressed(memberPub, _noPhoto); },
-  subscribeSafeguard(onLists) {   // onLists({ minors:[…], approved:[…], nophoto:[…] })
-    let minors = [], approved = [], nophoto = [];
+  subscribeSafeguard(onLists) {   // onLists({ minors, approved, nophoto, guardians, loaded })
+    let minors = [], approved = [], nophoto = [], guardians = {};
     // NEWEST WINS, per document. These are three separate replaceable docs riding one subscription, so they
     // need three timestamps: a single shared one would let a fresh minors list suppress a perfectly current
     // approved list that simply happened to arrive after it. Safeguarding lists are the worst place to let a
     // stale copy from a lagging relay win — it would quietly reinstate a child-protection state the church
     // has already changed.
-    let tMinors = 0, tApproved = 0, tNophoto = 0;
+    let tMinors = 0, tApproved = 0, tNophoto = 0, tGuardians = 0;
     // `loaded` says the relay has ANSWERED, not that the lists are non-empty. The clearance backfill must
     // not run before it: sealing every member a 'not a minor' clearance from lists that had simply not
     // arrived yet would strip child status from every child in the church. AUDIT-2026-07-27.
-    let loaded = false;
+    let sawMinors = false, sawEose = false;
+    // LOADED MEANS THE GUARDIAN MAP IS KNOWN TOO, and that needs both halves. The minors document proves we
+    // are AUTHENTICATED (it is served to nobody else), and eose proves the stored set has been delivered in
+    // full. Only together do they license reading an absent guardians document as "this church has confirmed
+    // no parent links" rather than "it has not arrived yet".
+    //
+    // The guardian map rides here rather than on its own subscription because the two used byte-identical
+    // filters — so a separate subscription could never tell the caller anything about THIS one's progress,
+    // and the back-fill was left guessing. Guessing is what emptied children's parent lists. It also returns
+    // a subscription slot, against a cap this codebase has been bitten by before.
+    const isLoaded = () => sawMinors && sawEose;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; loaded = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, loaded }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -2891,7 +3160,7 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { onLists({ minors, approved, nophoto, loaded }); },
+      oneose() { sawEose = true; onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -2911,7 +3180,20 @@ window.Steward = {
     if (urls && !urls.length) return Promise.resolve(null);   // read says every relay already holds it: nothing to do
     const mp = toPubHex(memberPub) || memberPub;
     if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
-    const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
+    // `guardians` = the pubkeys this church has CONFIRMED as this member's parents. It goes here, sealed to the
+    // member, because this doc is the only place a child can learn it safely.
+    //
+    // Why not the obvious alternatives (UX audit 2026-08-04, finding #2):
+    //   * the church's `guardians:` MAP is deliberately steward-only — it maps every child in the congregation
+    //     to their parents — so a child's device is never served it, `linked` was permanently false in
+    //     canDMPeer, and a child could not message their own parent. SAFEGUARDING.md promises they can.
+    //   * the `guardreq:` documents are readable by the child, and using them would be UNSAFE: a request is
+    //     authored by the CLAIMED parent, and accept() only enforces that the author is who they say they are
+    //     (SECURITY-AUDIT-2026-07-20 C1) — not that they are that child's parent. Trusting them would let any
+    //     adult self-declare as a child's parent and bypass the DM restriction.
+    // The church is the only party that knows the confirmed link, so the church has to say so.
+    const guards = Array.from(new Set((status && status.guardians || []).map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))).sort();
+    const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: now() });
     let ct = ''; try { ct = nip44e(body, nip44ck(sk, mp)); } catch (e) { return Promise.resolve(null); }
     // The ['church'] tag is EXPLICIT, not left to feChurch. feChurch only adds it when acting as a DELEGATED
     // steward, so a church OWNER — the ordinary case — published this with no church tag, the relay's accept
@@ -2957,7 +3239,7 @@ window.Steward = {
         // Record WHICH relays this write covered. The 15s skip below is a sub-second-collision guard, and
         // once writes are targeted a member written to relay A must not have their relay-B write suppressed
         // by a cache that only remembers "we wrote this member". `urls: null` means the full fan-out.
-        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now(), urls: (urls && urls.length) ? urls.slice() : null }); } catch (e) {} }
+        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: Date.now(), urls: (urls && urls.length) ? urls.slice() : null }); } catch (e) {} }
         return r;
       });
   },
@@ -3007,14 +3289,14 @@ window.Steward = {
   // second. Measured: read-before-write alone took the false banner from 8 toggles in 12 down to 1 in 4 — the
   // remainder being exactly this overlap. Queueing removes it: the second run reads after the first has
   // written and finds nothing to do. Cheap, because in steady state that second run is now a no-op.
-  refreshClearances(memberPubs, minors, approved) {
-    const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved);
+  refreshClearances(memberPubs, minors, approved, guardians) {
+    const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved, guardians);
     // Never let one run's rejection break the chain for every later caller.
     const next = _clearanceQueue.then(run, run);
     _clearanceQueue = next.then(() => {}, () => {});
     return next;
   },
-  async _refreshClearancesNow(memberPubs, minors, approved) {
+  async _refreshClearancesNow(memberPubs, minors, approved, guardians) {
     // A NETWORK VIEW HAS NO MEMBERS, so there is nothing to back-fill and nothing to report. Without this the
     // refusal cascaded into a false alarm: publishClearance returns null here, every member landed in
     // `unconfirmed`, _clearancesMatching also refuses, and the run ended with failed === roster and a
@@ -3035,8 +3317,41 @@ window.Steward = {
     const out = [];
     let failed = 0, skipped = 0, pending = 0;
     const unconfirmed = [];   // written but not acknowledged — verified below before anyone is alarmed
-    const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h) }; };
-    const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
+    // The confirmed parent links, normalised the same way publishClearance normalises them so `same()` is
+    // comparing like with like. A child whose parent link changes MUST be re-sealed, or their app keeps the
+    // old answer — which is why guardians joins the comparison rather than riding along unchecked.
+    const gmap = new Map();
+    try {
+      const src = guardians || {};
+      for (const k of Object.keys(src)) {
+        gmap.set(String(k).toLowerCase(),
+          Array.from(new Set((src[k] || []).map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))).sort());
+      }
+    } catch (e) {}
+    // UNKNOWN vs EMPTY. A caller that has not yet received the guardian map passes null/undefined; a caller
+    // that knows the church has no parent links passes {}. The first must not be read as the second — doing
+    // so rewrites every child with an empty guardian list and cuts them off from their own parent. So an
+    // absent map yields `undefined` per child, which _guardiansDiffer treats as "do not touch".
+    // NULL means "I do not know the parent links" — the caller had not received the map yet. Omitting the
+    // argument keeps its long-standing meaning ("no guardian data to sync", behaves as {}), because several
+    // callers and every existing test do exactly that, and changing what silence means would have quietly
+    // disabled guardian sync everywhere. Only an explicit null says "do not touch these".
+    // NULL MEANS "I DO NOT KNOW THE PARENT LINKS", and the only safe response is to write nothing at all.
+    //
+    // No caller passes null any more: the guardian map rides the safeguarding subscription now, so the screen
+    // waits for `loaded` and then always knows. This is the backstop for a future caller that does not — and
+    // it has to exist, because publishClearance collapses a missing guardian list to [] and writes it, so a
+    // write triggered for ANY other reason would blank a child. Holding back is free: `pending` already means
+    // "no write, no alarm, look again next visit".
+    //
+    // Omitting the argument keeps its long-standing meaning ("no guardian data to sync", behaves as {}) —
+    // several callers and tests do that, and changing what silence means would disable guardian sync widely.
+    const guardsUnknown = guardians === null;
+    const guardsKnown = !guardsUnknown;
+    const guardsFor = (h) => (guardsKnown ? (gmap.get(h) || []) : undefined);
+    const sameList = (x, y) => { const a = x || [], b = y || []; return a.length === b.length && a.every((v, i) => v === b[i]); };
+    const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }; };
+    const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared && sameList(a.guardians, b.guardians);
 
     // (a) Anything this console itself put on the wire in the last few seconds, still identical. Covers the
     //     sub-second toggle race without depending on how fast the relay echoes.
@@ -3074,6 +3389,7 @@ window.Steward = {
     // write amplification back at exactly the moment the link is worst. The residual is that a relay which
     // was down at write time still needs reconciling when it returns; that is what the _clearanceSent clear
     // on a connection change below is for, and a full per-relay outbox is the real cure.
+    if (guardsUnknown) return { results: [], failed: 0, skipped: 0, pending: pubs.length, total: pubs.length, unverified: true };
     const already = await _clearancesMatching(pubs, want);
     // A SKIP REQUIRES A FINISHED READ, and the comment that used to sit here — "a partial read simply proves
     // less, so the worst it can do is republish" — was true until read-before-write started asking whether
@@ -3097,7 +3413,7 @@ window.Steward = {
       const slice = pubs.slice(i, i + BATCH);
       const settle = Promise.allSettled(slice.map(p => {
         const h = String(p).toLowerCase();
-        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
+        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }, targetsFor(h));
       }));
       // NOTHING TO WRITE, AND NOTHING TO CONFIRM. A member can be correct on every relay we heard from while
       // the read still did not finish — so they are not skippable (an unfinished read cannot prove no newer
@@ -3528,24 +3844,73 @@ window.Steward = {
   //
   // The old key stays ON the safeguarding lists rather than being removed: that half fails closed, and a key
   // nobody holds costs nothing. AUDIT 2026-08-02.
+  // EVERY WRITE HERE IS CHECKED, and the order is chosen so that a refusal leaves a state the steward can
+  // still act on. HANDOFF-2026-08-05 \u00a74.2: this awaited seven church writes and inspected none of them.
+  // publish() does not throw on refusal \u2014 it returns `false` \u2014 so a console that was offline, or a relay that
+  // refused every doc, ran straight through to a report saying it had all happened.
+  //
+  // THE ORDER IS THE FIX, not just the checking. reseatOld filters the old key out of the roster the moment
+  // the VOUCH lands, and the roster row is where the Block control lives. So anything that must remain
+  // retryable has to happen while that row is still on screen:
+  //   1. the stolen-phone block   \u2014 abort if refused; the old row is still there, so the steward can retry
+  //   2. the safeguarding lists   \u2014 abort if refused; a key nobody has admitted yet costs nothing, and the
+  //                                 alternative is a child admitted to the church whom no list calls a child
+  //   3. the vouch, then admit    \u2014 the pre-existing rule, which only ever worked if the result was read
+  //   4. the clearance re-seal    \u2014 reported, never fatal: the seat HAS moved by here, the relay enforces
+  //                                 from the lists written in (2), and this re-runs safely by itself
+  // Re-running the whole thing after an abort is idempotent (every setter de-dupes through a Set).
+  // A replaceable write refused on a SAME-SECOND TIE is not something the steward did wrong — it is the clock.
+  // event-store breaks a created_at tie by lowest event id ("rt === et && r.id < e.id → have-newer"), so of any
+  // two writes to the same doc inside one second, roughly half lose. Every setter below stamps its own now(),
+  // so waiting past the second boundary and writing again produces a strictly-later created_at that cannot
+  // tie, and the retry is decisive. ONE retry: a second refusal is a real refusal (offline, or genuinely
+  // rejected), and must still surface.
+  //
+  // This is HANDOFF-2026-08-05 §6's "same-second replaceable race", which is why reseat-safeguarding fails
+  // ~2-in-5 on unmodified code. It silently lost writes before; checking the results here turned it into a
+  // visible refusal, which is honest but still wrong — the write should simply succeed. Scoped to the re-seat
+  // path deliberately: publish() has 77 call sites and this branch is not the place to change all of them.
+  //
+  // Kept as a LOCAL closure rather than a sibling method: two harnesses lift reseatMember out of the shipped
+  // bundle on its own and run it, so a helper reached through window.Steward is a helper they do not have.
   async reseatMember(oldPub, newPub, o) {
     o = o || {};
+    const w = async (fn) => {
+      const first = await fn();
+      if (first) return first;
+      await new Promise(r => setTimeout(r, 1100));   // ≥1s guarantees now() advances, so the retry cannot tie
+      return fn();
+    };
     const oldH = (toPubHex(oldPub) || oldPub || '').toLowerCase();
     const newH = (toPubHex(newPub) || newPub || '').toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(oldH) || !/^[0-9a-f]{64}$/.test(newH)) throw new Error('That doesn\u2019t look like a member code.');
     if (oldH === newH) throw new Error('That is the same key they already have.');
-    // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
-    // while the church still showed two of them; this order fails the safer way round.
-    const pairs = [...(o.reseats || []).filter(p => p && p.new !== newH), { old: oldH, new: newH, name: o.name || '', at: now() }];
-    await window.Steward.setReseats(pairs);
-    await window.Steward.setAdmitted([...new Set([...(o.admitted || []), newH])]);
-
     const low = (a) => (a || []).map(x => String(x || '').toLowerCase()).filter(Boolean);
+
+    // (1) THE STOLEN PHONE, FIRST AND FATAL. The tickbox promises "Blocks the old key so it can no longer read
+    // this church. Do this now \u2014 once they are reconnected, the old entry leaves your Members list and you
+    // cannot block it afterwards." That is true, which is why a refused block cannot be allowed to reach the
+    // success screen: the thief would keep reading the church, posting to it and holding the group keys, and
+    // the one control that could stop them would already have gone. Nothing has been written yet, so throwing
+    // here leaves the church exactly as it was and the steward able to try again.
+    if (o.blockOld) {
+      const blocked = await w(() => window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]));
+      if (!blocked) throw new Error('Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.');
+    }
+
     const mins = low(o.minors), appr = low(o.approved);
     const wasMinor = mins.indexOf(oldH) !== -1, wasCleared = appr.indexOf(oldH) !== -1;
     let nextMins = mins, nextAppr = appr;
-    if (wasMinor && mins.indexOf(newH) === -1) { nextMins = [...mins, newH]; await window.Steward.setMinors(nextMins); }
-    if (wasCleared && appr.indexOf(newH) === -1) { nextAppr = [...appr, newH]; await window.Steward.setApproved(nextAppr); }
+    // (2) SAFEGUARDING BEFORE ADMISSION. If the child marking will not save, the alternative to stopping is a
+    // child in the church whom no list names as a child \u2014 and safeguardAllows() then lets any adult DM them.
+    if (wasMinor && mins.indexOf(newH) === -1) {
+      nextMins = [...mins, newH];
+      if (!await w(() => window.Steward.setMinors(nextMins))) throw new Error('Couldn\u2019t save the child marking, so nothing was changed. Check your connection and try again \u2014 reconnecting them without it would leave them unprotected.');
+    }
+    if (wasCleared && appr.indexOf(newH) === -1) {
+      nextAppr = [...appr, newH];
+      if (!await w(() => window.Steward.setApproved(nextAppr))) throw new Error('Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.');
+    }
 
     // The seat may be the CHILD (an entry keyed by them) or a PARENT (named in some child's list). Both break.
     const g = o.guardians || {};
@@ -3558,15 +3923,48 @@ window.Steward = {
         nextG[childK] = [...new Set([...low(nextG[childK] || parents), newH])];
       }
     }
-    if (nextG) await window.Steward.setGuardians(nextG);
+    // The half no steward can repair by hand: re-ticking "child" restores the marking and still leaves the
+    // parent unable to message their own child. Reported as done, it would never be looked at again.
+    if (nextG && !await w(() => window.Steward.setGuardians(nextG))) throw new Error('Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.');
+
+    // (3) Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
+    // while the church still showed two of them; this order fails the safer way round. It only fails that way
+    // round if the result is read, which is what the two checks below add.
+    const pairs = [...(o.reseats || []).filter(p => p && p.new !== newH), { old: oldH, new: newH, name: o.name || '', at: now() }];
+    if (!await w(() => window.Steward.setReseats(pairs))) throw new Error('Couldn\u2019t record the reconnection, so nothing was changed. Check your connection and try again.');
+    if (!await w(() => window.Steward.setAdmitted([...new Set([...(o.admitted || []), newH])]))) throw new Error('Recorded the reconnection, but couldn\u2019t let the new phone in. Open Members and approve them, or run this again.');
 
     // Re-issue the record the member's OWN phone reads — always, not only for children. This member has been
     // assessed; the new key simply has not been told the answer yet. Sealing it here is what stops the
     // back-fill later inferring "no marking, therefore an adult" for someone who was never re-assessed.
-    await window.Steward.refreshClearances([newH], nextMins, nextAppr);
+    // Carry the guardian map. A re-seat MOVES the parent link to the new key, and the child's sealed clearance
+    // is where their phone learns it.
+    //
+    // An earlier version of this commit left this argument out, believing it caused
+    // scripts/reseat-safeguarding.test.mjs to fail. IT DID NOT. The adversarial review measured the test at
+    // 2 failures in 8 runs on the UNMODIFIED code, and 2 in 10 with the argument — identical. The real cause
+    // is a same-second race: reseatMember rewrites four replaceable church docs the test wrote moments before,
+    // created_at is whole seconds, and event-store's NIP-01 tie-break gives the lowest event id, so roughly
+    // half the time the second write is REFUSED and setGuardians' result is never inspected. My bisection
+    // measured noise and I wrote the wrong explanation into the code. Recorded because a confident wrong
+    // comment is what caused the bug this branch started with.
+    //
+    // (4) REPORTED, NEVER FATAL. By here the seat has moved and the relay is already enforcing from the lists
+    // written above, so throwing would tell the steward nothing happened when nearly all of it did. What this
+    // re-seal actually buys is the member's OWN phone knowing its answer without waiting for a back-fill — so
+    // a failure is worth naming, not worth undoing. `failed` counts members whose write was not acknowledged;
+    // `unverified` means we could not read back to find out, which is not the same as success.
+    const failed = [];
+    let clr = null;
+    try { clr = await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g); }
+    catch (e) { clr = null; }
+    if (!clr || clr.failed > 0 || clr.unverified) failed.push('clearance');
 
-    if (o.blockOld) await window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]);
-    return { minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG, blockedOld: !!o.blockOld };
+    return {
+      minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG,
+      blockedOld: !!o.blockOld,   // only reachable if the block LANDED — a refusal threw above
+      failed,
+    };
   },
   setAdmitted(pubkeys) {   // replace the whole admitted list (pass hex pubkeys)
     _requireTrustedView('approved-members list');
@@ -4247,6 +4645,11 @@ window.Steward = {
     // church's moderation decisions into another's screen. Cleared here beside the other per-identity state;
     // subscribeSafeguard refills it within a beat. (Same shape as the member app, which resets on church change.)
     _applyNoPhotoList([]);
+    // NOTE: the block above is the same list as _resetChurchScopedState(), minus the care-key, media-key and
+    // NIP-42 state. Deliberately NOT converged in this commit — a SWITCH keeps this device's key while a
+    // RESTORE replaces it, so the wider reset is not obviously correct here and changing it is not what this
+    // fix is for. But the duplication IS the bug class that produced AUDIT-2026-07-27 and the 2026-08-04 key
+    // loss. If you are adding per-church state, add it to _resetChurchScopedState() and settle this properly.
     window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
     window.Steward.actingChurch = actingChurch;   // UI reads this to show "acting as steward" + hide owner-only controls
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));

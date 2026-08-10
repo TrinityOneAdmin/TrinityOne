@@ -33,6 +33,50 @@ export function fnBody(src, anchor, what = anchor) {
   assert.fail(`could not find the end of ${what} — the source may be malformed`);
 }
 
+// Remove comments, keeping the source's byte offsets stable so an ORDERING check (does A appear before B?)
+// still means what it says.
+//
+// HANDOFF-2026-08-05 §4.3. This is not a tidiness helper — it closes a hole that let a shipped safeguarding
+// bug be reintroduced with all 935 tests green. `child-parent-dm.test.mjs` asserted that the parent exemption
+// appears BEFORE the minor refusal. A reviewer moved the exemption below the refusal, reinstating the bug,
+// and the assertion still passed: the first `myGuardians` in the slice was at offset 858, inside the
+// explanatory comment ABOVE the code, while `safeguard.isMinor` was at 1424. The comment was doing the
+// assertion's job. The prose describing a rule satisfied the check that the rule was followed.
+//
+// Comments are replaced with spaces rather than deleted so every surviving offset is the offset in the
+// original — otherwise fixing this test would silently move every other index-based assertion in the suite.
+export function stripComments(src) {
+  let out = '', q = '';
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i], prev = src[i - 1];
+    if (q) { out += c; if (c === q && prev !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; out += c; continue; }
+    if (c === '/' && src[i + 1] === '/') {
+      let nl = src.indexOf('\n', i); if (nl === -1) nl = src.length;
+      out += ' '.repeat(nl - i); i = nl - 1; continue;
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      let e = src.indexOf('*/', i); if (e === -1) e = src.length - 2;
+      // keep newlines so line numbers in any failure message still line up
+      for (let j = i; j <= e + 1; j++) out += src[j] === '\n' ? '\n' : ' ';
+      i = e + 1; continue;
+    }
+    out += c;
+  }
+  assert.equal(out.length, src.length, 'stripComments changed the length — offsets would no longer be comparable');
+  return out;
+}
+
+// An ordering assertion that cannot be satisfied by prose. Both needles must appear in the CODE, and
+// `first` must precede `second`. Use this instead of two indexOf calls on a raw slice.
+export function assertOrder(src, first, second, message) {
+  const code = stripComments(src);
+  const a = code.indexOf(first), b = code.indexOf(second);
+  assert.notEqual(a, -1, `${first} is not in the code (only, perhaps, in a comment) — ${message}`);
+  assert.notEqual(b, -1, `${second} is not in the code (only, perhaps, in a comment) — ${message}`);
+  assert.ok(a < b, `${first} must come before ${second} (found at ${a} and ${b}) — ${message}`);
+}
+
 // Same, for a statement that ends at a top-level `;` rather than a block (e.g. `const X = ...;`).
 export function stmt(src, anchor, what = anchor) {
   const at = src.indexOf(anchor);

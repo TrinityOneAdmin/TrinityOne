@@ -80,8 +80,8 @@ function consoleSide(urls) {
   const events = [];
   const publishSrc = grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
   const pubClearance = grab('publishClearance(memberPub, status, urls)');
-  const refresh = grab('refreshClearances(memberPubs, minors, approved)');
-  const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
+  const refresh = grab('refreshClearances(memberPubs, minors, approved, guardians)');
+  const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   const newest = grab('function _newestByD(');
   const connected = grab('function _connectedRelays(');
   const skewDecl = (STEWARD.match(/var _CLOCK_SKEW = [^\n]*\n/) || [])[0];

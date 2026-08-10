@@ -774,7 +774,11 @@ function App() {
     if (!np || !(F && F.announceMembership)) return;
     let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
     if (Date.now() - last < 12 * 3600 * 1000) return;
-    const beat = () => { F.announceMembership(np); if (lsCanWrite('trinityone.hb:' + np)) { try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} } };
+    // MARK DONE ON SUCCESS, NOT ON ATTEMPT. announceMembership is async and used to be called un-awaited, with
+    // the 12-hour heartbeat stamp written regardless — so a failed announce set the clock anyway and the member
+    // stayed invisible to their church for half a day. It is now queued in the outbox as well, so a failure is
+    // retried rather than lost, but the stamp must still only mean "this landed". UX audit 2026-08-04.
+    const beat = () => { Promise.resolve(F.announceMembership(np)).then(ok => { if (ok && lsCanWrite('trinityone.hb:' + np)) { try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} } }).catch(() => {}); };
     if (F.ready && F.ready.then) F.ready.then(beat).catch(() => {}); else beat();
   }, [activeChurch]);
   const pendingFollowRef = React.useRef(null);   // S2: a follow link opened before onboarding — defer the join+announce until the wizard completes (consent-first)
@@ -1603,7 +1607,15 @@ function App() {
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
     joinState,   // { approval, isAdmitted, isPending, offline, unknown } for the active church
-    retryConnection: () => bumpConn(x => x + 1),   // force a fresh relay re-subscribe (manual "Try again")
+    // RE-ANNOUNCE, not just re-subscribe. "Check again" used to re-run the READ subscription only, so a member
+    // whose join announce never landed could tap it for ever and remain invisible — the one action offered on
+    // the one screen where they are stuck. Now it re-sends the thing that makes them visible, then re-reads.
+    // Is the join announce still sitting in the outbox? The pending screen must not claim "sent" while it is.
+    joinQueued: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinQueued && window.Fellowship.joinQueued(np)); } catch (e) { return false; } })(),
+    // …and whether we stopped trying. Distinct from joinQueued: "still trying" is patience, "we gave up" is
+    // an action the member has to take. Both used to render as "has been sent, sit tight".
+    joinFailed: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinFailed && window.Fellowship.joinFailed(np)); } catch (e) { return false; } })(),
+    retryConnection: () => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; if (np) { if (window.Fellowship.retryJoin) window.Fellowship.retryJoin(np); if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(np); } } catch (e) {} bumpConn(x => x + 1); },
     // steward rule: this church asks members to use a real first + last name (two words)
     requireFullName: !!(((churches.find(c => c.id === activeChurch) || {}).rules) || {}).fullName,
     // AUDIT-2026-07-27. This used to read the church's list of children to decide whether to offer a DM. That
@@ -1623,7 +1635,17 @@ function App() {
       const me = (window.Fellowship && window.Fellowship.myPubkey) || null;
       const churchPub = (window.Fellowship && window.Fellowship.churchPub) || null;
       if (peer && peer === churchPub) return true;   // anyone may message the church/steward
-      const linked = !!(peer && me && (((guardians[peer] || []).includes(me)) || ((guardians[me] || []).includes(peer))));
+      // A child's device is never served the church's guardians map (it names every child in the congregation),
+      // so `guardians[me]` was permanently empty here and a child could not message their own parent — while
+      // the parent, not being a minor, could message them. Asymmetric, and it routed the child to "church
+      // leaders" in exactly the case where they most need their family. The church now seals the child's OWN
+      // confirmed parents into their clearance doc; myGuardians carries it. UX audit 2026-08-04.
+      //
+      // It must come from the CHURCH. A guardreq: doc is authored by the claimed parent and proves only
+      // authorship, so trusting one would let any adult declare themselves a child's parent.
+      const mine = safeguard.myGuardians || [];
+      const linked = !!(peer && me && (mine.includes(peer)
+        || ((guardians[peer] || []).includes(me)) || ((guardians[me] || []).includes(peer))));
       if (linked) return true;   // v2: a parent may always message their own child (and vice versa)
       if (safeguard.isMinor && !(peer && approved.includes(peer))) return false;   // a child may only DM a cleared adult
       // A steward still holds the list, so keep the old check for them — it costs nothing and keeps the
@@ -1874,7 +1896,7 @@ function App() {
         {/* Front-door PIN gate: over the whole app on open when a PIN is set and this session isn't unlocked.
             Not during the splash or first-run onboarding (there's no PIN yet then). */}
         {!showSplash && !showOnboarding && commLocked && !gateEscaped
-          ? <PinUnlockGate onUnlocked={() => { setCommLocked(false); setGateEscaped(false); }} onReadBible={() => setGateEscaped(true)} /> : null}
+          ? <PinUnlockGate onUnlocked={(r) => { setCommLocked(false); setGateEscaped(false); if (r && r.rememberFailed) ctx.toast('Unlocked — but this phone couldn’t save “stay open”, so it will ask for your PIN next time.'); }} onReadBible={() => setGateEscaped(true)} /> : null}
         {/* "Read the Bible without unlocking" leaves the app running with NO identity — which is the state
             that looked completely normal and made the missing gate invisible for months. Say so, permanently,
             and keep the way back one tap away. An empty church and a broken one must never look the same. */}

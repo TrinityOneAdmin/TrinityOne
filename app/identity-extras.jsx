@@ -227,8 +227,21 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
   const [err, setErr] = useIx('');
   const [busy, setBusy] = useIx(false);
   useIxE(() => { if (!open) { setPin(''); setPin2(''); setOff(''); setShowOff(false); setErr(''); setBusy(false); } }, [open]);
+  // "Remember me on this device" must be reversible from here, or the only way out is waiting 30 days. Read
+  // when the sheet opens (it lives in the secure store, so this is async) and re-read after turning it off.
+  const [remUntil, setRemUntil] = useIx(0);
+  const readRemembered = () => { try { if (ID.rememberedUntil) ID.rememberedUntil().then(u => setRemUntil(u || 0)).catch(() => {}); } catch (e) {} };
+  useIxE(() => { if (open) readRemembered(); }, [open]);
 
   const done = (msg) => { ctx.toast(msg); onClose(); };
+  const doForget = async () => {
+    // Clears the seed AND the expiry — they are one record in the secure store, so there is no way to drop
+    // one and keep the other. Does not lock the current session: the member is looking at the app, and
+    // throwing them out for changing a preference would be its own bug. The next launch asks for the PIN.
+    try { if (ID.forgetDevice) await ID.forgetDevice(); } catch (e) {}
+    setRemUntil(0);
+    ctx.toast('This phone will ask for your PIN next time');
+  };
   const doEnable = async () => {
     // The PIN is the ONLY secret protecting the at-rest encrypted seed blob (offline-brute-forceable if the
     // device is imaged), so a 4-digit PIN (~13 bits) is too weak. Require 6+ chars, and 8+ if all-numeric.
@@ -294,6 +307,17 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
             <Icon name="check" size={16} stroke={2.4} color="var(--sage)" />
             <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)' }}>Church community is protected on this device.</span>
           </div>
+          {remUntil > 0 ? (
+            <div style={{ padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', margin: '0 0 12px' }}>
+              <div style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+                This phone stays open without your PIN until <b>{new Date(remUntil * 1000).toLocaleDateString()}</b>.
+                <br /><span style={{ color: 'var(--ink-3)' }}>Anyone who can unlock this phone can open your church.</span>
+              </div>
+              <button onClick={doForget} style={{ marginTop: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', borderRadius: 10, padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>Ask for my PIN again</button>
+            </div>
+          ) : null}
+          {/* "Lock now" also clears the remembered seed (TrinityIdentity.lock does it) — otherwise restarting
+              the app would undo the one control a member reaches for when someone is about to hold the phone. */}
           <button onClick={doLock} style={{ ...primary, background: 'var(--clay)' }}>Lock now</button>
           {!showOff ? (
             <button onClick={() => { setShowOff(true); setErr(''); }} style={ghost}>Turn off protection…</button>

@@ -6067,6 +6067,13 @@
       return null;
     }
   }
+  function _safeReaders(cp, by, group) {
+    const readers = [cp];
+    if (Array.isArray(group)) readers.push(...group);
+    if (by) readers.push(by);
+    const clean3 = [...new Set(readers.map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))];
+    return { readers: clean3, narrowed: !Array.isArray(group) };
+  }
   async function _fetchCareTeam(cp) {
     try {
       const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CARETEAM_D + cp] }]);
@@ -6079,7 +6086,9 @@
         if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean);
       }
     } catch (e) {
+      return null;
     }
+    if (!_relayAuthedAt) return null;
     return [];
   }
   function _decEvt(cp, e) {
@@ -7819,12 +7828,21 @@
         tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]],
         content: JSON.stringify({ joined: Math.floor(Date.now() / 1e3) })
       }, sk);
+      const dup = _outbox.some((o) => o && o.evt && o.evt.id === evt.id);
+      if (!dup) {
+        _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+        _outboxSave();
+      }
+      let ok = false;
       try {
         await _publishAny(window.Fellowship.relays, evt);
+        ok = true;
+        _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+        _outboxSave();
       } catch (e) {
-        console.warn("[fellowship] membership publish failed", e);
+        console.warn("[fellowship] membership publish failed \u2014 queued for retry", e);
       }
-      return evt;
+      return ok ? evt : null;
     },
     // leave a church: tombstone the membership event (they vanish from the steward's list unless they
     // have posted). Wired for when an unfollow action exists.
@@ -8275,6 +8293,41 @@
       return evt;
     },
     // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
+    // Is this church's join announce still waiting to send? The pending screen used to say "has been sent" in
+    // the past tense with the publish result discarded, which is the one claim it could not make.
+    joinQueued(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _outbox.some((o) => o && o.join === cp));
+    },
+    // …and whether we GAVE UP on it. _outboxFlush moves a permanently-refused item out of _outbox and into
+    // _outboxFailed, so joinQueued alone reads false in that case and the screen falls through to "has been
+    // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
+    // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
+    joinFailed(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _outboxFailed.some((o) => o && o.join === cp));
+    },
+    // Try a refused join again, at the member's request — the announce is the only thing that makes them
+    // visible, so "we stopped trying" must come with a way to start again.
+    //
+    // DISCARD the old event and re-announce, rather than requeue it (which is what `requeue` does for a chat
+    // message, where the member's actual words must be preserved). Two reasons this one is different:
+    //   - the announce is addressable (d=member:<cp>) and carries no content worth keeping, so a fresh event
+    //     is strictly better than the stale one;
+    //   - a replaceable event with an old created_at can legitimately be refused as older than what the relay
+    //     already holds — retrying the stale bytes is the one thing that reliably fails again.
+    // Requeuing it also leaves a second, doomed entry alongside the fresh announce: it fails, lands back in
+    // _outboxFailed, and joinFailed() goes true again on a join that actually succeeded.
+    retryJoin(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      if (!cp) return false;
+      const had = _outboxFailed.some((o) => o && o.join === cp);
+      if (!had) return false;
+      _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp));
+      _outbox = _outbox.filter((o) => !(o && o.join === cp));
+      _outboxSave();
+      return true;
+    },
     outboxFor(groupId) {
       return [
         ..._outbox.filter((o) => o.groupId === groupId).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
@@ -8870,7 +8923,8 @@
         _noPhoto = pubSet(nophoto);
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
-        onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+        const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
+        onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
@@ -9795,8 +9849,8 @@
           try {
             const o = JSON.parse(e.content || "{}");
             if (best && e.created_at < best.createdAt) return;
-            best = { id: o.id || e.id, message: String(o.message || ""), by: e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
-            cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null);
+            best = { id: o.id || e.id, message: String(o.message || ""), by: e.pubkey, at: o.at || e.created_at, audience: o.audience === "care" ? "care" : "stewards", open: o.open !== false, createdAt: e.created_at };
+            cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at, audience: best.audience } : null);
           } catch {
           }
         }
@@ -9820,16 +9874,40 @@
       }
       if (!sk || !cp || !check || !check.by) return false;
       const body = JSON.stringify({ status: status === "help" ? "help" : "safe", note: String(note || "").trim().slice(0, 240), at: Math.floor(Date.now() / 1e3), checkId: check.id });
-      let ct = "";
+      const aud = check.audience === "care" ? "care" : "stewards";
+      let group = null;
       try {
-        ct = _dmEncrypt(sk, check.by, body);
+        if (aud === "care") group = await _fetchCareTeam(cp);
+        else {
+          const st = _churchRoster.get(cp);
+          group = st ? [...st] : null;
+        }
       } catch (e) {
-        return false;
+        group = null;
       }
+      if (group === null && aud !== "care") {
+        await new Promise((r) => setTimeout(r, 1200));
+        try {
+          const st = _churchRoster.get(cp);
+          group = st ? [...st] : null;
+        } catch (e) {
+        }
+      }
+      const picked = _safeReaders(cp, check.by, group);
+      let readers = picked.readers;
+      const to = {};
+      for (const r of readers) {
+        try {
+          to[r] = _dmEncrypt(sk, r, body);
+        } catch (e) {
+        }
+      }
+      if (!Object.keys(to).length) return false;
+      const ct = JSON.stringify({ v: 2, to });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SAFE_D + cp], ["t", NET], ["church", cp], ["p", check.by]], content: ct }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-        return true;
+        return picked.narrowed ? "narrow" : true;
       } catch (e) {
         console.warn("[fellowship] markSafe publish failed", e);
         return false;

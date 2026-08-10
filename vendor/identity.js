@@ -11925,6 +11925,7 @@ zoo`.split("\n"));
   var import_qrcode_generator = __toESM(require_qrcode());
   var STORE_KEY = "trinityone.nostr.mnemonic";
   var ENC_KEY = "trinityone.nostr.mnemonic.enc";
+  var PUB_KEY = "trinityone.nostr.pub";
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   var memMnemonic = null;
   var webPersisted = false;
@@ -12006,6 +12007,82 @@ zoo`.split("\n"));
     } catch (e) {
     }
     await secureRemoveEnc();
+  }
+  var REMEMBER_KEY = "trinityone.nostr.remember";
+  var REMEMBER_DAYS = 30;
+  var nowSec = () => Math.floor(Date.now() / 1e3);
+  async function rememberRead() {
+    if (!isNative()) return null;
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      const s = await SecureStorage.get(REMEMBER_KEY);
+      if (!s) return null;
+      const o = JSON.parse(String(s));
+      if (!o || typeof o.m !== "string" || !o.m || !(o.until > 0)) return null;
+      if (o.until <= nowSec()) {
+        await rememberClear();
+        return null;
+      }
+      return o;
+    } catch (e) {
+      console.warn("[identity] remember read failed", e);
+      return null;
+    }
+  }
+  async function rememberWrite(m, until) {
+    if (!isNative()) return false;
+    const payload = JSON.stringify({ m, until, pub: deriveProfile(m).pubkey });
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      await SecureStorage.set(REMEMBER_KEY, payload);
+      const v = await SecureStorage.get(REMEMBER_KEY);
+      if (v == null || String(v) !== payload) return false;
+      return true;
+    } catch (e) {
+      console.warn("[identity] remember write failed", e);
+      return false;
+    }
+  }
+  async function rememberClear() {
+    if (!isNative()) return;
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      await SecureStorage.remove(REMEMBER_KEY);
+    } catch (e) {
+      console.warn("[identity] remember clear failed", e);
+    }
+  }
+  function _recoveryReference() {
+    let have = "";
+    try {
+      have = localStorage.getItem(PUB_KEY) || "";
+    } catch (e) {
+    }
+    if (!have) {
+      try {
+        have = encOwnerPub() || "";
+      } catch (e) {
+      }
+    }
+    return have;
+  }
+  function encOwnerPub() {
+    try {
+      const o = JSON.parse(localStorage.getItem(ENC_KEY) || "null");
+      return o && o.pub || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  async function rememberedSeed() {
+    const rec = await rememberRead();
+    if (!rec) return null;
+    const owner = encOwnerPub();
+    if (!owner || !rec.pub || String(rec.pub).toLowerCase() !== String(owner).toLowerCase()) {
+      await rememberClear();
+      return null;
+    }
+    return rec.m;
   }
   async function hasOrphanEncBlob() {
     try {
@@ -12119,6 +12196,12 @@ zoo`.split("\n"));
   }
   async function init() {
     if (hasEnc()) {
+      const remembered = await rememberedSeed();
+      if (remembered) {
+        sessionMnemonic = remembered;
+        apply(deriveProfile(remembered), { ephemeral: false });
+        return;
+      }
       applyLocked();
       return;
     }
@@ -12138,6 +12221,10 @@ zoo`.split("\n"));
     apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
   }
   function apply(profile, meta) {
+    try {
+      if (profile && profile.pubkey) localStorage.setItem(PUB_KEY, String(profile.pubkey));
+    } catch (e) {
+    }
     window.TrinityIdentity.current = profile;
     window.TrinityIdentity.ephemeral = !!(meta && meta.ephemeral);
     window.TrinityIdentity.locked = false;
@@ -12159,6 +12246,7 @@ zoo`.split("\n"));
     async regenerate() {
       const mnemonic = generateSeedWords();
       await clearEnc();
+      await rememberClear();
       sessionMnemonic = null;
       await secureSet(mnemonic);
       apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -12245,11 +12333,57 @@ zoo`.split("\n"));
     },
     // restore an identity from a pasted 12-word BIP-39 phrase. RECOVERY ALWAYS WINS: importing clears any
     // community-PIN lock and restores the plaintext seed, so a forgotten PIN can NEVER trap the key —
+    // Does this phrase belong to the account already on this phone? Returns 'match' | 'different' | 'unknown'.
+    // 'unknown' means we have no stored public key to compare against (an identity created before 2026-08-05),
+    // and the caller must treat it as 'different' — refusing to guess is the whole point.
+    // Can this device check a recovery phrase at all? The panel asks BEFORE it promises anything, so a
+    // member on a device with no reference is told the truth rather than typing their 12 words and learning
+    // afterwards that it was for nothing.
+    canRecoverWithWords() {
+      return !!_recoveryReference();
+    },
+    whoseMnemonic(words) {
+      const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
+      if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
+      const have = _recoveryReference();
+      if (!have) return "unknown";
+      let got = "";
+      try {
+        got = (deriveProfile(m) || {}).pubkey || "";
+      } catch (e) {
+        return "different";
+      }
+      return got && got === have ? "match" : "different";
+    },
+    // UNLOCK — not replace. For the lock screen, where the member means "let me back into MY account".
+    //
+    // importMnemonic() below deletes the encrypted blob BEFORE it stores anything, which had two consequences on
+    // that screen. A member typing a valid phrase that was not theirs destroyed the account they were trying to
+    // open, with no undo, under copy saying "nothing else is lost". And because the lock is armed by the mere
+    // PRESENCE of that blob (see lockNow in app/app.jsx), deleting it did not open the lock — it REMOVED it, so
+    // any valid phrase at all walked past a locked phone and reached the notes, journal and outbox that
+    // clearCommunityCache deliberately keeps. Found by adversarial review 2026-08-05.
+    //
+    // This refuses unless the phrase derives the key already on the device. Replacing an account is still
+    // possible — through importMnemonic, behind the confirmation its other three callers already use.
+    async unlockWithMnemonic(words) {
+      const who = window.TrinityIdentity.whoseMnemonic(words);
+      if (who !== "match") {
+        const e = new Error("Those words belong to a different account.");
+        e.notThisAccount = true;
+        e.reason = who;
+        throw e;
+      }
+      return window.TrinityIdentity.importMnemonic(words);
+    },
     // the 12 words bring the identity back and turn protection off (the member can re-enable it after).
+    // REPLACE semantics: this destroys whatever is on the device. Callers that mean "unlock" want
+    // unlockWithMnemonic() above; callers that mean "replace" must confirm first, as three of them already do.
     async importMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
       await clearEnc();
+      await rememberClear();
       sessionMnemonic = null;
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -12269,13 +12403,15 @@ zoo`.split("\n"));
       if (!pin || pin.length < 6) return false;
       const m = sessionMnemonic || await secureGet();
       if (!m) return false;
+      await rememberClear();
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
       const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });
       if (isNative()) {
         if (!await secureSetEnc(blob)) return false;
+        const ownerPub = deriveProfile(m).pubkey;
         try {
-          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 }));
+          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub }));
         } catch (e) {
           return false;
         }
@@ -12341,16 +12477,42 @@ zoo`.split("\n"));
       const saved = await secureSet(m);
       if (!saved) return false;
       await clearEnc();
+      await rememberClear();
       sessionMnemonic = null;
       window.TrinityIdentity.locked = false;
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
       return true;
+    },
+    // ── "Remember me on this device" (30 days). See the block by REMEMBER_KEY for what it trades. ──
+    rememberDays: REMEMBER_DAYS,
+    // Offer it only where it is honest to: native, and only once a PIN actually exists to be skipped.
+    canRemember() {
+      return isNative() && hasEnc();
+    },
+    // Called AFTER a successful unlock, only when the member ticked the box. Reads the seed from this session
+    // rather than taking it as an argument, so there is no way to remember a key that was never unlocked.
+    async rememberDevice() {
+      if (!isNative() || !hasEnc() || !sessionMnemonic) return false;
+      return rememberWrite(sessionMnemonic, nowSec() + REMEMBER_DAYS * 86400);
+    },
+    // Turning it off must clear BOTH the stored seed and its expiry — they live in one record, so this does.
+    // Does NOT lock the current session: the member is looking at the app, and throwing them out for changing
+    // a preference would be its own bug. The next launch will ask for the PIN.
+    async forgetDevice() {
+      await rememberClear();
+      return true;
+    },
+    // For the profile screen: 0 when not remembered, else the unix second it lapses.
+    async rememberedUntil() {
+      const r = await rememberRead();
+      return r && r.until > nowSec() ? r.until : 0;
     },
     // Re-lock this session WITHOUT removing the PIN (forget the decrypted seed). Community becomes
     // unreachable until unlock() is called again.
     lock() {
       if (!hasEnc()) return false;
       sessionMnemonic = null;
+      rememberClear();
       window.TrinityIdentity.locked = true;
       try {
         if (window.Fellowship && window.Fellowship.clearCommunityCache) window.Fellowship.clearCommunityCache();

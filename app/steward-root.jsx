@@ -407,9 +407,12 @@ function StewardWelcome() {
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
             <button onClick={finishWithPin} disabled={pinVal.length < 8 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 8 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
             <button onClick={() => { setErr(''); setMode('steward'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 8 }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
-            {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory. If the user
-                bypasses this screen anyway (back-button, refresh), the StewardForcedPin modal will
-                fire on the next render because window.Steward.needsPin is still true. */}
+            {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory.
+                A back-button bypass is caught: needsPin is module state and still true on the next render.
+                A REFRESH is NOT, and the old comment here claimed otherwise. A reload rebuilds the module,
+                needsPin resets to false, and an unpersisted seed goes with it — which is exactly the key
+                loss found on a phone on 2026-08-04. Do not rely on this screen surviving a reload; the
+                protection is that nothing on the restore paths reloads, plus lock()'s needsPin guard. */}
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can change this later under Settings → Security → Console lock.</div>
           </div>
         ) : mode === 'scanning' ? (
@@ -498,8 +501,11 @@ function StewardForcedPin() {
     catch (e) { why = (e && e.message) ? ' (' + String(e.message).slice(0, 80) + ')' : ''; }
     if (!ok) {
       setBusy(false);
+      // NEVER advise a reload here. This fires while the seed may exist ONLY in memory (after createKey,
+      // restoreKey or removeLock), so reloading is the one action that destroys the church outright — and it
+      // was the product's own advice until 2026-08-04. Say "stay on this screen" instead, which is the truth.
       setErr(why
-        ? 'Something went wrong setting the PIN' + why + '. Try again, or reload this page.'
+        ? 'Something went wrong setting the PIN' + why + '. Try again — and stay on this screen, the church key is not saved until a PIN is set.'
         : 'That wasn’t accepted — use at least 8 characters, then try again.');
       setPin(''); setPin2('');
       return;
@@ -569,6 +575,17 @@ function StewardUnlock() {
     // opened by any passphrase. Saying "wrong PIN" there would send the steward round the retry loop for ever
     // while the real answer (restore from your 12 words) is never offered. It is also not a failed attempt, so
     // it must not count towards the lockout.
+    // The Keystore did not answer when we tried to settle an interrupted key operation, so we cannot tell
+    // whether a key is even here. unlock() returns TRUE in that state without clearing `locked`, which left
+    // this button stuck on "Unlocking…" for ever with nothing said — the dead end an interrupted "remove
+    // this church" walked straight into. Name it, and point away from the one action that could destroy a
+    // key that may still be present.
+    if (window.Steward.keyStoreStuck) {
+      setBusy(false); setPin('');
+      setLostKey(true);
+      setErr('This computer’s secure storage isn’t responding, so the console can’t tell whether a church key is stored here. Restart the console to try again — and if it keeps happening, restore from your 12 words rather than setting up a new church, which would replace a key that may still be there.');
+      return;
+    }
     if (window.Steward.deviceKeyLost) {
       setBusy(false); setPin('');
       setLostKey(true);
@@ -640,6 +657,20 @@ function StewardRoot() {
     window.addEventListener('steward-key', f);
     return () => { window.removeEventListener('steward-needs-pin', f); window.removeEventListener('steward-key', f); };
   }, []);
+  // K2. A key adopted from a LEGACY breadcrumb — the bare '1' that pre-dates the direction-aware one — came
+  // from an operation whose direction the device cannot recover. Both an interrupted removal and an
+  // interrupted PIN-set left that breadcrumb, and on the old build they left identical localStorage, so there
+  // is nothing to read that tells them apart. The engine keeps the key, which is the only safe half (a
+  // deleted key is a church that no longer exists; an orphaned ciphertext is an at-rest exposure the next
+  // removal clears). But if the interrupted operation WAS a removal, the steward has their church back and
+  // was told nothing. They know which it was even though the console does not — so ask them.
+  const [resumed, setResumed] = useSt(() => !!window.Steward.keyResumedUnknown);
+  useStE(() => {
+    const f = () => setResumed(!!window.Steward.keyResumedUnknown);
+    window.addEventListener('steward-key-resumed', f);
+    return () => window.removeEventListener('steward-key-resumed', f);
+  }, []);
+
   // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
   useStE(() => {
     if (!ks.has || !window.Steward.hasPinLock || !window.Steward.hasPinLock()) return;
@@ -653,6 +684,16 @@ function StewardRoot() {
   if (!showcase) {
     return (
       <div className="stew-root" style={{ height: '100%' }}>
+        {resumed && ks.has && !ks.locked && !needsPin ? (
+          <div role="status" style={{ padding: '10px 14px', background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 32%, transparent)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <span style={{ flex: 1 }}>
+              This device finished an interrupted change to its stored church key, and cannot tell which change it was.
+              <b> If you meant to remove this church from this device, do it again</b> — Settings → Security → Remove this church. Otherwise nothing is wrong and you can dismiss this.
+            </span>
+            <button onClick={() => { try { window.Steward.keyResumedUnknown = false; } catch (e) {} setResumed(false); }}
+              style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
+          </div>
+        ) : null}
         {ks.locked ? <StewardUnlock />
           : !ks.has ? <StewardWelcome />
           : needsPin ? <StewardForcedPin />

@@ -767,6 +767,47 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
   const [err, setErr] = useId('');
   const [busy, setBusy] = useId(false);
   const [forgot, setForgot] = useId(false);
+  // "Remember me on this device", 30 days. OFF by default and never persisted as a default: this is a decision
+  // about who can open the member's church, and it must be taken deliberately each time, not inherited from
+  // the last time they were in a hurry. Offered only where it is honest — canRemember() is native-and-a-PIN-
+  // exists, because on web the seed would live in localStorage rather than a hardware store.
+  const [remember, setRemember] = useId(false);
+  const [canRemember, setCanRemember] = useId(false);
+  useIdE(() => {
+    try { const ID = window.TrinityIdentity; setCanRemember(!!(ID && ID.canRemember && ID.canRemember())); } catch (e) {}
+  }, []);
+  // A forgotten PIN must NEVER be a dead end. TrinityIdentity.importMnemonic clears the community-PIN lock and
+  // re-seats the seed — the engine says so itself: "RECOVERY ALWAYS WINS: importing clears any community-PIN
+  // lock, so a forgotten PIN can NEVER trap the key". This screen used to say the opposite ("reinstall the app
+  // and restore your account with your 12 words"), which with allowBackup=false is a clean wipe: the member
+  // loses every note, journal entry and highlight to recover a key that was never trapped. The steward console
+  // fixed exactly this on 2026-07-30 and ships the pattern (StewardUnlock's "Restore this church with my 12
+  // words"); the member app never got it. UX audit 2026-08-04, found independently by two reviewers.
+  const [words, setWords] = useId('');
+  const [wordsErr, setWordsErr] = useId('');
+  const [wordsBusy, setWordsBusy] = useId(false);
+  const useWords = async () => {
+    const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (m.split(' ').filter(Boolean).length !== 12) { setWordsErr('That needs to be exactly 12 words, separated by spaces.'); return; }
+    setWordsBusy(true); setWordsErr('');
+    try {
+      // unlockWithMnemonic, NOT importMnemonic. The latter DELETES the stored key before checking anything —
+      // which on this screen destroyed the account of anyone who typed a valid phrase that was not theirs, and
+      // removed the lock outright for anyone holding a stolen phone, because the lock is armed by that blob's
+      // presence. Adversarial review 2026-08-05.
+      await window.TrinityIdentity.unlockWithMnemonic(m);
+      try { localStorage.removeItem(PIN_GUARD_KEY); } catch (e) {}   // a successful recovery clears the lockout
+      onUnlocked && onUnlocked();
+    } catch (e) {
+      if (e && e.notThisAccount) {
+        setWordsErr(e.reason === 'unknown'
+          ? 'This phone can’t check whose words those are, so it won’t risk replacing the account. Open the app with your PIN, or ask a steward to reconnect you.'
+          : 'Those words are valid, but they’re not the words for the account on this phone — so nothing was changed. Check you have the right ones.');
+      } else {
+        setWordsErr((e && e.message) || 'That doesn’t look like a valid 12-word recovery phrase.');
+      }
+    } finally { setWordsBusy(false); }
+  };
   const [waitLeft, setWaitLeft] = useId(() => { const g = readPinGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
   // tick the countdown down so the member can see it clear, rather than tapping a dead button
   useIdE(() => {
@@ -791,7 +832,19 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
     if (ok) {
       // A member who mistyped four times and then got it right must not stay one miss from a lockout.
       try { localStorage.removeItem(GUARD_KEY); } catch (e) {}
-      try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {} onUnlocked && onUnlocked();
+      // Remember AFTER the unlock, and only if they asked. rememberDevice() reads the seed from the session
+      // rather than taking it, so there is no path that remembers a key which was never actually unlocked.
+      // Its result is checked: a hardware store that silently no-ops the write would otherwise leave the
+      // member believing the phone stays open, until in 30 days it asks for a PIN they stopped typing.
+      let rememberFailed = false;
+      if (remember && ID && ID.rememberDevice) {
+        try { rememberFailed = !(await ID.rememberDevice()); } catch (e) { rememberFailed = true; }
+      }
+      // Handed UP rather than shown here: this screen unmounts the instant onUnlocked fires, so an error set
+      // on it would be rendered to nobody. The member IS unlocked — the only thing that failed is a
+      // preference — so we let them through and let the app say so where it can be read.
+      try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {}
+      onUnlocked && onUnlocked({ rememberFailed });
       return;
     }
     // Four free tries — a member mistyping is not an attacker. Then 30s, doubling, capped at 1h. Same numbers as
@@ -812,12 +865,53 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
       <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
         placeholder="PIN" style={{ width: 'min(320px, 100%)', boxSizing: 'border-box', height: 54, textAlign: 'center', letterSpacing: '.3em', border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', fontSize: 20, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
+      {/* The copy is half the feature. "Stay signed in" would describe the convenience and hide the trade, and
+          this is the exact screen where the member is deciding that trade: the PIN protects against somebody
+          HOLDING the phone, so skipping it means anyone who can unlock the phone can open the church. There is
+          no wording that keeps the protection and skips the PIN, because the PIN is the protection. 30 days is
+          stated because the owner chose a bounded window over "never ask again" — a phone that is lost and not
+          missed quickly re-locks on its own. */}
+      {canRemember ? (
+        <label style={{ width: 'min(320px, 100%)', display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 18, cursor: 'pointer' }}>
+          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)}
+            style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
+          <span style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink-2)', textAlign: 'left' }}>
+            Stay open on this phone for <b>30 days</b>.<br />
+            <span style={{ color: 'var(--ink-3)' }}>Anyone who can unlock this phone will be able to open your church.</span>
+          </span>
+        </label>
+      ) : null}
       {/* U4: the button must SHOW the cooldown. Leaving it enabled during a lockout means tapping it does
           nothing visible — the silent-failure class this codebase keeps being bitten by — so it counts down. */}
       <button onClick={tryUnlock} disabled={!pin || busy || waitLeft > 0} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy || waitLeft > 0) ? 'default' : 'pointer', background: (!pin || busy || waitLeft > 0) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy || waitLeft > 0) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{waitLeft > 0 ? 'Wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
       <button onClick={() => onReadBible && onReadBible()} style={{ marginTop: 16, background: 'none', border: 'none', color: 'var(--ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Read the Bible without unlocking →</button>
       <button onClick={() => setForgot(f => !f)} style={{ marginTop: 6, background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Forgot your PIN?</button>
-      {forgot ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: '10px auto 0', maxWidth: 300, lineHeight: 1.5 }}>Your PIN can’t be reset — not even by us. If you’ve forgotten it, reinstall the app and restore your account with your 12 words.</div> : null}
+      {forgot ? (
+        <div style={{ width: 'min(320px, 100%)', margin: '10px auto 0' }}>
+            {/* Ask the device whether it CAN check a phrase before promising anything. A phone whose PIN was
+                set before the account started being recorded on the blob has nothing to compare against and
+                will refuse — correctly, since guessing would let a valid phrase that is not this member's
+                replace the account they meant to open. Printing the promise unconditionally meant those
+                members typed their 12 words only to learn it was for nothing, which is a worse dead end
+                than the start-from-scratch copy it replaced. */}
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', lineHeight: 1.5 }}>
+              {(window.TrinityIdentity && window.TrinityIdentity.canRecoverWithWords && window.TrinityIdentity.canRecoverWithWords())
+                ? 'Your PIN can\u2019t be reset \u2014 not even by us. But your 12 words will open this account right here: type them below and nothing else is lost.'
+                : 'Your PIN can\u2019t be reset \u2014 not even by us. And this phone can\u2019t check whose 12 words are typed here, so it won\u2019t risk replacing the account: it was locked before it began recording which account it holds. Your 12 words still work \u2014 they will open this account on another device.'}
+          </div>
+          <textarea value={words} onChange={e => { setWords(e.target.value); setWordsErr(''); }} rows={3}
+            placeholder="word one  word two  word three …" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
+            style={{ width: '100%', boxSizing: 'border-box', marginTop: 12, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
+          {wordsErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{wordsErr}</div> : null}
+          <button onClick={useWords} disabled={wordsBusy || !words.trim()}
+            style={{ width: '100%', marginTop: 10, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', cursor: 'pointer', opacity: (wordsBusy || !words.trim()) ? 0.5 : 1 }}>
+            {wordsBusy ? 'Opening…' : 'Open with my 12 words'}
+          </button>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>
+            Don’t have them? Don’t uninstall — that erases this account for good. Ask a steward instead: they can put you back in your place under a new key.
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -291,13 +291,38 @@ function _openSealed(o, authorPub) {
   try { const mine = o && o.keys && o.keys[pub]; if (!mine) return null; const kh = nip44d(mine, nip44ck(sk, authorPub)); return JSON.parse(nip44d(o.enc, _unhex(kh))); } catch (e) { return null; }
 }
 // Fetch the church's published care-team recipient roster (careteam:<cp> → [pubkeys]).
+// Who may open a safety-check reply, and did we actually resolve the audience the check promised?
+//
+// `group` NULL means we could not establish an answer — the care-team query failed, or the stewards document
+// has not arrived yet. That is NOT the same as a church with nobody on that team, and the difference matters:
+// the audience is what the steward chose when they started the check, and a member replying "I need help" is
+// told it reached those people. Sealing narrower and reporting success is the one failure this feature cannot
+// afford, so the caller is handed `narrowed` and must say so rather than swallow it.
+//
+// The church key is unconditional. A reply only one volunteer's phone can open is a reply that disappears
+// with that phone, and this is the feature where that phone is most likely to be lost — so a failed lookup
+// degrades the reach rather than losing the disclosure.
+function _safeReaders(cp, by, group) {
+  const readers = [cp];
+  if (Array.isArray(group)) readers.push(...group);
+  if (by) readers.push(by);
+  const clean = [...new Set(readers.map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))];
+  return { readers: clean, narrowed: !Array.isArray(group) };
+}
 async function _fetchCareTeam(cp) {
   try {
     const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CARETEAM_D + cp] }]);
     let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
     if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean); }
-  } catch (e) {}
-  return [];
+    } catch (e) { return null; }   // could not READ the roster — not the same as a church with nobody on it
+    // NO DOCUMENT FOUND. That is a real answer only if we were genuinely connected when we asked. querySync
+    // RESOLVES with an empty list on a relay that is unreachable, still connecting, or has not answered the
+    // auth challenge — so silence is indistinguishable from "this church has named nobody" unless we check.
+    // _relayAuthedAt is 0 until the relay proves who we are and is reset on every disconnect, which is the
+    // same rule subscribeSafeguard states for the safeguarding lists: an empty answer from an
+    // unauthenticated or unreachable relay looks exactly like a real one.
+    if (!_relayAuthedAt) return null;
+    return [];
 }
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
@@ -1798,8 +1823,34 @@ window.Fellowship = {
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
       content: JSON.stringify({ joined: Math.floor(Date.now() / 1000) }),
     }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] membership publish failed', e); }
-    return evt;
+    // QUEUE FIRST, THEN ATTEMPT — the same rule as a group message (see the E1 note on _outbox.push). This
+    // used to be a bare _publishAny with a console.warn on failure: no retry, no persistence, nothing on
+    // screen. And this single event is the ONLY thing that makes a member visible to a steward — the pending
+    // list is `members.filter(m => !admitted.has(m.pubkey))`, so if it never lands the church cannot see that
+    // anyone asked. It fires on first launch, on the thin pipe this product is built for, while the screen
+    // says "Your request to join X has been sent … there's nothing to do in the meantime."
+    //
+    // A chat message got 50 persisted retries across restarts and a visible "Waiting to send". Joining the
+    // church got a line in the console log. UX audit 2026-08-04.
+    const dup = _outbox.some(o => o && o.evt && o.evt.id === evt.id);
+    if (!dup) {
+      _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+      _outboxSave();
+    }
+    let ok = false;
+    try {
+      await _publishAny(window.Fellowship.relays, evt);
+      ok = true;
+      // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
+      // does exactly this the moment its publish resolves; this function did not, so the entry sat in the
+      // outbox for ever after a publish that WORKED. joinQueued() reads that queue, so the pending screen
+      // told every successfully-joined member "still waiting to send — nobody at the church can see the
+      // request". Queueing first protects the failure path; forgetting to dequeue broke the happy one.
+      _outbox = _outbox.filter(o => o.evt.id !== evt.id);
+      _outboxSave();
+    }
+    catch (e) { console.warn('[fellowship] membership publish failed — queued for retry', e); }
+    return ok ? evt : null;
   },
   // leave a church: tombstone the membership event (they vanish from the steward's list unless they
   // have posted). Wired for when an unfollow action exists.
@@ -2208,6 +2259,34 @@ window.Fellowship = {
     return evt;
   },
   // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
+  // Is this church's join announce still waiting to send? The pending screen used to say "has been sent" in
+  // the past tense with the publish result discarded, which is the one claim it could not make.
+  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp)); },
+  // …and whether we GAVE UP on it. _outboxFlush moves a permanently-refused item out of _outbox and into
+  // _outboxFailed, so joinQueued alone reads false in that case and the screen falls through to "has been
+  // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
+  // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
+  joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp)); },
+  // Try a refused join again, at the member's request — the announce is the only thing that makes them
+  // visible, so "we stopped trying" must come with a way to start again.
+  //
+  // DISCARD the old event and re-announce, rather than requeue it (which is what `requeue` does for a chat
+  // message, where the member's actual words must be preserved). Two reasons this one is different:
+  //   - the announce is addressable (d=member:<cp>) and carries no content worth keeping, so a fresh event
+  //     is strictly better than the stale one;
+  //   - a replaceable event with an old created_at can legitimately be refused as older than what the relay
+  //     already holds — retrying the stale bytes is the one thing that reliably fails again.
+  // Requeuing it also leaves a second, doomed entry alongside the fresh announce: it fails, lands back in
+  // _outboxFailed, and joinFailed() goes true again on a join that actually succeeded.
+  retryJoin(npubOrHex) {
+    const cp = toPub(npubOrHex); if (!cp) return false;
+    const had = _outboxFailed.some(o => o && o.join === cp);
+    if (!had) return false;
+    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp));
+    _outbox = _outbox.filter(o => !(o && o.join === cp));   // no stale duplicate racing the fresh one
+    _outboxSave();
+    return true;
+  },
   outboxFor(groupId) { return [
     ..._outbox.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
     ..._outboxFailed.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
@@ -2551,7 +2630,14 @@ window.Fellowship = {
       _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
       const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
-      onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+      // MY OWN confirmed parents, from MY OWN sealed clearance — church-signed, NIP-44'd to me, and the only
+      // source a child can safely trust. The church's `guardians:` map is steward-only, so on a child's device
+      // it is permanently {} and canDMPeer's `linked` was permanently false: a child could not message their
+      // own parent, and the refusal sent them to "church leaders" instead of their family. UX audit
+      // 2026-08-04. Falls back to the church map for a STEWARD, who legitimately holds it.
+      const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice()
+        : (me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : []);
+      onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
@@ -3136,8 +3222,12 @@ window.Fellowship = {
           // SECURITY: the creator we encrypt our response to is the event's SIGNER (e.pubkey) — which the relay's
           // accept() already proved is the church / a steward / a care-admin — NEVER a self-declared content field
           // (a spoofed `by` would redirect every member's safe/in-danger status to an attacker's key).
-          best = { id: o.id || e.id, message: String(o.message || ''), by: e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
-          cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null);
+          // `audience` MUST travel to the caller: markSafe seals the reply to the readers the steward chose, and
+          // it reads that off this object. It was omitted here when the setting shipped, so every reply fell
+          // back to 'stewards' and the steward's "care team only" choice was silently ignored — the same shape
+          // of bug as the guardians map: the value is computed, and never reaches its consumer. 2026-08-05.
+          best = { id: o.id || e.id, message: String(o.message || ''), by: e.pubkey, at: o.at || e.created_at, audience: o.audience === 'care' ? 'care' : 'stewards', open: o.open !== false, createdAt: e.created_at };
+          cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at, audience: best.audience } : null);
         } catch {}
       },
     });
@@ -3150,12 +3240,46 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !check || !check.by) return false;
     const body = JSON.stringify({ status: status === 'help' ? 'help' : 'safe', note: String(note || '').trim().slice(0, 240), at: Math.floor(Date.now() / 1000), checkId: check.id });
-    let ct = ''; try { ct = _dmEncrypt(sk, check.by, body); } catch (e) { return false; }
+    // Seal to EVERY reader the steward chose, plus the church key — always. NIP-44 is one-to-one, so a
+    // multi-reader doc carries one ciphertext per recipient, keyed by their pubkey. v1 (a bare string sealed to
+    // check.by alone) is still written for nobody, but is still READ by the console, so checks already running
+    // when this shipped keep working.
+    //
+    // The church key is unconditional: a reply that only one volunteer's phone can open is a reply that
+    // disappears with that phone, and this is the feature where that phone is most likely to be lost.
+    const aud = (check.audience === 'care') ? 'care' : 'stewards';
+    // Resolve the audience the steward chose, keeping "could not read it" separate from "this church has
+    // nobody on that team". The old code wrapped both in one swallowing catch, so a failure sealed the reply
+    // to the church key and the initiator and still reported delivery. The stewards branch did not even
+    // throw: _churchRoster.get() is simply undefined until the stewards document arrives.
+    let group = null;
+    try {
+      if (aud === 'care') group = await _fetchCareTeam(cp);   // null on a failed read, [] if there is no team
+      else { const st = _churchRoster.get(cp); group = st ? [...st] : null; }   // undefined = not arrived yet
+    } catch (e) { group = null; }
+    // One retry for the stewards case: that roster arrives on a live subscription, so "not yet" is usually
+    // a race with the boot rather than a real failure, and re-reading it a beat later fixes the common case
+    // instead of merely reporting it.
+    if (group === null && aud !== 'care') {
+      await new Promise(r => setTimeout(r, 1200));
+      try { const st = _churchRoster.get(cp); group = st ? [...st] : null; } catch (e) {}
+    }
+    const picked = _safeReaders(cp, check.by, group);
+    let readers = picked.readers;
+    const to = {};
+    for (const r of readers) { try { to[r] = _dmEncrypt(sk, r, body); } catch (e) {} }
+    if (!Object.keys(to).length) return false;
+    const ct = JSON.stringify({ v: 2, to });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', SAFE_D + cp], ['t', NET], ['church', cp], ['p', check.by]], content: ct }, sk);
     // Return TRUE only on a real relay ACK. The member's "you're safe" confirmation must reflect DELIVERY —
     // a false "help is coming" when the send actually failed (offline / dead relay, the target environment) is
     // the worst failure this feature can have. Promise.any resolves iff ≥1 relay accepted the event.
-    try { await _publishAny(churchRelays(), evt); return true; } catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
+    // Truthy on delivery, as before — but 'narrow' rather than true when we could not resolve the audience
+    // the check promised. Truthy keeps every existing caller working; the extra state lets the screen tell
+    // the member their reply reached their church leader and not yet the team it was addressed to, which
+    // is the difference between a degraded send and the silent one this replaces.
+    try { await _publishAny(churchRelays(), evt); return picked.narrowed ? 'narrow' : true; }
+    catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
   },
   // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
   // H3: "I don't need help that day" is RECIPIENT-ONLY, and the relay enforces it — but it can no longer

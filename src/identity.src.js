@@ -25,6 +25,11 @@ const STORE_KEY = 'trinityone.nostr.mnemonic';
 // above is removed), so without the PIN the key can't load — the church community is unreachable and
 // the app presents as a plain offline Bible reader (plausible deniability). OFF by default.
 const ENC_KEY = 'trinityone.nostr.mnemonic.enc';
+// The account's PUBLIC key, in the clear. Not a secret — it is published in every event this identity signs.
+// It exists so a LOCKED phone can answer "do these twelve words belong to the account on this device?".
+// Without it the lock screen cannot tell "let me back into MY account" from "replace this account with a
+// different one", and importMnemonic destroys the stored key before anything is checked. 2026-08-05.
+const PUB_KEY = 'trinityone.nostr.pub';
 const COLORS = ['#5E8C6A', '#C2913A', '#C25A38', '#5360D6', '#1F9488', '#C24B7A'];
 
 let memMnemonic = null;   // in-memory fallback (private mode / localStorage unavailable)
@@ -107,6 +112,110 @@ async function secureRemoveEnc() {   // drop the native blob (recovery / removeP
   catch (e) { console.warn('[identity] secure enc remove failed', e); }
 }
 async function clearEnc() { try { localStorage.removeItem(ENC_KEY); } catch (e) {} await secureRemoveEnc(); }
+
+// ── "Remember me on this device", 30 days (owner, 2026-08-05) ────────────────────────────────────────────
+//
+// WHAT THIS TRADES, stated plainly because the UI has to say it too. The PIN protects against SOMEBODY HOLDING
+// THE PHONE. So remembering means, precisely: anyone who can unlock this phone can open your church. There is
+// no version that keeps the protection and skips the PIN, because the PIN *is* the protection. It is still a
+// reasonable thing to choose — people already trust their phone's own lock and biometrics with more than this —
+// but the tickbox must say the consequence rather than "stay signed in".
+//
+// HOW IT IS BUILT, and the trap it must not fall into. The lock is armed by the mere PRESENCE of the encrypted
+// blob (app/app.jsx's lockNow: `hasEnc() && !sessionMnemonic`). So "remembered" MUST mean sessionMnemonic is
+// populated at boot — never that the blob is removed. Removing it would not open the lock, it would DELETE the
+// lock, which is exactly the bypass fixed in 23f0798: the blob's absence lets anyone in, for ever, not just the
+// person who ticked the box. Keeping the blob also means the PIN still works and turning the feature off needs
+// no re-entry.
+//
+// The seed and its expiry live TOGETHER in the OS secure store. Putting the expiry in localStorage alone would
+// let "clear site data" extend the window indefinitely — the one action a person trying to hide something is
+// most likely to take.
+//
+// NATIVE ONLY. On web the seed would sit in localStorage, which is far weaker than a hardware-backed store, and
+// the threat model here is a seized device.
+const REMEMBER_KEY = 'trinityone.nostr.remember';
+const REMEMBER_DAYS = 30;
+const nowSec = () => Math.floor(Date.now() / 1000);
+async function rememberRead() {   // → { m, until } or null. Never returns an EXPIRED record.
+  if (!isNative()) return null;
+  try {
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
+    const s = await SecureStorage.get(REMEMBER_KEY);
+    if (!s) return null;
+    const o = JSON.parse(String(s));
+    if (!o || typeof o.m !== 'string' || !o.m || !(o.until > 0)) return null;
+    // EXPIRY IS ENFORCED HERE, at the read, not by each caller. The 30-day bound is the whole reason the owner
+    // chose this over "never ask again" — a phone lost and not missed quickly re-locks by itself — so it must
+    // not depend on every future caller remembering to compare a timestamp. Clearing on the way out also means
+    // a lapsed record stops being re-examined on every launch.
+    if (o.until <= nowSec()) { await rememberClear(); return null; }
+    return o;
+  } catch (e) { console.warn('[identity] remember read failed', e); return null; }
+}
+// Returns TRUE only if it durably landed, read-back verified — the same discipline as secureSetEnc, and for the
+// same reason in reverse: a caller told "remembered" that was not remembered sends the member away believing
+// the phone will open, when in 30 days' time it will ask for a PIN they may no longer have written down.
+async function rememberWrite(m, until) {
+  if (!isNative()) return false;
+  // The record carries the account it was made for, so a boot can tell whether it still belongs here.
+  const payload = JSON.stringify({ m, until, pub: deriveProfile(m).pubkey });
+  try {
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
+    await SecureStorage.set(REMEMBER_KEY, payload);
+    const v = await SecureStorage.get(REMEMBER_KEY);
+    if (v == null || String(v) !== payload) return false;
+    return true;
+  } catch (e) { console.warn('[identity] remember write failed', e); return false; }
+}
+async function rememberClear() {
+  if (!isNative()) return;
+  try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(REMEMBER_KEY); }
+  catch (e) { console.warn('[identity] remember clear failed', e); }
+}
+// WHOSE encrypted blob is on this device? Written by setPin. Absent on a device whose PIN predates this, and
+// on the two recovery paths that rebuild the marker without knowing the account — callers must read that as
+// "cannot prove it", never as "must be fine".
+// WHICH ACCOUNT is on this phone, for the purpose of checking a typed recovery phrase against it?
+//
+// Two references, and a locked boot is why there are two. PUB_KEY is written by apply(), which runs whenever
+// an identity loads — but NOT on a boot that is still PIN-locked, which is precisely when a member reaches
+// for their 12 words. So a device that had a PIN set and never unlocked since had nothing to compare
+// against, and the forgot-PIN panel promised a recovery the phone would then refuse.
+//
+// setPin now records the owner on the encrypted blob's own marker (finding 2), and that survives a locked
+// boot. Devices whose PIN predates that still have neither, and for them the honest answer is an empty
+// string — the caller must treat "no reference" as "cannot check", never as "must be fine". Guessing would
+// let a valid phrase that is NOT this member's replace the account they meant to open.
+function _recoveryReference() {
+  let have = '';
+  try { have = localStorage.getItem(PUB_KEY) || ''; } catch (e) {}
+  if (!have) { try { have = encOwnerPub() || ''; } catch (e) {} }
+  return have;
+}
+function encOwnerPub() {
+  try { const o = JSON.parse(localStorage.getItem(ENC_KEY) || 'null'); return (o && o.pub) || null; } catch (e) { return null; }
+}
+// The remembered seed, but ONLY if it belongs to the account the encrypted blob holds.
+//
+// The audit found rememberClear() missing from importMnemonic() and setPin(), so a record could outlive the
+// identity that made it and open the phone as that identity with no PIN. Both calls are now there — but the
+// bug WAS a list of call sites being incomplete, and a fix shaped like a longer list fails the same way the
+// next time this file grows. So the guarantee lives here instead: a record that does not match is inert
+// however it survived, and is destroyed on sight rather than left to expire on time it may have plenty of.
+//
+// Fails CLOSED. No recorded owner, or no owner on the record, means the check cannot be made — and the cost
+// of guessing wrong is somebody else's account opening without a PIN.
+async function rememberedSeed() {
+  const rec = await rememberRead();   // expiry is enforced in there
+  if (!rec) return null;
+  const owner = encOwnerPub();
+  if (!owner || !rec.pub || String(rec.pub).toLowerCase() !== String(owner).toLowerCase()) {
+    await rememberClear();
+    return null;
+  }
+  return rec.m;
+}
 // native: is there an encrypted-seed blob in the hardware store with NO localStorage marker? (marker lost to a
 // kill before flush). Only setPin writes this blob; removePin/recovery/regenerate all clearEnc() it — so an
 // orphan can only mean "a PIN was set but the marker didn't persist", which init() recovers as a locked identity.
@@ -199,7 +308,20 @@ async function init() {
   // Community PIN is on and we haven't unlocked this session → stay locked. Crucially, do NOT generate
   // a fresh key here (that would silently orphan the member's encrypted identity). No identity loads,
   // so Fellowship never gets a signing key and the app looks like a plain Bible reader.
-  if (hasEnc()) { applyLocked(); return; }
+  if (hasEnc()) {
+    // "Remember me on this device". The encrypted blob is still here and still armed — this only restores the
+    // in-memory seed the PIN would have produced, so the lock is OPENED rather than removed. If the 30 days
+    // have passed we drop the record and lock normally; a window that quietly renewed itself would not be a
+    // 30-day window. Any failure to read falls through to the lock, which is the safe direction.
+    // rememberRead() refuses and clears an expired record, so a non-null answer is a live one by construction.
+    const remembered = await rememberedSeed();   // live, AND belonging to the account this blob holds
+    if (remembered) {
+      sessionMnemonic = remembered;
+      apply(deriveProfile(remembered), { ephemeral: false });
+      return;
+    }
+    applyLocked(); return;
+  }
   let mnemonic = await secureGet();
   if (!mnemonic) {
     // SECURITY-AUDIT-2026-07-06 M12 resilience: the localStorage marker may have been lost (app killed before the
@@ -212,6 +334,7 @@ async function init() {
 }
 
 function apply(profile, meta) {
+  try { if (profile && profile.pubkey) localStorage.setItem(PUB_KEY, String(profile.pubkey)); } catch (e) {}
   window.TrinityIdentity.current = profile;
   window.TrinityIdentity.ephemeral = !!(meta && meta.ephemeral);
   window.TrinityIdentity.locked = false;
@@ -238,6 +361,7 @@ window.TrinityIdentity = {
     const mnemonic = generateSeedWords();
     // a brand-new identity starts with no PIN — clear any stale lock so the fresh key persists plainly
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
+    await rememberClear();   // …and never leave the PREVIOUS identity's seed remembered on this device
     sessionMnemonic = null;
     await secureSet(mnemonic);
     apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -315,11 +439,45 @@ window.TrinityIdentity = {
 
   // restore an identity from a pasted 12-word BIP-39 phrase. RECOVERY ALWAYS WINS: importing clears any
   // community-PIN lock and restores the plaintext seed, so a forgotten PIN can NEVER trap the key —
+  // Does this phrase belong to the account already on this phone? Returns 'match' | 'different' | 'unknown'.
+  // 'unknown' means we have no stored public key to compare against (an identity created before 2026-08-05),
+  // and the caller must treat it as 'different' — refusing to guess is the whole point.
+    // Can this device check a recovery phrase at all? The panel asks BEFORE it promises anything, so a
+    // member on a device with no reference is told the truth rather than typing their 12 words and learning
+    // afterwards that it was for nothing.
+    canRecoverWithWords() { return !!_recoveryReference(); },
+  whoseMnemonic(words) {
+    const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
+      const have = _recoveryReference();
+    if (!have) return 'unknown';
+    let got = ''; try { got = (deriveProfile(m) || {}).pubkey || ''; } catch (e) { return 'different'; }
+    return got && got === have ? 'match' : 'different';
+  },
+  // UNLOCK — not replace. For the lock screen, where the member means "let me back into MY account".
+  //
+  // importMnemonic() below deletes the encrypted blob BEFORE it stores anything, which had two consequences on
+  // that screen. A member typing a valid phrase that was not theirs destroyed the account they were trying to
+  // open, with no undo, under copy saying "nothing else is lost". And because the lock is armed by the mere
+  // PRESENCE of that blob (see lockNow in app/app.jsx), deleting it did not open the lock — it REMOVED it, so
+  // any valid phrase at all walked past a locked phone and reached the notes, journal and outbox that
+  // clearCommunityCache deliberately keeps. Found by adversarial review 2026-08-05.
+  //
+  // This refuses unless the phrase derives the key already on the device. Replacing an account is still
+  // possible — through importMnemonic, behind the confirmation its other three callers already use.
+  async unlockWithMnemonic(words) {
+    const who = window.TrinityIdentity.whoseMnemonic(words);
+    if (who !== 'match') { const e = new Error('Those words belong to a different account.'); e.notThisAccount = true; e.reason = who; throw e; }
+    return window.TrinityIdentity.importMnemonic(words);
+  },
   // the 12 words bring the identity back and turn protection off (the member can re-enable it after).
+  // REPLACE semantics: this destroys whatever is on the device. Callers that mean "unlock" want
+  // unlockWithMnemonic() above; callers that mean "replace" must confirm first, as three of them already do.
   async importMnemonic(words) {
     const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
+    await rememberClear();   // this device is no longer that account — do not leave its seed remembered
     sessionMnemonic = null;
     await secureSet(m);
     apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -336,6 +494,7 @@ window.TrinityIdentity = {
     if (!pin || pin.length < 6) return false;   // floor: the PIN is the only secret over the at-rest blob (audit #5); UI adds the all-numeric rule
     const m = sessionMnemonic || await secureGet();   // secureGet returns the plaintext seed while no blob exists yet
     if (!m) return false;
+    await rememberClear();   // a record made before this PIN was set belongs to a state that no longer exists
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
     const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });   // M11: carries its iteration count
@@ -344,7 +503,13 @@ window.TrinityIdentity = {
       // BEFORE writing the marker or dropping the plaintext — a failed Keystore write leaves the plaintext seed
       // intact (the PIN simply isn't set), so the only durable copy of the key is never destroyed.
       if (!(await secureSetEnc(blob))) return false;
-      try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) { return false; }
+      // The marker records WHICH account this blob holds. Nothing secret — a pubkey is public — and it is the
+      // only reference the boot path can consult without the PIN. Without it a remembered seed cannot be
+      // checked against anything, which is how a record left by a previous identity came to open the phone as
+      // that identity. The two recovery paths that also write this marker do NOT know the account (that is the
+      // point of them), so they leave it absent and rememberedSeed() refuses rather than guesses.
+      const ownerPub = deriveProfile(m).pubkey;
+      try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub })); } catch (e) { return false; }
     } else {
       try { localStorage.setItem(ENC_KEY, blob); } catch (e) { return false; }   // web/desktop: no secure store — keep the blob in localStorage
     }
@@ -387,16 +552,41 @@ window.TrinityIdentity = {
     const saved = await secureSet(m);
     if (!saved) return false;
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
+    // No PIN left to skip, so a remembered copy is just a second plaintext seed at rest with nothing guarding
+    // it. secureSet above already holds the durable copy.
+    await rememberClear();
     sessionMnemonic = null;
     window.TrinityIdentity.locked = false;
     apply(deriveProfile(m), { ephemeral: isEphemeral() });
     return true;
   },
+  // ── "Remember me on this device" (30 days). See the block by REMEMBER_KEY for what it trades. ──
+  rememberDays: REMEMBER_DAYS,
+  // Offer it only where it is honest to: native, and only once a PIN actually exists to be skipped.
+  canRemember() { return isNative() && hasEnc(); },
+  // Called AFTER a successful unlock, only when the member ticked the box. Reads the seed from this session
+  // rather than taking it as an argument, so there is no way to remember a key that was never unlocked.
+  async rememberDevice() {
+    if (!isNative() || !hasEnc() || !sessionMnemonic) return false;
+    return rememberWrite(sessionMnemonic, nowSec() + REMEMBER_DAYS * 86400);
+  },
+  // Turning it off must clear BOTH the stored seed and its expiry — they live in one record, so this does.
+  // Does NOT lock the current session: the member is looking at the app, and throwing them out for changing
+  // a preference would be its own bug. The next launch will ask for the PIN.
+  async forgetDevice() { await rememberClear(); return true; },
+  // For the profile screen: 0 when not remembered, else the unix second it lapses.
+  async rememberedUntil() { const r = await rememberRead(); return (r && r.until > nowSec()) ? r.until : 0; },
+
   // Re-lock this session WITHOUT removing the PIN (forget the decrypted seed). Community becomes
   // unreachable until unlock() is called again.
   lock() {
     if (!hasEnc()) return false;
     sessionMnemonic = null;
+    // "Lock now" must MEAN now. Leaving the remembered seed in place would re-open the account on the next
+    // launch, so the one control a member reaches for when someone is about to pick up their phone would be
+    // undone by restarting the app. Fire-and-forget: the in-memory seed is already gone above, so the lock is
+    // effective immediately whatever the store does.
+    rememberClear();
     window.TrinityIdentity.locked = true;
     // best-effort forensic hygiene: drop cached community data if Fellowship is present
     try { if (window.Fellowship && window.Fellowship.clearCommunityCache) window.Fellowship.clearCommunityCache(); } catch (e) {}

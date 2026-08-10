@@ -626,6 +626,7 @@ function safetyAck(id, set) {
 function SafetyDock({ ctx, onOpenToday }) {
   const [check, setCheck] = React.useState(null);
   const [answered, setAnswered] = React.useState('');
+  const [narrow, setNarrow] = React.useState(false);   // delivered, but not to the audience the check named
   const [dismissed, setDismissed] = React.useState(false);
   const [sending, setSending] = React.useState(false);
   const [err, setErr] = React.useState('');
@@ -644,7 +645,13 @@ function SafetyDock({ ctx, onOpenToday }) {
   // The safety check rides on the practical-care toggle: a church with Care off doesn't run check-ins either.
   // (Care is also where the persistent "I'm safe / I need help" lives, so the two can't be separated.)
   if (!(ctx.care && ctx.care.settings && ctx.care.settings.enabled)) return null;
-  if (!check || answered || dismissed) return null;   // gone once answered or X'd
+  if (!check || dismissed) return null;
+  // Answered cleanly: the dock has done its job and goes. Answered with a CAVEAT: it has to stay, because
+  // the caveat is the whole point — the reply reached the church leader but not yet the team the steward
+  // addressed it to, and a member who is told nothing will assume it arrived where they were promised.
+  // Setting an error string here used to be the fix; nothing rendered it, because this early return had
+  // already fired on `answered`.
+  if (answered && !narrow) return null;
   // The safety surfaces deliberately say "your church", never the church's NAME: it keeps the line short
   // enough not to truncate on a narrow screen, and it keeps the congregation unnamed on a lock screen or
   // over someone's shoulder — which matters most to exactly the churches this feature exists for.
@@ -654,7 +661,8 @@ function SafetyDock({ ctx, onOpenToday }) {
     let ok = false;
     try { ok = await window.Fellowship.markSafe(check, s, ''); } catch (e) {}
     setSending(false);
-    if (ok) { safetyAck(check.id, s); setAnswered(s); } else setErr('Couldn’t send — try again.');
+    if (ok) { safetyAck(check.id, s); setAnswered(s); if (ok === 'narrow') setNarrow(true); }
+    else setErr('Couldn’t send — try again.');
   };
   const btn = (extra) => ({ flex: 1, height: 40, border: 'none', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14, color: '#fff', ...extra });
   return (
@@ -674,10 +682,21 @@ function SafetyDock({ ctx, onOpenToday }) {
         </div>
         <button onClick={dismiss} aria-label="Dismiss" style={{ flexShrink: 0, width: 28, height: 28, border: 'none', background: 'none', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, marginTop: -2, marginRight: -4 }}><Icon name="x" size={17} color="currentColor" /></button>
       </div>
+      {narrow ? (
+        // Delivered, but not to everyone the steward chose. Name who DID get it and who has not, in that
+        // order: a member who has just said "I need help" needs to know someone has it before they need to
+        // know who is still missing.
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 10, lineHeight: 1.45 }}>
+          <b style={{ color: 'var(--clay-deep, #b4462f)' }}>Your church leader has this.</b> Your church’s team list
+          hasn’t loaded on this phone yet, so the rest of the team may not see it straight away. Nothing else to do —
+          it will reach them when your phone next connects.
+        </div>
+      ) : (
       <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
         <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
         <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
       </div>
+      )}
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 8 }}>{err}</div> : null}
     </div>
   );
@@ -755,7 +774,11 @@ function SafetyBanner({ ctx, persistent }) {
     let ok = false;
     try { ok = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
     setSending(false);
-    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery; expand so the confirmation is seen
+    // 'narrow' means delivered, but we could not resolve the audience the steward chose — so it reached
+    // the church leader and not (yet) the team it was addressed to. Saying so is the whole point: what
+    // this replaces reported a full delivery that never happened.
+    const NARROW = 'Sent to your church leader. Your church’s team list hasn’t loaded yet, so they may not see it straight away.';
+    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); if (ok === 'narrow') setErr(NARROW); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery; expand so the confirmation is seen
   };
   const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
   const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });
@@ -804,7 +827,7 @@ function SafetyBanner({ ctx, persistent }) {
         <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: 'var(--on-clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
       </div>
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
-      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only your church’s leaders can see your reply — not other members, and not the server.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only the people your church chose for this check can open your reply — not other members. The relay can see that you replied and when, but not what you said.</div>
     </div>
   );
 }

@@ -168,12 +168,13 @@ function consoleSide() {
     + grab(STEWARD, 'var _beatsDoc = ') + ';\n'
     + grab(STEWARD, 'function _memberHonours(') + grab(STEWARD, 'function _topWeMustAnswer(')
     + grab(STEWARD, 'function _newestByD(') + grab(STEWARD, 'function _connectedRelays(')
+    + grab(STEWARD, 'function _guardiansDiffer(')
     + grab(STEWARD, 'async function _clearancesMatching(') + grab(STEWARD, 'function _clearanceOutranks(')
     + grab(STEWARD, 'async function _publishToRelays(evt, urls)');
   const methods = [
     grab(STEWARD, 'publishClearance(memberPub, status, urls)'),
-    grab(STEWARD, 'refreshClearances(memberPubs, minors, approved)'),
-    grab(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)'),
+    grab(STEWARD, 'refreshClearances(memberPubs, minors, approved, guardians)'),
+    grab(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)'),
     grab(STEWARD, 'setMinors(pubkeys)'), grab(STEWARD, 'setApproved(pubkeys)'),
     grab(STEWARD, 'setGuardians(links)'), grab(STEWARD, 'setReseats(pairs)'),
     grab(STEWARD, 'setAdmitted(pubkeys)'), grab(STEWARD, 'setBlocked(pubkeys)'),

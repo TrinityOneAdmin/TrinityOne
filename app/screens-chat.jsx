@@ -486,15 +486,25 @@ function ChatScreen({ ctx }) {
               that instruction GUARANTEED the member missed the event. It is the most anxious screen a newcomer
               sees, and it was giving them the one instruction that could not work. Honest wording until push
               ships (it is built and device-verified on a branch); then this can promise it again and mean it. */}
-          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward usually lets people in within a day. <b>Leave this open and you’ll see it happen</b> — or check back here later, and there’s nothing to do in the meantime.</p>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 20, padding: '10px 16px', borderRadius: 999, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', color: '#8a6717', fontWeight: 700, fontSize: 13.5 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2913a' }} /> Pending steward approval
+          {/* HANDOFF-2026-08-05 §4.1: three states, not two. A join the relay refused outright is moved out of
+              the outbox into the failed queue, so `joinQueued` reads false for it — and it used to land on the
+              reassuring "has been sent, a steward usually lets people in within a day" branch. That is the one
+              case where that copy is permanently wrong: nothing is retrying and the day never comes. */}
+          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>{ctx.joinFailed
+            ? <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> <b>could not be sent</b>, and your phone has stopped trying. Nobody at the church can see it. Tap <b>Try again</b> below — if it keeps failing, ask whoever invited you for a fresh invite link.</React.Fragment>
+            : ctx.joinQueued
+            ? <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> is <b>still waiting to send</b> — your phone will keep trying. Stay on a connection if you can; nobody at the church can see the request until it arrives.</React.Fragment>
+            : <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward usually lets people in within a day. <b>Leave this open and you’ll see it happen</b> — or check back here later.</React.Fragment>}</p>
+          {/* The badge asserts a state the church is in. If the request never reached them, no steward has
+              anything pending — saying so is the same false claim as the copy above, in one line. */}
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 20, padding: '10px 16px', borderRadius: 999, background: ctx.joinFailed ? 'color-mix(in oklab, var(--danger, #c0392b) 12%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: ctx.joinFailed ? '1px solid color-mix(in oklab, var(--danger, #c0392b) 30%, transparent)' : '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', color: ctx.joinFailed ? 'var(--danger, #c0392b)' : '#8a6717', fontWeight: 700, fontSize: 13.5 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: ctx.joinFailed ? 'currentColor' : '#c2913a' }} /> {ctx.joinFailed ? 'Not sent — the church hasn’t seen this' : 'Pending steward approval'}
           </div>
           {ctx.joinState && ctx.joinState.offline ? (
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 14, lineHeight: 1.5 }}>You’re offline right now — this is your last saved status.</div>
           ) : null}
           <div style={{ marginTop: 16 }}>
-            <button onClick={() => ctx.retryConnection && ctx.retryConnection()} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}><Icon name="refresh" size={14} /> Check again</button>
+            <button onClick={() => ctx.retryConnection && ctx.retryConnection()} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}><Icon name="refresh" size={14} /> {ctx.joinFailed ? 'Try again' : 'Check again'}</button>
           </div>
         </div>
       ) : (ctx.joinState && ctx.joinState.offline && ctx.joinState.unknown) ? (

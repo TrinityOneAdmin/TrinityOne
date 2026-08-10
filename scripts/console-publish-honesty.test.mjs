@@ -109,10 +109,10 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // ── lift everything first, THEN build the scope ────────────────────────────────────────────────────────
   const publishSrc = grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
   const pubClearance = grab('publishClearance(memberPub, status, urls)');
-  const refresh = grab('refreshClearances(memberPubs, minors, approved)');
+  const refresh = grab('refreshClearances(memberPubs, minors, approved, guardians)');
   // NOT grab('_refreshClearancesNow(...)'): its first occurrence is the CALL inside the refreshClearances
   // wrapper, so brace-matching from there returns the wrapper's tail. Anchor on the `async ` declaration.
-  const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
+  const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   const newest = grab('function _newestByD(');
   const connected = grab('function _connectedRelays(');
   // The read-and-compare step now lives in one shared helper, used BOTH to skip redundant writes and to verify
@@ -128,7 +128,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // would assert my description of when that refusal fires rather than the console's.
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   assert.ok(skewDecl && futureDecl, 'the future-date guard is gone from the bundle — re-anchor this test');
-  const matching = skewDecl + futureDecl + netViewDecl + guards + grab('async function _clearancesMatching(')
+  const matching = skewDecl + futureDecl + netViewDecl + guards + grab('function _guardiansDiffer(') + grab('async function _clearancesMatching(')
     // The cross-author ranking rule lives beside it and is called from inside it. Unlifted, the call
     // throws ReferenceError into _clearancesMatching's own catch, which returns null — "could not
     // check" — so the harness would quietly measure the no-read path and skip nothing.
