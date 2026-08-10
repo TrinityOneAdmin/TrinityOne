@@ -11,10 +11,15 @@ const CCY_SYM = { GBP: '£', USD: '$', EUR: '€', sats: '⚡' };
 // Donation nudge — TrinityOne stays free & open (AGPL). When a church opens its books we gently ask for a
 // gift toward the shared relays + development. Shown once per session until they give, then hidden ~3 months.
 // No paywall, no lock: everything works whether or not they give.
+// PARKED for the pilot: the "Keep TrinityOne going" panel asks a STEWARD to donate to TrinityOne itself. It
+// is not the church's giving feature (that is `givingOn` in the member app, also off). Off because the
+// addresses below are not ours yet — and an unclaimed handle in a donation prompt is money going to whoever
+// registers it first. Restore: true, once DONATE.ln and DONATE.alt are real and owned.
+const DONATE_ON = false;
 const DONATE_LS = 'trinityone.books.donateHiddenUntil';
 const DONATE = {
   ln: 'donate@trinityone.church',        // TODO(owner): real Lightning address / LNURL for donations
-  alt: 'https://strike.me/trinityone',   // TODO(owner): real Strike (or other gateway) donation link — '' to hide
+  alt: '',                               // TODO(owner): a real, OWNED donation link. Was 'https://strike.me/trinityone' — an unclaimed public handle anyone could register. '' hides the button.
   suggest: ['£5', '£10', '£25'],
   hideDays: 90,
 };
@@ -581,7 +586,7 @@ function DashFinance() {
     await S.publishPost(lead + text, broadcastGroup.id);
   };
   React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving
-    if (_booksDonateShown || Date.now() < booksDonateHiddenUntil()) return;
+    if (!DONATE_ON || _booksDonateShown || Date.now() < booksDonateHiddenUntil()) return;
     _booksDonateShown = true; setDonate(true);
   }, []);
 
