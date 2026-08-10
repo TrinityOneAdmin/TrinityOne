@@ -1,2 +1,0 @@
-// migrate.js — extracted from migrate.html so it runs under strict CSP (no inline scripts).
-(function(){if(!/Android/i.test(navigator.userAgent))return;document.querySelectorAll("[data-steward-cta]").forEach(function(a){a.href="./trinityone-steward.apk";a.setAttribute("download","");if(/start a church/i.test(a.textContent))a.textContent="Get the Steward app";});})();

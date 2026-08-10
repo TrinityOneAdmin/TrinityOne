@@ -28,7 +28,7 @@
 // the screens with reach, never to weaken it — so this file also asserts the honest text is still there.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const IDENTITY = read('app/identity.jsx');
@@ -37,8 +37,16 @@ const EXTRAS = read('app/identity-extras.jsx');
 const CHAT = read('app/screens-chat.jsx');
 const DASH = read('app/stew-dashboard.jsx');
 const APP = read('app/app.jsx');
-const ABOUT = read('about.html');
-const FEATURES = read('features.html');
+// features.html and downloads.html were folded into welcome.html's single scroll on 2026-08-06.
+const FEATURES = read('welcome.html');
+// EVERY served marketing page, not a hand-listed pair. MARKETING-AUDIT-2026-08-05: this file used to read
+// about.html by name, and the trim deleted that page — so the test died with ENOENT rather than telling
+// anyone anything. Worse, a hand-listed pair is the wrong shape for the question being asked, which is "does
+// the site claim this ANYWHERE": the claim could simply move to a page not on the list. Same lesson as
+// no-internal-docs.test.mjs — ask what ships, don't list the paths you happened to look at.
+const SITE = readdirSync(new URL('..', import.meta.url).pathname)
+  .filter(f => f.endsWith('.html') && f !== 'index.html' && f !== 'steward.html')
+  .map(f => [f, read(f)]);
 // Strip comments before asserting. These fixes are commented, and the comments necessarily QUOTE the phrases
 // being removed — so a naive text search finds the record of the fix and reports it as the bug. JSX comments
 // matter as much as `//` ones: my first version stripped only the latter and failed on its own `{/* … */}`.
@@ -77,10 +85,38 @@ test('the join screen does not claim following is passive', () => {
 test('marketing does not claim messages are encrypted while groups default to plaintext', () => {
   assert.match(DASH, /const \[encrypted, setEncrypted\] = React\.useState\(false\)/,
     'group encryption is no longer off by default — if that changed, these claims become true and can return');
-  assert.doesNotMatch(code(ABOUT), /Messages are encrypted/,
-    'about.html still says "Messages are encrypted" unqualified, while new group rooms are plaintext');
+  const offenders = SITE.filter(([, html]) => /Messages are encrypted/.test(code(html))).map(([f]) => f);
+  assert.deepEqual(offenders, [],
+    'these pages say "Messages are encrypted" unqualified, while new group rooms are plaintext: ' +
+    offenders.join(', '));
   assert.doesNotMatch(code(FEATURES), /private, encrypted messages/,
     'features.html still lists "Group rooms and private, encrypted messages" — the group rooms are not encrypted');
+});
+
+// MARKETING-AUDIT-2026-08-05 D5. features.html sold "Reminders reach you even with the app closed" as a plain
+// tick, unqualified. It is true on Android — Capacitor LocalNotifications hands the schedule to the OS, which
+// fires it whether or not the app is running. On web it is a `setTimeout` "while this tab is alive"
+// (app/reminders.jsx), which dies with the tab. And there is no iOS app: downloads.html routes iPhone users to
+// "Open in your browser", so for every iPhone member the sentence was simply false — on the feature whose whole
+// value is that it reaches you when you are NOT looking. A rota reminder that silently never arrives is worse
+// than none, because they stopped checking.
+test('the reminders claim is qualified to the platform that can keep it', () => {
+  const REM = code(read('app/reminders.jsx'));
+  // The code fact first, so this test dies honestly the day web/iOS gets real background delivery. Anchored on
+  // EXECUTABLE code, not the comment that describes it: code() strips comments, so matching the explanation
+  // would assert against text this very helper deletes — and would then fail for a reason it is not testing.
+  assert.match(REM, /webTimers\[id\] = setTimeout\(/,
+    'the web reminder path is no longer a tab-lifetime setTimeout — if it can now deliver with the app ' +
+    'closed, the unqualified claim becomes true and may return');
+  assert.match(REM, /LN\.schedule\(/,
+    'native no longer schedules OS notifications, so even the Android half of the claim needs re-checking');
+  assert.doesNotMatch(code(FEATURES), /Reminders reach you even with the app closed/,
+    'features.html still promises reminders "even with the app closed" without naming Android. On web and ' +
+    'iOS that is a setTimeout on a live tab — and the site sends iPhone users to the browser, so those ' +
+    'members are being promised the one thing this feature cannot do for them.');
+  // Over-correction check: the capability is real on Android and should still be sold.
+  assert.match(code(FEATURES), /On Android, reminders reach you with the app closed/,
+    'the reminders capability has been dropped entirely rather than qualified — it genuinely works on Android');
 });
 
 test('the waiting-for-approval screen does not tell a member to close the app', () => {
@@ -121,7 +157,9 @@ test('the honest wording that already existed is still there', () => {
 
 test('the withdrawn "big company" line is left alone', () => {
   // Recorded so a later pass does not "fix" it again. It is true: TrinityOne is not a big company.
-  assert.match(read('about.html') + read('welcome.html'), /big company/,
+  // about.html carried a second copy and was deleted by the 2026-08-05 trim; welcome.html is where the
+  // sentence lives now, and it survived the trim intact.
+  assert.match(read('welcome.html'), /big company/,
     'the "big company" line was removed. It was withdrawn as a finding on the owner\'s correction — the sentence ' +
     'is about who stands behind the product, not about where data sits, and it is honest.');
 });

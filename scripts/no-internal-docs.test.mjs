@@ -60,7 +60,7 @@ test('the documentation directories are not browsable', async () => {
 
 test('but the app, the marketing pages and the control UI still work', async () => {
   // The denylist is easy to over-tighten; breaking the app to hide a document is not a fix.
-  for (const p of ['/index.html', '/steward.html', '/vendor/fellowship.js', '/app/app.jsx', '/features.html', '/relay-app/control.html']) {
+  for (const p of ['/index.html', '/steward.html', '/vendor/fellowship.js', '/app/app.jsx', '/welcome.html', '/relay-app/control.html']) {
     assert.equal(await get(p), 200, p + ' stopped being served');
   }
 });
