@@ -6088,6 +6088,7 @@
     } catch (e) {
       return null;
     }
+    if (!_relayAuthedAt) return null;
     return [];
   }
   function _decEvt(cp, e) {

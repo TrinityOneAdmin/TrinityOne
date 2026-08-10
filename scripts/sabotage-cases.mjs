@@ -175,4 +175,12 @@ export const CASES = [
     replace: `      if (false) {`,
     test: 'scripts/console-legacy-breadcrumb.test.mjs',
   },
+  {
+    name: 'safety: silence from an unproven relay read as "no team"',
+    file: 'src/fellowship.src.js',
+    // the pre-fix behaviour: only a THROW counted as failure, and the real pool resolves with [] instead
+    find: `    if (!_relayAuthedAt) return null;`,
+    replace: ``,
+    test: 'scripts/safety-audience-narrowing.test.mjs',
+  },
 ];

@@ -315,8 +315,13 @@ async function _fetchCareTeam(cp) {
     let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
     if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean); }
     } catch (e) { return null; }   // could not READ the roster — not the same as a church with nobody on it
-    // Queried successfully and there is no care-team document: this church has not named one. That is a
-    // real answer, and callers may seal accordingly.
+    // NO DOCUMENT FOUND. That is a real answer only if we were genuinely connected when we asked. querySync
+    // RESOLVES with an empty list on a relay that is unreachable, still connecting, or has not answered the
+    // auth challenge — so silence is indistinguishable from "this church has named nobody" unless we check.
+    // _relayAuthedAt is 0 until the relay proves who we are and is reset on every disconnect, which is the
+    // same rule subscribeSafeguard states for the safeguarding lists: an empty answer from an
+    // unauthenticated or unreachable relay looks exactly like a real one.
+    if (!_relayAuthedAt) return null;
     return [];
 }
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's

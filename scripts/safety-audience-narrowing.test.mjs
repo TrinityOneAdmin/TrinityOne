@@ -100,7 +100,7 @@ test('the shipped bundle carries the guard', () => {
 // _safeReaders can only be right if what it is HANDED is right. _fetchCareTeam used to answer [] for both
 // "this church has nobody on that team" and "I could not read the roster", which is the conflation the whole
 // fix rests on undoing — and the sabotage runner caught that nothing was watching it.
-function liftFetch({ throws = false, events = [] } = {}) {
+function liftFetch({ throws = false, events = [], authed = true } = {}) {
   const at = SRC.indexOf('async function _fetchCareTeam(');
   assert.notEqual(at, -1, '_fetchCareTeam is gone — re-anchor this test');
   let depth = 0, q = '', body;
@@ -116,6 +116,10 @@ function liftFetch({ throws = false, events = [] } = {}) {
     pool: { async querySync() { if (throws) throw new Error('relay unreachable'); return events; } },
     churchRelays: () => ['wss://example.invalid'],
     CARETEAM_D: 'trinityone/careteam:',
+    // 0 means the relay has never proved who we are on this connection. An empty query result is meaningless
+    // in that state, and the real pool RESOLVES with [] rather than rejecting — so without this the "throws"
+    // case below is the only failure the code can see, and it is the one that almost never happens.
+    _relayAuthedAt: authed ? 1 : 0,
   };
   const names = Object.keys(scope);
   return new Function(...names, body + '\nreturn _fetchCareTeam;')(...names.map(n => scope[n]));
@@ -150,4 +154,20 @@ test('an unparseable roster is "unknown" rather than silently empty', async () =
   assert.equal(await f(CHURCH), null,
     'a corrupt care-team document was read as "this church has nobody", which is the same silent narrowing ' +
     'by another route');
+});
+
+test('an empty answer from a relay that never authenticated is "unknown"', async () => {
+  const f = liftFetch({ events: [], authed: false });
+  assert.equal(await f(CHURCH), null,
+    'THE REAL FAILURE MODE: pool.querySync RESOLVES with an empty list when the relay is unreachable, still ' +
+    'connecting, or has not answered the auth challenge — it does not reject. So an unreachable relay was ' +
+    'read as "this church has named nobody", the reply sealed to the church leader alone, and the member was ' +
+    'told it reached the care team. Only a genuine throw was ever detected, which is the rare case');
+});
+
+test('a church that truly has no care team still answers "none", once connected', async () => {
+  const f = liftFetch({ events: [], authed: true });
+  assert.deepEqual(await f(CHURCH), [],
+    'a connected read that finds no care-team document is a real answer — reporting it as a failure would ' +
+    'warn every church that has not set one up, on every reply');
 });
