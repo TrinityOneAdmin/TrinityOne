@@ -716,6 +716,7 @@ function SafetyBanner({ ctx, persistent }) {
   // the full card briefly, then collapse to a slim line. Escalation stays one tap away in both — someone who
   // marked themselves safe and then isn't must always be able to say so.
   const [collapsed, setCollapsed] = React.useState(false);
+  const [narrow, setNarrow] = React.useState(false);   // delivered, but not to the audience the check named
   // The member can clear the collapsed line outright (X), remembered per check like the dock's own dismiss.
   // Note this is the last IN-APP one-tap route to escalate, so it's offered only as a deliberate choice and
   // never applied for them — the ordinary ways to reach the church (DM a steward, Community) are unaffected.
@@ -778,7 +779,7 @@ function SafetyBanner({ ctx, persistent }) {
     // the church leader and not (yet) the team it was addressed to. Saying so is the whole point: what
     // this replaces reported a full delivery that never happened.
     const NARROW = 'Sent to your church leader. Your church’s team list hasn’t loaded yet, so they may not see it straight away.';
-    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); if (ok === 'narrow') setErr(NARROW); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery; expand so the confirmation is seen
+    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); if (ok === 'narrow') setNarrow(true); } else setErr('Couldn’t send — check your connection and try again.');
   };
   const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
   const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });
@@ -813,6 +814,16 @@ function SafetyBanner({ ctx, persistent }) {
       <div role="status" style={{ ...wrap, background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + tone }}>
         <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--ink)' }}>{help ? 'You asked your church for help' : 'You told your church you’re safe'}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{help ? 'Someone will reach out. You can change this if things change.' : 'Thank you. You can change this if things change.'}</div>
+        {narrow ? (
+          // The reply went, but not to everyone the steward chose — the team list had not reached this phone.
+          // This banner is the surface a member actually sees on Today and in Care (the small dock only appears
+          // on other tabs), so the caveat has to live here or it is never read. Who DID get it first: someone
+          // who has just asked for help needs to know it landed before they need to know who is still missing.
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>
+            <b style={{ color: 'var(--clay-deep, #b4462f)' }}>Your church leader has this.</b> Your church’s team list
+            hasn’t loaded on this phone yet, so the rest of the team may not see it straight away.
+          </div>
+        ) : null}
         <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{ marginTop: 11, height: 40, padding: '0 15px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{help ? 'Actually, I’m safe' : 'I need help instead'}</button>
       </div>
     );
