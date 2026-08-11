@@ -1271,6 +1271,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         {/* my church */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>MY CHURCH</div>
         <Group>
+          {/* NAME THE CHURCH YOU ARE IN. This section offered only "Follow a church", so the one screen headed MY
+              CHURCH read as though the member belonged to none — after joining, nothing in the app ever named it
+              again: not on arrival, not here. Tapping it opens the church, which is also where leaving lives. */}
+          {ctx.church && ctx.church.name ? (
+            <Row icon="home" label={ctx.church.name} sub="Your church — open it to see people, groups and serving"
+              accent="var(--sage, #4f7a5e)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('list'); }} />
+          ) : null}
           <Row icon="qr" label="Follow a church" sub="Scan a code or paste a church’s link" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('follow'); }} />
           <DirectoryToggle identity={identity} onSave={onSave} ctx={ctx} />
         </Group>

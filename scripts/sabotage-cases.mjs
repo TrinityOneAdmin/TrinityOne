@@ -338,4 +338,11 @@ export const CASES = [
     replace: `  if (false) {`,
     test: 'scripts/join-page-honesty.test.mjs',
   },
+  {
+    name: 'you-screen: the church you are in is unnamed again',
+    file: 'app/identity.jsx',
+    find: `{ctx.church && ctx.church.name ? (`,
+    replace: `{false ? (`,
+    test: 'scripts/church-is-named.test.mjs',
+  },
 ];
