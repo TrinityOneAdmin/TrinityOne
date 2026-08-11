@@ -229,4 +229,19 @@ export const CASES = [
     replace: `    for (const k of Object.keys(profiles)) { const v = profiles[k] || {}; lean[k] = { ...v, name: '' }; }`,
     test: 'scripts/profile-cache-quota.test.mjs',
   },
+  {
+    name: 'rotation: one envelope, refused silently on a big church',
+    file: 'src/steward.src.js',
+    find: `      ring = ring.slice(0, Math.max(1, ring.length - 2));`,
+    replace: ``,
+    test: 'scripts/key-rotation-size.test.mjs',
+  },
+  {
+    name: 'rotation: the console forgets to check whether it landed',
+    file: 'app/stew-dashboard.jsx',
+    // the pre-fix shape: fire it and walk away, so a refused rotation is never noticed
+    find: `      if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(remaining, stewardRoster || [])).then(r => ['the care key', r]));`,
+    replace: `      if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);`,
+    test: 'scripts/key-rotation-size.test.mjs',
+  },
 ];

@@ -3518,6 +3518,7 @@ function DashMembers() {
   const [showInactive, setShowInactive] = React.useState(false);
   const [showBlocked, setShowBlocked] = React.useState(false);
   const [confirmBlock, setConfirmBlock] = React.useState(null);
+  const [blockWarn, setBlockWarn] = React.useState('');   // a rotation that did not land — the member may still hold the key
   const [q, setQ] = React.useState('');
   const ql = q.trim().toLowerCase();
   const matchQ = (m) => !ql || (m.name || '').toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql) || (m.npub || '').toLowerCase().includes(ql);
@@ -3532,8 +3533,17 @@ function DashMembers() {
     window.Steward.setBlocked([...blockedList, pk]);
     try {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
-      if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);
-      if (window.Steward.rotateMediaKey) window.Steward.rotateMediaKey(remaining);   // same for encrypted sermons
+      // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
+      // being blocked; the block list alone is a note. These were fire-and-forget, so on a church large
+      // enough for the envelope to be refused (measured: ~723 members for care) the steward saw "blocked"
+      // while the member kept the key. Nothing said otherwise.
+      const rotations = [];
+      if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(remaining, stewardRoster || [])).then(r => ['the care key', r]));
+      if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining)).then(r => ['the sermon key', r]));
+      Promise.all(rotations).then(rs => {
+        const failed = rs.filter(([, ok]) => ok === false).map(([what]) => what);
+        if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
+      }).catch(() => {});
       // and the NAME key: a blocked member keeping it could still read the congregation's names, which is the
       // one thing this encryption exists to stop. The ring carries the superseded keys, so names sealed before
       // the rotation still open for everyone who remains.
@@ -3644,6 +3654,16 @@ function DashMembers() {
   };
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* A rotation that did not land. Rendered at the top of the panel and NOT tied to the confirm dialog,
+          which has already closed by the time the publish resolves — the same mistake that made the safety
+          check's warning unreachable three times. It stays until dismissed: the steward believes the person
+          is out, and this is the one thing that says otherwise. */}
+      {blockWarn ? (
+        <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: 'var(--clay-soft)', border: '1px solid var(--clay)' }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{blockWarn}</div>
+          <button onClick={() => setBlockWarn('')} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
+        </div>
+      ) : null}
       {total === 0 ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'var(--ink-3)', padding: 24 }}>
           <div style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="pray" size={26} color="var(--ink-3)" /></div>

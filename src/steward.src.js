@@ -2602,10 +2602,37 @@ window.Steward = {
     if (!_careKeyChecked || !_isRelayAuthed()) return false;  // same trusted-view rule as minting
     if (!_careKeyHex) return false;                            // nothing to rotate yet — ensureCareKeyForMembers mints the first
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-    const ring = [fresh, ...(_careKeyRing.length ? _careKeyRing : [_careKeyHex])].slice(0, 12);   // keep a bounded history
     const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))];
-    const keys = {}; const payload = JSON.stringify(ring);
-    for (const mp of want) { try { keys[mp] = nip44e(payload, nip44ck(sk, mp)); } catch (e) {} }
+    // FIT THE ENVELOPE TO THE CHURCH, and rotate a shorter history rather than not rotating at all.
+    //
+    // This document carries one sealed copy of the key ring per member, and the relay caps a single message
+    // at 1 MB. Measured: a 12-key ring costs ~1,452 bytes per member once sealed, so the document crosses
+    // 1 MB at about 723 members and the send is refused. It used to be refused SILENTLY — the caller neither
+    // awaited this nor read its result — which is the worst way for this particular thing to fail, because
+    // rotation is what takes the care key away from someone the church has just blocked. They stayed blocked
+    // on paper and kept the key in fact.
+    //
+    // The ring exists so that things sealed under previous keys still open. Trimming it costs the church
+    // access to OLDER sealed care records; not rotating costs them the removal itself. Between those two,
+    // the removal wins — so shrink the history until it fits, and say so when we do.
+    const _fits = (k) => JSON.stringify({ keys: k, rev: (_careKeyRev || 1) + 1 }).length < 900000;
+    let ring = [fresh, ...(_careKeyRing.length ? _careKeyRing : [_careKeyHex])].slice(0, 12);
+    let keys = null;
+    while (ring.length >= 1) {
+      const payload = JSON.stringify(ring);
+      const k = {};
+      for (const mp of want) { try { k[mp] = nip44e(payload, nip44ck(sk, mp)); } catch (e) {} }
+      if (_fits(k)) { keys = k; break; }
+      if (ring.length === 1) break;
+      ring = ring.slice(0, Math.max(1, ring.length - 2));
+    }
+    if (!keys) {
+      // Even a single-key ring will not fit — past roughly 1,400 members this document needs splitting across
+      // several, which changes what every reader has to look up. Refuse loudly rather than pretend.
+      console.warn('[steward] care key rotation too large for one document at ' + want.length + ' members');
+      return false;
+    }
+    if (ring.length < 12) console.warn('[steward] care key ring trimmed to ' + ring.length + ' to fit ' + want.length + ' members — older sealed care records will no longer open');
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: (_careKeyRev || 1) + 1 }) }));
     if (ok === false) return false;
     _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = (_careKeyRev || 1) + 1; _careKeyDocKeys = keys;
