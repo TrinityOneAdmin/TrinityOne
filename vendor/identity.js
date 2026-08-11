@@ -12342,6 +12342,26 @@ zoo`.split("\n"));
     canRecoverWithWords() {
       return !!_recoveryReference();
     },
+    // WHO TO SAY YOU ARE, WHEN YOU CANNOT GET IN.
+    //
+    // The lock screen tells a member with no 12 words to "ask a steward — they can put you back in your place
+    // under a new key", and the steward's re-seat needs the member's account code. That code lived only
+    // inside the restore wizard, which sits behind the lock — so the one instruction the screen gave was the
+    // one thing the screen made impossible. The member was told not to uninstall (correct: it erases the
+    // account) and had nothing else to try.
+    //
+    // The account IS knowable while locked: PUB_KEY survives the lock wipe deliberately, which is the same
+    // reference _recoveryReference() uses to check a typed phrase. It is a public key — showing it to a
+    // steward reveals nothing that authenticating to a relay would not.
+    lockedNpub() {
+      const hex = _recoveryReference();
+      if (!hex) return "";
+      try {
+        return npubEncode(hex);
+      } catch (e) {
+        return "";
+      }
+    },
     whoseMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");

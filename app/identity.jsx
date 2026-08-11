@@ -778,6 +778,10 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
   const [err, setErr] = useId('');
   const [busy, setBusy] = useId(false);
   const [forgot, setForgot] = useId(false);
+  const [codeCopied, setCodeCopied] = useId(false);
+  // The account this phone holds, readable while locked. '' on a device locked before it began
+  // recording that — those members need a steward to look them up by name, and the panel says so.
+  const lockedCode = (window.TrinityIdentity && window.TrinityIdentity.lockedNpub) ? window.TrinityIdentity.lockedNpub() : '';
   // "Remember me on this device", 30 days. OFF by default and never persisted as a default: this is a decision
   // about who can open the member's church, and it must be taken deliberately each time, not inherited from
   // the last time they were in a hurry. Offered only where it is honest — canRemember() is native-and-a-PIN-
@@ -921,6 +925,28 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>
             Don’t have them? Don’t uninstall — that erases this account for good. Ask a steward instead: they can put you back in your place under a new key.
           </div>
+          {/* …and GIVE THEM THE THING TO SHOW. The advice above was the only instruction on this screen, and
+              the code a steward needs lived inside the restore wizard — behind this very lock. So a member
+              with no 12 words was told to ask a steward, told not to uninstall (correct: it erases the
+              account), and handed nothing to act on. The account is knowable while locked: PUB_KEY survives
+              the lock wipe deliberately and is the same reference used to check a typed phrase. It is a
+              public key, so showing it discloses nothing that connecting to a relay would not. */}
+          {lockedCode ? (
+            <div style={{ marginTop: 12, padding: '12px 12px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginBottom: 9, textAlign: 'center' }}>Show this to a steward. They can put you back in your place on this phone, under your own name.</div>
+              <div style={{ width: 150, height: 150, margin: '0 auto 9px', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }}
+                dangerouslySetInnerHTML={{ __html: (window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG('trinityone-reseat:' + lockedCode) : '' }} />
+              <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, wordBreak: 'break-all', color: 'var(--ink-3)', textAlign: 'center', lineHeight: 1.45 }}>{lockedCode}</div>
+              <button onClick={() => { try { if (navigator.clipboard) navigator.clipboard.writeText('trinityone-reseat:' + lockedCode); setCodeCopied(true); setTimeout(() => setCodeCopied(false), 1800); } catch (e) {} }}
+                style={{ width: '100%', marginTop: 9, padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+                {codeCopied ? 'Copied' : 'Copy the code'}
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>
+              This phone can’t show your account code — it was locked before it recorded which account it holds. A steward can still reconnect you, but they will need to find you by name.
+            </div>
+          )}
         </div>
       ) : null}
     </div>

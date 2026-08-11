@@ -273,4 +273,18 @@ export const CASES = [
     replace: `  if (false) {`,
     test: 'scripts/named-invite.test.mjs',
   },
+  {
+    name: 'locked-out: the account code goes back behind the lock',
+    file: 'app/identity.jsx',
+    find: `          {lockedCode ? (`,
+    replace: `          {false ? (`,
+    test: 'scripts/locked-out-route.test.mjs',
+  },
+  {
+    name: 'locked-out: lockedNpub reads a reference a locked boot lacks',
+    file: 'src/identity.src.js',
+    find: `      const hex = _recoveryReference();`,
+    replace: `      const hex = (window.TrinityIdentity.current || {}).pubkey || '';`,
+    test: 'scripts/locked-out-route.test.mjs',
+  },
 ];
