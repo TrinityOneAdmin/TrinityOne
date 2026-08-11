@@ -8,10 +8,14 @@ const { useState: useId, useEffect: useIdE } = React;
 // tap on a grey link permanently closed the only door back into an existing account, while two other screens
 // went on telling the member to "restore your 12-word phrase". The other restore pane (NostrSheet) has never
 // had a caller at all; see the note at the top of this file.
-function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore }) {
+function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, suggestedName }) {
   const D = window.TrinityData;
   const [step, setStep] = useId(0);   // 0 name, 1 back up the 12 words, 2 confirm a couple
-  const [name, setName] = useId('');
+  // PREFILLED FROM THE INVITE, so the person confirms the name their church already knows instead of being
+  // asked as though nobody had said. An empty box here was written straight over the name the slip
+  // carried (finish() sends `name: name.trim()`), so a named invite produced a member the steward sees
+  // as Anonymous — the opposite of what migrate.html promises the pastor.
+  const [name, setName] = useId(suggestedName || '');
   const [av, setAv] = useId({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
   const [words, setWords] = useId([]);
   const [ack, setAck] = useId(false);
@@ -282,7 +286,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore }) 
     try { localStorage.setItem('trinityone.openFollow', '1'); } catch (e) {}
     try { location.reload(); } catch (e) {}
   };
-  useIdE(() => { if (open) { setIntro(true); setRMode('choose'); setXfer(null); setXferStage('show'); setXferSeen(null); setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
+  useIdE(() => { if (open) { setIntro(true); setRMode('choose'); setXfer(null); setXferStage('show'); setXferSeen(null); setStep(0); setName(suggestedName || ''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
   // fetch the member's own 12 words when we reach the back-up step. The secure store can answer empty for a
   // moment right after boot, so retry until we get a full phrase rather than getting stuck on "Preparing…".
   useIdE(() => {

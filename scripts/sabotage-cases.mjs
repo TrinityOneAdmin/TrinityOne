@@ -259,4 +259,18 @@ export const CASES = [
     replace: `    keys[mp] = sealTo(payload, mp);`,
     test: 'scripts/seal-yields.test.mjs',
   },
+  {
+    name: 'invite: the named slip stops prefilling the wizard',
+    file: 'app/identity.jsx',
+    find: `  const [name, setName] = useId(suggestedName || '');`,
+    replace: `  const [name, setName] = useId('');`,
+    test: 'scripts/named-invite.test.mjs',
+  },
+  {
+    name: 'invite: the name is captured too late to be rendered',
+    file: 'app/app.jsx',
+    find: `  if (pendingNameRef.current === null) {`,
+    replace: `  if (false) {`,
+    test: 'scripts/named-invite.test.mjs',
+  },
 ];

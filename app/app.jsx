@@ -782,6 +782,18 @@ function App() {
     if (F.ready && F.ready.then) F.ready.then(beat).catch(() => {}); else beat();
   }, [activeChurch]);
   const pendingFollowRef = React.useRef(null);   // S2: a follow link opened before onboarding — defer the join+announce until the wizard completes (consent-first)
+  // …and the NAME on that same slip. A bulk invite carries who this is (?name=), and the wizard used to
+  // start with an empty box regardless — so a church that printed 200 named slips got 200 members called
+  // Anonymous, which is the opposite of what migrate.html promises the pastor.
+  // Read at FIRST RENDER, not in an effect: the wizard mounts before the URL effect below runs, and a ref
+  // written afterwards never re-renders it — so the box stayed empty however correctly the name was
+  // captured. useRef's initialiser runs once, which is exactly the timing this needs.
+  const pendingNameRef = React.useRef(null);
+  if (pendingNameRef.current === null) {
+    let n = '';
+    try { if (!lsGet('trinityone.onboarded', false)) n = (new URLSearchParams(location.search).get('name') || '').slice(0, 40).trim(); } catch (e) {}
+    pendingNameRef.current = n;
+  }
   useAE(() => {
     if (!inviteParam && !followParam) return;
     let cleanup;
@@ -1911,7 +1923,7 @@ function App() {
             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--clay)' }}>Unlock</span>
           </div>
         ) : null}
-        {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
+        {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity} suggestedName={pendingNameRef.current}
           onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
           onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
         {/* U1: the SAME restore flow, opened from settings rather than only from first-run. Deliberately its
