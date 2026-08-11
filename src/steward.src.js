@@ -2615,16 +2615,25 @@ window.Steward = {
     // The ring exists so that things sealed under previous keys still open. Trimming it costs the church
     // access to OLDER sealed care records; not rotating costs them the removal itself. Between those two,
     // the removal wins — so shrink the history until it fits, and say so when we do.
-    const _fits = (k) => JSON.stringify({ keys: k, rev: (_careKeyRev || 1) + 1 }).length < 900000;
-    let ring = [fresh, ...(_careKeyRing.length ? _careKeyRing : [_careKeyHex])].slice(0, 12);
+    // SIZE IT BY MEASURING ONE, NOT BY ENCRYPTING EVERYONE. Sealing costs ~5 ms per member on a workstation
+    // and several times that on a phone, so trial-encrypting the whole church once per candidate ring length
+    // would turn a slow operation into an unusable one — measured, up to 48s at 500 members. One sealed
+    // sample gives the exact per-member cost for that ring length, because the size depends on the ring and
+    // not on who it is sealed to.
+    const full = [fresh, ...(_careKeyRing.length ? _careKeyRing : [_careKeyHex])].slice(0, 12);
+    const probe = want[0];
+    let ring = null;
+    for (let n = full.length; n >= 1; n -= (n > 4 ? 2 : 1)) {
+      const cand = full.slice(0, n);
+      let per = 0;
+      try { per = 64 + String(nip44e(JSON.stringify(cand), nip44ck(sk, probe))).length + 6; } catch (e) { break; }
+      if (per * want.length < 900000) { ring = cand; break; }
+    }
     let keys = null;
-    while (ring.length >= 1) {
+    if (ring) {
       const payload = JSON.stringify(ring);
-      const k = {};
-      for (const mp of want) { try { k[mp] = nip44e(payload, nip44ck(sk, mp)); } catch (e) {} }
-      if (_fits(k)) { keys = k; break; }
-      if (ring.length === 1) break;
-      ring = ring.slice(0, Math.max(1, ring.length - 2));
+      keys = {};
+      for (const mp of want) { try { keys[mp] = nip44e(payload, nip44ck(sk, mp)); } catch (e) {} }
     }
     if (!keys) {
       // Even a single-key ring will not fit — past roughly 1,400 members this document needs splitting across
@@ -2632,7 +2641,7 @@ window.Steward = {
       console.warn('[steward] care key rotation too large for one document at ' + want.length + ' members');
       return false;
     }
-    if (ring.length < 12) console.warn('[steward] care key ring trimmed to ' + ring.length + ' to fit ' + want.length + ' members — older sealed care records will no longer open');
+    if (ring.length < full.length) console.warn('[steward] care key ring trimmed to ' + ring.length + ' to fit ' + want.length + ' members — older sealed care records will no longer open');
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: (_careKeyRev || 1) + 1 }) }));
     if (ok === false) return false;
     _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = (_careKeyRev || 1) + 1; _careKeyDocKeys = keys;

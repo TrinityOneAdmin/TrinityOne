@@ -63,7 +63,11 @@ test('rotation exists, is gated like minting, and keeps the old keys', () => {
   assert.match(b, /_isRelayAuthed\(\)/, 'rotation must not run from an untrusted view — same rule as minting');
   // Assert the CONSTRUCTION carries the old ring forward — matching the name alone passes even if the new
   // ring is built as [fresh] and the old keys are dropped (verified: that sabotage slipped through once).
-  assert.match(b, /ring\s*=\s*\[\s*fresh\s*,\s*\.\.\./, 'the new ring must be [fresh, ...previous] — otherwise rotation destroys the church’s history');
+  // `full` since 2026-08-11: the candidate ring is now sized down to fit a large church's envelope, so the
+  // full history and the ring actually published are two different things. The invariant is unchanged —
+  // whatever is published must START from the fresh key and carry the previous ones behind it.
+  assert.match(b, /full\s*=\s*\[\s*fresh\s*,\s*\.\.\./, 'the new ring must be [fresh, ...previous] — otherwise rotation destroys the church’s history');
+  assert.match(b, /ring = cand/, 'the published ring must come from that candidate list, not be minted separately');
   assert.match(b, /_careKeyRev/, 'the envelope revision must advance so a lagging relay cannot resurrect the old one');
 });
 

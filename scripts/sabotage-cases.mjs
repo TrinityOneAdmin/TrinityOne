@@ -232,8 +232,8 @@ export const CASES = [
   {
     name: 'rotation: one envelope, refused silently on a big church',
     file: 'src/steward.src.js',
-    find: `      ring = ring.slice(0, Math.max(1, ring.length - 2));`,
-    replace: ``,
+    find: `      if (per * want.length < 900000) { ring = cand; break; }`,
+    replace: `      ring = cand; break;`,
     test: 'scripts/key-rotation-size.test.mjs',
   },
   {

@@ -48,11 +48,20 @@ test('shrinking the ring is what makes a large church fit', () => {
 test('rotation trims the ring rather than giving up', () => {
   const at = SRC.indexOf('async rotateCareKey(');
   const body = SRC.slice(at, SRC.indexOf('\n  },', at));
-  assert.match(body, /while \(ring\.length >= 1\)/,
+  assert.match(body, /for \(let n = full\.length; n >= 1;/,
     'rotation builds one envelope and publishes it. On a church past ~723 members the relay refuses it and ' +
     'the blocked member keeps the care key');
-  assert.match(body, /ring = ring\.slice\(0, Math\.max\(1, ring\.length - 2\)\)/, 'nothing actually shrinks the ring');
-  assert.match(body, /ring\.length < 12.*trimmed/s,
+  // Sized by sealing ONE sample per candidate ring length, not by encrypting the whole church each time:
+  // sealing costs ~5 ms per member on a workstation and several times that on a phone, so trial-encrypting
+  // everyone per candidate turned a slow operation into an unusable one (measured: up to 48 s at 500).
+  assert.match(body, /nip44e\(JSON\.stringify\(cand\), nip44ck\(sk, probe\)\)/,
+    'the ring is sized by encrypting the entire church once per candidate length — that is quadratic in the ' +
+    'thing that was already too slow');
+  assert.doesNotMatch(body, /while \(ring\.length >= 1\)/, 'the trial-encrypt loop is back');
+  assert.match(body, /per \* want\.length < 900000/,
+    'the sample is measured but never compared against the ceiling, so the full ring is always chosen and ' +
+    'the document is refused exactly as before — measuring without deciding is not a fix');
+  assert.match(body, /ring\.length < full\.length.*trimmed/s,
     'the ring is trimmed silently — a church losing access to older sealed care records should be told');
   assert.match(body, /return false;/, 'a rotation that cannot be made to fit must report failure, not pretend');
 });

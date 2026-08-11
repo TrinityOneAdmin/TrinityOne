@@ -16825,30 +16825,38 @@ zoo`.split("\n");
       if (!_careKeyHex) return false;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))];
-      const _fits = (k) => JSON.stringify({ keys: k, rev: (_careKeyRev || 1) + 1 }).length < 9e5;
-      let ring = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 12);
+      const full = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 12);
+      const probe = want[0];
+      let ring = null;
+      for (let n = full.length; n >= 1; n -= n > 4 ? 2 : 1) {
+        const cand = full.slice(0, n);
+        let per = 0;
+        try {
+          per = 64 + String(encrypt3(JSON.stringify(cand), getConversationKey(sk, probe))).length + 6;
+        } catch (e) {
+          break;
+        }
+        if (per * want.length < 9e5) {
+          ring = cand;
+          break;
+        }
+      }
       let keys = null;
-      while (ring.length >= 1) {
+      if (ring) {
         const payload = JSON.stringify(ring);
-        const k = {};
+        keys = {};
         for (const mp of want) {
           try {
-            k[mp] = encrypt3(payload, getConversationKey(sk, mp));
+            keys[mp] = encrypt3(payload, getConversationKey(sk, mp));
           } catch (e) {
           }
         }
-        if (_fits(k)) {
-          keys = k;
-          break;
-        }
-        if (ring.length === 1) break;
-        ring = ring.slice(0, Math.max(1, ring.length - 2));
       }
       if (!keys) {
         console.warn("[steward] care key rotation too large for one document at " + want.length + " members");
         return false;
       }
-      if (ring.length < 12) console.warn("[steward] care key ring trimmed to " + ring.length + " to fit " + want.length + " members \u2014 older sealed care records will no longer open");
+      if (ring.length < full.length) console.warn("[steward] care key ring trimmed to " + ring.length + " to fit " + want.length + " members \u2014 older sealed care records will no longer open");
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: (_careKeyRev || 1) + 1 }) }));
       if (ok === false) return false;
       _careKeyRing = ring;
