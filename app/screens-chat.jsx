@@ -364,7 +364,7 @@ function ChatScreen({ ctx }) {
     ctx.openGroup(g);
   };
   const groupCard = (g) => (
-    <div key={g.id} onClick={() => openGroup(g)} style={{
+    <div key={g.id} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} onClick={() => openGroup(g)} style={{
       display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
       background: ctx.openGroupId === g.id ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface)',
       border: '1px solid ' + (ctx.openGroupId === g.id ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', boxShadow: 'var(--shadow)',
@@ -543,7 +543,7 @@ function ChatScreen({ ctx }) {
         {groupHits.length ? <SectionLabel>Groups</SectionLabel> : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: groupHits.length ? 22 : 0 }}>
           {groupHits.map(g => (
-            <div key={g.id} onClick={() => openGroup(g)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
+            <div key={g.id} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} onClick={() => openGroup(g)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
               <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{hi(g.name)}</div>
@@ -559,7 +559,7 @@ function ChatScreen({ ctx }) {
             const d = window.Fellowship.displayFor(e.pubkey);
             const me = e.pubkey === window.Fellowship.myPubkey;
             return (
-              <div key={i} onClick={() => openGroup(group)} style={{ padding: 13, borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
+              <div key={i} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} onClick={() => openGroup(group)} style={{ padding: 13, borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
                   <UserAvatar av={avOf(d)} name={d.handle} size={20} />
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{me ? 'You' : d.handle}</span>
@@ -1144,6 +1144,16 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
   // perf #2: memoize the rendered bubbles so a composer keystroke (draft state) doesn't re-render the whole
   // thread. Recompute only when message / reaction / menu / pin / picker state actually changes — NOT on draft.
+  // Polled rather than pushed: the relay's connection state is not an event the app publishes, and a room
+  // sitting open while the signal comes and goes should follow it. Three seconds is far below the time it
+  // takes to read the message and costs nothing.
+  const [connected, setConnected] = React.useState(() => !(window.Fellowship && window.Fellowship.relayReady) || window.Fellowship.relayReady());
+  React.useEffect(() => {
+    const read = () => { try { setConnected(!window.Fellowship.relayReady || window.Fellowship.relayReady()); } catch (e) {} };
+    read();
+    const t = setInterval(read, 3000);
+    return () => clearInterval(t);
+  }, []);
   const bubbles = React.useMemo(() => visibleMsgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
     summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
     pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
@@ -1223,7 +1233,21 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             </div>
           </div>
         ) : null}
-        {bubbles}
+        {/* AN EMPTY ROOM MUST EXPLAIN ITSELF. This rendered {bubbles} alone, so a room with no messages was a
+            blank area between the header and the message box — and a member cannot tell "nobody has posted"
+            from "it is broken" or "it has not loaded". The group list one screen earlier already says "No
+            messages yet" on every row; inside the room it said nothing.
+        
+            And the two cases are NOT the same. Offline, the cached list still renders rows saying "No messages
+            yet" — over messages the member sent themselves — so silence reads as "nothing is happening at my
+            church" rather than "I cannot reach my church". relayReady() is what tells them apart. */}
+        {visibleMsgs.length ? bubbles : (
+          <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '38px 26px', fontSize: 13.5, lineHeight: 1.55 }}>
+            {connected
+              ? <React.Fragment><div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>No messages yet</div>Say hello — the first message in a room is always the hardest.</React.Fragment>
+              : <React.Fragment><div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>Can’t reach your church</div>You may be offline, or its relay may be down. Anything you send will go when you reconnect.</React.Fragment>}
+          </div>
+        )}
       </div>
 
       <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>

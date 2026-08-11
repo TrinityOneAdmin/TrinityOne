@@ -7493,6 +7493,13 @@
     churchPub: null,
     // hex pubkey of the active church; messages are tagged ['p', churchPub]
     ready: null,
+    // IS THE CHURCH REACHABLE RIGHT NOW? _relayAuthedAt is set when the relay proves who we are and reset to 0
+    // on every disconnect, so it already answers this — it was simply never exposed, and the screens had no way
+    // to tell "nothing has been said" from "we cannot hear anything". A member offline read "No messages yet"
+    // over a message they had just sent themselves.
+    relayReady() {
+      return !!_relayAuthedAt;
+    },
     profile,
     displayFor,
     // http(s) base of the church's gateway (derived from its relay) — for the /feed video proxy

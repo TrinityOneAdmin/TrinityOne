@@ -35,7 +35,10 @@ if (!cases.length) { console.error('no cases match ' + JSON.stringify(filter)); 
 const SANDBOX = mkdtempSync(join(tmpdir(), 'sabotage-'));
 console.log('sandbox: ' + SANDBOX + '\n');
 for (const d of ['src', 'app', 'scripts', 'vendor']) cpSync(join(ROOT, d), join(SANDBOX, d), { recursive: true });
-for (const f of ['package.json', 'index.html', 'steward.html', 'engine.js']) {
+// Root-level scripts count too — join.js and pills.js are shipped code with tests of their own, and a case
+// that mutates a file the sandbox never copied dies with ENOENT rather than reporting anything useful.
+for (const f of ['package.json', 'index.html', 'steward.html', 'engine.js', 'join.js', 'join.html',
+                 'pills.js', 'welcome.html', 'help.html', 'switching.js', 'android-cta.js']) {
   if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(SANDBOX, f));
 }
 try { symlinkSync(join(ROOT, 'node_modules'), join(SANDBOX, 'node_modules')); } catch (e) {}

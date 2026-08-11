@@ -28,7 +28,24 @@
   // URLSearchParams.get() ALREADY percent-decodes — decoding again double-decodes (a name with a literal '%' throws;
   // encoded chars render wrong). Use the values as-is.
   if (name)   { try { document.getElementById('pill').textContent = 'Hi, ' + name; } catch(e){} }
-  if (church) { try { document.getElementById('head').textContent = 'Join ' + church; } catch(e){} }
+  // NAME THE CHURCH ONLY IF IT LOOKS LIKE A NAME. `?c=` used to be printed verbatim, so a mistyped or
+  // truncated link rendered "Join npub1bogus" — a raw key-shaped string shown to a member as their church's
+  // name. Anything key-shaped, or anything long enough to be a paste of the wrong thing, is not a name.
+  var NAMEY = /^[\p{L}\p{N} .,'’&()\-]{2,48}$/u;
+  if (church && NAMEY.test(church) && !/^npub1|^nsec1|^[0-9a-f]{40,}$/i.test(church)) {
+    try { document.getElementById('head').textContent = 'Join ' + church; } catch(e){}
+  }
+  // NO INVITE AT ALL. The page said "You're invited / Join a church" to a visitor who has no invitation and
+  // nothing to join with, then offered a button that opens the app with an empty church — generic onboarding,
+  // with nothing anywhere explaining that a code from their church is the missing piece.
+  if (!follow && !church) {
+    try {
+      document.getElementById('pill').textContent = 'Joining a church';
+      document.getElementById('head').textContent = 'You need an invitation';
+      var sub = document.getElementById('sub');
+      if (sub) sub.textContent = 'Churches on TrinityOne are private, so you join with a link or code from yours — usually from a steward, a printed slip, or a QR code at the door. Ask whoever invited you.';
+    } catch(e){}
+  }
 
   var ua = navigator.userAgent || '';
   var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
