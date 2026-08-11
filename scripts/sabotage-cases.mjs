@@ -244,4 +244,19 @@ export const CASES = [
     replace: `      if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);`,
     test: 'scripts/key-rotation-size.test.mjs',
   },
+  {
+    name: 'seal: the loop stops yielding (console freezes again)',
+    file: 'src/steward.src.js',
+    find: `      await new Promise(r => setTimeout(r, 0));`,
+    replace: ``,
+    count: 1,
+    test: 'scripts/seal-yields.test.mjs',
+  },
+  {
+    name: 'seal: one bad pubkey aborts the whole rotation',
+    file: 'src/steward.src.js',
+    find: `    try { keys[mp] = sealTo(payload, mp); } catch (e) {}`,
+    replace: `    keys[mp] = sealTo(payload, mp);`,
+    test: 'scripts/seal-yields.test.mjs',
+  },
 ];

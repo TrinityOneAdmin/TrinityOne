@@ -166,6 +166,35 @@ const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (l
 // yesterday, and a kids check-in roll that emptied mid-service). Fine for timestamps/filenames only.
 const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const CAREKEY_D = 'trinityone/carekey:';
+
+// SEAL ONE COPY PER MEMBER, WITHOUT FREEZING THE SCREEN.
+//
+// Every key envelope in this file holds a separately-sealed copy of the ring for each member, and sealing
+// costs ~5 ms per member on a workstation — several times that on a phone. Done in one synchronous loop, a
+// church of 500 locks the console for about eight seconds per key, and blocking someone rotates three of
+// them. Nothing is drawn and nothing responds for that whole time; the steward has just tapped a destructive
+// button and cannot tell whether it worked.
+//
+// Yielding between small chunks costs a few milliseconds of wall clock and gives the browser its thread back,
+// so the console keeps painting and an `onProgress` can say how far it has got. The five call sites shared
+// one loop shape and now share one implementation — a per-member seal that forgot to yield is exactly the
+// kind of thing that gets copied a sixth time.
+async function _sealEach(payload, targets, sealTo, onProgress) {
+  const keys = {};
+  const list = [...targets];
+  for (let i = 0; i < list.length; i++) {
+    const mp = list[i];
+    try { keys[mp] = sealTo(payload, mp); } catch (e) {}
+    // every 25, hand the thread back — small enough that the longest blocking stretch stays around 125 ms
+    if ((i % 25) === 24) {
+      if (onProgress) { try { onProgress(i + 1, list.length); } catch (e) {} }
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  if (onProgress) { try { onProgress(list.length, list.length); } catch (e) {} }
+  return keys;
+}
+
 const CARENEED_D = 'trinityone/care:';   // a care need — its sealed half depends on the care key existing
 let _careKeyHex = null;          // this device's copy of the church care key (the CURRENT one = ring[0])
 let _careKeyRing = [];           // current key first, then superseded ones — so rotation never orphans old ciphertext
@@ -2468,9 +2497,9 @@ window.Steward = {
     // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
     if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
     if (!_mediaKeyHex) { _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex]; }
-    const keys = {}; const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+    const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
-    for (const mp of targets) { try { keys[mp] = nip44e(_mring, nip44ck(sk, mp)); } catch (e) {} }
+    const keys = await _sealEach(_mring, targets, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
@@ -2485,9 +2514,9 @@ window.Steward = {
     const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     const have = _mediaKeyDocKeys || {};
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
-    const keys = {};
+    
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
-    for (const mp of want) { try { keys[mp] = nip44e(_mring, nip44ck(sk, mp)); } catch (e) {} }
+    const keys = await _sealEach(_mring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (ok !== false) _mediaKeyDocKeys = keys;                    // reflect what we just published so we don't loop
     return ok;
@@ -2503,8 +2532,8 @@ window.Steward = {
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const ring = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 12);
     const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
-    const keys = {}; const payload = JSON.stringify(ring);
-    for (const mp of want) { try { keys[mp] = nip44e(payload, nip44ck(sk, mp)); } catch (e) {} }
+    const payload = JSON.stringify(ring);
+    const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (ok === false) return false;
     _mediaKeyRing = ring; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys;
@@ -2560,9 +2589,9 @@ window.Steward = {
     const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))];
     const have = _careKeyDocKeys || {};
     if (want.every(p2 => have[p2])) return false;             // everyone's keyed — no republish
-    const keys = {};
+    
     const _ring = JSON.stringify(_careKeyRing.length ? _careKeyRing : [_careKeyHex]);
-    for (const mp of want) { try { keys[mp] = nip44e(_ring, nip44ck(sk, mp)); } catch (e) {} }
+    const keys = await _sealEach(_ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }));
     if (ok !== false) _careKeyDocKeys = keys;
     return ok;
@@ -2632,8 +2661,7 @@ window.Steward = {
     let keys = null;
     if (ring) {
       const payload = JSON.stringify(ring);
-      keys = {};
-      for (const mp of want) { try { keys[mp] = nip44e(payload, nip44ck(sk, mp)); } catch (e) {} }
+      keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     }
     if (!keys) {
       // Even a single-key ring will not fit — past roughly 1,400 members this document needs splitting across
