@@ -287,4 +287,19 @@ export const CASES = [
     replace: `      const hex = (window.TrinityIdentity.current || {}).pubkey || '';`,
     test: 'scripts/locked-out-route.test.mjs',
   },
+  {
+    name: 'backup: the skip jumps straight past the words again',
+    file: 'app/identity.jsx',
+    find: `onClick={() => setConfirmSkip(true)}`,
+    replace: `onClick={() => setStep(3)}`,
+    count: 2,
+    test: 'scripts/backup-skip-consent.test.mjs',
+  },
+  {
+    name: 'backup: the PIN screen stops naming the words',
+    file: 'app/identity.jsx',
+    find: `{skippedWords ? 'If you forget it, your 12 words are the only way back — and you have not written those down yet.' : 'If you forget it, your 12 words will open this account again.'}`,
+    replace: ``,
+    test: 'scripts/backup-skip-consent.test.mjs',
+  },
 ];

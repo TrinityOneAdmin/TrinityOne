@@ -19,6 +19,8 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   const [av, setAv] = useId({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
   const [words, setWords] = useId([]);
   const [ack, setAck] = useId(false);
+  const [confirmSkip, setConfirmSkip] = useId(false);   // ask once more before an irreversible shortcut
+  const [skippedWords, setSkippedWords] = useId(false);  // …and remember, so the PIN step can say what it means
   const [copied, setCopied] = useId(false);
   const [checkIdx, setCheckIdx] = useId([]);   // the three word positions we quiz
   const [answers, setAnswers] = useId(['', '', '']);
@@ -716,7 +718,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
         <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} placeholder="Type it again to confirm"
           style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
         {pinErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '10px 2px 0', lineHeight: 1.4 }}>{pinErr}</div> : null}
-        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 2px 0' }}>You’ll enter this each time you open the app. It never leaves your phone, and no one — not even us — can reset it.</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 2px 0' }}>You’ll enter this each time you open the app. It never leaves your phone, and no one — not even us — can reset it. {skippedWords ? 'If you forget it, your 12 words are the only way back — and you have not written those down yet.' : 'If you forget it, your 12 words will open this account again.'}</div>
       </div>
       </React.Fragment>)}
       </div>
@@ -724,7 +726,19 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       {/* actions */}
       <div style={{ padding: '12px 22px 26px', borderTop: '1px solid var(--line-2)', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
-        {step === 0 ? (<React.Fragment>
+        {confirmSkip ? (
+          /* ASK ONCE MORE BEFORE AN IRREVERSIBLE SHORTCUT. Skipping was one tap with no warning, and the very
+             next screen sets a PIN saying "no one — not even us — can reset it" without ever mentioning the
+             words. Two taps and a member had an account whose only key they had never seen. Not a dark
+             pattern in reverse: skipping is still allowed and still one tap from here — it just says what it
+             costs first. */
+          <div style={{ padding: '2px 0 4px' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 5 }}>Leave without your 12 words?</div>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>They are the only way back into this account. If this phone is lost, broken or wiped, nobody can return it to you — not your church, not us. Writing them on paper takes a minute.</div>
+            <button onClick={() => { setConfirmSkip(false); setStep(1); }} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-ui)' }}>Show me the words again</button>
+            <button onClick={() => { setConfirmSkip(false); setSkippedWords(true); setStep(3); }} style={{ width: '100%', marginTop: 8, padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip anyway</button>
+          </div>
+        ) : step === 0 ? (<React.Fragment>
           <button onClick={() => setStep(1)} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', marginBottom: 10, background: name.trim() ? 'var(--clay)' : 'var(--surface-2)', color: name.trim() ? '#fff' : 'var(--ink-3)', boxShadow: name.trim() ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{name.trim() ? `Continue as ${name.trim()}` : 'Continue without a name'}</button>
           <button onClick={() => { setRestoring(true); setRErr(''); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--clay)' }}>I already have an account — restore it</button>
           <button onClick={onSkip} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip setup for now</button>
@@ -741,10 +755,10 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
             <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
           </label>
           <button onClick={() => setStep(2)} disabled={!ack} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ack ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
-          <button onClick={() => setStep(3)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
+          <button onClick={() => setConfirmSkip(true)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
         </React.Fragment>) : step === 2 ? (<React.Fragment>
           <button onClick={confirmWords} disabled={!canConfirm} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: canConfirm ? 'pointer' : 'default', marginBottom: 10, background: canConfirm ? 'var(--clay)' : 'var(--surface-2)', color: canConfirm ? '#fff' : 'var(--ink-3)', boxShadow: canConfirm ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
-          <button onClick={() => setStep(3)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip for now</button>
+          <button onClick={() => setConfirmSkip(true)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip for now</button>
         </React.Fragment>) : (<React.Fragment>
           <button onClick={savePin} disabled={pinBusy || pin.length < 6 || !pin2} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (pinBusy || pin.length < 6 || !pin2) ? 'default' : 'pointer', marginBottom: 10, background: (pinBusy || pin.length < 6 || !pin2) ? 'var(--surface-2)' : 'var(--clay)', color: (pinBusy || pin.length < 6 || !pin2) ? 'var(--ink-3)' : '#fff', boxShadow: (pinBusy || pin.length < 6 || !pin2) ? 'none' : 'var(--shadow)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{pinBusy ? 'Setting…' : 'Set a PIN'}</button>
           <button onClick={finish} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip for now</button>
