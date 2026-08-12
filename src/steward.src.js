@@ -3593,7 +3593,7 @@ window.Steward = {
   // the RING: rotating on removal must not orphan the names already published. AUDIT-2026-07-27.
   // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
   // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
-  ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+  async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
     const cp = actingChurch || pub;
     // (1) NEVER act on a view we have not established. "The relay returned no envelope" is not proof that none
@@ -3622,11 +3622,40 @@ window.Steward = {
     // every 150 ms roster emit; each envelope makes every member's app re-open every sealed name in the church
     // and re-render every subscriber.
     if (!opts.rotate && ring.length === _nameKeyRing.length && recips.every(p2 => have[p2])) return Promise.resolve(null);
+    // (6) FIT THE ENVELOPE TO THE CHURCH — the same 1 MB ceiling, and the same trade, as the care key. This
+    // document also carries one sealed copy of the ring PER RECIPIENT, and NAME_RING_MAX is 12 exactly as the
+    // care ring is, so it is refused by the relay at the same ~723 members. It was refused silently, and the
+    // block handler did not await this call at all, so in a large church a Block took the care key away and
+    // left the NAME key in place — and a blocked member holding the name key can still read the whole
+    // congregation's names, which is the one thing this encryption exists to prevent.
+    //
+    // Trimming costs less here than it does for care. The ring is what opens names sealed under superseded
+    // keys, so a trim does blank the name of anyone who has not yet re-sealed — but the member side stamps its
+    // sealed name with `_ringId` (the head of the ring) and re-seals automatically the moment it sees a new
+    // envelope, so those names come back on their own as people's phones come online. A trimmed care record
+    // never comes back. Either way the removal wins over the history.
+    const probe = recips[0];
+    let fitted = null;
+    for (let n = ring.length; n >= 1; n -= (n > 4 ? 2 : 1)) {
+      const cand = ring.slice(0, n);
+      let per = 0;
+      // one sealed sample, not the whole church per candidate — see the note on rotateCareKey
+      try { per = 64 + String(nip44e(JSON.stringify(cand), nip44ck(churchSk, probe))).length + 6; } catch (e) { break; }
+      if (per * recips.length < 900000) { fitted = cand; break; }
+    }
+    if (!fitted) {
+      console.warn('[steward] name key envelope too large for one document at ' + recips.length + ' members');
+      return false;
+    }
+    if (fitted.length < ring.length) console.warn('[steward] name key ring trimmed to ' + fitted.length + ' to fit ' + recips.length + ' members — names not yet re-sealed under the new key will be blank until that member is next online');
+    ring = fitted;
     _nameKeyRing = ring;
-    const keys = {};
     const wrapped = JSON.stringify(ring);
-    for (const pk of recips) { try { keys[pk] = nip44e(wrapped, nip44ck(churchSk, pk)); } catch (e) {} }
-    const out = publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+    // Sealed one at a time WITH THE THREAD HANDED BACK. This ran as a synchronous loop over every recipient at
+    // ~5 ms each on a workstation and several times that on a phone, so a 500-member church froze the console
+    // for seconds — after a Block, which is precisely when a steward needs to see that something is happening.
+    const keys = await _sealEach(wrapped, recips, (pl, pk) => nip44e(pl, nip44ck(churchSk, pk)));
+    const out = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
     _nameKeyDocKeys = keys;
     return out;
   },

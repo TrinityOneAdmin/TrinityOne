@@ -17861,7 +17861,7 @@ zoo`.split("\n");
     // the RING: rotating on removal must not orphan the names already published. AUDIT-2026-07-27.
     // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
     // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
-    ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+    async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const cp = actingChurch || pub;
       if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
@@ -17873,16 +17873,31 @@ zoo`.split("\n");
       const have = _nameKeyDocKeys || {};
       const recips = opts.rotate ? want : [.../* @__PURE__ */ new Set([...want, ...Object.keys(have)])];
       if (!opts.rotate && ring.length === _nameKeyRing.length && recips.every((p2) => have[p2])) return Promise.resolve(null);
-      _nameKeyRing = ring;
-      const keys = {};
-      const wrapped = JSON.stringify(ring);
-      for (const pk of recips) {
+      const probe = recips[0];
+      let fitted = null;
+      for (let n = ring.length; n >= 1; n -= n > 4 ? 2 : 1) {
+        const cand = ring.slice(0, n);
+        let per = 0;
         try {
-          keys[pk] = encrypt3(wrapped, getConversationKey(churchSk, pk));
+          per = 64 + String(encrypt3(JSON.stringify(cand), getConversationKey(churchSk, probe))).length + 6;
         } catch (e) {
+          break;
+        }
+        if (per * recips.length < 9e5) {
+          fitted = cand;
+          break;
         }
       }
-      const out = publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+      if (!fitted) {
+        console.warn("[steward] name key envelope too large for one document at " + recips.length + " members");
+        return false;
+      }
+      if (fitted.length < ring.length) console.warn("[steward] name key ring trimmed to " + fitted.length + " to fit " + recips.length + " members \u2014 names not yet re-sealed under the new key will be blank until that member is next online");
+      ring = fitted;
+      _nameKeyRing = ring;
+      const wrapped = JSON.stringify(ring);
+      const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt3(pl, getConversationKey(churchSk, pk)));
+      const out = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
       _nameKeyDocKeys = keys;
       return out;
     },

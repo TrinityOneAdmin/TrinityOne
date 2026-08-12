@@ -3540,20 +3540,22 @@ function DashMembers() {
       const rotations = [];
       if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(remaining, stewardRoster || [])).then(r => ['the care key', r]));
       if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining)).then(r => ['the sermon key', r]));
+      // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
+      // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
+      // read the whole congregation's names. It returns null for the cases where it deliberately declines
+      // (nothing to rotate, no trusted view, delegated console) and false only when the envelope will not fit,
+      // and only false is reported below — so declining stays quiet and failing does not.
+      //
+      // NOT AS A DELEGATED STEWARD. A delegated console can never read the owner's name-key envelope, so it
+      // holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as the
+      // church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed name
+      // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
+      // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
+      if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true })).then(r => ['the name key', r]));
       Promise.all(rotations).then(rs => {
         const failed = rs.filter(([, ok]) => ok === false).map(([what]) => what);
         if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
       }).catch(() => {});
-      // and the NAME key: a blocked member keeping it could still read the congregation's names, which is the
-      // one thing this encryption exists to stop. The ring carries the superseded keys, so names sealed before
-      // the rotation still open for everyone who remains.
-      // NOT AS A DELEGATED STEWARD — this sat one line above the identical guard applied to groups below, and
-      // was the more destructive of the two. A delegated console can never read the owner's name-key envelope,
-      // so it holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as
-      // the church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed
-      // name in the congregation stops opening — the whole roster goes anonymous from one Block tap.
-      // steward.src.js now refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
-      if (!delegated && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true });
       // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
       // phone carried on decrypting every future message in every encrypted group — forever. The background
       // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,

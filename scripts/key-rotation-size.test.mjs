@@ -66,6 +66,41 @@ test('rotation trims the ring rather than giving up', () => {
   assert.match(body, /return false;/, 'a rotation that cannot be made to fit must report failure, not pretend');
 });
 
+// THE NAME KEY IS THE SAME DOCUMENT SHAPE AND WAS LEFT BEHIND (Fable pre-merge review, 2026-08-12). Care and
+// media were made fit-aware and awaited; the name key — sealed per recipient with a ring of the same
+// NAME_RING_MAX = 12, so refused by the relay at the same ~723 members — was neither. It was fired and
+// forgotten one line below the two that were awaited. A blocked member who keeps the NAME key can still read
+// every name in the congregation, which the block handler's own comment calls the one thing this encryption
+// exists to stop. Of the three keys it was the worst one to silently fail to rotate.
+test('the name key is fitted to the church, not just published and hoped for', () => {
+  const at = SRC.indexOf('async ensureNameKeyForMembers(');
+  assert.notEqual(at, -1, 'ensureNameKeyForMembers no longer awaits anything, so it cannot report a failure');
+  const body = SRC.slice(at, SRC.indexOf('\n  },', at));
+  assert.match(body, /for \(let n = ring\.length; n >= 1;/,
+    'the name key builds one envelope and publishes it. Past ~723 members the relay refuses it and a blocked ' +
+    'member keeps the key that opens every name in the church');
+  assert.match(body, /per \* recips\.length < 900000/,
+    'the sample is measured but never compared against the ceiling, so the full ring is always chosen and the ' +
+    'document is refused exactly as before');
+  assert.match(body, /return false;/,
+    'a name-key rotation that cannot be made to fit still resolves like a success, so the handler that now ' +
+    'awaits it has nothing to report');
+  assert.match(body, /_sealEach\(wrapped, recips/,
+    'the name envelope still seals every recipient in one synchronous loop — seconds of frozen console in a ' +
+    'large church, immediately after the steward taps Block');
+});
+
+test('blocking waits for the name key too, and says so if it did not land', () => {
+  const at = DASH.indexOf('const block = (pk) =>');
+  const body = DASH.slice(at, DASH.indexOf('\n  };', at));
+  assert.match(body, /rotations\.push\(Promise\.resolve\(window\.Steward\.ensureNameKeyForMembers\(/,
+    'the name key is fired and forgotten while the care and sermon keys are awaited beside it. A large church ' +
+    'is told the person is blocked while they keep the key to the whole congregation\'s names');
+  assert.match(body, /!delegated && window\.Steward\.ensureNameKeyForMembers/,
+    'a DELEGATED console holds an empty ring, and rotating from empty republishes a brand-new single-key ring ' +
+    'as the church name key — the whole roster goes anonymous from one Block tap. AUDIT-2026-07-27');
+});
+
 test('the console notices a rotation that did not land, and shows it', () => {
   assert.match(DASH, /rotations\.push\(Promise\.resolve\(window\.Steward\.rotateCareKey\(/,
     'the console still fires rotation and forgets it — a failure cannot be noticed if it is never awaited');
@@ -79,4 +114,7 @@ test('the console notices a rotation that did not land, and shows it', () => {
 test('the shipped console carries it', () => {
   assert.match(VENDOR, /care key ring trimmed/,
     'vendor/steward.js predates this fix — run bash scripts/build-steward.sh');
+  assert.match(VENDOR, /name key ring trimmed/,
+    'vendor/steward.js predates the NAME key half of this fix, so the shipped console still leaves a blocked ' +
+    'member holding the key to every name in the church — run bash scripts/build-steward.sh');
 });

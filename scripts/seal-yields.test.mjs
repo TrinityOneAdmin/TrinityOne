@@ -76,11 +76,35 @@ test('progress can be reported, which a blocking loop can never do', async () =>
 });
 
 test('every per-member seal in the console goes through it', () => {
-  const loops = SRC.match(/for \(const mp of \w+\) \{ try \{ keys\[mp\] = nip44e/g) || [];
-  assert.equal(loops.length, 0,
-    `${loops.length} key envelope(s) still seal in a synchronous loop. They were identical five times over, ` +
-    'which is how this got copied that far — a new one will freeze the console exactly as the others did');
-  assert.ok((SRC.match(/_sealEach\(/g) || []).length >= 6, 'the call sites were not actually converted');
+  // MATCH THE SHAPE, NOT THE VARIABLE NAMES. The first version of this guard was written as
+  // /for \(const mp of \w+\) \{ try \{ keys\[mp\] = nip44e/ — the exact spelling of the five loops that had
+  // just been converted. Two others survived with different names (`for (const pk of recips)` in the name key,
+  // `for (const p of ...)` in sealToPubs) and this test reported clean over both. A guard written to the code
+  // you already fixed cannot see the code you missed; write it to the defect instead. Any identifier now.
+  //
+  // ONE EXEMPTION, BY NAME AND WITH A REASON. sealToPubs seals to a single care team — the church, the person
+  // who asked for help, and the handful of stewards on the team — so its cost does not grow with the
+  // congregation and a synchronous loop there cannot freeze anything. It is cut out of the text below rather
+  // than allowed to fall through a gap in the pattern, which is how it escaped the first version of this
+  // guard. If it ever acquires a church-wide caller the exemption is wrong; that is the thing to re-check.
+  const cutMethod = (src, sig) => {
+    const at = src.indexOf(sig);
+    assert.notEqual(at, -1, sig + ' is gone — this exemption no longer refers to anything, so re-check it');
+    let depth = 0;
+    for (let i = src.indexOf('{', at); i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) return src.slice(0, at) + src.slice(i + 1);
+    }
+    assert.fail('could not find the end of ' + sig);
+  };
+  const SCAN = cutMethod(SRC, 'sealToPubs(recips, obj) {');
+  const loops = SCAN.match(/for \(const (\w+) of [\s\S]{1,90}?\) \{ try \{ keys\[\1\] = nip44e/g) || [];
+  assert.deepEqual(loops, [],
+    `${loops.length} key envelope(s) still seal in a synchronous loop:\n    ` + loops.join('\n    ') +
+    '\n  Sealing costs ~5 ms per member on a workstation and several times that on a phone, so each of these ' +
+    'freezes the console for seconds in a large church. They were identical five times over, which is how ' +
+    'this shape got copied that far — a new one will freeze it exactly as the others did.');
+  assert.ok((SRC.match(/_sealEach\(/g) || []).length >= 7, 'the call sites were not actually converted');
 });
 
 test('the shipped console carries it', () => {
