@@ -77,6 +77,21 @@ test('authenticating mid-connection raises the allowance', () => {
     'right after AUTH is the one read they most need to complete');
 });
 
+test('a member who read before AUTH is not starved by the replay', () => {
+  const scanAllowance = lift();
+  const ws = {};
+  const anon = scanAllowance(ws);
+  anon.left = 0;                             // pre-AUTH reads drained the anonymous bucket — see below
+  ws._auth = 'd'.repeat(64);                 // …and only THEN does NIP-42 complete
+  const after = scanAllowance(ws);
+  assert.ok(after.left >= 300000,
+    `the replay starts with ${after.left} rows of budget instead of a full allowance. The relay's CHALLENGE is ` +
+    'lazy, so a member\'s first reads NECESSARILY go out unauthenticated, and a #p or #t filter spends budget ' +
+    'inside store.query before canRead withholds the rows. Carrying that spend across AUTH truncates the ' +
+    'member\'s own DM and group history — silently, because a spent budget just returns fewer rows. Asserting ' +
+    'only on .cap does not see this: the cap is right and the balance is empty.');
+});
+
 test('a member is not permanently punished for one big read', () => {
   const scanAllowance = lift();
   const ws = { _auth: 'c'.repeat(64) };

@@ -3721,7 +3721,19 @@ function scanAllowance(ws) {
   const cap = ws._auth ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;
   if (!ws._scanRL) ws._scanRL = { left: cap, t: now, cap };
   const rl = ws._scanRL;
-  if (rl.cap !== cap) { rl.cap = cap; rl.left = Math.min(Math.max(rl.left, 0), cap); }   // AUTH raises it mid-connection
+  // AUTH raises it mid-connection, and the raise GRANTS THE FULL MEMBER ALLOWANCE rather than carrying the
+  // anonymous remainder forward. The relay's CHALLENGE is lazy (relay-nip42-lazy-auth), so a member's first
+  // reads necessarily go out before AUTH completes — and a `#p` or `#t` filter spends scan budget inside
+  // store.query BEFORE canRead withholds the rows. So an ordinary member can arrive at AUTH having already
+  // drained the 25,000-row anonymous bucket on their own history, and the post-AUTH replay — the one read they
+  // most need to complete — would start starved and truncate their DMs and group backfill, silently, because a
+  // spent budget just returns fewer rows. Carrying the spend forward punishes the member for the fact that the
+  // relay had not yet asked who they were.
+  //
+  // This cannot be farmed for unlimited scanning: the grant fires only on the anon->authed transition, a
+  // socket can make that transition once, and re-sending AUTH leaves cap unchanged so this branch does not run
+  // again. A DOWNgrade (which nothing currently does) still clamps rather than grants.
+  if (rl.cap !== cap) { const raised = cap > rl.cap; rl.cap = cap; rl.left = raised ? cap : Math.min(Math.max(rl.left, 0), cap); }
   const elapsed = now - rl.t;
   if (elapsed > 0) { rl.left = Math.min(cap, rl.left + Math.floor(elapsed / 1000 * cap)); rl.t = now; }
   return rl;
