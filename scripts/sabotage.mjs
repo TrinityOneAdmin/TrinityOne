@@ -23,7 +23,7 @@
 import { execFileSync, execSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { CASES } from './sabotage-cases.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
@@ -41,7 +41,24 @@ for (const f of ['package.json', 'index.html', 'steward.html', 'engine.js', 'joi
                  'pills.js', 'welcome.html', 'help.html', 'switching.js', 'android-cta.js']) {
   if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(SANDBOX, f));
 }
-try { symlinkSync(join(ROOT, 'node_modules'), join(SANDBOX, 'node_modules')); } catch (e) {}
+// FIND A REAL node_modules, AND STOP IF THERE IS NONE. This linked ROOT/node_modules unconditionally. A git
+// worktree does not have one — `git worktree add` checks out tracked files only — so in a worktree the link
+// dangled, `npx esbuild` in every rebuild tried the network instead and failed, and 27 of the cases reported
+// BUILD-FAILED with no explanation of why. That direction is at least safe (a case that cannot build counts
+// as a failure, so the harness cannot manufacture a false green) but it makes the whole run unreproducible
+// anywhere but this box, which is most of the value of having it. Walk up instead — a worktree under
+// .claude/worktrees/ finds the main checkout's modules two or three levels up — and say so plainly if not.
+let MODULES = null;
+for (let d = ROOT, i = 0; i < 6 && !MODULES; i++, d = dirname(d)) {
+  if (existsSync(join(d, 'node_modules', 'esbuild'))) MODULES = join(d, 'node_modules');
+}
+if (!MODULES) {
+  console.error('no node_modules with esbuild found at or above ' + ROOT + '\n' +
+    '  Every src/*.src.js case rebuilds its bundle before running, because the tests read vendor/.\n' +
+    '  Run npm install in the main checkout first — in a git worktree, in the repo it was created from.');
+  process.exit(2);
+}
+symlinkSync(MODULES, join(SANDBOX, 'node_modules'));
 
 // REBUILD THE BUNDLE THE TEST ACTUALLY READS. Mutating src/ proves nothing about a test that lifts from
 // vendor/ — and several do, because vendor/ is what the APK and the console load. Without this the runner

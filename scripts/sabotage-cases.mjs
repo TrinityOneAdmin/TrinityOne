@@ -215,6 +215,36 @@ export const CASES = [
     test: 'scripts/relay-scan-budget.test.mjs',
   },
   {
+    name: 'name key: published without checking it fits the church',
+    file: 'src/steward.src.js',
+    // the pre-fix shape: build one envelope at the full ring and hope the relay takes it
+    find: `    for (let n = ring.length; n >= 1; n -= (n > 4 ? 2 : 1)) {`,
+    replace: `    for (let n = ring.length; n >= ring.length; n -= (n > 4 ? 2 : 1)) {`,
+    test: 'scripts/key-rotation-size.test.mjs',
+  },
+  {
+    name: 'name key: sealed in one synchronous loop again (frozen console)',
+    file: 'src/steward.src.js',
+    find: `    const keys = await _sealEach(wrapped, recips, (pl, pk) => nip44e(pl, nip44ck(churchSk, pk)));`,
+    replace: `    const keys = {}; for (const pk of recips) { try { keys[pk] = nip44e(wrapped, nip44ck(churchSk, pk)); } catch (e) {} }`,
+    test: 'scripts/seal-yields.test.mjs',
+  },
+  {
+    name: 'block: the name key is fired and forgotten again',
+    file: 'app/stew-dashboard.jsx',
+    find: `      if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true })).then(r => ['the name key', r]));`,
+    replace: `      if (!delegated && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true });`,
+    test: 'scripts/key-rotation-size.test.mjs',
+  },
+  {
+    name: 'relay: AUTH carries the drained anonymous budget forward',
+    file: 'scripts/gateway.mjs',
+    // the pre-fix shape: the raise clamps instead of granting, so the post-AUTH replay starts starved
+    find: `  if (rl.cap !== cap) { const raised = cap > rl.cap; rl.cap = cap; rl.left = raised ? cap : Math.min(Math.max(rl.left, 0), cap); }`,
+    replace: `  if (rl.cap !== cap) { rl.cap = cap; rl.left = Math.min(Math.max(rl.left, 0), cap); }`,
+    test: 'scripts/relay-scan-budget.test.mjs',
+  },
+  {
     name: 'profiles: a full cache silently loses everything again',
     file: 'src/fellowship.src.js',
     // the pre-fix write: one attempt, and the failure swallowed
