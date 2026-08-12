@@ -375,4 +375,18 @@ export const CASES = [
     replace: `{false ? (`,
     test: 'scripts/church-is-named.test.mjs',
   },
+  {
+    name: 'join: the name pattern is a literal again (dead page on an old phone)',
+    file: 'join.js',
+    find: `  try { NAMEY = new RegExp("^[\\\\p{L}\\\\p{N} .,'\u2019&()\\\\-]{2,48}$", 'u'); }`,
+    replace: `  try { NAMEY = /^[\\p{L}\\p{N} .,'\u2019&()\\-]{2,48}$/u; }`,
+    test: 'scripts/join-page-honesty.test.mjs',
+  },
+  {
+    name: 'chat: an empty room cries offline before it has connected',
+    file: 'app/screens-chat.jsx',
+    find: `            {connected || !settled`,
+    replace: `            {connected`,
+    test: 'scripts/chat-empty-and-offline.test.mjs',
+  },
 ];

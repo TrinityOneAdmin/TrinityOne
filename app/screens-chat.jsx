@@ -1154,6 +1154,13 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     const t = setInterval(read, 3000);
     return () => clearInterval(t);
   }, []);
+  // …and don't say "can't reach" until it has actually had a chance. See the note at the empty-state branch.
+  const [settled, setSettled] = React.useState(false);
+  React.useEffect(() => {
+    if (connected) { setSettled(true); return; }          // once it has connected, a later drop is real at once
+    const t = setTimeout(() => setSettled(true), 6000);
+    return () => clearTimeout(t);
+  }, [connected]);
   const bubbles = React.useMemo(() => visibleMsgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
     summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
     pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
@@ -1241,9 +1248,16 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             And the two cases are NOT the same. Offline, the cached list still renders rows saying "No messages
             yet" — over messages the member sent themselves — so silence reads as "nothing is happening at my
             church" rather than "I cannot reach my church". relayReady() is what tells them apart. */}
+        {/* NOT YET CONNECTED IS NOT THE SAME AS CANNOT CONNECT. relayReady() is `!!_relayAuthedAt`, which is 0
+            for the whole of a normal startup until NIP-42 completes — so branching straight on it announced
+            "Can't reach your church" on EVERY cold open of an empty room, for as long as authentication took.
+            A false alarm about reaching your church is worse than saying nothing: it is the one message a
+            member on a thin connection has no way to check, and it teaches them to distrust the true one.
+            So the claim waits out a short grace period. If we are genuinely offline they see the neutral
+            empty state for a few seconds first, which is not misleading either way, and then the truth. */}
         {visibleMsgs.length ? bubbles : (
           <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '38px 26px', fontSize: 13.5, lineHeight: 1.55 }}>
-            {connected
+            {connected || !settled
               ? <React.Fragment><div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>No messages yet</div>Say hello — the first message in a room is always the hardest.</React.Fragment>
               : <React.Fragment><div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>Can’t reach your church</div>You may be offline, or its relay may be down. Anything you send will go when you reconnect.</React.Fragment>}
           </div>

@@ -31,7 +31,16 @@
   // NAME THE CHURCH ONLY IF IT LOOKS LIKE A NAME. `?c=` used to be printed verbatim, so a mistyped or
   // truncated link rendered "Join npub1bogus" — a raw key-shaped string shown to a member as their church's
   // name. Anything key-shaped, or anything long enough to be a paste of the wrong thing, is not a name.
-  var NAMEY = /^[\p{L}\p{N} .,'’&()\-]{2,48}$/u;
+  // BUILT AT RUNTIME, NOT WRITTEN AS A LITERAL. `\p{L}` with the /u flag is a PARSE-time construct: on a
+  // browser that predates it (Chrome under 64 — an Android 7 phone whose WebView was never updated, which is
+  // squarely the kind of phone this is for) the whole of join.js fails to parse and the page does nothing at
+  // all. Not "the name is not shown" — no join page behaviour whatsoever, silently. Built through RegExp the
+  // same failure is a catchable throw, and the fallback still accepts Latin, Greek, Cyrillic, Arabic, Hebrew
+  // and CJK names; it is broader than the strict version rather than narrower, which is the safe direction
+  // for a check whose only job is to refuse things shaped like keys.
+  var NAMEY;
+  try { NAMEY = new RegExp("^[\\p{L}\\p{N} .,'’&()\\-]{2,48}$", 'u'); }
+  catch (e) { NAMEY = /^[0-9A-Za-zÀ-ʯͰ-῿Ⰰ-퟿豈-﷏ﷰ-￯ .,'’&()\-]{2,48}$/; }
   if (church && NAMEY.test(church) && !/^npub1|^nsec1|^[0-9a-f]{40,}$/i.test(church)) {
     try { document.getElementById('head').textContent = 'Join ' + church; } catch(e){}
   }

@@ -17,7 +17,10 @@ import { readFileSync } from 'node:fs';
 
 const JS = readFileSync(new URL('../join.js', import.meta.url), 'utf8');
 
-function run(search) {
+// `oldEngine` stands in for a WebView that predates unicode property escapes (Chrome under 64 — an Android 7
+// phone whose WebView was never updated). Such an engine rejects \p{L} with /u, and if the pattern is written
+// as a LITERAL it rejects it at parse time, which kills the entire file rather than one check.
+function run(search, { oldEngine = false } = {}) {
   const el = {
     pill: { textContent: "You're invited" }, head: { textContent: 'Join a church' },
     sub: { textContent: 'A warm, private home for your church…' }, openNow: { href: '' },
@@ -27,7 +30,13 @@ function run(search) {
     document: { getElementById: (id) => el[id] || { style: {}, classList: { add() {}, remove() {} }, textContent: '' }, addEventListener() {} },
     location: { search, hostname: 'trinityone.church', href: '', pathname: '/join.html' },
     navigator: { userAgent: 'Mozilla/5.0' },
-    URLSearchParams, console, encodeURIComponent, decodeURIComponent, RegExp, JSON, Math, Date, String,
+    URLSearchParams, console, encodeURIComponent, decodeURIComponent, JSON, Math, Date, String,
+    RegExp: oldEngine
+      ? function (src, flags) {
+          if (String(flags || '').includes('u') && /\\p\{/.test(String(src))) throw new SyntaxError('Invalid property name');
+          return new RegExp(src, flags);
+        }
+      : RegExp,
   };
   const sandbox = new Proxy(real, { has: () => true, get: (t, k) => (k in t ? t[k] : undefined) });
   new Function('S', 'with(S){' + JS + '}')(sandbox);
@@ -64,4 +73,45 @@ test('an ordinary church name still shows, including punctuation and non-Latin s
   assert.equal(run('?c=' + encodeURIComponent('كنيسة النعمة')).head, 'Join كنيسة النعمة',
     'the name filter rejects non-Latin scripts, which would blank the church name for exactly the ' +
     'congregations this product is aimed at');
+});
+
+// An engine without unicode property escapes must lose NOTHING here. Written as a regex literal this was a
+// PARSE-time failure, so join.js did not run at all on such a phone: no church named, no invitation greeted,
+// no app button wired — a blank, silent page for exactly the older devices this product is meant to reach.
+test('an older phone still gets the whole join page', () => {
+  const r = run('?follow=npub1abc&name=Deborah&c=St%20Aidan', { oldEngine: true });
+  assert.equal(r.head, 'Join St Aidan',
+    'join.js did not run at all on an engine without \\p{L}. Written as a literal, that pattern fails at ' +
+    'PARSE time and takes the entire file with it — the visitor gets a page that does nothing, silently');
+  assert.match(r.pill, /Deborah/, 'the named slip is not greeted on an older phone');
+});
+
+test('an older phone still refuses a key-shaped name', () => {
+  const r = run('?follow=npub1abc&c=npub1bogus000000000000000000', { oldEngine: true });
+  assert.doesNotMatch(r.head, /npub1/,
+    'the fallback pattern accepts key-shaped text, so an older phone shows a member a raw key as their ' +
+    "church's name — the defect this check exists to prevent, reintroduced for the oldest devices");
+});
+
+test('an older phone still shows a non-Latin church name', () => {
+  const r = run('?follow=npub1abc&c=' + encodeURIComponent('كنيسة القديس مرقس'), { oldEngine: true });
+  assert.match(r.head, /كنيسة/,
+    'the fallback is narrower than the strict pattern, so an Arabic-named church is treated as key-shaped ' +
+    'and left unnamed. The fallback must be BROADER, not tighter — its only job is refusing keys');
+});
+
+// A SOURCE CHECK, DELIBERATELY, because the defect cannot be reproduced in Node: Node parses \p{L} happily,
+// so the three tests above would pass just as well against a regex LITERAL — a literal never reaches the
+// RegExp constructor the old-engine stub replaces, so the fallback would sit there untouched and unproven.
+// The thing that actually matters is WHERE the pattern is written, and only the text can say that.
+test('no unicode-property pattern is written as a literal, where it fails at parse time', () => {
+  // Comment lines are stripped first: the note explaining this very rule contains both `\p{L}` and "/u", and
+  // matched itself. Prose cannot fail to parse; only code can.
+  const code = JS.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const literals = code.match(/\/[^\n/]*\\p\{[^\n]*\/[a-z]*u[a-z]*/g) || [];
+  assert.deepEqual(literals, [],
+    'a \\p{…} pattern is written as a regex literal:\n    ' + literals.join('\n    ') +
+    '\n  On a WebView older than Chrome 64 that is a PARSE error, so the whole of join.js fails to load and ' +
+    'the page silently does nothing at all. Build it with new RegExp inside a try/catch instead, so the same ' +
+    'failure costs one check rather than the file.');
 });

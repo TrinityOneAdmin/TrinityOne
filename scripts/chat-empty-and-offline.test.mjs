@@ -34,6 +34,17 @@ test('offline says so, rather than looking quiet', () => {
   assert.match(CHAT, /Can’t reach your church/,
     'an offline member is shown the same "no messages" as a member whose church is simply quiet');
   assert.match(CHAT, /\{connected/, 'the empty state does not branch on the connection at all');
+  // …BUT NOT ON THE BARE FLAG. relayReady() is `!!_relayAuthedAt`, which is 0 for the whole of a normal
+  // startup until NIP-42 completes — so branching straight on it announced "Can't reach your church" on
+  // EVERY cold open of an empty room, until authentication landed. A false alarm about reaching your church
+  // is worse than saying nothing: a member on a thin connection cannot check it, and it teaches them to
+  // distrust the true one. The claim has to wait out a grace period first.
+  assert.match(CHAT, /\{connected \|\| !settled/,
+    'an empty room claims "Can\'t reach your church" the instant it opens, before the relay has been given ' +
+    'any chance to authenticate — which is every cold open, on a working connection');
+  assert.match(CHAT, /if \(connected\) \{ setSettled\(true\); return; \}/,
+    'the grace period is applied to a connection that has ALREADY worked, so a genuine drop mid-conversation ' +
+    'is hidden for six seconds — the one case where the message is true and useful straight away');
   assert.match(CHAT, /relayReady/, 'the screen never asks whether the church is reachable');
 });
 
