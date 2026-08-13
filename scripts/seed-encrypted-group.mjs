@@ -55,14 +55,24 @@ const keyDoc = finalizeEvent({
   content: JSON.stringify({ rev: 1, keys, rings }),
 }, sk);
 
+// …and a guaranteed-EMPTY, unencrypted room. The offline empty-state ("Can't reach your church") only
+// renders when a room has no messages, so testing it needs a room that reliably has none — every seeded room
+// has conversation in it. The name is deliberately distinctive: a probe matching controls by text prefix
+// opened "Musicians" when asked for "Music", and then measured the wrong room.
+const quietDoc = finalizeEvent({
+  kind: 30078, created_at: now(), tags: [['d', GROUP_D + 'quiet-test-room'], ['t', NET]],
+  content: JSON.stringify({ name: 'Zzz quiet test room', kind: 'group', encrypted: false, visibility: 'open', sub: 'Deliberately empty, for testing the offline state' }),
+}, sk);
+
 const ws = new WebSocket(RELAY);
 let acked = 0;
-ws.on('open', () => { for (const e of [groupDoc, keyDoc]) ws.send(JSON.stringify(['EVENT', e])); });
+ws.on('open', () => { for (const e of [groupDoc, keyDoc, quietDoc]) ws.send(JSON.stringify(['EVENT', e])); });
 ws.on('message', (d) => {
   const m = JSON.parse(String(d));
   if (m[0] === 'OK') {
-    console.log('  ' + (m[1] === groupDoc.id ? 'group doc ' : 'key envelope') + '  ok=' + m[2] + (m[3] ? ' ' + m[3] : ''));
-    if (++acked === 2) {
+    const which = m[1] === groupDoc.id ? 'encrypted group' : m[1] === keyDoc.id ? 'key envelope  ' : 'quiet room    ';
+    console.log('  ' + which + '  ok=' + m[2] + (m[3] ? ' ' + m[3] : ''));
+    if (++acked === 3) {
       console.log('\n  church     : ' + pub.slice(0, 16) + '…');
       console.log('  group id   : ' + GID + '  ("Leaders (encrypted)")');
       console.log('  key sealed : ' + (MEMBER ? 'church + ' + MEMBER.slice(0, 16) + '…' : 'CHURCH ONLY — a member will be in the "no key yet" state'));
@@ -72,4 +82,4 @@ ws.on('message', (d) => {
   }
 });
 ws.on('error', (e) => { console.error('relay error: ' + e.message); process.exit(1); });
-setTimeout(() => { console.error('timed out with ' + acked + '/2 acked'); process.exit(1); }, 15000);
+setTimeout(() => { console.error('timed out with ' + acked + '/3 acked'); process.exit(1); }, 15000);
