@@ -293,7 +293,7 @@ test('EVERY TRUSTED-VIEW GUARD ASKS THE POOL, NOT A STALE FLAG', () => {
     'once and never cleared leaves them open for the rest of the session.');
   for (const [name, sig] of [
     ['_requireTrustedView', 'function _requireTrustedView('],
-    ['ensureNameKeyForMembers', 'ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {'],
+    ['ensureNameKeyForMembers', '_ensureNameKeyLocked(memberPubs, stewardPubs, opts = {}) {'],   // the guard lives in the locked implementation; the public name is a serialising wrapper
   ]) {
     assert.match(grab(sig), /_isRelayAuthed\(\)/,
       `${name} no longer checks the live auth state, so it will act on whatever an unauthenticated or ` +

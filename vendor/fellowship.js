@@ -3472,6 +3472,31 @@
     }
   };
 
+  // node_modules/nostr-tools/lib/esm/utils.js
+  var utf8Decoder2 = new TextDecoder("utf-8");
+  var utf8Encoder2 = new TextEncoder();
+  function normalizeURL2(url) {
+    try {
+      if (url.indexOf("://") === -1)
+        url = "wss://" + url;
+      let p = new URL(url);
+      if (p.protocol === "http:")
+        p.protocol = "ws:";
+      else if (p.protocol === "https:")
+        p.protocol = "wss:";
+      p.pathname = p.pathname.replace(/\/+/g, "/");
+      if (p.pathname.endsWith("/"))
+        p.pathname = p.pathname.slice(0, -1);
+      if (p.port === "80" && p.protocol === "ws:" || p.port === "443" && p.protocol === "wss:")
+        p.port = "";
+      p.searchParams.sort();
+      p.hash = "";
+      return p.toString();
+    } catch (e) {
+      throw new Error(`Invalid URL: ${url}`);
+    }
+  }
+
   // node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol2 = /* @__PURE__ */ Symbol("verified");
   var isRecord2 = (obj) => obj instanceof Object;
@@ -3501,8 +3526,8 @@
     }
     return true;
   }
-  var utf8Decoder2 = new TextDecoder("utf-8");
-  var utf8Encoder2 = new TextEncoder();
+  var utf8Decoder3 = new TextDecoder("utf-8");
+  var utf8Encoder3 = new TextEncoder();
   var JS2 = class {
     generateSecretKey() {
       return schnorr.utils.randomSecretKey();
@@ -3542,7 +3567,7 @@
     return JSON.stringify([0, evt.pubkey, evt.created_at, evt.kind, evt.tags, evt.content]);
   }
   function getEventHash2(event) {
-    let eventHash = sha256(utf8Encoder2.encode(serializeEvent2(event)));
+    let eventHash = sha256(utf8Encoder3.encode(serializeEvent2(event)));
     return bytesToHex(eventHash);
   }
   var i2 = new JS2();
@@ -4723,14 +4748,14 @@
   var bech32 = /* @__PURE__ */ genBech32("bech32");
 
   // node_modules/nostr-tools/lib/esm/nip44.js
-  var utf8Decoder3 = new TextDecoder("utf-8");
-  var utf8Encoder3 = new TextEncoder();
+  var utf8Decoder4 = new TextDecoder("utf-8");
+  var utf8Encoder4 = new TextEncoder();
   var minPlaintextSize = 1;
   var maxPlaintextSize = 4294967295;
   var extendedPrefixThreshold = 65536;
   function getConversationKey(privkeyA, pubkeyB) {
     const sharedX = secp256k1.getSharedSecret(privkeyA, hexToBytes("02" + pubkeyB)).subarray(1, 33);
-    return extract(sha256, sharedX, utf8Encoder3.encode("nip44-v2"));
+    return extract(sha256, sharedX, utf8Encoder4.encode("nip44-v2"));
   }
   function getMessageKeys(conversationKey, nonce) {
     const keys = expand(sha256, conversationKey, nonce, 76);
@@ -4764,7 +4789,7 @@
     return arr;
   }
   function pad(plaintext) {
-    const unpadded = utf8Encoder3.encode(plaintext);
+    const unpadded = utf8Encoder4.encode(plaintext);
     const unpaddedLen = unpadded.length;
     if (unpaddedLen < minPlaintextSize || unpaddedLen > maxPlaintextSize)
       throw new Error("invalid plaintext size: must be between 1 and 4294967295 bytes");
@@ -4789,7 +4814,7 @@
     const unpadded = padded.subarray(prefixLen, prefixLen + unpaddedLen);
     if (unpaddedLen < minPlaintextSize || unpaddedLen > maxPlaintextSize || unpadded.length !== unpaddedLen || padded.length !== prefixLen + calcPaddedLen(unpaddedLen))
       throw new Error("invalid padding");
-    return utf8Decoder3.decode(unpadded);
+    return utf8Decoder4.decode(unpadded);
   }
   function hmacAad(key, message, aad) {
     if (aad.length !== 32)
@@ -5265,8 +5290,8 @@
   }
 
   // node_modules/nostr-tools/lib/esm/nip19.js
-  var utf8Decoder4 = new TextDecoder("utf-8");
-  var utf8Encoder4 = new TextEncoder();
+  var utf8Decoder5 = new TextDecoder("utf-8");
+  var utf8Encoder5 = new TextEncoder();
   var Bech32MaxSize = 5e3;
   function decode(code) {
     let { prefix, words } = bech32.decode(code, Bech32MaxSize);
@@ -5282,7 +5307,7 @@
           type: "nprofile",
           data: {
             pubkey: bytesToHex(tlv[0][0]),
-            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder4.decode(d)) : []
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder5.decode(d)) : []
           }
         };
       }
@@ -5300,7 +5325,7 @@
           type: "nevent",
           data: {
             id: bytesToHex(tlv[0][0]),
-            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder4.decode(d)) : [],
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder5.decode(d)) : [],
             author: tlv[2]?.[0] ? bytesToHex(tlv[2][0]) : void 0,
             kind: tlv[3]?.[0] ? parseInt(bytesToHex(tlv[3][0]), 16) : void 0
           }
@@ -5321,10 +5346,10 @@
         return {
           type: "naddr",
           data: {
-            identifier: utf8Decoder4.decode(tlv[0][0]),
+            identifier: utf8Decoder5.decode(tlv[0][0]),
             pubkey: bytesToHex(tlv[2][0]),
             kind: parseInt(bytesToHex(tlv[3][0]), 16),
-            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder4.decode(d)) : []
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder5.decode(d)) : []
           }
         };
       }
@@ -5721,8 +5746,8 @@
   cmac.create = (key) => new _CMAC(key);
 
   // node_modules/nostr-tools/lib/esm/nip04.js
-  var utf8Decoder5 = new TextDecoder("utf-8");
-  var utf8Encoder5 = new TextEncoder();
+  var utf8Decoder6 = new TextDecoder("utf-8");
+  var utf8Encoder6 = new TextEncoder();
   function decrypt3(secretKey, pubkey, data) {
     const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
     let [ctb64, ivb64] = data.split("?iv=");
@@ -5731,7 +5756,7 @@
     let iv = base64.decode(ivb64);
     let ciphertext = base64.decode(ctb64);
     let plaintext = cbc(normalizedKey, iv).decrypt(ciphertext);
-    return utf8Decoder5.decode(plaintext);
+    return utf8Decoder6.decode(plaintext);
   }
   function getNormalizedX(key) {
     return key.slice(1, 33);
@@ -7496,7 +7521,13 @@
         const st = pool.listConnectionStatus();
         const want = churchRelays();
         if (!want.length) return true;
-        for (const url of want) if (st.get(url) === true) return true;
+        for (const url of want) {
+          if (st.get(url) === true) return true;
+          try {
+            if (st.get(normalizeURL2(url)) === true) return true;
+          } catch (e) {
+          }
+        }
         return false;
       } catch (e) {
         return false;

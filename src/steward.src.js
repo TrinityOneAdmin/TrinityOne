@@ -747,6 +747,13 @@ function _isRelayAuthed() {
 let _noPhoto = new Set();
 const _applyNoPhotoList = (list) => { _noPhoto = pubSet(list); };   // shared normalisation — scripts/trinity-rules.mjs
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
+// ONE NAME-KEY PUBLISH AT A TIME. ensureNameKeyForMembers assigns the new ring synchronously and only
+// updates the recipient map after the envelope publishes — a gap that used to be nanoseconds. Sealing
+// per member and yielding every 25 stretched it into SECONDS on a large church, and the roster tick
+// (stew-dashboard.jsx:312) re-fires whenever the blocked list changes, which a Block does. A second call
+// landing in that gap sees the new ring alongside the STALE recipient map, takes the grow-never-shrink
+// path, and republishes the name key TO THE MEMBER JUST BLOCKED — undoing the removal it was part of.
+let _nameKeyBusy = null;
 let _nameKeyDocKeys = null;   // the recipient map of the envelope we last SAW — null means "we have not looked"
 let _nameKeyChecked = false;  // the namekey subscription has ANSWERED (event or EOSE) for the active identity
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
@@ -3594,6 +3601,15 @@ window.Steward = {
   // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
   // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
   async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+    // Serialise: let any publish already in flight finish and commit its recipient map before deciding.
+    while (_nameKeyBusy) { try { await _nameKeyBusy; } catch (e) { break; } }
+    let _release;
+    _nameKeyBusy = new Promise(r => { _release = r; });
+    try {
+      return await this._ensureNameKeyLocked(memberPubs, stewardPubs, opts);
+    } finally { _nameKeyBusy = null; _release(); }
+  },
+  async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
     const cp = actingChurch || pub;
     // (1) NEVER act on a view we have not established. "The relay returned no envelope" is not proof that none
@@ -3629,11 +3645,19 @@ window.Steward = {
     // left the NAME key in place — and a blocked member holding the name key can still read the whole
     // congregation's names, which is the one thing this encryption exists to prevent.
     //
-    // Trimming costs less here than it does for care. The ring is what opens names sealed under superseded
-    // keys, so a trim does blank the name of anyone who has not yet re-sealed — but the member side stamps its
-    // sealed name with `_ringId` (the head of the ring) and re-seals automatically the moment it sees a new
-    // envelope, so those names come back on their own as people's phones come online. A trimmed care record
-    // never comes back. Either way the removal wins over the history.
+    // WHAT A TRIM ACTUALLY COSTS — corrected 2026-08-13, because the first version of this note described a
+    // recovery mechanism that does not exist. It claimed members re-seal because `_ringId` changes. They do
+    // not: `_ringId` fingerprints the HEAD of the ring and a trim removes the TAIL, so on a non-rotating
+    // trim the stamp is unchanged and `syncSealedNames` skips everyone. Nothing re-seals in session.
+    //
+    // What really recovers it is unrelated and weaker: `_sealedMine` is an in-memory Map, so a member
+    // re-seals at their next COLD START. So the true cost of a trim is that every name sealed under a
+    // dropped key is unreadable until that member next launches the app from scratch — and permanently, for
+    // anyone who never comes back. The console loses those keys too, since the envelope is replaceable.
+    //
+    // It is still the right trade against not rotating at all — a blocked member holding the name key reads
+    // the whole congregation — but it is a real cost to a real congregation, not the self-healing one the
+    // old note promised. Note also that the trim is reached on ordinary GROWTH, not only on a Block.
     const probe = recips[0];
     let fitted = null;
     for (let n = ring.length; n >= 1; n -= (n > 4 ? 2 : 1)) {

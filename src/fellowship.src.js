@@ -4,6 +4,9 @@
 // §5.2). Points at the local dev relay by default; swap window.Fellowship.relays for a
 // hosted NIP-29 relay later (the app only ever talks to window.Fellowship).
 import { SimplePool } from 'nostr-tools/pool';
+// The SAME normaliser the pool keys its connection map by. Comparing raw URLs against that map is why a
+// perfectly healthy socket could read as unreachable — see relaysHealthy().
+import { normalizeURL } from 'nostr-tools/utils';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
@@ -1639,7 +1642,21 @@ window.Fellowship = {
       const st = pool.listConnectionStatus();
       const want = churchRelays();
       if (!want.length) return true;                                  // nothing wanted → nothing to be unhealthy about
-      for (const url of want) if (st.get(url) === true) return true;   // one live socket is enough to work
+      // COMPARE NORMALISED URLS. The pool keys this map by normalizeURL(), which strips a trailing slash,
+      // collapses a doubled slash and lowercases the scheme; the relay list is stored exactly as it was
+      // typed, scanned or published. So `wss://church.example/relay/` — a perfectly ordinary thing for
+      // someone to enter, and reachable from the QR path, the relay directory and the "add a relay" box —
+      // missed the map entirely and read as `undefined`, i.e. not connected.
+      //
+      // That was harmless while nothing important asked. Then relayReady() started answering from this, and
+      // it became a PERMANENT "Can't reach your church" over a live socket, on precisely the self-hosted and
+      // LAN-only churches that type their own relay in — plus a full re-subscribe storm every 90 seconds,
+      // for ever, because the reconnect tick reads the same answer. The bug this branch set out to fix,
+      // reintroduced from the other side.
+      for (const url of want) {
+        if (st.get(url) === true) return true;                        // one live socket is enough to work
+        try { if (st.get(normalizeURL(url)) === true) return true; } catch (e) {}
+      }
       return false;
     } catch (e) { return false; }
   },

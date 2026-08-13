@@ -483,4 +483,19 @@ export const CASES = [
     replace: ``,
     test: 'scripts/group-encryption-honesty.test.mjs',
   },
+  {
+    name: 'relay-url: a trailing slash makes a live church unreachable',
+    file: 'src/fellowship.src.js',
+    // the pre-fix shape: compare the URL exactly as stored against a map keyed by the normalised form
+    find: `        try { if (st.get(normalizeURL(url)) === true) return true; } catch (e) {}`,
+    replace: ``,
+    test: 'scripts/chat-empty-and-offline.test.mjs',
+  },
+  {
+    name: 'name key: two publishes can overlap again',
+    file: 'src/steward.src.js',
+    find: `    while (_nameKeyBusy) { try { await _nameKeyBusy; } catch (e) { break; } }`,
+    replace: ``,
+    test: 'scripts/key-rotation-size.test.mjs',
+  },
 ];

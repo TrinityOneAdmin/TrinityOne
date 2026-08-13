@@ -15088,6 +15088,7 @@ zoo`.split("\n");
     _noPhoto = pubSet(list);
   };
   var _nameKeyRing = [];
+  var _nameKeyBusy = null;
   var _nameKeyDocKeys = null;
   var _nameKeyChecked = false;
   var churchSk = null;
@@ -17862,6 +17863,25 @@ zoo`.split("\n");
     // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
     // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
     async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+      while (_nameKeyBusy) {
+        try {
+          await _nameKeyBusy;
+        } catch (e) {
+          break;
+        }
+      }
+      let _release;
+      _nameKeyBusy = new Promise((r) => {
+        _release = r;
+      });
+      try {
+        return await this._ensureNameKeyLocked(memberPubs, stewardPubs, opts);
+      } finally {
+        _nameKeyBusy = null;
+        _release();
+      }
+    },
+    async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const cp = actingChurch || pub;
       if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);

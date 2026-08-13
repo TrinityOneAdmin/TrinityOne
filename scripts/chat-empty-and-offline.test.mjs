@@ -77,3 +77,50 @@ test('every group row can be opened without a touchscreen', () => {
 test('the shipped bundle carries the connection check', () => {
   assert.match(VENDOR, /relayReady/, 'vendor/fellowship.js predates this — run npm run build:bundles');
 });
+
+// A URL A MEMBER TYPED MUST STILL MATCH THE SOCKET IT OPENED.
+//
+// THE DEFECT (independent audit of this branch, 2026-08-13). relaysHealthy() asks the pool's connection map
+// whether a wanted relay is up. The pool keys that map by nostr-tools' normalizeURL — trailing slash
+// stripped, doubled slash collapsed, scheme lowercased — while the relay list holds the URL exactly as it
+// was typed, scanned from a QR, or published in a directory. So `wss://church.example/relay/` missed the map
+// and came back `undefined`, which reads as "not connected".
+//
+// Harmless until relayReady() started answering from it. Then it became a PERMANENT "Can't reach your
+// church" over a live, serving socket — for the self-hosted and LAN-only churches most likely to type their
+// own relay in — plus the 90-second full re-subscribe storm, for ever, since the reconnect tick reads the
+// same answer. Exactly the defect this branch set out to fix, arriving from the other direction.
+import { fnBody as fnBody2, stripComments as strip2 } from './test-slice.mjs';
+
+function healthyRig(want, connectedAs = 'ws://127.0.0.1:8000/relay') {
+  const map = new Map([[connectedAs, true]]);
+  const scope = {
+    pool: { listConnectionStatus: () => map },
+    churchRelays: () => want,
+    normalizeURL: (u) => {
+      const url = new URL(String(u));
+      url.pathname = url.pathname.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+      return url.href.replace(/\/$/, url.pathname === '/' ? '/' : '');
+    },
+  };
+  const body = 'const api = { ' + strip2(fnBody2(FELLOW, '  relaysHealthy() {', 'relaysHealthy')) + ' };';
+  const names = Object.keys(scope);
+  return new Function(...names, body + '\nreturn api.relaysHealthy();')(...names.map(n => scope[n]));
+}
+
+test('a relay written with a trailing slash is still recognised as connected', () => {
+  assert.equal(healthyRig(['ws://127.0.0.1:8000/relay/']), true,
+    'THE BUG: the socket is open and serving, but the wanted URL is not spelled the way the pool keys it, ' +
+    'so the app reports the church unreachable — permanently, on a working connection');
+});
+
+test('an uppercase scheme and a doubled slash are recognised too', () => {
+  assert.equal(healthyRig(['WS://127.0.0.1:8000/relay']), true, 'scheme case decides whether your church is reachable');
+  assert.equal(healthyRig(['ws://127.0.0.1:8000//relay']), true, 'a doubled slash decides whether your church is reachable');
+});
+
+test('the exact spelling still works, and a genuinely absent relay is still unhealthy', () => {
+  assert.equal(healthyRig(['ws://127.0.0.1:8000/relay']), true);
+  assert.equal(healthyRig(['ws://elsewhere.example/relay']), false,
+    'everything reads as healthy, so a real outage is invisible — the opposite failure, equally silent');
+});

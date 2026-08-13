@@ -73,8 +73,12 @@ test('rotation trims the ring rather than giving up', () => {
 // every name in the congregation, which the block handler's own comment calls the one thing this encryption
 // exists to stop. Of the three keys it was the worst one to silently fail to rotate.
 test('the name key is fitted to the church, not just published and hoped for', () => {
-  const at = SRC.indexOf('async ensureNameKeyForMembers(');
-  assert.notEqual(at, -1, 'ensureNameKeyForMembers no longer awaits anything, so it cannot report a failure');
+  // The public entry point is a serialising wrapper (one name-key publish at a time — a second call landing
+  // mid-publish saw the new ring with the stale recipient map and re-keyed the blocked member back in). The
+  // decisions live in the locked implementation, so slice THAT; anchoring on the wrapper silently reads a
+  // five-line function and every assertion below passes over nothing.
+  const at = SRC.indexOf('async _ensureNameKeyLocked(');
+  assert.notEqual(at, -1, 'the name-key implementation moved — re-anchor rather than widening this test');
   const body = SRC.slice(at, SRC.indexOf('\n  },', at));
   assert.match(body, /for \(let n = ring\.length; n >= 1;/,
     'the name key builds one envelope and publishes it. Past ~723 members the relay refuses it and a blocked ' +
@@ -117,4 +121,23 @@ test('the shipped console carries it', () => {
   assert.match(VENDOR, /name key ring trimmed/,
     'vendor/steward.js predates the NAME key half of this fix, so the shipped console still leaves a blocked ' +
     'member holding the key to every name in the church — run bash scripts/build-steward.sh');
+});
+
+// TWO NAME-KEY PUBLISHES MUST NOT OVERLAP.
+//
+// THE DEFECT (independent audit, 2026-08-13). The rotate assigns the new ring synchronously but only commits
+// the recipient map after publishing. That gap used to be nanoseconds. Sealing per member with a yield every
+// 25 stretched it to SECONDS in a large church — and the roster tick re-fires whenever the blocked list
+// changes, which is precisely what a Block does. A second call landing in the gap sees the NEW ring beside
+// the STALE recipient map, takes the grow-never-shrink path, and republishes the name key TO THE MEMBER JUST
+// BLOCKED. The fix that made blocking take the name key away could hand it straight back.
+test('name-key publishes are serialised, so a roster tick cannot re-key a blocked member', () => {
+  const wrapper = SRC.slice(SRC.indexOf('async ensureNameKeyForMembers('), SRC.indexOf('async _ensureNameKeyLocked('));
+  assert.match(wrapper, /while \(_nameKeyBusy\)/,
+    'a second name-key publish can start while the first is still sealing — it sees the new ring with the ' +
+    'old recipient list and re-keys the blocked member back in');
+  assert.match(wrapper, /finally \{ _nameKeyBusy = null;/,
+    'the lock is not released on every exit, so one failure wedges the name key for the rest of the session ' +
+    '— every later block silently stops rotating it');
+  assert.match(SRC, /let _nameKeyBusy = null;/, 'the lock is gone');
 });
