@@ -198,6 +198,15 @@ window.HelpData = {
           // For a congregation where the social graph is the danger, someone could act on the old sentence in a
           // way that gets them hurt. Say exactly what is and isn't hidden, and where to ask.
           { lead: 'What you write stays between you.', text: 'Your notes stay on your phone. What’s inside a direct message can only be read by you and the person you’re writing to — not your church, not us. The server that carries it can still see that you messaged someone, and when. If that matters where you live, ask your leaders how your church’s server is run.' },
+          // WHERE THE ROOM DISCLOSURE LIVES NOW. Until 2026-08-13 every church room carried the sentence
+          // "Church room · not end-to-end encrypted, so the relay can read messages here" across the top,
+          // every time it was opened. The owner removed it: a permanent warning on a screen you open twenty
+          // times a day is not read, and it made the room feel like somewhere to be careful rather than
+          // somewhere to talk. The room still says "Not encrypted" on its face — but the fact needs somewhere
+          // it is EXPLAINED, and the entry above says direct messages are private without saying that rooms
+          // are not, which on its own reads as though everything is. So it is answered here, where a member
+          // who wonders can find it.
+          { lead: 'A church room is not the same as a message to one person.', text: 'When a room says “Not encrypted”, it means the server that carries your church’s messages can read what is written there. It is private from the outside world and from other churches, but not from whoever runs that server. Direct messages, and any room marked “End-to-end encrypted”, are different — those the server only ever holds scrambled. A good rule: treat a church room like talking in the hall after a service.' },
           { lead: 'The one thing to keep safe is your 12 words.', text: 'They’re the backup for everything — your name and your groups. Write them on paper once and you’re covered, even on a new phone.' },
         ] },
         { type: 'callout', tone: 'sage', text: 'Not sure about the 12 words? It really is just one small thing to do once — the guide “Your 12 words” walks you through it gently, and any steward at church will happily help.' },

@@ -36,6 +36,7 @@ const CHURCH = read('app/screens-church.jsx');
 const EXTRAS = read('app/identity-extras.jsx');
 const CHAT = read('app/screens-chat.jsx');
 const DASH = read('app/stew-dashboard.jsx');
+const HELP = read('app/help-data.jsx');
 const APP = read('app/app.jsx');
 // features.html and downloads.html were folded into welcome.html's single scroll on 2026-08-06.
 const FEATURES = read('welcome.html');
@@ -151,8 +152,15 @@ test('the honest wording that already existed is still there', () => {
   // These sentences are the source material for every fix above. Losing them would be the real regression.
   assert.match(EXTRAS, /can still tell that you use TrinityOne and which church you belong to/,
     'the honest PIN retraction has been deleted — that is the sentence the fix is built on');
-  assert.match(CHAT, /not end-to-end encrypted, so the relay can read messages here/,
-    'the chat header no longer tells members a church room is readable by the relay');
+  // 2026-08-13: this used to require the sentence in the chat header. The owner removed it from the room —
+  // a permanent warning on a screen opened twenty times a day is not read, it is wallpaper. That is a design
+  // call and it stands. What must NOT happen is the fact disappearing with the banner, so the requirement
+  // moved rather than relaxed: the room still labels itself, and the explanation is now answerable in Help.
+  assert.match(HELP, /the server that carries your church’s messages can read what is written there/,
+    'the only remaining explanation that a church room is readable by the server is gone. The room label ' +
+    '("Not encrypted") states the fact but does not say who can read it, and the Help entry beside this one ' +
+    'tells members their direct messages are private — with nothing about rooms, that reads as though ' +
+    'everything is');
 });
 
 // 2026-08-13: the owner shortened this to a pill, because the full sentence wrapped to two lines and read as
@@ -161,16 +169,14 @@ test('the honest wording that already existed is still there', () => {
 // lawful compulsion, and a member may be relying on "the relay can read messages here" in front of someone
 // official. So the requirement is that the short state is honest on its own AND the full sentence is still
 // reachable from it — present in the file is not the same as reachable on the screen.
-test('the short encryption pill is honest, and opens to the full sentence', () => {
+test('the room labels its encryption state, and the explanation is findable', () => {
   assert.match(CHAT, /'Not encrypted'/,
     'the collapsed pill no longer states the unencrypted case at all. A room that the relay can read must ' +
     'say so even in its quietest form — silence there reads as safety');
   assert.match(CHAT, /'End-to-end encrypted'/, 'the collapsed pill no longer distinguishes an encrypted room');
-  assert.match(CHAT, /onClick=\{\(\) => setEncWhy/,
-    'the pill is not a control any more, so the full sentence is in the file but unreachable on the screen. ' +
-    'That is worse than the banner it replaced: it looks like the disclosure survived when it did not');
-  assert.match(CHAT, /encWhy\s*\n?\s*\?/,
-    'nothing renders the expanded wording, so tapping the pill reveals nothing');
+  assert.doesNotMatch(CHAT, /not end-to-end encrypted, so the relay can read messages here/,
+    'the removed banner is back in the room. It was taken out deliberately — if it is wanted again that is ' +
+    'a decision to make on purpose, not something to drift back in');
 });
 
 test('the withdrawn "big company" line is left alone', () => {

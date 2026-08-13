@@ -398,18 +398,19 @@ export const CASES = [
     test: 'scripts/chat-empty-and-offline.test.mjs',
   },
   {
-    name: 'encryption pill: the full sentence stops being reachable',
+    name: 'encryption: the room stops stating it is unencrypted',
     file: 'app/screens-chat.jsx',
-    // the plausible tidy-up: keep the short pill, drop the control that opens it out
-    find: `          <button type="button" onClick={() => setEncWhy(v => !v)} aria-expanded={encWhy}`,
-    replace: `          <button type="button" aria-expanded={encWhy}`,
+    find: `<Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted' : 'Not encrypted'}</span>`,
+    replace: `<Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted' : 'Church room'}</span>`,
     test: 'scripts/no-overclaims.test.mjs',
   },
   {
-    name: 'encryption pill: the unencrypted case stops being stated',
-    file: 'app/screens-chat.jsx',
-    find: `              : (group && group.encrypted ? 'End-to-end encrypted' : 'Not encrypted')}</span>`,
-    replace: `              : (group && group.encrypted ? 'End-to-end encrypted' : 'Church room')}</span>`,
+    name: 'encryption: the Help explanation of a readable room is dropped',
+    file: 'app/help-data.jsx',
+    // the plausible drift: not a deletion, a SOFTENING — the awkward half of the sentence rewritten into
+    // reassurance, which is how an honest disclosure usually dies
+    find: `the server that carries your church\u2019s messages can read what is written there`,
+    replace: `your church\u2019s messages are carried safely`,
     test: 'scripts/no-overclaims.test.mjs',
   },
 ];
