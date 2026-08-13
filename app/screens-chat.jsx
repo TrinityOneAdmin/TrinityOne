@@ -1096,12 +1096,17 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           // storage for however long the member leaves it. A refused message is by definition one they meant
           // to send into an ENCRYPTED room, so it is the most sensitive text the app handles. Losing it if
           // they navigate away is the smaller harm, and it is the one they can see happening.
+          // Only claim the words are kept when they ARE. The restore above handles `extra.text`; a poll has
+          // no text, and its question and options were cleared before the send — so for a poll the previous
+          // wording promised something already gone. Small, and behind two conditions that are rarely both
+          // true, but it is the same shape as the share sheet saying "Shared" over a message it lost.
+          const kept = !!(extra && extra.text);
           let why = 'Couldn’t lock this message, so it wasn’t sent. Try again in a moment.';
           if (evt._refused === 'nokey') {
             const online = (() => { try { return window.Fellowship.relayReady(); } catch (e) { return false; } })();
             why = online
-              ? 'This room is encrypted and your key hasn’t arrived yet, so this wasn’t sent — it can’t go out unlocked. Your words are still here; try again in a moment.'
-              : 'This room is encrypted and your key only arrives when you’re connected. Your words are still here — send them once you’re back online.';
+              ? 'This room is encrypted and your key hasn’t arrived yet, so this wasn’t sent — it can’t go out unlocked.' + (kept ? ' Your words are still here; try again in a moment.' : ' Nothing was sent — please try again in a moment.')
+              : 'This room is encrypted and your key only arrives when you’re connected.' + (kept ? ' Your words are still here — send them once you’re back online.' : ' Nothing was sent — try again once you’re back online.');
           }
           ctx.toast(why);
           return;
