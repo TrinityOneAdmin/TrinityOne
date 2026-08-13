@@ -1084,8 +1084,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         if (evt && evt._refused) {
           if (extra && extra.text) setDraft(d => d || extra.text);
           // TELL THEM WHICH OF THE TWO IT IS. The first version said "it should sort itself out shortly" for
-          // both, and that is a promise the app cannot keep: the room's key is only ever delivered by the
-          // relay, so a member with no signal will not get one however long they wait. Saying "shortly" to
+          // both. That is a promise the app cannot keep for a member who does not already hold the room's
+          // key envelope: it arrives from the relay, so with no signal it does not arrive at all. (A member
+          // who HAS received it is unaffected — the docs hub persists the sealed envelope and re-absorbs it
+          // at boot, so they unwrap it offline and never see this message.) Saying "shortly" to
           // someone standing in a building with no reception is the same class of mistake as an empty room
           // claiming the church is unreachable — a confident sentence about something the app has not
           // checked. relayReady() is the thing that tells them apart, so use it.

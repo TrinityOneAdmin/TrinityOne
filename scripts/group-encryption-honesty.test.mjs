@@ -182,10 +182,16 @@ test('sharing into a room that refused it does not claim success', () => {
 });
 
 test('an offline refusal is not promised a fix that cannot come', () => {
-  // The key for an encrypted room is only ever delivered BY THE RELAY. A member with no signal will not get
-  // one however long they wait, so "it should sort itself out shortly" — which both refusals used to say —
-  // is a confident claim about something the app never checked. Same defect as an empty room announcing the
-  // church is unreachable, in the opposite direction.
+  // CORRECTED 2026-08-13. An earlier version of this note said the room key "is only ever delivered by the
+  // relay", and that is wrong: the docs hub persists its whole buffer — group-key envelopes included — and
+  // re-absorbs it at boot, so a member who has already received the envelope unwraps it offline with their
+  // own key and is in the 'sealed' state with no signal at all. What is on disk is the SEALED envelope, not
+  // the key, which is why this is safe to keep.
+  //
+  // The narrower claim is the one that holds, and it is the one this test is about: a member who does NOT
+  // already hold the envelope cannot obtain it while offline. For them "it should sort itself out shortly"
+  // — which both refusals used to say — is a promise about something the app never checked. Same defect as
+  // an empty room announcing the church is unreachable, in the opposite direction.
   assert.match(CHAT, /window\.Fellowship\.relayReady\(\)/,
     'the refusal message does not distinguish offline from waiting-for-a-key');
   assert.match(CHAT, /send them once you’re back online/,
