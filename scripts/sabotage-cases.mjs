@@ -441,4 +441,11 @@ export const CASES = [
     replace: `        if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });`,
     test: 'scripts/group-encryption-honesty.test.mjs',
   },
+  {
+    name: 'offline: a refused message is promised a fix that cannot come',
+    file: 'app/screens-chat.jsx',
+    find: `              : 'This room is encrypted and your key only arrives when you\u2019re connected. Your words are still here \u2014 send them once you\u2019re back online.';`,
+    replace: `              : 'This room is encrypted and your key hasn\u2019t arrived yet. It should sort itself out shortly.';`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
 ];

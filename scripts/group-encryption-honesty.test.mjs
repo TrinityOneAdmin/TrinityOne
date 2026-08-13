@@ -97,6 +97,28 @@ test('the label is read from the shared answer, not from the room setting', () =
     'the waiting state has no label of its own, so it falls back to claiming one of the other two');
 });
 
+test('an offline refusal is not promised a fix that cannot come', () => {
+  // The key for an encrypted room is only ever delivered BY THE RELAY. A member with no signal will not get
+  // one however long they wait, so "it should sort itself out shortly" — which both refusals used to say —
+  // is a confident claim about something the app never checked. Same defect as an empty room announcing the
+  // church is unreachable, in the opposite direction.
+  assert.match(CHAT, /window\.Fellowship\.relayReady\(\)/,
+    'the refusal message does not distinguish offline from waiting-for-a-key');
+  assert.match(CHAT, /send them once you’re back online/,
+    'an offline member is told their key is on its way. It is not: nothing arrives until they reconnect');
+  assert.doesNotMatch(CHAT, /It should sort itself out shortly/,
+    'the promise that cannot be kept is back');
+});
+
+test('a refused message is NOT written to disk', () => {
+  // Deliberate: a refused message is by definition one meant for an ENCRYPTED room, so it is the most
+  // sensitive text the app handles, and the threat model is seizure of the phone. Keeping it in the composer
+  // loses it if they navigate away; persisting it leaves an unsent, unencrypted message in storage
+  // indefinitely. If this is ever revisited, revisit it on purpose.
+  assert.doesNotMatch(CHAT, /localStorage\.setItem\(['"`]trinityone\.draft/,
+    'unsent drafts are being persisted — see the note at the refusal handler before allowing this');
+});
+
 test('a member who cannot send is told why, and keeps their words', () => {
   assert.match(CHAT, /evt\._refused/, 'the composer treats a refusal as an ordinary failure');
   assert.match(CHAT, /setDraft\(d => d \|\| extra\.text\)/,

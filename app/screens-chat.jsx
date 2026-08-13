@@ -1083,9 +1083,27 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         // words go back in the composer where they left them.
         if (evt && evt._refused) {
           if (extra && extra.text) setDraft(d => d || extra.text);
-          ctx.toast(evt._refused === 'sealfailed'
-            ? 'Couldn’t lock this message, so it wasn’t sent. Try again in a moment.'
-            : 'This room is encrypted and your key hasn’t arrived yet — not sent, so it can’t go out unlocked. It should sort itself out shortly.');
+          // TELL THEM WHICH OF THE TWO IT IS. The first version said "it should sort itself out shortly" for
+          // both, and that is a promise the app cannot keep: the room's key is only ever delivered by the
+          // relay, so a member with no signal will not get one however long they wait. Saying "shortly" to
+          // someone standing in a building with no reception is the same class of mistake as an empty room
+          // claiming the church is unreachable — a confident sentence about something the app has not
+          // checked. relayReady() is the thing that tells them apart, so use it.
+          //
+          // AND THE WORDS STAY IN THE COMPOSER, NOT ON DISK. Writing an unsent message to localStorage would
+          // survive leaving the room, which is the nicer behaviour — but this product's threat model is
+          // seizure of the phone, and a draft saved to disk is an unsent, unencrypted message sitting in
+          // storage for however long the member leaves it. A refused message is by definition one they meant
+          // to send into an ENCRYPTED room, so it is the most sensitive text the app handles. Losing it if
+          // they navigate away is the smaller harm, and it is the one they can see happening.
+          let why = 'Couldn’t lock this message, so it wasn’t sent. Try again in a moment.';
+          if (evt._refused === 'nokey') {
+            const online = (() => { try { return window.Fellowship.relayReady(); } catch (e) { return false; } })();
+            why = online
+              ? 'This room is encrypted and your key hasn’t arrived yet, so this wasn’t sent — it can’t go out unlocked. Your words are still here; try again in a moment.'
+              : 'This room is encrypted and your key only arrives when you’re connected. Your words are still here — send them once you’re back online.';
+          }
+          ctx.toast(why);
           return;
         }
         if (evt && evt._delivered === false) ctx.toast('No signal — we’ll send it as soon as you’re back online.');
