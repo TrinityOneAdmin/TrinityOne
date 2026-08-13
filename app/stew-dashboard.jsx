@@ -3552,10 +3552,6 @@ function DashMembers() {
       // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
       // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
       if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true })).then(r => ['the name key', r]));
-      Promise.all(rotations).then(rs => {
-        const failed = rs.filter(([, ok]) => ok === false).map(([what]) => what);
-        if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
-      }).catch(() => {});
       // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
       // phone carried on decrypting every future message in every encrypted group — forever. The background
       // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
@@ -3572,9 +3568,21 @@ function DashMembers() {
         const wasIn = g.visibility === 'invite' ? (g.members || []).includes(pk) : true;   // an open group includes everyone
         if (!wasIn) continue;
         const recips = (g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk && !isBlocked(p)) : remaining);
-        if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });
+        // AWAITED AND REPORTED, like care and the name key beside them. This was fire-and-forget, and it
+        // became the more serious of the two once the member app started REFUSING to send into an encrypted
+        // room without a key (fellowship publishMessage): a rotation that quietly fails no longer leaks the
+        // room to the blocked member — it locks the remaining members out of talking in it, while the app
+        // tells them it will sort itself out shortly. Silence is not survivable in either direction.
+        if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { rotate: true })).then(r => ['the key for ' + (g.name || 'a group'), r]));
         if (g.visibility === 'invite' && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
       }
+      // AWAITED AFTER THE GROUP LOOP, not before it. This sat above the loop, so the group-key
+      // rotations pushed below were collected into an array nothing was waiting on any more — the exact
+      // fire-and-forget the rest of this handler exists to undo.
+      Promise.all(rotations).then(rs => {
+        const failed = rs.filter(([, ok]) => ok === false).map(([what]) => what);
+        if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
+      }).catch(() => {});
       // SAY SO. Both guards above are correct and both are silent: as a delegated steward you tap Block, the
       // row greys out, and the removed member's phone keeps decrypting every future message in every encrypted
       // group and keeps reading the congregation's names — indefinitely, with nothing on screen suggesting a

@@ -400,8 +400,8 @@ export const CASES = [
   {
     name: 'encryption: the room stops stating it is unencrypted',
     file: 'app/screens-chat.jsx',
-    find: `<Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted' : 'Not encrypted'}</span>`,
-    replace: `<Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted' : 'Church room'}</span>`,
+    find: `: 'Not encrypted'}</span>`,
+    replace: `: 'Church room'}</span>`,
     test: 'scripts/no-overclaims.test.mjs',
   },
   {
@@ -412,5 +412,33 @@ export const CASES = [
     find: `the server that carries your church\u2019s messages can read what is written there`,
     replace: `your church\u2019s messages are carried safely`,
     test: 'scripts/no-overclaims.test.mjs',
+  },
+  {
+    name: 'encryption: the label goes back to the steward\u2019s setting',
+    file: 'app/screens-chat.jsx',
+    find: `{encState === 'sealed' ? 'End-to-end encrypted' : encState === 'nokey' ? 'Encrypted \u00b7 no key yet' : 'Not encrypted'}`,
+    replace: `{group && group.encrypted ? 'End-to-end encrypted' : 'Not encrypted'}`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
+  {
+    name: 'encryption: a member with no key sends in clear again',
+    file: 'src/fellowship.src.js',
+    find: `    if (wantsEnc && !gkey) return { _refused: 'nokey' };`,
+    replace: ``,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
+  {
+    name: 'encryption: a failed seal is swallowed and sent unencrypted',
+    file: 'src/fellowship.src.js',
+    find: `        if (wantsEnc) return { _refused: 'sealfailed' };`,
+    replace: ``,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
+  {
+    name: 'encryption: the room key rotation is fired and forgotten again',
+    file: 'app/stew-dashboard.jsx',
+    find: `        if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { rotate: true })).then(r => ['the key for ' + (g.name || 'a group'), r]));`,
+    replace: `        if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
   },
 ];

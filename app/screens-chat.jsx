@@ -1077,6 +1077,17 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         : extra.kind === 'poll' ? window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags])
         : window.Fellowship.publishMessage(group.id, extra.text, rtags);
       Promise.resolve(p).then(evt => {
+        // REFUSED, NOT FAILED — and the difference matters to the member. The room is encrypted and this
+        // phone has no key for it yet, so sending would have put their words on the relay in clear under a
+        // label promising the opposite. Nothing is queued (a queued copy leaks later instead of now), so the
+        // words go back in the composer where they left them.
+        if (evt && evt._refused) {
+          if (extra && extra.text) setDraft(d => d || extra.text);
+          ctx.toast(evt._refused === 'sealfailed'
+            ? 'Couldn’t lock this message, so it wasn’t sent. Try again in a moment.'
+            : 'This room is encrypted and your key hasn’t arrived yet — not sent, so it can’t go out unlocked. It should sort itself out shortly.');
+          return;
+        }
         if (evt && evt._delivered === false) ctx.toast('No signal — we’ll send it as soon as you’re back online.');
       }).catch(() => { ctx.toast('No signal — we’ll send it as soon as you’re back online.'); });
       if (replyTo) setReplyTo(null);
@@ -1154,6 +1165,19 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     const t = setInterval(read, 3000);
     return () => clearInterval(t);
   }, []);
+  // THE LABEL IS DERIVED, NOT DECLARED. It used to read group.encrypted — the setting the steward chose —
+  // while whether a message is really sealed depends on holding the room's key. Fellowship answers both from
+  // one place now. Polled on the same beat as the connection because the key arrives asynchronously: a member
+  // admitted a moment ago starts on 'nokey' and moves to 'sealed' when the envelope lands, and the label has
+  // to follow that without needing the room to be reopened.
+  const [encState, setEncState] = React.useState('clear');
+  React.useEffect(() => {
+    if (!group || !group.id) return;
+    const read = () => { try { setEncState(window.Fellowship && window.Fellowship.groupEncState ? window.Fellowship.groupEncState(group.id) : (group.encrypted ? 'nokey' : 'clear')); } catch (e) {} };
+    read();
+    const t = setInterval(read, 3000);
+    return () => clearInterval(t);
+  }, [group && group.id]);
   // …and don't say "can't reach" until it has actually had a chance. See the note at the empty-state branch.
   const [settled, setSettled] = React.useState(false);
   React.useEffect(() => {
@@ -1219,7 +1243,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             no-overclaims.test.mjs follows it there. */}
         <div style={{ textAlign: 'center', margin: '2px 0 4px' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted' : 'Not encrypted'}</span>
+            <Icon name="lock" size={13} /> {encState === 'sealed' ? 'End-to-end encrypted' : encState === 'nokey' ? 'Encrypted · no key yet' : 'Not encrypted'}</span>
         </div>
         {groupEvents.length ? (
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>

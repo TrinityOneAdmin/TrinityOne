@@ -747,6 +747,18 @@ function loadCountCache(cp) { const n = parseInt(localStorage.getItem(MEMBERCOUN
 function saveCountCache(cp, n) { if (!_mayCache()) return; try { localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n)); } catch {} }
 // generic per-church doc cache (groups / plans / devotionals): paint the last-known set instantly on
 // load, then refresh live. `prefix` namespaces the kind of doc.
+// The active church's cached group documents, by id. The group subscription keeps its map inside a closure,
+// so this reads the same cache that paints the group list — good enough for the two questions asked of it
+// (is this room meant to be encrypted, and should the label say so), and it fails to `null` rather than
+// guessing. Unknown is deliberately treated as "not encrypted": that way an absent cache never blocks a
+// member from sending, and never claims a protection either.
+function _groupDoc(gid) {
+  try {
+    const cp = window.Fellowship.churchPub;
+    if (!cp || !gid) return null;
+    return loadDocCache('groups', cp).find(g => g && g.id === gid) || null;
+  } catch (e) { return null; }
+}
 function loadDocCache(prefix, cp) { try { const a = JSON.parse(localStorage.getItem('trinityone.' + prefix + '.' + cp) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
 function saveDocCache(prefix, cp, list) { if (!_mayCache()) return; try { localStorage.setItem('trinityone.' + prefix + '.' + cp, JSON.stringify(list.slice(0, 300))); } catch {} }
 
@@ -1628,6 +1640,22 @@ window.Fellowship = {
   // needs BOTH: we have proved who we are, AND there is a socket alive to prove it to. relaysHealthy() already
   // answers the second half properly — it was hardened for exactly this class of lie (AUDIT-2026-07-26).
   relayReady() { return !!_relayAuthedAt && window.Fellowship.relaysHealthy(); },
+  // WHAT WILL ACTUALLY HAPPEN TO MY NEXT MESSAGE IN THIS ROOM — the one question the encryption label should
+  // be answering, and did not. The label read the room's `encrypted` setting, which is what the STEWARD asked
+  // for; whether a message is really sealed depends on whether THIS member holds the room's key. Those came
+  // apart in exactly the direction that matters: "End-to-end encrypted" over a message about to be sent in
+  // clear. Both now read this, so the label cannot promise what the send will not do.
+  //   'sealed'  — a key is held; the next message is encrypted (whatever the room's setting says)
+  //   'nokey'   — the room is meant to be encrypted and this member has no key; sending is refused
+  //   'clear'   — an ordinary church room: the relay can read it
+  groupEncState(groupId) {
+    try {
+      const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
+      if (gkey) return 'sealed';
+      const gdoc = _groupDoc(groupId);
+      return (gdoc && gdoc.encrypted) ? 'nokey' : 'clear';
+    } catch (e) { return 'clear'; }
+  },
   profile,
   displayFor,
   // http(s) base of the church's gateway (derived from its relay) — for the /feed video proxy
@@ -2280,7 +2308,28 @@ window.Fellowship = {
     const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
     let body = content, encTag = [];
     const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];   // encrypted group → seal under THIS church's CURRENT key, i.e. ring[0] (H5)
-    if (gkey) { try { body = nip44e(content, gkey); encTag = [['enc', '1']]; } catch (e) {} }
+    // NEVER SEND IN CLEAR TO A ROOM THAT SAYS IT IS ENCRYPTED.
+    //
+    // This used to be `if (gkey) { …encrypt… }` and nothing else: the send consulted only whether THIS member
+    // happened to hold a key, and never the room's own setting. So a member who did not have the key — newly
+    // admitted and the envelope not yet arrived, skipped by the console's per-member sealing, or left behind
+    // by a rotation that failed silently — typed into a room labelled "End-to-end encrypted" and the words
+    // went to the relay in plain text. Reading fails safe in that state (an undecryptable message is simply
+    // not shown); writing failed open, which is the wrong way round, and the member had no way to know.
+    //
+    // Refusing is not the pleasant option, but the alternative is publishing something the member believed
+    // was protected, and no later fix can un-publish it. The words are handed back to the composer rather
+    // than queued: a queued copy would go out in clear on the next flush, which is the same leak, delayed.
+    const gdoc = _groupDoc(groupId);
+    const wantsEnc = !!(gdoc && gdoc.encrypted);
+    if (wantsEnc && !gkey) return { _refused: 'nokey' };
+    if (gkey) {
+      try { body = nip44e(content, gkey); encTag = [['enc', '1']]; }
+      catch (e) {
+        // The seal threw. Before, this was swallowed and the loop fell through to sending `content` as-is.
+        if (wantsEnc) return { _refused: 'sealfailed' };
+      }
+    }
     const evt = finalizeEvent({
       kind: 1, created_at: Math.floor(Date.now() / 1000),
       tags: [['t', NET], ['t', groupId], ...churchTag, ...encTag, ...extraTags], content: body,

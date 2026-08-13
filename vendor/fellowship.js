@@ -6474,6 +6474,15 @@
     } catch {
     }
   }
+  function _groupDoc(gid) {
+    try {
+      const cp = window.Fellowship.churchPub;
+      if (!cp || !gid) return null;
+      return loadDocCache("groups", cp).find((g) => g && g.id === gid) || null;
+    } catch (e) {
+      return null;
+    }
+  }
   function loadDocCache(prefix, cp) {
     try {
       const a = JSON.parse(localStorage.getItem("trinityone." + prefix + "." + cp) || "[]");
@@ -7510,6 +7519,24 @@
     relayReady() {
       return !!_relayAuthedAt && window.Fellowship.relaysHealthy();
     },
+    // WHAT WILL ACTUALLY HAPPEN TO MY NEXT MESSAGE IN THIS ROOM — the one question the encryption label should
+    // be answering, and did not. The label read the room's `encrypted` setting, which is what the STEWARD asked
+    // for; whether a message is really sealed depends on whether THIS member holds the room's key. Those came
+    // apart in exactly the direction that matters: "End-to-end encrypted" over a message about to be sent in
+    // clear. Both now read this, so the label cannot promise what the send will not do.
+    //   'sealed'  — a key is held; the next message is encrypted (whatever the room's setting says)
+    //   'nokey'   — the room is meant to be encrypted and this member has no key; sending is refused
+    //   'clear'   — an ordinary church room: the relay can read it
+    groupEncState(groupId) {
+      try {
+        const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
+        if (gkey) return "sealed";
+        const gdoc = _groupDoc(groupId);
+        return gdoc && gdoc.encrypted ? "nokey" : "clear";
+      } catch (e) {
+        return "clear";
+      }
+    },
     profile,
     displayFor,
     // http(s) base of the church's gateway (derived from its relay) — for the /feed video proxy
@@ -8311,11 +8338,15 @@
       const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
       let body = content, encTag = [];
       const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
+      const gdoc = _groupDoc(groupId);
+      const wantsEnc = !!(gdoc && gdoc.encrypted);
+      if (wantsEnc && !gkey) return { _refused: "nokey" };
       if (gkey) {
         try {
           body = encrypt(content, gkey);
           encTag = [["enc", "1"]];
         } catch (e) {
+          if (wantsEnc) return { _refused: "sealfailed" };
         }
       }
       const evt = finalizeEvent2({
