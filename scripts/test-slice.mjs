@@ -18,7 +18,31 @@ import assert from 'node:assert/strict';
 export function fnBody(src, anchor, what = anchor) {
   const at = typeof anchor === 'number' ? anchor : src.indexOf(anchor);
   assert.notEqual(at, -1, `${what} is missing — re-anchor this test rather than widening a window`);
-  const open = src.indexOf('{', at);
+  // SKIP THE PARAMETER LIST BEFORE LOOKING FOR THE BODY. This took the first `{` after the anchor, which for
+  // a signature carrying an object default — `publishMessage(groupId, content, extraTags = [], opts = {})` —
+  // is the empty object in that default. It opens and closes immediately, so fnBody returned a 64-character
+  // stub of the signature itself and nothing else.
+  //
+  // That fails loudly for `assert.match`, which is how it was found. It fails SILENTLY for
+  // `assert.doesNotMatch`: the forbidden pattern is trivially absent from a stub, so the assertion passes
+  // over any amount of the thing it exists to forbid. Every caller of this helper is a security or
+  // correctness guard, so a helper that can hand one an empty function body is a hole under all of them.
+  //
+  // Walk the signature's parens first when there are any, then take the `{` after them.
+  let open;
+  const paren = src.indexOf('(', at);
+  const nl = src.indexOf('\n', at);
+  if (paren !== -1 && (nl === -1 || paren < nl)) {
+    let d = 0, end = -1;
+    for (let i = paren; i < src.length; i++) {
+      if (src[i] === '(') d++;
+      else if (src[i] === ')' && --d === 0) { end = i; break; }
+    }
+    assert.notEqual(end, -1, `${what} has an unterminated parameter list`);
+    open = src.indexOf('{', end);
+  } else {
+    open = src.indexOf('{', at);
+  }
   assert.notEqual(open, -1, `${what} has no block to read`);
   let depth = 0, q = '';
   for (let i = open; i < src.length; i++) {

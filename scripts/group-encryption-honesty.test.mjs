@@ -49,6 +49,72 @@ function rig({ keyHeld = false, flagged = false } = {}) {
   return { state: api(GID) };
 }
 
+// THE DECISION ITSELF, DRIVEN. Everything about the send used to be checked by grepping the source for the
+// literal lines that implement it — which proves the strings are present, not that the guard can see the bug.
+// An auditor replaced the whole check with `false`, in src AND vendor, reinstating the original defect, and
+// all eleven tests here plus vendor-freshness stayed green. So the decision is now its own function and this
+// runs it.
+function wantsRig({ cache = null, hint = undefined, cp = 'ab'.repeat(32), gid = 'g1' } = {}) {
+  const store = {};
+  if (cache !== null) store['trinityone.groups.' + cp] = JSON.stringify(cache);
+  const scope = {
+    window: { Fellowship: { churchPub: cp } },
+    localStorage: { getItem: (k) => (k in store ? store[k] : null) },
+  };
+  const body = stripComments(fnBody(SRC, 'function _wantsEncrypted(groupId, hint)', '_wantsEncrypted'))
+    + '\n' + stripComments(fnBody(SRC, 'function _groupDoc(gid)', '_groupDoc'))
+    + '\nfunction loadDocCache(prefix, cp2){ try { const a = JSON.parse(localStorage.getItem("trinityone." + prefix + "." + cp2) || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } }';
+  const names = Object.keys(scope);
+  const fn = new Function(...names, body + '\nreturn _wantsEncrypted;')(...names.map(n => scope[n]));
+  return fn(gid, hint);
+}
+
+test('a warm cache saying encrypted is honoured', () => {
+  assert.equal(wantsRig({ cache: [{ id: 'g1', encrypted: true }] }), true);
+});
+
+test('an ordinary room is not treated as encrypted', () => {
+  assert.equal(wantsRig({ cache: [{ id: 'g1', encrypted: false }] }), false,
+    'every ordinary room would refuse to send, which is the fix breaking normal messaging for everyone');
+});
+
+test('a cache MISS does not silently mean "send it in clear"', () => {
+  // The four routes to a miss are all ordinary: a swallowed QuotaExceededError on write, caching disabled,
+  // an empty list persisted after the roster filter, and the church-switch race.
+  assert.equal(wantsRig({ cache: [], hint: true }), true,
+    'THE BUG: the room is missing from the cache, so the decision answered "not encrypted" and the message ' +
+    'went out in plain text under an "End-to-end encrypted" label — the original defect, surviving in ' +
+    'exactly the conditions most likely to produce it');
+  assert.equal(wantsRig({ cache: null, hint: true }), true, 'no cache at all must not mean "send in clear"');
+});
+
+test('the wrong church\'s cache cannot authorise cleartext', () => {
+  // The church-switch race: churchPub has moved on, the cache under the new key has not arrived yet.
+  assert.equal(wantsRig({ cache: null, cp: 'cd'.repeat(32), hint: true }), true);
+});
+
+test('a caller cannot talk the send INTO cleartext', () => {
+  // hint:false must not override a cache that says encrypted — a caller wrong in that direction publishes
+  // plaintext, and this function exists to make that impossible to do by accident.
+  assert.equal(wantsRig({ cache: [{ id: 'g1', encrypted: true }], hint: false }), true,
+    'a caller passing the wrong flag can downgrade a room to cleartext');
+});
+
+test('the send asks the shared decision, not the cache directly', () => {
+  const fn = stripComments(fnBody(SRC, 'async publishMessage(groupId, content, extraTags = [], opts = {})', 'publishMessage'));
+  assert.match(fn, /_wantsEncrypted\(groupId, opts\.encrypted\)/,
+    'publishMessage decides for itself again, so the caller\'s knowledge is thrown away and a cache miss ' +
+    'once more means "send it in clear"');
+});
+
+test('every send path passes what it knows', () => {
+  const calls = CHAT.match(/publishMessage\(/g) || [];
+  const withHint = CHAT.match(/publishMessage\([^;]*?encrypted:/g) || [];
+  assert.equal(withHint.length, calls.length,
+    `${calls.length - withHint.length} of ${calls.length} send paths do not pass the room's encryption state. ` +
+    'The room screen holds it and simply was not asked — that is how a cache miss became a cleartext publish');
+});
+
 test('a key in hand means the label says encrypted', () => {
   assert.equal(rig({ keyHeld: true, flagged: true }).state, 'sealed');
 });
@@ -72,7 +138,7 @@ test('a key held in a room not marked encrypted still reports sealed, because th
 });
 
 test('the send refuses rather than publishing in clear, and refuses BEFORE queueing', () => {
-  const fn = stripComments(fnBody(SRC, 'async publishMessage(groupId, content, extraTags = [])', 'publishMessage'));
+  const fn = stripComments(fnBody(SRC, 'async publishMessage(groupId, content, extraTags = [], opts = {})', 'publishMessage'));
   assert.match(fn, /if \(wantsEnc && !gkey\) return \{ _refused: 'nokey' \};/,
     'a member without the room\'s key still publishes plaintext into a room that says it is encrypted');
   assert.match(fn, /if \(wantsEnc\) return \{ _refused: 'sealfailed' \};/,
@@ -95,6 +161,24 @@ test('the label is read from the shared answer, not from the room setting', () =
     'the pill is back on the steward\'s setting, which is a statement about intent, not about this message');
   assert.match(CHAT, /encState === 'nokey' \? 'Encrypted · no key yet'/,
     'the waiting state has no label of its own, so it falls back to claiming one of the other two');
+});
+
+test('sharing into a room that refused it does not claim success', () => {
+  // The share sheet fired and forgot, then toasted "Shared to <room>" unconditionally. Once the send started
+  // REFUSING to publish into an encrypted room without its key, that turned a leak into silent LOSS wearing a
+  // confirmation: the verse gone, the sheet closed, the member told it had been shared. Losing something
+  // quietly while claiming it worked is the worst outcome this app can produce.
+  const fn = stripComments(fnBody(CHAT, 'const sendToGroup = (g) =>', 'sendToGroup'));
+  assert.match(fn, /_refused/,
+    'the share path ignores a refusal and reports success — the shared item is unrecoverable and the member ' +
+    'has no way to know');
+  assert.match(fn, /encrypted: !!g\.encrypted/,
+    'the share path does not tell the send what it knows about the room, so it falls back to the cache — ' +
+    'and a cache miss there means publishing in clear');
+  const okAt = fn.indexOf("'Shared to '");
+  const refusedAt = fn.indexOf('_refused');
+  assert.ok(refusedAt !== -1 && okAt !== -1 && refusedAt < okAt,
+    'the success toast fires before the refusal is considered');
 });
 
 test('an offline refusal is not promised a fix that cannot come', () => {

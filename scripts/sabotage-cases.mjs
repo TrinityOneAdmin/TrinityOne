@@ -448,4 +448,39 @@ export const CASES = [
     replace: `              : 'This room is encrypted and your key hasn\u2019t arrived yet. It should sort itself out shortly.';`,
     test: 'scripts/group-encryption-honesty.test.mjs',
   },
+  {
+    name: 'encryption: the room requirement is decided as "never"',
+    file: 'src/fellowship.src.js',
+    // The auditor's mutation, verbatim in spirit: reinstate the original defect by making the decision say
+    // no. This is a SEMANTIC mutation — the earlier cases each deleted the exact literal their test grepped
+    // for, which proves the regex matches and nothing else.
+    find: `  if (hint === true) return true;
+  const g = _groupDoc(groupId);
+  return !!(g && g.encrypted);`,
+    replace: `  return false;`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
+  {
+    name: 'encryption: the caller\u2019s knowledge is thrown away (cache only)',
+    file: 'src/fellowship.src.js',
+    find: `  if (hint === true) return true;
+  const g = _groupDoc(groupId);`,
+    replace: `  const g = _groupDoc(groupId);`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
+  {
+    name: 'encryption: a caller can talk the send into cleartext',
+    file: 'src/fellowship.src.js',
+    find: `  if (hint === true) return true;`,
+    replace: `  if (hint === true) return true;
+  if (hint === false) return false;`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
+  {
+    name: 'share: a refused share is reported as shared',
+    file: 'app/screens-chat.jsx',
+    find: `        if (evt && evt._refused) { ctx.toast('Not shared \u2014 ' + g.name + ' is encrypted and your key hasn\u2019t arrived yet. Try again shortly.'); return; }`,
+    replace: ``,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
 ];

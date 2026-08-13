@@ -1072,10 +1072,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     // NIP-10 reply markers, when this message answers another
     const rtags = replyTo ? [['e', replyTo.id, '', 'reply'], ['p', replyTo.pubkey]] : [];
     if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
-      const p = extra.kind === 'verse' ? window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse'], ...rtags])
-        : extra.flag ? window.Fellowship.publishMessage(group.id, extra.text, [['k', extra.flag], ...rtags])
-        : extra.kind === 'poll' ? window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags])
-        : window.Fellowship.publishMessage(group.id, extra.text, rtags);
+      const p = extra.kind === 'verse' ? window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse'], ...rtags], { encrypted: !!(group && group.encrypted) })
+        : extra.flag ? window.Fellowship.publishMessage(group.id, extra.text, [['k', extra.flag], ...rtags], { encrypted: !!(group && group.encrypted) })
+        : extra.kind === 'poll' ? window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags], { encrypted: !!(group && group.encrypted) })
+        : window.Fellowship.publishMessage(group.id, extra.text, rtags, { encrypted: !!(group && group.encrypted) });
       Promise.resolve(p).then(evt => {
         // REFUSED, NOT FAILED — and the difference matters to the member. The room is encrypted and this
         // phone has no key for it yet, so sending would have put their words on the relay in clear under a
@@ -1452,8 +1452,18 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const sendToGroup = (g) => {
     if (!live) { ctx.toast('Chat isn’t available'); return; }
     // share as clean plain text (not a JSON card) so it reads naturally in the group, thoughts included
-    FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''));
-    ctx.toast('Shared to ' + g.name); onClose();
+    // DO NOT SAY "SHARED" UNTIL IT IS. This fired and forgot, then toasted success unconditionally. Once the
+    // send began REFUSING to publish into an encrypted room without its key, that turned a leak into silent
+    // loss wearing a confirmation: the verse was gone, the sheet closed, and the member was told it had been
+    // shared. Losing something quietly while claiming it worked is the worst failure this app can produce.
+    Promise.resolve(FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], { encrypted: !!g.encrypted }))
+      .then(evt => {
+        if (evt && evt._refused) { ctx.toast('Not shared — ' + g.name + ' is encrypted and your key hasn’t arrived yet. Try again shortly.'); return; }
+        if (evt && evt._delivered === false) { ctx.toast('No signal — we’ll share it to ' + g.name + ' when you’re back online.'); return; }
+        ctx.toast('Shared to ' + g.name);
+      })
+      .catch(() => ctx.toast('Couldn’t share to ' + g.name + ' — nothing was sent.'));
+    onClose();
   };
   const sendToPerson = (m) => {
     if (!FS || !FS.sendDM) { ctx.toast('Messaging isn’t available'); return; }

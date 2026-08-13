@@ -752,6 +752,29 @@ function saveCountCache(cp, n) { if (!_mayCache()) return; try { localStorage.se
 // (is this room meant to be encrypted, and should the label say so), and it fails to `null` rather than
 // guessing. Unknown is deliberately treated as "not encrypted": that way an absent cache never blocks a
 // member from sending, and never claims a protection either.
+// DOES THIS ROOM REQUIRE ENCRYPTION? Its own function because it is a security decision, and a security
+// decision buried in the middle of a 40-line send is one nobody can test — which is exactly what happened:
+// the first version of this check lived inline and the whole suite stayed green when it was replaced with
+// `false`.
+//
+// FAIL CLOSED, AND ASK MORE THAN ONE SOURCE. It used to read only _groupDoc(), which reads a localStorage
+// cache and answers null on a miss — and a miss was treated as "not encrypted", so the send went out in
+// clear. A miss is not exotic: a swallowed QuotaExceededError on write, caching switched off, an empty list
+// persisted after the roster filter, or the church-switch race all produce one. That left the original
+// defect — plaintext under an "End-to-end encrypted" caption — alive in precisely the messy conditions it
+// was most likely to occur in.
+//
+// So the CALLER's knowledge wins when it has any. The room screen is rendering `group.encrypted` from the
+// live subscription at the moment the member presses send; it always knew the answer and simply was not
+// asked. The cache stays as the fallback for callers that do not know. Either saying "encrypted" is enough.
+//
+// `hint === false` deliberately does NOT override a cache that says encrypted: a caller being wrong in that
+// direction publishes cleartext, and this function exists to make that impossible to do by accident.
+function _wantsEncrypted(groupId, hint) {
+  if (hint === true) return true;
+  const g = _groupDoc(groupId);
+  return !!(g && g.encrypted);
+}
 function _groupDoc(gid) {
   try {
     const cp = window.Fellowship.churchPub;
@@ -2303,7 +2326,7 @@ window.Fellowship = {
   },
 
   // publish a message to a group (kind 1, tagged with the network + group ids)
-  async publishMessage(groupId, content, extraTags = []) {
+  async publishMessage(groupId, content, extraTags = [], opts = {}) {
     if (!sk) await window.Fellowship.ready;
     const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
     let body = content, encTag = [];
@@ -2320,8 +2343,9 @@ window.Fellowship = {
     // Refusing is not the pleasant option, but the alternative is publishing something the member believed
     // was protected, and no later fix can un-publish it. The words are handed back to the composer rather
     // than queued: a queued copy would go out in clear on the next flush, which is the same leak, delayed.
-    const gdoc = _groupDoc(groupId);
-    const wantsEnc = !!(gdoc && gdoc.encrypted);
+    // opts.encrypted is what the CALLER knows — the room screen has it from the live subscription. See
+    // _wantsEncrypted: the cache alone answered "no" whenever it had no answer at all.
+    const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);
     if (wantsEnc && !gkey) return { _refused: 'nokey' };
     if (gkey) {
       try { body = nip44e(content, gkey); encTag = [['enc', '1']]; }

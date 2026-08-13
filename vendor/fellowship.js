@@ -6474,6 +6474,11 @@
     } catch {
     }
   }
+  function _wantsEncrypted(groupId, hint) {
+    if (hint === true) return true;
+    const g = _groupDoc(groupId);
+    return !!(g && g.encrypted);
+  }
   function _groupDoc(gid) {
     try {
       const cp = window.Fellowship.churchPub;
@@ -8333,13 +8338,12 @@
       if (!_profTimer) _profTimer = setTimeout(_flushProfiles, 250);
     },
     // publish a message to a group (kind 1, tagged with the network + group ids)
-    async publishMessage(groupId, content, extraTags = []) {
+    async publishMessage(groupId, content, extraTags = [], opts = {}) {
       if (!sk) await window.Fellowship.ready;
       const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
       let body = content, encTag = [];
       const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
-      const gdoc = _groupDoc(groupId);
-      const wantsEnc = !!(gdoc && gdoc.encrypted);
+      const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);
       if (wantsEnc && !gkey) return { _refused: "nokey" };
       if (gkey) {
         try {
