@@ -1260,13 +1260,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           )}
         </div>
 
-        {/* privacy reassurance */}
-        <div style={{ display: 'flex', gap: 11, padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))',
-          border: '1px solid color-mix(in oklab, var(--sage) 30%, transparent)', marginBottom: 18 }}>
-          <Icon name="shield" size={20} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-            <b style={{ color: 'var(--ink)' }}>No account, no tracking.</b> Your identity lives only on this device as a private key.</div>
-        </div>
+        {/* The "No account, no tracking" reassurance panel was removed on the owner's call (2026-08-13): a
+            standing green box on the screen a member visits most often is marketing copy in the place where
+            they came to do something. Nothing is lost by it going — it made no promise the app depends on,
+            and the substantive privacy statements live where they can actually be acted on: the PIN screen's
+            retraction ("someone who examines this phone can still tell you use TrinityOne, and which church
+            you follow"), which identity-extras.jsx carries and no-overclaims.test.mjs guards. This panel said
+            only the flattering half, on a screen with no decision attached to it. */}
 
         {/* my church */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>MY CHURCH</div>

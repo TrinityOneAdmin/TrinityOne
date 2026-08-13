@@ -1154,6 +1154,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     const t = setInterval(read, 3000);
     return () => clearInterval(t);
   }, []);
+  const [encWhy, setEncWhy] = React.useState(false);   // the encryption pill, opened out to the full sentence
   // …and don't say "can't reach" until it has actually had a chance. See the note at the empty-state branch.
   const [settled, setSettled] = React.useState(false);
   React.useEffect(() => {
@@ -1209,9 +1210,22 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       ) : null}
 
       <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* TWO WORDS BY DEFAULT, THE WHOLE TRUTH ON TAP. This said the full sentence every time, which wrapped
+            to two lines and read as a warning banner over every room — the owner's call, and a fair one: a
+            standing warning on a screen you open twenty times a day stops being read at all.
+            The sentence itself does not go away, because it is not decoration. The threat model here is lawful
+            compulsion, and a member may be relying on "the relay can read messages here" in front of someone
+            official; no-overclaims.test.mjs guards that wording for that reason. So the pill carries the short
+            state and opens the full sentence when tapped — quiet by default, still answerable. */}
         <div style={{ textAlign: 'center', margin: '2px 0 4px' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted · not even the relay can read this' : 'Church room · not end-to-end encrypted, so the relay can read messages here'}</span>
+          <button type="button" onClick={() => setEncWhy(v => !v)} aria-expanded={encWhy}
+            aria-label={group && group.encrypted ? 'End-to-end encrypted — what this means' : 'Not encrypted — what this means'}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', maxWidth: '100%', textAlign: 'left', lineHeight: 1.35 }}>
+            <Icon name="lock" size={13} />
+            <span>{encWhy
+              ? (group && group.encrypted ? 'End-to-end encrypted · not even the relay can read this' : 'Church room · not end-to-end encrypted, so the relay can read messages here')
+              : (group && group.encrypted ? 'End-to-end encrypted' : 'Not encrypted')}</span>
+          </button>
         </div>
         {groupEvents.length ? (
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>

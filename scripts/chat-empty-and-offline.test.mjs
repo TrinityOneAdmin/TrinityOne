@@ -28,9 +28,20 @@ test('an empty room explains itself', () => {
 });
 
 test('offline says so, rather than looking quiet', () => {
-  assert.match(FELLOW, /relayReady\(\) \{ return !!_relayAuthedAt; \}/,
-    'the app knows whether the relay is reachable but does not expose it, so no screen can tell a silent ' +
-    'church from an unreachable one');
+  // THIS USED TO PIN THE EXACT LINE `relayReady() { return !!_relayAuthedAt; }` — an assertion about how the
+  // answer was written rather than what it had to mean, and that spelling was itself the bug. _relayAuthedAt
+  // is set once on a successful NIP-42 auth and is cleared ONLY by reconnectAll() on a PIN unlock, so after
+  // one good connection this reported "reachable" for the rest of the page's life. Verified on a real phone
+  // (2026-08-12): with wifi and mobile data both off, an empty room still said "Say hello".
+  //
+  // So the requirement is behavioural: being reachable needs a live socket, not just a memory of one.
+  assert.match(FELLOW, /relayReady\(\)\s*\{\s*return\s*!!_relayAuthedAt\s*&&\s*window\.Fellowship\.relaysHealthy\(\)/,
+    'relayReady() answers from _relayAuthedAt alone. That flag means "we authenticated at some point", not ' +
+    '"we can reach the church now" — nothing clears it when the connection drops, so a member who loses ' +
+    'signal is told their church is simply quiet, over a room they cannot actually reach');
+  assert.match(FELLOW, /relaysHealthy\(\)\s*\{/,
+    'relaysHealthy() is gone — that is the only thing that actually inspects live sockets, and relayReady() ' +
+    'now depends on it');
   assert.match(CHAT, /Can’t reach your church/,
     'an offline member is shown the same "no messages" as a member whose church is simply quiet');
   assert.match(CHAT, /\{connected/, 'the empty state does not branch on the connection at all');

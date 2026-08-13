@@ -7493,12 +7493,22 @@
     churchPub: null,
     // hex pubkey of the active church; messages are tagged ['p', churchPub]
     ready: null,
-    // IS THE CHURCH REACHABLE RIGHT NOW? _relayAuthedAt is set when the relay proves who we are and reset to 0
-    // on every disconnect, so it already answers this — it was simply never exposed, and the screens had no way
-    // to tell "nothing has been said" from "we cannot hear anything". A member offline read "No messages yet"
-    // over a message they had just sent themselves.
+    // IS THE CHURCH REACHABLE RIGHT NOW?
+    //
+    // The comment that used to sit here said _relayAuthedAt is "reset to 0 on every disconnect", and that was
+    // simply not true: it is set once when the relay proves who we are, and the ONLY thing that clears it is
+    // reconnectAll() on a PIN unlock. So after one successful authentication this answered "reachable" for the
+    // rest of the page's life. Confirmed on a real phone (2026-08-12): with wifi AND mobile data switched off,
+    // an empty room still invited the member to "Say hello". The wrong comment is most of why it went unnoticed
+    // — it described the behaviour the name promises rather than the behaviour the code has.
+    //
+    // "Ever authenticated" is still the right question for the correctness gates that read _relayAuthedAt
+    // directly (an empty answer from an unauthenticated relay must never be mistaken for "the church has none"),
+    // so those are deliberately left alone. This one is the UI's question, which is a different question, and it
+    // needs BOTH: we have proved who we are, AND there is a socket alive to prove it to. relaysHealthy() already
+    // answers the second half properly — it was hardened for exactly this class of lie (AUDIT-2026-07-26).
     relayReady() {
-      return !!_relayAuthedAt;
+      return !!_relayAuthedAt && window.Fellowship.relaysHealthy();
     },
     profile,
     displayFor,

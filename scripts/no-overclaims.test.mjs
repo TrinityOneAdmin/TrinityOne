@@ -155,6 +155,24 @@ test('the honest wording that already existed is still there', () => {
     'the chat header no longer tells members a church room is readable by the relay');
 });
 
+// 2026-08-13: the owner shortened this to a pill, because the full sentence wrapped to two lines and read as
+// a standing warning banner over every room — and a warning you see twenty times a day stops being read.
+// Shortening the DISPLAY is a design call and a fair one. Losing the sentence is not: the threat model is
+// lawful compulsion, and a member may be relying on "the relay can read messages here" in front of someone
+// official. So the requirement is that the short state is honest on its own AND the full sentence is still
+// reachable from it — present in the file is not the same as reachable on the screen.
+test('the short encryption pill is honest, and opens to the full sentence', () => {
+  assert.match(CHAT, /'Not encrypted'/,
+    'the collapsed pill no longer states the unencrypted case at all. A room that the relay can read must ' +
+    'say so even in its quietest form — silence there reads as safety');
+  assert.match(CHAT, /'End-to-end encrypted'/, 'the collapsed pill no longer distinguishes an encrypted room');
+  assert.match(CHAT, /onClick=\{\(\) => setEncWhy/,
+    'the pill is not a control any more, so the full sentence is in the file but unreachable on the screen. ' +
+    'That is worse than the banner it replaced: it looks like the disclosure survived when it did not');
+  assert.match(CHAT, /encWhy\s*\n?\s*\?/,
+    'nothing renders the expanded wording, so tapping the pill reveals nothing');
+});
+
 test('the withdrawn "big company" line is left alone', () => {
   // Recorded so a later pass does not "fix" it again. It is true: TrinityOne is not a big company.
   // about.html carried a second copy and was deleted by the 2026-08-05 trim; welcome.html is where the

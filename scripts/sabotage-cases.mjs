@@ -389,4 +389,27 @@ export const CASES = [
     replace: `            {connected`,
     test: 'scripts/chat-empty-and-offline.test.mjs',
   },
+  {
+    name: 'offline: reachability answers from a memory of a connection',
+    file: 'src/fellowship.src.js',
+    // the pre-fix shape: authenticated once, therefore "reachable" for ever
+    find: `  relayReady() { return !!_relayAuthedAt && window.Fellowship.relaysHealthy(); },`,
+    replace: `  relayReady() { return !!_relayAuthedAt; },`,
+    test: 'scripts/chat-empty-and-offline.test.mjs',
+  },
+  {
+    name: 'encryption pill: the full sentence stops being reachable',
+    file: 'app/screens-chat.jsx',
+    // the plausible tidy-up: keep the short pill, drop the control that opens it out
+    find: `          <button type="button" onClick={() => setEncWhy(v => !v)} aria-expanded={encWhy}`,
+    replace: `          <button type="button" aria-expanded={encWhy}`,
+    test: 'scripts/no-overclaims.test.mjs',
+  },
+  {
+    name: 'encryption pill: the unencrypted case stops being stated',
+    file: 'app/screens-chat.jsx',
+    find: `              : (group && group.encrypted ? 'End-to-end encrypted' : 'Not encrypted')}</span>`,
+    replace: `              : (group && group.encrypted ? 'End-to-end encrypted' : 'Church room')}</span>`,
+    test: 'scripts/no-overclaims.test.mjs',
+  },
 ];
