@@ -444,8 +444,10 @@ export const CASES = [
   {
     name: 'offline: a refused message is promised a fix that cannot come',
     file: 'app/screens-chat.jsx',
-    find: `              : 'This room is encrypted and your key only arrives when you\u2019re connected. Your words are still here \u2014 send them once you\u2019re back online.';`,
-    replace: `              : 'This room is encrypted and your key hasn\u2019t arrived yet. It should sort itself out shortly.';`,
+    // Anchored on the SHORTEST stable fragment, not the whole sentence: this case went NO-ANCHOR the moment
+    // the copy around it was reworded, and a dead case is a guard that quietly stopped guarding.
+    find: `send them once you\u2019re back online.`,
+    replace: `It should sort itself out shortly.`,
     test: 'scripts/group-encryption-honesty.test.mjs',
   },
   {

@@ -97,17 +97,21 @@ test('a member who read before AUTH is not starved by the replay', () => {
     'only on .cap does not see this: the cap is right and the balance is empty.');
 });
 
-test('authenticating is not membership, and buys nothing on its own', () => {
-  // The AUTH handler checks a signature, a challenge, freshness, host binding and the blocklist — it never
-  // asks whether the pubkey belongs to any church here. So a generated keypair used to connect, authenticate
-  // and immediately hold twelve times the anonymous burst, then reconnect and repeat. The justification
-  // written when the grant was added — "a socket can only upgrade once" — was true and beside the point.
-  const scanAllowance = lift([]);            // nobody is a member
-  const stranger = scanAllowance({ _auth: 'e'.repeat(64) });
-  assert.ok(stranger.cap <= 50000,
-    `any keypair that completes NIP-42 is handed ${stranger.cap} rows/second. Authentication proves someone ` +
-    'holds a key, not that a church admitted them — so this is a burst anyone can buy, and buy again by ' +
-    'reconnecting');
+// AN OPEN WEAKNESS, RECORDED RATHER THAN GUARDED. Completing NIP-42 proves someone holds a key, not that a
+// church admitted them, so an authenticated stranger gets the member-sized burst and can repeat it by
+// reconnecting. The obvious repair — requiring MEMBERS.has(_auth) — was written and then REVERTED, because a
+// re-audit measured it starving the steward console (which authenticates as the CHURCH key and so is not in
+// MEMBERS) down to the anonymous allowance, while costing an attacker only one extra message. There is
+// deliberately no test asserting the gate: a test here would pin the wrong answer in place. See the note on
+// scanAllowance in gateway.mjs and AUDIT-BACKLOG.md.
+test('the console and every member share the large allowance, whoever they are', () => {
+  const scanAllowance = lift([]);            // MEMBERS deliberately empty
+  const authed = scanAllowance({ _auth: 'e'.repeat(64) });
+  assert.ok(authed.cap >= 300000,
+    'the allowance is gated on something other than having authenticated. The steward console authenticates ' +
+    'as the CHURCH key and publishes no member doc, so any membership-shaped gate silently drops the most ' +
+    'read-heavy client in the system to the anonymous budget — measured: a quiet room went from 20 of 20 ' +
+    'messages served to none');
 });
 
 test('a member is not permanently punished for one big read', () => {

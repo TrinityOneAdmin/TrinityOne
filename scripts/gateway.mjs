@@ -3718,21 +3718,28 @@ const SCAN_ROWS_PER_SEC_AUTHED = 300000;
 const SCAN_ROWS_PER_SEC_ANON = 25000;
 function scanAllowance(ws) {
   const now = Date.now();
-  // AUTHENTICATING IS NOT MEMBERSHIP, AND ONLY MEMBERSHIP BUYS THE LARGE ALLOWANCE.
+  // WHY THIS IS NOT GATED ON MEMBERSHIP — REVERTED 2026-08-14, and the reasoning kept so it is not retried.
   //
-  // The generous cap was granted to anything that completed NIP-42 — and the AUTH handler checks a signature,
-  // a challenge, freshness, host binding and the blocklist, but never whether the pubkey belongs to any
-  // church here. So any generated keypair could connect, authenticate and immediately hold twelve times the
-  // anonymous burst, then reconnect and do it again. The justification written when the grant was added
-  // ("a socket can only upgrade once") was true and beside the point.
+  // An audit correctly observed that completing NIP-42 proves someone holds a key, not that a church admitted
+  // them, so any generated keypair buys the large allowance. The obvious repair — require MEMBERS.has(_auth)
+  // — was written, and a re-audit measured what it actually did:
   //
-  // MEMBERS is the relay's effective write-allowed set — self-joined, minus blocked, minus unapproved — the
-  // same knowledge the read gates already depend on, so this costs a Set lookup.
+  //   · THE STEWARD CONSOLE IS NOT A MEMBER. It authenticates as the CHURCH key, and MEMBERS is built from
+  //     `member:` docs, which a church never publishes. So the single most read-heavy client in the system
+  //     dropped to the anonymous allowance. Measured on a 60k-event store: a room whose messages were the
+  //     oldest went from 20 of 20 served to NONE, silently, because the post-AUTH replay shares one budget
+  //     across every subscription on the connection — roster, safeguarding lists and care needs truncate
+  //     arbitrarily, and on this branch a partial roster feeds read-before-write and the name-key rotation.
+  //   · AND IT BARELY HELPED. accept() lets any pubkey publish its own `member:` doc and rebuildMembers()
+  //     ingests it immediately, so the attack cost went from one message to two. Measured: five fresh
+  //     keypairs, one event each, MEMBERS 0 -> 5.
   //
-  // A pending joiner, authenticated but not yet approved, stays on the anonymous allowance. That is the right
-  // answer rather than a regrettable one: almost everything they can read is ungated and cheap, and the deep
-  // scans this bounds are over a corpus they are not being served anyway.
-  const cap = (ws._auth && MEMBERS.has(ws._auth)) ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;
+  // Trading a silent data-truncation regression on the console for one extra attacker message is a bad
+  // trade, so the gate is gone. The underlying weakness — an authenticated stranger gets a member-sized
+  // burst, repeatable by reconnecting — REMAINS OPEN and is recorded in AUDIT-BACKLOG.md. It wants a
+  // measured answer (a smaller gap between the two caps, or a per-IP connection rate limit), not another
+  // guess at who counts as trusted.
+  const cap = ws._auth ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;
   if (!ws._scanRL) ws._scanRL = { left: cap, t: now, cap };
   const rl = ws._scanRL;
   // AUTH raises it mid-connection, and the raise GRANTS THE FULL MEMBER ALLOWANCE rather than carrying the

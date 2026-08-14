@@ -289,3 +289,28 @@ lost — but it is not the "same name, same groups" the help text used to promis
 
 Also still true: restore brings back the account and (probably) the church list, but NOT the member's notes,
 journal or highlights — those need the encrypted backup file. The copy now says so.
+
+## OPEN: an authenticated stranger gets a member-sized scan burst (relay)
+
+Raised by the 2026-08-13 audit, and **still open by decision** rather than oversight.
+
+Completing NIP-42 proves someone holds a key, not that a church admitted them. So any generated keypair can
+connect, authenticate, and hold the 300,000 rows/second allowance instead of 25,000 — then reconnect and
+repeat. It is a DoS amplification against a church's own relay (often a Raspberry Pi), not a data leak:
+content gating is separate and unaffected.
+
+**The obvious repair was written, measured, and reverted** (2026-08-14). Requiring `MEMBERS.has(ws._auth)`:
+
+- **starved the steward console**, which authenticates as the CHURCH key and never publishes a `member:` doc,
+  so it is not in `MEMBERS`. Measured on a 60k-event store: a room whose messages were the oldest went from
+  20 of 20 served to none, silently, because the post-AUTH replay shares one budget across every subscription
+  on the connection. Roster, safeguarding lists and care needs truncate arbitrarily — and a partial roster
+  feeds read-before-write and the name-key rotation.
+- **barely helped**: `accept()` lets any pubkey publish its own `member:` doc and the members set rebuilds
+  immediately, so the attack cost went from one message to two. Measured: five fresh keypairs, one event
+  each, members 0 → 5.
+
+**What it actually wants**, and why it is not being guessed at again: a measured decision between narrowing
+the gap between the two caps (how much scanning does a real member's deepest read need?) and a per-IP
+connection rate limit. Both need numbers from a real corpus. A third guess at "who counts as trusted" is the
+one thing that should not be tried.
