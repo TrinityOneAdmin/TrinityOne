@@ -15,6 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
 
@@ -270,8 +271,10 @@ test('the console reports the members it could not seal to', () => {
 
 test('a room that could not be keyed is retried, not marked done', () => {
   const DASH2 = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  const at = DASH2.indexOf('const grew = recips.some(');
-  const body = DASH2.slice(at, at + 1400);
+  // Brace-matched, not a fixed window: test-windows.test.mjs exists because a hand-picked character count
+  // silently stops covering the code it names the moment that code grows, and every assertion after the cut
+  // then reads a truncated slice and passes over nothing. This one was 532 characters short on its first run.
+  const body = fnBody(DASH2, 'if (key !== prev) {', 'the key distributor branch');
   assert.match(body, /if \(r === null \|\| r === false\) return;/,
     'the roster is recorded as handled even when nothing was published — publishGroupKey does nothing when ' +
     'this console has no ring yet, so the member who joined in that window is never keyed, and the next ' +
