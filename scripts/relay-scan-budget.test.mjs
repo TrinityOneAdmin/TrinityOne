@@ -24,7 +24,9 @@ import { readFileSync } from 'node:fs';
 
 const SRC = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
 
-function lift() {
+let membersSet = new Set();
+function lift(members = []) {
+  membersSet = new Set(members);
   const at = SRC.indexOf('function scanAllowance(ws)');
   assert.notEqual(at, -1,
     'scanAllowance() is gone from the gateway.\n\n' +
@@ -37,14 +39,15 @@ function lift() {
   }
   const capsAt = SRC.indexOf('const SCAN_ROWS_PER_SEC_AUTHED');
   const caps = SRC.slice(capsAt, SRC.indexOf('\n', SRC.indexOf('SCAN_ROWS_PER_SEC_ANON')) + 1);
-  return new Function('nowRef', caps + '\n' + body.replace('const now = Date.now();', 'const now = nowRef.t;') +
-    '\nreturn scanAllowance;')({ t: 0 });
+  return new Function('nowRef', 'MEMBERS', caps + '\n' + body.replace('const now = Date.now();', 'const now = nowRef.t;') +
+    '\nreturn scanAllowance;')({ t: 0 }, membersSet);
 }
 
 test('a stranger gets far less scanning than a member', () => {
-  const scanAllowance = lift();
+  const M = 'a'.repeat(64);
+  const scanAllowance = lift([M]);
   const anon = scanAllowance({});
-  const member = scanAllowance({ _auth: 'a'.repeat(64) });
+  const member = scanAllowance({ _auth: M });
   assert.ok(anon.left < member.left,
     'an unauthenticated socket is allowed as much relay CPU as a church member. The expensive request needs ' +
     'no identity, so this is the one that has to be cheap to refuse and expensive to repeat');
@@ -66,11 +69,12 @@ test('the allowance is shared across requests, not minted fresh for each', () =>
     'the spend did not carry over between requests on the same connection');
 });
 
-test('authenticating mid-connection raises the allowance', () => {
-  const scanAllowance = lift();
+test('a MEMBER authenticating mid-connection raises the allowance', () => {
+  const M = 'b'.repeat(64);
+  const scanAllowance = lift([M]);
   const ws = {};
   scanAllowance(ws);
-  ws._auth = 'b'.repeat(64);                 // NIP-42 completes on the same socket
+  ws._auth = M;                              // NIP-42 completes on the same socket
   const after = scanAllowance(ws);
   assert.ok(after.cap >= 300000,
     'a member who has just proved who they are is still throttled like a stranger — the replay that runs ' +
@@ -78,11 +82,12 @@ test('authenticating mid-connection raises the allowance', () => {
 });
 
 test('a member who read before AUTH is not starved by the replay', () => {
-  const scanAllowance = lift();
+  const M = 'd'.repeat(64);
+  const scanAllowance = lift([M]);
   const ws = {};
   const anon = scanAllowance(ws);
   anon.left = 0;                             // pre-AUTH reads drained the anonymous bucket — see below
-  ws._auth = 'd'.repeat(64);                 // …and only THEN does NIP-42 complete
+  ws._auth = M;                              // …and only THEN does NIP-42 complete
   const after = scanAllowance(ws);
   assert.ok(after.left >= 300000,
     `the replay starts with ${after.left} rows of budget instead of a full allowance. The relay's CHALLENGE is ` +
@@ -92,9 +97,23 @@ test('a member who read before AUTH is not starved by the replay', () => {
     'only on .cap does not see this: the cap is right and the balance is empty.');
 });
 
+test('authenticating is not membership, and buys nothing on its own', () => {
+  // The AUTH handler checks a signature, a challenge, freshness, host binding and the blocklist — it never
+  // asks whether the pubkey belongs to any church here. So a generated keypair used to connect, authenticate
+  // and immediately hold twelve times the anonymous burst, then reconnect and repeat. The justification
+  // written when the grant was added — "a socket can only upgrade once" — was true and beside the point.
+  const scanAllowance = lift([]);            // nobody is a member
+  const stranger = scanAllowance({ _auth: 'e'.repeat(64) });
+  assert.ok(stranger.cap <= 50000,
+    `any keypair that completes NIP-42 is handed ${stranger.cap} rows/second. Authentication proves someone ` +
+    'holds a key, not that a church admitted them — so this is a burst anyone can buy, and buy again by ' +
+    'reconnecting');
+});
+
 test('a member is not permanently punished for one big read', () => {
-  const scanAllowance = lift();
-  const ws = { _auth: 'c'.repeat(64) };
+  const M = 'c'.repeat(64);
+  const scanAllowance = lift([M]);
+  const ws = { _auth: M };
   const rl = scanAllowance(ws);
   rl.left = 0;                               // spent entirely
   rl.t -= 1000;                              // …a second ago

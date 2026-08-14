@@ -3718,7 +3718,21 @@ const SCAN_ROWS_PER_SEC_AUTHED = 300000;
 const SCAN_ROWS_PER_SEC_ANON = 25000;
 function scanAllowance(ws) {
   const now = Date.now();
-  const cap = ws._auth ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;
+  // AUTHENTICATING IS NOT MEMBERSHIP, AND ONLY MEMBERSHIP BUYS THE LARGE ALLOWANCE.
+  //
+  // The generous cap was granted to anything that completed NIP-42 — and the AUTH handler checks a signature,
+  // a challenge, freshness, host binding and the blocklist, but never whether the pubkey belongs to any
+  // church here. So any generated keypair could connect, authenticate and immediately hold twelve times the
+  // anonymous burst, then reconnect and do it again. The justification written when the grant was added
+  // ("a socket can only upgrade once") was true and beside the point.
+  //
+  // MEMBERS is the relay's effective write-allowed set — self-joined, minus blocked, minus unapproved — the
+  // same knowledge the read gates already depend on, so this costs a Set lookup.
+  //
+  // A pending joiner, authenticated but not yet approved, stays on the anonymous allowance. That is the right
+  // answer rather than a regrettable one: almost everything they can read is ungated and cheap, and the deep
+  // scans this bounds are over a corpus they are not being served anyway.
+  const cap = (ws._auth && MEMBERS.has(ws._auth)) ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;
   if (!ws._scanRL) ws._scanRL = { left: cap, t: now, cap };
   const rl = ws._scanRL;
   // AUTH raises it mid-connection, and the raise GRANTS THE FULL MEMBER ALLOWANCE rather than carrying the

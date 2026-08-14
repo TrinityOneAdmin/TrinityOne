@@ -512,4 +512,11 @@ export const CASES = [
     replace: ``,
     test: 'scripts/group-key-ring.test.mjs',
   },
+  {
+    name: 'relay: any keypair buys a member-sized allowance',
+    file: 'scripts/gateway.mjs',
+    find: `  const cap = (ws._auth && MEMBERS.has(ws._auth)) ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;`,
+    replace: `  const cap = ws._auth ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;`,
+    test: 'scripts/relay-scan-budget.test.mjs',
+  },
 ];
