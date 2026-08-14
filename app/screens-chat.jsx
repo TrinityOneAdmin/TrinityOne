@@ -1105,7 +1105,12 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           const kept = !!(extra && extra.text);
           let why = 'Couldn’t lock this message, so it wasn’t sent. Try again in a moment.';
           if (evt._refused === 'nokey') {
-            const online = (() => { try { return window.Fellowship.relayReady(); } catch (e) { return false; } })();
+            // `settled` matters here for the same reason it does in the empty state: relayReady() is false
+            // for the whole of a cold start, because proving who you are is a round trip AFTER connecting.
+            // Branching straight on it told a member who had just opened the app that they were offline. The
+            // empty state got a grace period for exactly this and the refusal did not — so until the
+            // connection has had its chance, say the neutral thing rather than the confident wrong one.
+            const online = (() => { try { return window.Fellowship.relayReady(); } catch (e) { return false; } })() || !settled;
             why = online
               ? 'This room is encrypted and your key hasn’t arrived yet, so this wasn’t sent — it can’t go out unlocked.' + (kept ? ' Your words are still here; try again in a moment.' : ' Nothing was sent — please try again in a moment.')
               : 'This room is encrypted and your key only arrives when you’re connected.' + (kept ? ' Your words are still here — send them once you’re back online.' : ' Nothing was sent — try again once you’re back online.');

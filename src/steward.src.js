@@ -3103,7 +3103,7 @@ window.Steward = {
   //
   // The church key is always wrapped to itself (so the church can later add members without needing
   // the original opaque key material from disk). ----
-  publishGroupKey(groupId, memberPubs, opts = {}) {
+  async publishGroupKey(groupId, memberPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
     const haveRing = (_skeys[groupId] || []).length > 0;
     if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
@@ -3135,22 +3135,45 @@ window.Steward = {
     // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
     // AUDIT-2026-07-27.
     _senvTs[groupId] = now();
+    // A MEMBER WE COULD NOT SEAL TO MUST NOT VANISH QUIETLY. This loop skipped any pubkey that threw and
+    // carried on, and the publish reported success — so that member was simply absent from the envelope.
+    // The member side treats "no copy for me" as REMOVAL and deletes any key it held, so they lose the room
+    // rather than merely failing to gain it: nothing new decrypts, and (since the send now refuses rather
+    // than publishing in clear) nothing can be posted either, with the app telling them to try again in a
+    // moment, indefinitely. Nobody is told — not them, not the steward.
+    //
+    // The skip itself is right: one unusable pubkey must not cost everyone else their key. What was wrong is
+    // that it was silent. Collect them and hand them back.
+    // `build` stays self-contained and returns the skips alongside the envelope rather than writing to a
+    // variable outside itself — group-key-ring.test.mjs lifts this function out of the source and runs it,
+    // and an outer reference turns that test into a ReferenceError rather than a check.
+    let skipped = [];
     const build = (r) => {
-      const keys = {}, rings = {};
+      const keys = {}, rings = {}, missed = [];
       const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
       for (const pk of recips) {
-        try { const ck = nip44ck(churchSk, pk); keys[pk] = nip44e(cur, ck); rings[pk] = nip44e(wrapped, ck); } catch (e) {}
+        try { const ck = nip44ck(churchSk, pk); keys[pk] = nip44e(cur, ck); rings[pk] = nip44e(wrapped, ck); }
+        catch (e) { missed.push(pk); }
       }
+      build.missed = missed;
       return JSON.stringify({ rev, keys, rings });
     };
     // A church large enough to push the sealed ring past the relay's 1 MB cap sheds history rather than
     // failing to publish: a shorter ring costs old messages, a refused envelope costs the group entirely.
     let content = build(ring);
+    skipped = build.missed || [];
     for (let r = ring.length; content.length > 900000 && r > 1; ) {
       r = Math.max(1, r >> 1);
       content = build(ring.slice(0, r));
+      skipped = build.missed || [];
     }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
+    const ok = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
+    if (ok === false) return false;
+    if (skipped.length) {
+      console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
+      return { ok: true, skipped: skipped.slice() };
+    }
+    return true;
   },
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----

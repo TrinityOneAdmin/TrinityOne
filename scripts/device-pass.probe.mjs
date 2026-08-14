@@ -214,10 +214,21 @@ try {
   await shot('01-today');
 
   console.log('\n── the You screen ──────────────────────────────────────────────────────────');
-  await tap('You', false);
+  // ASSERT THE SCREEN OPENED BEFORE ASSERTING ANYTHING ABOUT IT. Both checks below used to pass whether or
+  // not the tap landed: the result was discarded, and the Today screen already shows the church name, so
+  // "the You screen names your church" really meant "some screen does". The absence check was worse — a
+  // panel that was never on this screen is trivially absent from any other one.
+  const openedYou = await tap('You', false);
   await sleep(3500);
-  check('the You screen names the church you are in', await bodyHas('St Mary the Virgin'));
-  check('the "No account, no tracking" panel is gone', !(await bodyHas('No account, no tracking')));
+  const onYou = await waitFor(async () => await bodyHas('MY CHURCH') && await bodyHas('Edit name & mark'), 20000, 2000);
+  check('the You screen actually opens', openedYou && onYou, 'anchored on markings unique to that screen');
+  if (onYou) {
+    check('the You screen names the church you are in', await bodyHas('St Mary the Virgin'));
+    check('the "No account, no tracking" panel is gone', !(await bodyHas('No account, no tracking')));
+  } else {
+    check('the You screen names the church you are in', false, 'skipped — the screen never opened');
+    check('the "No account, no tracking" panel is gone', false, 'skipped — the screen never opened');
+  }
   await shot('02-you');
   await ev('history.back()'); await sleep(2500);
 

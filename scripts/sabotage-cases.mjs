@@ -498,4 +498,18 @@ export const CASES = [
     replace: ``,
     test: 'scripts/key-rotation-size.test.mjs',
   },
+  {
+    name: 'group key: a member we cannot seal to is skipped silently again',
+    file: 'src/steward.src.js',
+    find: `        catch (e) { missed.push(pk); }`,
+    replace: `        catch (e) {}`,
+    test: 'scripts/group-key-ring.test.mjs',
+  },
+  {
+    name: 'group key: a room is marked keyed even when nothing was published',
+    file: 'app/stew-dashboard.jsx',
+    find: `            if (r === null || r === false) return;                       // not keyed \u2014 leave \`last\` alone so we come back`,
+    replace: ``,
+    test: 'scripts/group-key-ring.test.mjs',
+  },
 ];

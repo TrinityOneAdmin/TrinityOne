@@ -239,3 +239,46 @@ test('unblocking someone gives their keys back', () => {
   assert.match(deps, /\}, \[groups, members, stewardRoster, blockedList\]\)/,
     'blockedList is not a dependency of the key distributor — unblocking a member never restores their keys');
 });
+
+// A MEMBER WE COULD NOT KEY MUST NOT DISAPPEAR QUIETLY.
+//
+// THE DEFECT (independent audit, 2026-08-13). Three silent routes left a member without a room's key, and
+// the member side treats "no copy for me" as REMOVAL — it deletes any key it held. So they lost the room
+// rather than merely failing to gain it. Harmless-ish while a keyless member could still post in clear;
+// once the send started refusing rather than publishing unlocked, it became permanent mutism with the app
+// telling them to try again in a moment, for ever, and nobody — not them, not a steward — being told.
+//
+//   1. the console's per-member seal was `catch (e) {}`: one unusable pubkey was skipped and the publish
+//      reported success. Skipping is right; being silent about it is not.
+//   2. the background distributor recorded the new roster as handled whether or not anything was published,
+//      and the publish it calls does nothing at all if that console has not yet received the room's key
+//      envelope. The next tick then saw no change and never retried.
+//   3. a delegated console cannot key at all (unchanged here — it is guarded elsewhere).
+test('the console reports the members it could not seal to', () => {
+  const SRC2 = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
+  const at = SRC2.indexOf('async publishGroupKey(');
+  assert.notEqual(at, -1, 'publishGroupKey moved — re-anchor rather than widening this test');
+  const body = SRC2.slice(at, SRC2.indexOf('\n  },', at));
+  assert.match(body, /catch \(e\) \{ missed\.push\(pk\); \}/,
+    'a member the church cannot seal to is skipped silently, and the envelope publishes as a success — they ' +
+    'lose the room and nobody is told');
+  assert.match(body, /return \{ ok: true, skipped: skipped\.slice\(\) \};/,
+    'the skips are collected but never handed back, so the caller cannot report them either');
+  assert.match(body, /if \(ok === false\) return false;/,
+    'a refused publish still reports success, so a failed key distribution looks identical to a good one');
+});
+
+test('a room that could not be keyed is retried, not marked done', () => {
+  const DASH2 = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const at = DASH2.indexOf('const grew = recips.some(');
+  const body = DASH2.slice(at, at + 1400);
+  assert.match(body, /if \(r === null \|\| r === false\) return;/,
+    'the roster is recorded as handled even when nothing was published — publishGroupKey does nothing when ' +
+    'this console has no ring yet, so the member who joined in that window is never keyed, and the next ' +
+    'tick sees no change and never comes back');
+  assert.match(DASH2, /could not be given the key for/,
+    'members that could not be keyed are not surfaced to the steward, who is the only person able to fix it');
+  assert.match(DASH2, /steward-write-blocked'[^)]*group key/s,
+    'the warning does not go through the console\'s existing write-blocked channel, so it is raised somewhere ' +
+    'nobody is watching');
+});

@@ -17490,7 +17490,7 @@ zoo`.split("\n");
     //
     // The church key is always wrapped to itself (so the church can later add members without needing
     // the original opaque key material from disk). ----
-    publishGroupKey(groupId, memberPubs, opts = {}) {
+    async publishGroupKey(groupId, memberPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const haveRing = (_skeys[groupId] || []).length > 0;
       if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
@@ -17507,8 +17507,9 @@ zoo`.split("\n");
       const rev2 = _srev[groupId] || 1;
       _srev[groupId] = rev2;
       _senvTs[groupId] = now();
+      let skipped = [];
       const build = (r) => {
-        const keys = {}, rings = {};
+        const keys = {}, rings = {}, missed = [];
         const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
         for (const pk of recips) {
           try {
@@ -17516,16 +17517,26 @@ zoo`.split("\n");
             keys[pk] = encrypt3(cur, ck);
             rings[pk] = encrypt3(wrapped, ck);
           } catch (e) {
+            missed.push(pk);
           }
         }
+        build.missed = missed;
         return JSON.stringify({ rev: rev2, keys, rings });
       };
       let content = build(ring);
+      skipped = build.missed || [];
       for (let r = ring.length; content.length > 9e5 && r > 1; ) {
         r = Math.max(1, r >> 1);
         content = build(ring.slice(0, r));
+        skipped = build.missed || [];
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
+      const ok = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
+      if (ok === false) return false;
+      if (skipped.length) {
+        console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
+        return { ok: true, skipped: skipped.slice() };
+      }
+      return true;
     },
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----

@@ -294,8 +294,32 @@ function KeyDistributor() {
       if (prev === undefined) { last.current[g.id] = key; continue; }   // first sighting — already keyed by create/edit
       if (key !== prev) {
         const grew = recips.some(pk => pk && !prev.split(',').includes(pk));
-        if (grew && window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true });
-        last.current[g.id] = key;
+        // ONLY RECORD IT AS HANDLED IF IT ACTUALLY WAS. This wrote `last.current[g.id] = key` whether or not
+        // anything was published — and publishGroupKey with reuseOnly returns immediately, doing nothing, if
+        // this console has not yet received the room's key envelope (it must never mint a second key over an
+        // existing one). So a console that started while the envelope was still in flight recorded the new
+        // roster as done, and the next tick saw no change and never tried again. The member who joined in
+        // that window has no key, for good: nothing in the room decrypts for them, and since the send now
+        // refuses rather than publishing in clear, they cannot post either — while the app tells them to try
+        // again in a moment, indefinitely.
+        //
+        // Leaving `last` un-advanced is what makes the next tick retry, which is the whole repair.
+        if (grew && window.Steward.publishGroupKey) {
+          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {
+            if (r === null || r === false) return;                       // not keyed — leave `last` alone so we come back
+            last.current[g.id] = key;
+            const missed = r && r.skipped;
+            // The console's existing warning channel, rather than a new banner nobody knows to look at.
+            if (missed && missed.length) {
+              try {
+                window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+                  message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
+              } catch (e) {}
+            }
+          }).catch(() => {});
+        } else {
+          last.current[g.id] = key;                                      // nothing to publish (shrank, or no key API)
+        }
       }
     }
     // #17: re-wrap the church MEDIA key for the current roster too. Unlike groups (keyed at create/edit), the media
