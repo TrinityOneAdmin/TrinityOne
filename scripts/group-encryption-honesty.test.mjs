@@ -100,6 +100,93 @@ test('a caller cannot talk the send INTO cleartext', () => {
     'a caller passing the wrong flag can downgrade a room to cleartext');
 });
 
+// THE SEND ITSELF, EXECUTED. Everything about publishMessage was still checked by grepping for the lines
+// that implement it — and a re-audit showed exactly what that is worth: appending `&& false` to the wantsEnc
+// line disables the whole refusal, restores BOTH original leaks (a keyless member publishing plaintext under
+// an "End-to-end encrypted" label, and a thrown seal falling through to cleartext), rebuilds vendor, and
+// leaves every test in this file green. The literal is still present, so every grep is satisfied.
+//
+// That is the second time a "behavioural" claim here was really a source-text claim. So this drives the real
+// function against stubs and asserts on WHAT COMES OUT.
+function sendRig({ cache = [{ id: 'g1', encrypted: true }], hint, key = null, sealThrows = false } = {}) {
+  const CP = 'ab'.repeat(32);
+  const store = { ['trinityone.groups.' + CP]: JSON.stringify(cache) };
+  const outbox = [];
+  const published = [];
+  const scope = {
+    sk: new Uint8Array(32),
+    window: { Fellowship: { churchPub: CP, ready: Promise.resolve(), relays: ['wss://r'] } },
+    localStorage: { getItem: (k) => (k in store ? store[k] : null) },
+    _gkeys: key ? { [CP + '|g1']: [key] } : {},
+    _gkKey: (cp, gid) => cp + '|' + gid,
+    // deliberately does NOT echo the plaintext — a stub that did would make the "is the plaintext on the
+    // wire" assertion pass for the wrong reason, which is the whole failure mode this file is about
+    nip44e: (plain) => { if (sealThrows) throw new Error('seal failed'); return 'SEALED[' + String(plain).length + ']'; },
+    finalizeEvent: (e) => ({ ...e, id: 'evt1' }),
+    NET: 'trinityone',
+    _outbox: outbox,
+    _outboxSave: () => {},
+    _publishBounded: async (_r, e) => { published.push(e); return true; },
+    console: { warn: () => {} },
+  };
+  const body = stripComments(fnBody(SRC, 'function _wantsEncrypted(groupId, hint)', '_wantsEncrypted'))
+    + '\n' + stripComments(fnBody(SRC, 'function _groupDoc(gid)', '_groupDoc'))
+    + '\nfunction loadDocCache(prefix, cp){ try { const a = JSON.parse(localStorage.getItem("trinityone." + prefix + "." + cp) || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } }'
+    + '\nconst api = { ' + stripComments(fnBody(SRC, 'async publishMessage(groupId, content, extraTags = [], opts = {})', 'publishMessage')) + ' };';
+  const names = Object.keys(scope);
+  const api = new Function(...names, body + '\nreturn api;')(...names.map(n => scope[n]));
+  return { send: (text) => api.publishMessage('g1', text, [], hint === undefined ? {} : { encrypted: hint }), outbox, published };
+}
+
+test('EXECUTED: a keyless member is refused, and nothing is queued or published', async () => {
+  const r = sendRig({ key: null });
+  const out = await r.send('secret words');
+  assert.equal(out && out._refused, 'nokey',
+    'the send published instead of refusing — a member with no key put their words on the relay in clear, ' +
+    'under a room labelled encrypted. This is the original defect, and no grep-based test can see it');
+  assert.equal(r.outbox.length, 0, 'a refused message was queued — it goes out in clear on the next flush');
+  assert.equal(r.published.length, 0, 'a refused message was published anyway');
+});
+
+test('EXECUTED: with a key, the words are sealed before they leave', async () => {
+  const r = sendRig({ key: new Uint8Array(32) });
+  const evt = await r.send('secret words');
+  assert.equal(evt._refused, undefined, 'a member holding the key was refused');
+  assert.ok(!String(evt.content).includes('secret words'), 'the plaintext is on the wire');
+  assert.ok(evt.tags.some(t => t[0] === 'enc'), 'the event is not marked encrypted, so readers will not decrypt it');
+});
+
+test('EXECUTED: a seal that throws refuses rather than falling through to cleartext', async () => {
+  const r = sendRig({ key: new Uint8Array(32), sealThrows: true });
+  const out = await r.send('secret words');
+  assert.equal(out && out._refused, 'sealfailed',
+    'the seal threw and the send carried on with the ORIGINAL text — the catch block was empty for exactly ' +
+    'this reason and it looked deliberate');
+  assert.equal(r.published.length, 0, 'the unencrypted message was published');
+});
+
+test('EXECUTED: an ordinary room still sends normally', async () => {
+  const r = sendRig({ cache: [{ id: 'g1', encrypted: false }], key: null });
+  const evt = await r.send('hello everyone');
+  assert.equal(evt._refused, undefined, 'an ordinary unencrypted room now refuses to send — this breaks chat for everyone');
+  assert.equal(evt.content, 'hello everyone');
+  assert.ok(!evt.tags.some(t => t[0] === 'enc'));
+});
+
+test('EXECUTED: a cache miss does not become a cleartext publish', async () => {
+  const r = sendRig({ cache: [], hint: true, key: null });
+  const out = await r.send('secret words');
+  assert.equal(out && out._refused, 'nokey',
+    'the room was missing from the cache, so the send fell back to "not encrypted" and published in clear — ' +
+    'the caller told it the room was encrypted and it did not listen');
+});
+
+test('EXECUTED: a caller cannot downgrade an encrypted room to cleartext', async () => {
+  const r = sendRig({ cache: [{ id: 'g1', encrypted: true }], hint: false, key: null });
+  const out = await r.send('secret words');
+  assert.equal(out && out._refused, 'nokey', 'a caller passing the wrong flag published cleartext into an encrypted room');
+});
+
 test('the send asks the shared decision, not the cache directly', () => {
   const fn = stripComments(fnBody(SRC, 'async publishMessage(groupId, content, extraTags = [], opts = {})', 'publishMessage'));
   assert.match(fn, /_wantsEncrypted\(groupId, opts\.encrypted\)/,

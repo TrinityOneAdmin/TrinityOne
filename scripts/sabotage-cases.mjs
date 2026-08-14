@@ -515,10 +515,21 @@ export const CASES = [
     test: 'scripts/group-key-ring.test.mjs',
   },
   {
-    name: 'relay: any keypair buys a member-sized allowance',
-    file: 'scripts/gateway.mjs',
-    find: `  const cap = (ws._auth && MEMBERS.has(ws._auth)) ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;`,
-    replace: `  const cap = ws._auth ? SCAN_ROWS_PER_SEC_AUTHED : SCAN_ROWS_PER_SEC_ANON;`,
-    test: 'scripts/relay-scan-budget.test.mjs',
+    name: 'encryption: the refusal is disabled while the literal stays put',
+    file: 'src/fellowship.src.js',
+    // The re-audit's attack, verbatim: keep every grepped string exactly where it is and neuter the decision.
+    // Both original leaks come back — a keyless member publishes plaintext under an "End-to-end encrypted"
+    // label, and a thrown seal falls through to cleartext — and before the EXECUTED tests were written this
+    // left all 19 guards in group-encryption-honesty.test.mjs green.
+    find: `    const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);`,
+    replace: `    const wantsEnc = _wantsEncrypted(groupId, opts.encrypted) && false;`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
+  },
+  {
+    name: 'encryption: the send stops honouring the caller\u2019s knowledge',
+    file: 'src/fellowship.src.js',
+    find: `    const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);`,
+    replace: `    const wantsEnc = _wantsEncrypted(groupId, undefined);`,
+    test: 'scripts/group-encryption-honesty.test.mjs',
   },
 ];
