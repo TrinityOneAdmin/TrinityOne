@@ -596,6 +596,29 @@ export const CASES = [
     test: 'scripts/group-key-ring.test.mjs',
   },
   {
+    name: 'blocklist: the local set updates only after the relay confirms',
+    file: 'src/steward.src.js',
+    // semantically "the same code, later" — but the whole point is the window BEFORE the publish resolves,
+    // which is exactly when the roster effect re-keys the person just blocked
+    find: `    _localBlocked = new Set(list.map(p => String(p).toLowerCase()));
+    const content = JSON.stringify({ pubkeys: list });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));`,
+    replace: `    const content = JSON.stringify({ pubkeys: list });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk))
+      .then(r => { _localBlocked = new Set(list.map(p => String(p).toLowerCase())); return r; });`,
+    test: 'scripts/name-key-integrity.test.mjs',
+  },
+  {
+    name: 'blocklist: only `want` is filtered, the grow-path re-add returns',
+    file: 'src/steward.src.js',
+    // the subtle half-fix: `want` is already clean, so the union "must be fine" — but Object.keys(have) is
+    // the OLD envelope's recipient map and still contains the person just blocked
+    find: `    const recips = (opts.rotate ? want : [...new Set([...want, ...Object.keys(have)])])
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));`,
+    replace: `    const recips = opts.rotate ? want : [...new Set([...want, ...Object.keys(have)])];`,
+    test: 'scripts/name-key-integrity.test.mjs',
+  },
+  {
     name: 'fnBody: a call-shaped anchor silently widens again',
     file: 'scripts/test-slice.mjs',
     // Restores the pre-fix behaviour: nothing checks what sits between the balanced `)` and the chosen `{`,

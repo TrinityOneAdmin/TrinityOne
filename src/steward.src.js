@@ -746,6 +746,16 @@ function _isRelayAuthed() {
 // beside it promising the opposite. Module-level and fed by subscribeSafeguard, mirroring the member app.
 let _noPhoto = new Set();
 const _applyNoPhotoList = (list) => { _noPhoto = pubSet(list); };   // shared normalisation — scripts/trinity-rules.mjs
+// AUDIT-2026-08-10 item B. The blocklist the recipient builders consulted was the SUBSCRIBED copy, which
+// round-trips through the relay — so the console that performs a block re-keyed the blocked member back in
+// through its own stale React state: block() rotates them out, the roster effect re-runs with the old
+// blockedList, and the grow-never-shrink merge re-adds them from the old envelope's recipient map. Kept in
+// sync SYNCHRONOUSLY at the top of setBlocked (full replacement, so unblock works too), and consulted inline
+// by every recipient builder. Memory-only and starts empty, so a console that did not perform the block
+// fails OPEN toward the subscription list — sync knowledge where we have it, subscription elsewhere. Hex is
+// lowercased on both sides (the blockedSet normalisation), because a case-mismatch here would silently drop
+// LEGITIMATE members from envelopes.
+let _localBlocked = new Set();
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
 // ONE NAME-KEY PUBLISH AT A TIME. ensureNameKeyForMembers assigns the new ring synchronously and only
 // updates the recipient map after the envelope publishes — a gap that used to be nanoseconds. Sealing
@@ -826,6 +836,8 @@ function _resetChurchScopedState() {
   _clearanceSent.clear();
   _careRoster = new Set(); _careRosterKnown = false;
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+  // church A's blocks must not suppress church B's members from B's envelopes (item B)
+  _localBlocked = new Set();
   _applyNoPhotoList([]);
   // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
@@ -2518,7 +2530,8 @@ window.Steward = {
   // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
   async ensureMediaKeyForMembers(memberPubs) {
     if (!sk || !_mediaKeyHex) return false;                       // no media key on this device → nothing to distribute yet
-    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     const have = _mediaKeyDocKeys || {};
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
     
@@ -2593,7 +2606,8 @@ window.Steward = {
     }
     // include ourselves (delegated stewards sign with their own key) and the steward roster, so a steward
     // can open needs and re-wrap for new members without the owner present
-    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))];
+    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     const have = _careKeyDocKeys || {};
     if (want.every(p2 => have[p2])) return false;             // everyone's keyed — no republish
     
@@ -3107,7 +3121,10 @@ window.Steward = {
     if (!churchSk || !churchPub) return Promise.resolve(null);
     const haveRing = (_skeys[groupId] || []).length > 0;
     if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
-    const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])];
+    // The locally-known blocklist wins over a stale caller list (AUDIT-2026-08-10 item B): the roster effect
+    // calls this with the same stale roster in the same post-block window as the name key.
+    const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));
     let ring = _skeys[groupId] || [];
     let key = ring[0];
     // AUDIT-2026-07-24: the contract above ("must NOT mint a new key — would orphan history") was enforced only
@@ -3229,6 +3246,10 @@ window.Steward = {
     _requireTrustedView('blocked list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
+    // SYNCHRONOUS, before the publish (AUDIT-2026-08-10 item B): the recipient builders must know about the
+    // block in the same tick it happens, not after the relay round-trip — that lag is the window in which the
+    // roster effect re-keyed the person just blocked. Full replacement, so an unblock clears it too.
+    _localBlocked = new Set(list.map(p => String(p).toLowerCase()));
     const content = JSON.stringify({ pubkeys: list });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));
   },
@@ -3679,14 +3700,19 @@ window.Steward = {
     if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
     // (3) Include the acting church and the steward roster, not just this device. Omitting `cp` is why a
     // delegated console could never read the envelope in the first place.
-    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].map(p => toPubHex(p) || p).filter(Boolean))];
+    // BOTH halves of the union are filtered against the locally-known blocklist (AUDIT-2026-08-10 item B):
+    // filtering only `want` leaves the grow-path re-add — the blocked member comes straight back out of
+    // `Object.keys(have)`, which is the old envelope's recipient map and still contains them.
+    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].map(p => toPubHex(p) || p).filter(Boolean))]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));
     const have = _nameKeyDocKeys || {};
     // (4) GROW, never shrink — except on an explicit rotate. This runs on every roster tick, and the roster
     // arrives in pieces, so an early call held a PARTIAL member list. Publishing that dropped everyone missing
     // from it, and the member side treats "I am not in this envelope" as revocation and deletes its keys — so
     // half the congregation would have gone anonymous until a fuller envelope happened along. A block is the
     // one case where removing a recipient is the whole point, and that is what opts.rotate marks.
-    const recips = opts.rotate ? want : [...new Set([...want, ...Object.keys(have)])];
+    const recips = (opts.rotate ? want : [...new Set([...want, ...Object.keys(have)])])
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));
     // (5) Everyone already keyed and nothing rotated → say nothing. Without this the console republished on
     // every 150 ms roster emit; each envelope makes every member's app re-open every sealed name in the church
     // and re-render every subscriber.
@@ -4810,6 +4836,9 @@ window.Steward = {
     // key, wrapped to church B's members. That hands every member of B the key that opens A's sealed names.
     // AUDIT-2026-07-27.
     _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+    // The locally-known blocklist is per-CHURCH too (item B): carried across, church A's blocks would
+    // silently drop church B's members from every envelope this console publishes for B.
+    _localBlocked = new Set();
     // F6: photo suppression is PER CHURCH. Carrying it across an identity switch would suppress whichever
     // members of the new church happened to share a pubkey position with the old list — and, worse, leak one
     // church's moderation decisions into another's screen. Cleared here beside the other per-identity state;

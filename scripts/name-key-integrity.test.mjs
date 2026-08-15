@@ -147,6 +147,85 @@ test('the envelope grows and never silently shrinks', () => {
     'the acting church and the steward roster must be recipients, or a delegated console can never read the envelope at all');
 });
 
+// ── a block is honoured before the relay confirms it (AUDIT-2026-08-10 item B) ──────────────────────────────
+// The recipient builders used to consult only the SUBSCRIBED blocklist, which round-trips through the relay.
+// So the console that performs a block re-keyed the blocked member straight back in through its own stale
+// React state: block() rotates them out, the roster effect re-runs with the old blockedList, and the
+// grow-never-shrink merge re-adds them from `have`. The envelope carrying a copy sealed to the blocked pubkey
+// then sits in the relay DB — lawful compulsion of the relay plus the blocked member's own sk (and a hostile
+// ex-member is exactly who cooperates) opens every congregation name sealed under the current ring.
+//
+// This EXECUTES the shipped setBlocked and _ensureNameKeyLocked, lifted from vendor/steward.js, with the
+// blocklist publish left UNRESOLVED — the exact window the bug lives in. The sync `_localBlocked` statement
+// under test is the SAME statement the shipped code runs, not a test-local reimplementation.
+function blockRig(have) {
+  const setBlockedM = fnBody(STEWARD, 'setBlocked(pubkeys)', 'setBlocked in the shipped bundle');
+  const ensureM = fnBody(STEWARD, 'async _ensureNameKeyLocked(', '_ensureNameKeyLocked in the shipped bundle');
+  const src = `
+    let _localBlocked = new Set();
+    let _nameKeyRing = ['11'.repeat(32)];
+    let _nameKeyDocKeys = HAVE;
+    let _nameKeyChecked = true;
+    const published = [];
+    const churchSk = new Uint8Array(32).fill(3);
+    const churchPub = CP, pub = CP, sk = churchSk, actingChurch = '';
+    const NAME_RING_MAX = 12, NAMEKEY_D = 'trinityone/namekey:', BLOCKED_D = 'trinityone/blocked:', NET = 'trinityone';
+    const _isRelayAuthed = () => true;
+    const _requireTrustedView = () => {};
+    const now = () => 1000;
+    const _hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
+    const toPubHex = (p) => /^[0-9a-f]{64}$/i.test(p) ? String(p).toLowerCase() : null;
+    // esbuild renames the nip44 imports in the bundle — provide both spellings (see memberSide above)
+    const encrypt3 = () => 'ct', getConversationKey = () => 'ck';
+    const nip44e = encrypt3, nip44ck = getConversationKey;
+    const _sealEach = async (payload, recips) => { const keys = {}; for (const pk of recips) keys[pk] = 'sealed'; return keys; };
+    const finalizeEvent2 = (t) => t, finalizeEvent = finalizeEvent2, feChurch = (t) => t;
+    // the blocklist publish NEVER resolves — the relay has not confirmed the block yet
+    const publish = (evt) => {
+      published.push(evt);
+      const d = ((evt.tags || []).find((t) => t[0] === 'd') || [])[1] || '';
+      return d.startsWith(BLOCKED_D) ? new Promise(() => {}) : Promise.resolve(evt);
+    };
+    const api = { ${setBlockedM}, ${ensureM} };
+    return { api, published };
+  `;
+  return new Function('CP', 'HAVE', src)(church.pub, have);
+}
+const _nameEnvs = (rig) => rig.published.filter(e => String(((e.tags || []).find(t => t[0] === 'd') || [])[1] || '').startsWith('trinityone/namekey:'));
+
+test('a block is honoured before the relay confirms it', async () => {
+  const C = K().pub, D = K().pub;
+  const rig = blockRig({ [church.pub]: 1, [alice.pub]: 1, [bob.pub]: 1, [C]: 1 });
+  rig.api.setBlocked([C]);                                        // NOT awaited — the publish is in flight
+  // the roster effect re-fires with the STALE list still containing C — the deterministic self-race
+  await rig.api._ensureNameKeyLocked([alice.pub, bob.pub, C], []);
+  assert.equal(_nameEnvs(rig).length, 0,
+    'the stale roster tick republished the envelope — nothing changed once the blocked member is filtered, so nothing should publish');
+  // …and a genuinely-new member D still gets keyed (kills the never-publish-anything mutant)
+  await rig.api._ensureNameKeyLocked([alice.pub, bob.pub, C, D], []);
+  const env = _nameEnvs(rig)[0];
+  assert.ok(env, 'a new member joining must still trigger a publish');
+  const keys = JSON.parse(env.content).keys;
+  assert.ok(keys[alice.pub] && keys[bob.pub], 'legitimate members fell out of the envelope — an over-matching filter anonymises real members');
+  assert.ok(keys[D], 'the new member is missing from the envelope');
+  assert.ok(keys[church.pub], 'the church itself must stay a recipient');
+  assert.equal(keys[C], undefined,
+    'the member just blocked was sealed back into the name key from the stale `have` map — the grow-path re-add');
+});
+
+test('unblocking replaces the local set — the filter follows the newest list, not history', async () => {
+  const C = K().pub, D = K().pub;
+  const rig = blockRig({ [church.pub]: 1, [alice.pub]: 1 });
+  rig.api.setBlocked([C]);
+  rig.api.setBlocked([]);                                         // the steward unblocks — full replacement, not append
+  await rig.api._ensureNameKeyLocked([alice.pub, C, D], []);
+  const env = _nameEnvs(rig)[0];
+  assert.ok(env, 'after the unblock the envelope must publish for the returning member');
+  const keys = JSON.parse(env.content).keys;
+  assert.ok(keys[C], 'the unblocked member must get keys back — the set is replaced, never merely appended to');
+  assert.ok(keys[D] && keys[alice.pub]);
+});
+
 test('switching church resets the name key', () => {
   // subscribeNameKey is mounted once with an empty dependency list, so the ring was carried across an identity
   // switch — and the roster effect then published church A's key as church B's, wrapped to B's members. That

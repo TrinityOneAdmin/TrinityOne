@@ -269,6 +269,43 @@ test('the console reports the members it could not seal to', () => {
     'a refused publish still reports success, so a failed key distribution looks identical to a good one');
 });
 
+// ── a locally-blocked member never re-enters the envelope (AUDIT-2026-08-10 item B) ────────────────────────
+// The group-key sibling of the name-key race: the roster effect calls publishGroupKey with the same stale
+// list in the same window after a block, so the console that performed the block wrapped the fresh key
+// straight back to the blocked pubkey. EXECUTES the shipped publishGroupKey, lifted whole from
+// vendor/steward.js with its collaborators stubbed.
+test('a locally-blocked member is excluded from the group key envelope', async () => {
+  const STEW2 = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  const method = fnBody(STEW2, 'async publishGroupKey(', 'publishGroupKey in the shipped bundle');
+  const C = K().pub;
+  const src = `
+    let _localBlocked = new Set([C]);
+    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {};
+    const GROUP_RING_MAX = 12, GROUPKEY_D = 'trinityone/groupkey:', NET = 'trinityone';
+    const churchSk = new Uint8Array(32).fill(3), churchPub = CP;
+    const _isRelayAuthed = () => true;
+    const now = () => 1000;
+    const _hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
+    const toPubHex = (p) => /^[0-9a-f]{64}$/i.test(p) ? String(p).toLowerCase() : null;
+    // esbuild renames the nip44 imports in the bundle — provide both spellings
+    const encrypt3 = () => 'ct', getConversationKey = () => 'ck';
+    const nip44e = encrypt3, nip44ck = getConversationKey;
+    const published = [];
+    const publish = async (evt) => { published.push(evt); return evt; };
+    const finalizeEvent2 = (t) => t, finalizeEvent = finalizeEvent2;
+    const api = { ${method} };
+    return { api, published };
+  `;
+  const rig = new Function('CP', 'C', src)(church.pub, C);
+  const out = await rig.api.publishGroupKey('g1', [alice.pub, C]);
+  assert.ok(out !== null && out !== false, 'sanity: the publish itself must go through');
+  const keys = JSON.parse(rig.published[0].content).keys;
+  assert.ok(keys[alice.pub], 'a legitimate member fell out of the envelope — an over-matching filter mutes real members');
+  assert.ok(keys[church.pub], 'the church itself must stay a recipient');
+  assert.equal(keys[C], undefined,
+    'the freshly-rotated group key was wrapped straight back to the member just blocked');
+});
+
 // ── the distributor loop, EXECUTED ─────────────────────────────────────────────────────────────────────────
 // AUDIT-2026-08-10 item C. subscribeMembers coalesces at ~150ms and re-emits a fresh array on every church
 // event burst, so the roster effect re-runs constantly. The retry-on-failure semantics above are right, but
