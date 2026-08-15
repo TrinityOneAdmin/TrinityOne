@@ -983,6 +983,22 @@ function _replaySealedNames(cp, hub) {
 //   m — for the member themselves. Stage 2 took the name out of kind-0, and kind-0 was where a member restoring
 //       from their 12 words on a new phone got their name back. Reading the congregation copy cannot work at
 //       restore time: it needs the name key, which needs membership, which is the thing still in flight.
+// Open a church calendar document (event / service / room / booking / rota). These are sealed under the
+// church's NAME key — see the note on _sealChurchDoc in steward.src.js and reference/PLAN-2026-08-15-CLEARTEXT.md.
+// Cleartext first, because every one written before that shipped is plain JSON, then every key in the ring so
+// a rotation never hides the church's own history.
+//
+// Returns null when it is sealed and this member holds no key for it. The caller MUST render that as a locked
+// state, never as nothing: an empty calendar is indistinguishable from a church with nothing on, which is the
+// silent-blank failure this project treats as its worst.
+function _openChurchDoc(cp, content) {
+  let o;
+  try { o = JSON.parse(content); } catch (e) { return null; }
+  if (!o || typeof o.e !== 'string') return o;           // written before the calendar was sealed
+  for (const k of (_nameKeys.get(cp) || [])) { try { return JSON.parse(nip44d(o.e, k)); } catch (e) {} }
+  return null;
+}
+
 function _sealNameDoc(cp, nm, congKey) {
   if (!sk || !cp) return '';
   const body = JSON.stringify({ name: nm });
@@ -3025,7 +3041,13 @@ window.Fellowship = {
         const id = d.slice(prefix.length);
         // AUDIT-2026-07-24 (services/rotas/rosters/rooms): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { byId.delete(id); emit(); } return; }
-        try { byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        try {
+          const c = _openChurchDoc(pubk, e.content);
+          // sealed, and this member has no key for it yet — keep it in the list as LOCKED so the screen can
+          // say so. Dropping it here is what would turn "your key hasn't arrived" into "nothing is on".
+          if (c === null) { byId.set(id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }
+          byId.set(id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }); emit();
+        } catch {}
       },
       onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path

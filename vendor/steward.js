@@ -14430,6 +14430,35 @@ zoo`.split("\n");
   var GUARDREQ_D = "trinityone/guardreq:";
   var NAMEKEY_D = "trinityone/namekey:";
   var NAME_RING_MAX = 12;
+  function _sealChurchDoc(obj) {
+    const body = JSON.stringify(obj);
+    const k = _nameKeyRing[0];
+    if (!k) {
+      console.warn("[steward] no church name key yet \u2014 writing this document in cleartext");
+      return body;
+    }
+    try {
+      return JSON.stringify({ e: encrypt3(body, _unhex(k)) });
+    } catch (e) {
+      return body;
+    }
+  }
+  function _openChurchDoc(content) {
+    try {
+      const o = JSON.parse(content);
+      if (!o || typeof o.e !== "string") return o;
+    } catch (e) {
+      return null;
+    }
+    const ct = JSON.parse(content).e;
+    for (const k of _nameKeyRing) {
+      try {
+        return JSON.parse(decrypt3(ct, _unhex(k)));
+      } catch (e) {
+      }
+    }
+    return null;
+  }
   var NAME_D = "trinityone/name:";
   var CLEARANCE_D = "trinityone/clearance:";
   var _clearanceSent = /* @__PURE__ */ new Map();
@@ -18826,7 +18855,13 @@ zoo`.split("\n");
             return;
           }
           try {
-            byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at });
+            const c = _openChurchDoc(e.content);
+            if (c === null) {
+              byId.set(id, { id, _locked: true, ts: e.created_at });
+              emit();
+              return;
+            }
+            byId.set(id, { id, ...map(c, id), ts: e.created_at });
             emit();
           } catch {
           }
@@ -18860,8 +18895,9 @@ zoo`.split("\n");
     publishService(svc) {
       if (!sk) return Promise.resolve(null);
       const id = svc.id || "svc" + Date.now();
-      const content = JSON.stringify({ date: svc.date || "", time: svc.time || "10:30", name: svc.name || "Sunday Gathering" });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content })).then(() => ({ id, ...JSON.parse(content) }));
+      const doc = { date: svc.date || "", time: svc.time || "10:30", name: svc.name || "Sunday Gathering" };
+      const content = _sealChurchDoc(doc);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
     },
     removeService(id) {
       if (!sk) return Promise.resolve(null);
@@ -18906,8 +18942,9 @@ zoo`.split("\n");
     publishRoom(room) {
       if (!sk) return Promise.resolve(null);
       const id = room.id || "room" + Date.now();
-      const content = JSON.stringify({ name: (room.name || "Room").trim(), capacity: room.capacity || "", note: (room.note || "").trim() });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content })).then(() => ({ id, ...JSON.parse(content) }));
+      const doc = { name: (room.name || "Room").trim(), capacity: room.capacity || "", note: (room.note || "").trim() };
+      const content = _sealChurchDoc(doc);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
     },
     removeRoom(id) {
       if (!sk) return Promise.resolve(null);
@@ -18919,8 +18956,9 @@ zoo`.split("\n");
     publishBooking(b) {
       if (!sk || !b || !b.roomId) return Promise.resolve(null);
       const id = b.id || "bk" + Date.now();
-      const content = JSON.stringify({ roomId: b.roomId, date: b.date || "", start: b.start || "", end: b.end || "", title: (b.title || "").trim(), note: (b.note || "").trim() });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content })).then(() => ({ id, ...JSON.parse(content) }));
+      const doc = { roomId: b.roomId, date: b.date || "", start: b.start || "", end: b.end || "", title: (b.title || "").trim(), note: (b.note || "").trim() };
+      const content = _sealChurchDoc(doc);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
     },
     removeBooking(id) {
       if (!sk) return Promise.resolve(null);
@@ -18933,7 +18971,8 @@ zoo`.split("\n");
     // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
     publishRota(rota) {
       if (!sk || !rota || !rota.service) return Promise.resolve(null);
-      const content = JSON.stringify({ service: rota.service, published: !!rota.published, assign: rota.assign || {} });
+      const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
+      const content = _sealChurchDoc(doc);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content })).then(() => ({ id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} }));
     },
     removeRota(serviceId) {
@@ -18951,7 +18990,8 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null });
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null };
+      const content = _sealChurchDoc(doc);
       const tags = [["d", EVENT_D + id], ["t", NET]];
       if (groupId) tags.push(["t", groupId]);
       if (actingChurch) tags.push(["p", actingChurch]);

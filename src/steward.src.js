@@ -129,6 +129,46 @@ const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploade
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
 const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per member (ring: current first)
 const NAME_RING_MAX = 12;   // same bound as the care key: the ring is sealed PER RECIPIENT, so it multiplies
+
+// ---- WHEN AND WHERE THIS CHURCH GATHERS — sealed under the church's name key ----
+//
+// Measured 2026-08-15 against the relay's own sqlite: `event` was stored as
+// {"date":"2026-07-24","time":"10:30","title":"Sunday Service","where":"…"} in the clear, and `service`,
+// `room`, `booking` and `rota` repeated it. For a congregation where meeting is the risk, that is the most
+// dangerous thing in the database — handing over the relay hands over the address and the timetable.
+// Members' NAMES were already sealed; the gatherings they attend were not.
+//
+// These five are encryptable at no cost to relay policy because the relay never opens them — it routes on
+// the `d` tag and the author only. (minors/approved/guardians/admitted/stewards/group/sermon are different:
+// the relay parses those to enforce rules server-side, so sealing them would move enforcement to clients.
+// Out of scope deliberately — see reference/PLAN-2026-08-15-CLEARTEXT.md.)
+//
+// The name key is reused rather than a fourth per-church key being minted: it already reaches every member
+// as a per-recipient envelope, already rotates on block, is already fitted to the 1 MB ceiling, and already
+// survives an offline cold start. A fourth ring would be a fourth copy of every failure mode that took this
+// week to fix. The cost, stated: whatever exposes the name key exposes the timetable — but both are held by
+// the same set of people, so they were always going to fall together.
+//
+// FAIL OPEN, DELIBERATELY, AND ONLY HERE. With no ring the document is written in cleartext rather than
+// refused. A church whose key has not arrived must still be able to run its calendar, and unlike the chat
+// send there is no label promising otherwise — nothing here claims a protection it is not delivering. The
+// console warns so it is not silent.
+function _sealChurchDoc(obj) {
+  const body = JSON.stringify(obj);
+  const k = _nameKeyRing[0];
+  if (!k) { console.warn('[steward] no church name key yet — writing this document in cleartext'); return body; }
+  try { return JSON.stringify({ e: nip44e(body, _unhex(k)) }); } catch (e) { return body; }
+}
+// Cleartext first (every document written before this shipped), then every key in the ring so a rotation
+// never hides the church's own history. Returns null when it is sealed and we hold no key for it — the
+// caller must show that as "waiting for your key", never as an empty calendar.
+function _openChurchDoc(content) {
+  try { const o = JSON.parse(content); if (!o || typeof o.e !== 'string') return o; } catch (e) { return null; }
+  const ct = JSON.parse(content).e;
+  for (const k of _nameKeyRing) { try { return JSON.parse(nip44d(ct, _unhex(k))); } catch (e) {} }
+  return null;
+}
+
 const NAME_D = 'trinityone/name:';         // a member's own display name for this church, sealed under it
 const CLEARANCE_D = 'trinityone/clearance:';   // a member's OWN safeguarding status, NIP-44 sealed to them
 // memberPubHex -> { minor, cleared, at } for clearances THIS console has just published. Read-before-write
@@ -4424,7 +4464,11 @@ window.Steward = {
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at }); emit(); } catch {}
+        // _openChurchDoc, not JSON.parse: the calendar documents are sealed under the church name key now
+        // (cleartext ones written before that still open — it tries plain JSON first). A null means sealed
+        // with a key this console does not hold, which must not silently become an empty calendar.
+        try { const c = _openChurchDoc(e.content); if (c === null) { byId.set(id, { id, _locked: true, ts: e.created_at }); emit(); return; }
+              byId.set(id, { id, ...map(c, id), ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -4450,9 +4494,10 @@ window.Steward = {
   publishService(svc) {
     if (!sk) return Promise.resolve(null);
     const id = svc.id || ('svc' + Date.now());
-    const content = JSON.stringify({ date: svc.date || '', time: svc.time || '10:30', name: svc.name || 'Sunday Gathering' });
+    const doc = { date: svc.date || '', time: svc.time || '10:30', name: svc.name || 'Sunday Gathering' };
+    const content = _sealChurchDoc(doc);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERVICE_D + id], ['t', NET]], content }))
-      .then(() => ({ id, ...JSON.parse(content) }));
+      .then(() => ({ id, ...doc }));
   },
   removeService(id) {
     if (!sk) return Promise.resolve(null);
@@ -4483,8 +4528,9 @@ window.Steward = {
   publishRoom(room) {
     if (!sk) return Promise.resolve(null);
     const id = room.id || ('room' + Date.now());
-    const content = JSON.stringify({ name: (room.name || 'Room').trim(), capacity: room.capacity || '', note: (room.note || '').trim() });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content })).then(() => ({ id, ...JSON.parse(content) }));
+    const doc = { name: (room.name || 'Room').trim(), capacity: room.capacity || '', note: (room.note || '').trim() };
+    const content = _sealChurchDoc(doc);
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content })).then(() => ({ id, ...doc }));
   },
   removeRoom(id) {
     if (!sk) return Promise.resolve(null);
@@ -4494,8 +4540,9 @@ window.Steward = {
   publishBooking(b) {
     if (!sk || !b || !b.roomId) return Promise.resolve(null);
     const id = b.id || ('bk' + Date.now());
-    const content = JSON.stringify({ roomId: b.roomId, date: b.date || '', start: b.start || '', end: b.end || '', title: (b.title || '').trim(), note: (b.note || '').trim() });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content })).then(() => ({ id, ...JSON.parse(content) }));
+    const doc = { roomId: b.roomId, date: b.date || '', start: b.start || '', end: b.end || '', title: (b.title || '').trim(), note: (b.note || '').trim() };
+    const content = _sealChurchDoc(doc);
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content })).then(() => ({ id, ...doc }));
   },
   removeBooking(id) {
     if (!sk) return Promise.resolve(null);
@@ -4507,7 +4554,8 @@ window.Steward = {
   // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
   publishRota(rota) {
     if (!sk || !rota || !rota.service) return Promise.resolve(null);
-    const content = JSON.stringify({ service: rota.service, published: !!rota.published, assign: rota.assign || {} });
+    const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
+    const content = _sealChurchDoc(doc);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }))
       .then(() => ({ id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} }));
   },
@@ -4524,7 +4572,8 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
-    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null) });
+    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null) };
+    const content = _sealChurchDoc(doc);
     const tags = [['d', EVENT_D + id], ['t', NET]];
     if (groupId) tags.push(['t', groupId]);   // lets a group's chat filter to its own events
     if (actingChurch) tags.push(['p', actingChurch]);   // delegated steward: p-tag the church so members' group view shows it

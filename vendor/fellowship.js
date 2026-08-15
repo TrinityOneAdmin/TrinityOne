@@ -6699,6 +6699,22 @@
       }
     }
   }
+  function _openChurchDoc(cp, content) {
+    let o;
+    try {
+      o = JSON.parse(content);
+    } catch (e) {
+      return null;
+    }
+    if (!o || typeof o.e !== "string") return o;
+    for (const k of _nameKeys.get(cp) || []) {
+      try {
+        return JSON.parse(decrypt(o.e, k));
+      } catch (e) {
+      }
+    }
+    return null;
+  }
   function _sealNameDoc(cp, nm, congKey) {
     if (!sk || !cp) return "";
     const body = JSON.stringify({ name: nm });
@@ -9370,7 +9386,13 @@
             return;
           }
           try {
-            byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at, _by: e.pubkey });
+            const c = _openChurchDoc(pubk, e.content);
+            if (c === null) {
+              byId.set(id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              emit();
+              return;
+            }
+            byId.set(id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }

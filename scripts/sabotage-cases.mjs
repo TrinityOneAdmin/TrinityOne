@@ -632,4 +632,27 @@ export const CASES = [
     replace: ``,
     test: 'scripts/test-slice.test.mjs',
   },
+  {
+    name: 'calendar: an event is written in the clear again',
+    file: 'src/steward.src.js',
+    // anchored on the inner fragment, not the whole indented block: these helpers were moved to module
+    // scope mid-change and the indentation shifted, which is exactly how a case goes NO-ANCHOR
+    find: `JSON.stringify({ e: nip44e(body, _unhex(k)) })`,
+    replace: `body`,
+    test: 'scripts/church-calendar-sealed.test.mjs',
+  },
+  {
+    name: 'calendar: a member drops what it cannot open, so nothing is on',
+    file: 'src/fellowship.src.js',
+    find: `          if (c === null) { byId.set(id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }`,
+    replace: `          if (c === null) { return; }`,
+    test: 'scripts/church-calendar-sealed.test.mjs',
+  },
+  {
+    name: 'calendar: a rotation hides the church\u2019s own past gatherings',
+    file: 'src/steward.src.js',
+    find: `for (const k of _nameKeyRing) { try { return JSON.parse(nip44d(ct, _unhex(k))); } catch (e) {} }`,
+    replace: `try { return JSON.parse(nip44d(ct, _unhex(_nameKeyRing[0]))); } catch (e) {}`,
+    test: 'scripts/church-calendar-sealed.test.mjs',
+  },
 ];
