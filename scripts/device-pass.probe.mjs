@@ -320,7 +320,19 @@ try {
   await shot('06-offline');
   adb('shell', 'svc', 'wifi', 'enable');
   adb('shell', 'svc', 'data', 'enable');
-  check('it comes back when the signal does', await waitFor(async () => await ev('window.Fellowship.relayReady()'), 90000, 3000));
+  // WAIT FOR THE HANDSET BEFORE JUDGING THE APP. This turned the radios on and immediately began timing the
+  // app's recovery — so a phone whose wifi took its time re-associating was recorded as the app failing to
+  // reconnect. It reported exactly that once, and a direct measurement showed the app in fact recovers in
+  // under 15 seconds with no reload. A check that attributes the environment's slowness to the product is
+  // the same fault as one that passes without opening the screen it names: it is not measuring what it says.
+  const backOnline = await waitFor(() => Promise.resolve(/0% packet loss/.test(
+    adb('shell', 'ping', '-c', '1', '-W', '2', '1.1.1.1'))), 90000, 5000);
+  check('the phone itself is back on the network', backOnline, 'the handset, not the app — measured before blaming anything');
+  if (backOnline) {
+    check('it comes back when the signal does', await waitFor(async () => await ev('window.Fellowship.relayReady()'), 90000, 3000));
+  } else {
+    check('it comes back when the signal does', false, 'skipped — the handset never regained connectivity, so this proves nothing either way');
+  }
 
   await waitFor(async () => await ev('window.Fellowship.relayReady()'), 60000, 3000);
   console.log('\n── the lock ────────────────────────────────────────────────────────────────');
