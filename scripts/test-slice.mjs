@@ -33,13 +33,32 @@ export function fnBody(src, anchor, what = anchor) {
   const paren = src.indexOf('(', at);
   const nl = src.indexOf('\n', at);
   if (paren !== -1 && (nl === -1 || paren < nl)) {
-    let d = 0, end = -1;
+    // Quote- and comment-aware, like the brace walk below. Without this a paren inside a string default —
+    // `function f(sep = ')')` — closes the count early and everything downstream reads the wrong region.
+    let d = 0, end = -1, q = '';
     for (let i = paren; i < src.length; i++) {
-      if (src[i] === '(') d++;
-      else if (src[i] === ')' && --d === 0) { end = i; break; }
+      const c = src[i], prev = src[i - 1];
+      if (q) { if (c === q && prev !== '\\') q = ''; continue; }
+      if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+      if (c === '/' && src[i + 1] === '/') { const e = src.indexOf('\n', i); if (e === -1) break; i = e; continue; }
+      if (c === '/' && src[i + 1] === '*') { const e = src.indexOf('*/', i); if (e === -1) break; i = e + 1; continue; }
+      if (c === '(') d++;
+      else if (c === ')' && --d === 0) { end = i; break; }
     }
     assert.notEqual(end, -1, `${what} has an unterminated parameter list`);
     open = src.indexOf('{', end);
+    assert.notEqual(open, -1, `${what} has no block to read`);
+    // AUDIT-2026-08-10 item E. For a DEFINITION, nothing but whitespace, comments, or a single `=>` sits
+    // between the parameter list's `)` and the body's `{`. For a CALL — `addEventListener('install', (e) =>
+    // {…})` — the walk above balances to the CALL's final paren, and `indexOf('{', end)` then lands on the
+    // NEXT construct's block: the slice silently contains a neighbouring function, and a `doesNotMatch` on it
+    // reads code the test never named. Measured on the real sw.js: the 'install' slice contained the entire
+    // 'activate' handler. A helper that guesses at what the caller meant is the disease this file exists to
+    // cure, so a call-shaped anchor fails loudly instead of returning anything.
+    const between = stripComments(src.slice(end + 1, open)).trim();
+    assert.ok(between === '' || between === '=>',
+      `${what} looks like a call, not a definition — anchor the function itself ` +
+      `(found ${JSON.stringify(between.slice(0, 40))} between its ')' and '{')`);
   } else {
     open = src.indexOf('{', at);
   }

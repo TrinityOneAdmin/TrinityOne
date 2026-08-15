@@ -27,8 +27,11 @@ test('the precache is derived from index.html, not hand-maintained', () => {
 });
 
 test('install caches whatever the page actually references', () => {
-  const at = SW.indexOf("addEventListener('install'");
-  const body = fnBody(SW, at);
+  // Anchor the handler ARROW, not the addEventListener CALL: fnBody refuses call-shaped anchors now, because
+  // the call anchor silently sliced past the install handler into the activate one (AUDIT-2026-08-10 item E).
+  // This slice is the handler body alone — which is what this test's prose claims to read.
+  const at = SW.indexOf('(e) => {', SW.indexOf("addEventListener('install'"));
+  const body = fnBody(SW, at, "the install handler");
   assert.match(body, /shellUrls\(\)/, 'install must use the derived list');
   assert.match(body, /catch/, 'one 404 must not fail the whole install');
 });

@@ -532,4 +532,18 @@ export const CASES = [
     replace: `    const wantsEnc = _wantsEncrypted(groupId, undefined);`,
     test: 'scripts/group-encryption-honesty.test.mjs',
   },
+  {
+    name: 'fnBody: a call-shaped anchor silently widens again',
+    file: 'scripts/test-slice.mjs',
+    // Restores the pre-fix behaviour: nothing checks what sits between the balanced `)` and the chosen `{`,
+    // so anchoring on a CALL slices into the next construct \u2014 the overshoot that made the sw.js install
+    // slice contain the whole activate handler. The paren walk stays; only the refusal is removed, so every
+    // string any other test greps for stays put.
+    find: `    const between = stripComments(src.slice(end + 1, open)).trim();
+    assert.ok(between === '' || between === '=>',
+      \`\${what} looks like a call, not a definition \u2014 anchor the function itself \` +
+      \`(found \${JSON.stringify(between.slice(0, 40))} between its ')' and '{')\`);`,
+    replace: ``,
+    test: 'scripts/test-slice.test.mjs',
+  },
 ];

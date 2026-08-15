@@ -194,11 +194,17 @@ test('changing your name re-seals it everywhere, and a late-arriving key seals o
 test('the console mints and maintains the name key', () => {
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   assert.match(DASH, /subscribeNameKey/, 'the console never loads the envelope, so it cannot re-key anyone');
-  const at = DASH.indexOf('ensureCareKeyForMembers(memberPubs, stewardRoster)');
+  // Anchor the distributor EFFECT's arrow, not the ensureCareKeyForMembers CALL: the call-shaped anchor made
+  // fnBody slice past the effect into its neighbours, so this assertion was passing against code outside the
+  // loop it names (AUDIT-2026-08-10 item E). The arrow after `notBlocked` is the roster effect itself.
+  const at = DASH.indexOf('() => {', DASH.indexOf('const notBlocked = (pk)'));
   assert.notEqual(at, -1, 'the key-distributor loop moved — re-anchor this test');
+  const body = fnBody(DASH, at, 'the key-distributor roster effect');
+  assert.match(body, /ensureCareKeyForMembers\(memberPubs, stewardRoster\)/,
+    'the distributor no longer maintains the care key for the roster');
   // The steward roster is passed too: without it a delegated console is not a recipient of the envelope it
   // is meant to maintain, which is how it ended up holding an empty ring and wiping the church's names.
-  assert.match(fnBody(DASH, at), /ensureNameKeyForMembers\(memberPubs, stewardRoster\)/,
+  assert.match(body, /ensureNameKeyForMembers\(memberPubs, stewardRoster\)/,
     'nothing mints a name key, so every seal in the member app silently does nothing');
 });
 
