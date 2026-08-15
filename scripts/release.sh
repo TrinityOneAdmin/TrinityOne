@@ -90,6 +90,16 @@ if [[ $DO_APK == 1 ]]; then
   run "bash scripts/build-steward-apk.sh"
   # refresh the self-serve index the gateway serves at /apks.html
   run "bash scripts/build-apk-index.sh"
+  # STAGE THEM WHERE THE RELAY ACTUALLY SERVES FROM. /trinityone.apk is served out of relay/apks/ — the one
+  # directory the sandboxed relay can write — and nothing in a release ever refreshed it. It was only ever
+  # written by the console's "Fetch latest APK" button, so the gateway (and a8, and trinityone.church, which
+  # is served by a8 rather than by Pages) kept handing out whatever was last fetched BY HAND. Measured
+  # 2026-08-15: repo root and pages-dist held the 10.5 MB build while relay/apks/ still held a 7.5 MB one from
+  # 31 July, and the site advertised versionCode 197 with cf-cache-status DYNAMIC — not a cache, a different
+  # and older origin. Two other release bugs had to be fixed before this one became visible at all.
+  run "mkdir -p relay/apks"
+  run "cp trinityone.apk relay/apks/trinityone.apk"
+  run "cp trinityone-steward.apk relay/apks/trinityone-steward.apk"
   [[ $DRY == 0 ]] && say "APKs → trinityone.apk ($(du -h trinityone.apk | cut -f1)) + trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))"
 fi
 
