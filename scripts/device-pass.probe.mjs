@@ -157,6 +157,12 @@ const pillText = () => ev(`(function(){
   for (var i=0;i<all.length;i++){ var t=(all[i].innerText||'').trim(); if (want.indexOf(t)>=0) return t; }
   return '(no pill)';})()`);
 const bodyHas = (s) => ev(`document.body.innerText.indexOf(${JSON.stringify(s)}) >= 0`);
+// ARE WE ACTUALLY INSIDE A ROOM? The encryption pill renders only there (matched on its three exact
+// wordings above), so it is the same gate the You-screen section uses: prove the navigation LANDED before
+// reporting anything about the destination. Without it, three room checks passed from the room LIST —
+// screens-chat.jsx renders 'No messages yet' as the empty-room preview right next to the room's name — and a
+// missed tap produced three confident greens about a screen the probe never reached. AUDIT-2026-08-10 item D.
+const inRoom = async () => (await pillText()) !== '(no pill)';
 const waitFor = async (fn, ms = 45000, every = 2500) => {
   const until = Date.now() + ms;
   while (Date.now() < until) { if (await fn()) return true; await sleep(every); }
@@ -198,8 +204,11 @@ try {
   await sleep(1500);
   await tap('I’ll back these up later');
   await sleep(800);
+  // 'Skip anyway' is the confirm step's OWN wording (identity.jsx). Anchoring on bare 'Skip' matched the
+  // first screen's 'Skip for now', which is on screen BEFORE the confirm exists — the check passed without
+  // the confirmation existing at all. AUDIT-2026-08-10 item D.
   check('skipping the 12 words asks for confirmation first',
-    await bodyHas('Skip') && !(await bodyHas('Enter your PIN')), 'the confirm step is reachable');
+    await bodyHas('Skip anyway') && !(await bodyHas('Enter your PIN')), 'anchored on the confirm step’s own wording');
   await tap('Skip anyway', false); await tap('Skip', false);
   await sleep(1500);
   await typeInto('At least 6', PIN);
@@ -233,11 +242,25 @@ try {
   await ev('history.back()'); await sleep(2500);
 
   console.log('\n── an ordinary room ────────────────────────────────────────────────────────');
+  // The taps stay OPTIONAL (a required tap aborts the whole run and costs every check after it — the
+  // gated-skip pattern from the You screen keeps the rest of the evidence); the GATE below is what makes a
+  // missed tap loud. Three checks here used to discard both tap results and pass from the room list or the
+  // Today screen. AUDIT-2026-08-10 item D.
   await tap('Community', false); await sleep(4000);
   await tap('Readings', false); await sleep(4000);
-  check('an empty room says so rather than going blank', await bodyHas('No messages yet'));
-  check('a healthy connection does NOT claim the church is unreachable', !(await bodyHas('reach your church')));
-  check('an ordinary room is labelled Not encrypted', (await pillText()) === 'Not encrypted', await pillText());
+  const openedReadings = await waitFor(inRoom, 20000, 2000);
+  check('the Readings room actually opens', openedReadings, 'gated on the in-room encryption pill');
+  if (openedReadings) {
+    // 'Say hello — the first message…' renders ONLY in the in-room empty state (screens-chat.jsx), never in
+    // the list preview, which shows 'No messages yet' beside every quiet room's name.
+    check('an empty room says so rather than going blank', await bodyHas('No messages yet') && await bodyHas('Say hello'));
+    check('a healthy connection does NOT claim the church is unreachable', !(await bodyHas('reach your church')));
+    check('an ordinary room is labelled Not encrypted', (await pillText()) === 'Not encrypted', await pillText());
+  } else {
+    check('an empty room says so rather than going blank', false, 'skipped — the room never opened');
+    check('a healthy connection does NOT claim the church is unreachable', false, 'skipped — the room never opened');
+    check('an ordinary room is labelled Not encrypted', false, 'skipped — the room never opened');
+  }
   await shot('03-room-clear');
   const canaryClear = 'DEVICE-CLEAR-' + process.pid;
   await ev(`(async function(){ await window.Fellowship.publishMessage('readings', ${JSON.stringify(canaryClear)}, []); return 1; })()`);
@@ -281,8 +304,13 @@ try {
   // full of seeded conversation, and the run then measured the empty state in a room that was not empty.
   await tap('Zzz quiet test room', true);
   await sleep(4500);
-  const inQuiet = await waitFor(async () => await bodyHas('Zzz quiet test room') && await bodyHas('No messages yet'), 20000, 2000);
-  check('an empty room is where the offline message belongs', inQuiet, 'confirmed empty from inside the room, not from the list behind it');
+  // The old conjunction (room name + 'No messages yet') was satisfiable from the ROOM LIST, where the name
+  // and its empty-room preview render side by side — its comment claimed "from inside the room" and the
+  // claim was false. The pill gate proves we are inside, and 'Say hello' renders only in the in-room empty
+  // state. AUDIT-2026-08-10 item D.
+  const inQuiet = (await waitFor(inRoom, 20000, 2000))
+    && await waitFor(async () => await bodyHas('Zzz quiet test room') && await bodyHas('No messages yet') && await bodyHas('Say hello'), 20000, 2000);
+  check('an empty room is where the offline message belongs', inQuiet, 'gated on the in-room pill and the in-room empty state, which the list behind it cannot fake');
   adb('shell', 'svc', 'wifi', 'disable');
   adb('shell', 'svc', 'data', 'disable');
   const wentOffline = await waitFor(async () => !(await ev('window.Fellowship.relayReady()')), 75000, 3000);
