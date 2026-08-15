@@ -569,6 +569,33 @@ export const CASES = [
     test: 'scripts/seal-sequencing.test.mjs',
   },
   {
+    name: 'distributor: the in-flight guard is "simplified" away',
+    file: 'app/stew-dashboard.jsx',
+    find: `          if (pending.current[g.id]) continue;
+`,
+    replace: ``,
+    test: 'scripts/group-key-ring.test.mjs',
+  },
+  {
+    name: 'distributor: the roster is recorded as done before the publish resolves',
+    file: 'app/stew-dashboard.jsx',
+    // the exact pre-branch shape: advance `last` optimistically, so a failed publish is never retried and
+    // the member who joined in that window has no key, for good
+    find: `          pending.current[g.id] = true;
+          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {`,
+    replace: `          pending.current[g.id] = true;
+          last.current[g.id] = key;
+          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {`,
+    test: 'scripts/group-key-ring.test.mjs',
+  },
+  {
+    name: 'distributor: the backoff comparison points the wrong way',
+    file: 'app/stew-dashboard.jsx',
+    find: `          if (Date.now() < (nextTry.current[g.id] || 0)) continue;`,
+    replace: `          if (Date.now() > (nextTry.current[g.id] || 0)) continue;`,
+    test: 'scripts/group-key-ring.test.mjs',
+  },
+  {
     name: 'fnBody: a call-shaped anchor silently widens again',
     file: 'scripts/test-slice.mjs',
     // Restores the pre-fix behaviour: nothing checks what sits between the balanced `)` and the chosen `{`,

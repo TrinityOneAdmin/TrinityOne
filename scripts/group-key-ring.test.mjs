@@ -269,6 +269,97 @@ test('the console reports the members it could not seal to', () => {
     'a refused publish still reports success, so a failed key distribution looks identical to a good one');
 });
 
+// ── the distributor loop, EXECUTED ─────────────────────────────────────────────────────────────────────────
+// AUDIT-2026-08-10 item C. subscribeMembers coalesces at ~150ms and re-emits a fresh array on every church
+// event burst, so the roster effect re-runs constantly. The retry-on-failure semantics above are right, but
+// without an in-flight guard a slow envelope publish is fired AGAIN on the next tick, and a persistently
+// refused one is re-sent on EVERY tick — full near-1 MB envelopes, repeatedly, on the metered links this
+// product is built for. These tests lift the real loop out of app/stew-dashboard.jsx and DRIVE it: comments
+// cannot satisfy them, and a mutant that advances `last` optimistically or drops the guard goes red.
+function distributorRig() {
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const loop = fnBody(D, 'for (const g of groups) {', 'the key distributor loop');
+  const rig = {
+    calls: [],
+    result: Promise.resolve(true),          // what publishGroupKey resolves for the next call(s)
+    nowVal: 1_000_000,                      // fake clock, advanced by hand
+    last: { current: {} }, pending: { current: {} }, nextTry: { current: {} }, failCount: { current: {} },
+  };
+  const win = {
+    Steward: { publishGroupKey: (gid, recips, opts) => { rig.calls.push([gid, [...recips], opts]); return rig.result; } },
+    dispatchEvent: () => {},
+  };
+  const fakeDate = { now: () => rig.nowVal };
+  const fn = new Function('groups', 'memberPubs', 'notBlocked', 'last', 'pending', 'nextTry', 'failCount',
+    'window', 'Date', 'CustomEvent', loop);
+  rig.tick = (groups, memberPubs) => fn(groups, memberPubs, () => true, rig.last, rig.pending, rig.nextTry,
+    rig.failCount, win, fakeDate, function CustomEvent() {});
+  return rig;
+}
+const settle = () => new Promise(res => setImmediate(res));
+const G1 = { id: 'g1', name: 'Prayer', encrypted: true };
+
+test('distributor: a publish in flight is not fired again by the next roster tick', async () => {
+  const r = distributorRig();
+  let resolve1; r.result = new Promise(res => { resolve1 = res; });
+  r.tick([G1], ['a']);                       // first sighting — seeds `last`, publishes nothing
+  assert.equal(r.calls.length, 0, 'sanity: the first sighting is already keyed by create/edit');
+  r.tick([G1], ['a', 'b']);                  // someone joined → one publish starts
+  r.tick([G1], ['a', 'b']);                  // the 150ms coalesced re-emit lands while it is still in flight
+  r.tick([G1], ['a', 'b']);
+  assert.equal(r.calls.length, 1, 'a slow envelope publish was fired again while still in flight — the metered-link burn');
+  resolve1(true); await settle();
+  r.tick([G1], ['a', 'b']);                  // done and recorded — nothing more to send
+  assert.equal(r.calls.length, 1);
+});
+
+test('distributor: a roster that grew DURING the flight is still retried after it ends', async () => {
+  const r = distributorRig();
+  let resolve1; r.result = new Promise(res => { resolve1 = res; });
+  r.tick([G1], ['a']);
+  r.tick([G1], ['a', 'b']);                  // publish for a,b in flight
+  r.tick([G1], ['a', 'b', 'c']);             // c joins mid-flight — skipped now, must NOT be lost
+  assert.equal(r.calls.length, 1);
+  resolve1(true); await settle();            // `last` advances with the a,b captured AT CALL TIME
+  r.result = Promise.resolve(true);
+  r.tick([G1], ['a', 'b', 'c']);
+  assert.equal(r.calls.length, 2, 'the joiner who arrived during the flight was never keyed — silent, permanent');
+  assert.deepEqual(r.calls[1][1].sort(), ['a', 'b', 'c']);
+});
+
+test('distributor: a refused publish backs off instead of hammering, then retries and succeeds', async () => {
+  const r = distributorRig();
+  r.result = Promise.resolve(false);         // the relay refuses (size, quota, down)
+  r.tick([G1], ['a']);
+  r.tick([G1], ['a', 'b']);
+  await settle();
+  assert.equal(r.calls.length, 1);
+  r.tick([G1], ['a', 'b']);                  // next coalesced tick, milliseconds later
+  await settle();
+  assert.equal(r.calls.length, 1, 'a refused near-1 MB envelope is re-sent on every 150ms roster tick');
+  r.nowVal += 61_000;                        // past the 60s backoff cap
+  r.result = Promise.resolve(true);
+  r.tick([G1], ['a', 'b']);
+  await settle();
+  assert.equal(r.calls.length, 2, 'backoff must be a delay, not a tombstone — the retry is the whole repair');
+  r.tick([G1], ['a', 'b']);                  // success advanced `last` — no further sends
+  assert.equal(r.calls.length, 2, 'success must advance `last` (the never-publish mutant fails here)');
+});
+
+test('distributor: a rejected publish clears the in-flight guard rather than wedging the group', async () => {
+  const r = distributorRig();
+  r.result = Promise.reject(new Error('socket died'));
+  r.tick([G1], ['a']);
+  r.tick([G1], ['a', 'b']);
+  await settle();
+  assert.equal(r.calls.length, 1);
+  assert.ok(!r.pending.current.g1, 'the guard stayed shut after a throw — this group is silently wedged for ever');
+  r.result = Promise.resolve(true);
+  r.tick([G1], ['a', 'b']);
+  await settle();
+  assert.equal(r.calls.length, 2, 'after a throw the next tick must try again');
+});
+
 test('a room that could not be keyed is retried, not marked done', () => {
   const DASH2 = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   // Brace-matched, not a fixed window: test-windows.test.mjs exists because a hand-picked character count

@@ -266,6 +266,13 @@ function KeyDistributor() {
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const last = React.useRef({});
+  // AUDIT-2026-08-10 item C. subscribeMembers coalesces at ~150ms and re-emits on every church event burst,
+  // so this effect re-runs constantly. Without these, a slow envelope publish was fired AGAIN on the next
+  // tick, and a persistently refused one was re-sent on every tick — full near-1 MB envelopes, repeatedly,
+  // on the metered links this product is built for.
+  const pending = React.useRef({});    // group id → a publish is in flight; do not start another
+  const nextTry = React.useRef({});    // group id → earliest Date.now() a REFUSED publish may retry
+  const failCount = React.useRef({});  // group id → consecutive refusals, for the exponential backoff
   const membersRef = React.useRef([]); membersRef.current = members;
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
@@ -305,9 +312,25 @@ function KeyDistributor() {
         //
         // Leaving `last` un-advanced is what makes the next tick retry, which is the whole repair.
         if (grew && window.Steward.publishGroupKey) {
+          // In-flight guard + backoff (AUDIT-2026-08-10 item C) — the retry semantics above are untouched.
+          // Skipping while a publish is in flight loses nothing: `last` is only advanced with the value
+          // captured AT CALL TIME, so a roster that grew DURING the flight still differs on the next tick
+          // and is retried. A REFUSED publish (real bandwidth spent) backs off exponentially, capped at
+          // 60s — a joining member must not wait minutes for their key, and a Pi relay that comes back
+          // within a minute keys them; a null (reuseOnly with no ring — returns immediately, no network)
+          // gets no backoff, because the call is free and the retry is the whole repair.
+          if (pending.current[g.id]) continue;
+          if (Date.now() < (nextTry.current[g.id] || 0)) continue;
+          pending.current[g.id] = true;
           Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {
+            pending.current[g.id] = false;
+            if (r === false) {
+              const n = (failCount.current[g.id] || 0) + 1; failCount.current[g.id] = n;
+              nextTry.current[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
+            }
             if (r === null || r === false) return;                       // not keyed — leave `last` alone so we come back
             last.current[g.id] = key;
+            delete failCount.current[g.id]; delete nextTry.current[g.id];
             const missed = r && r.skipped;
             // The console's existing warning channel, rather than a new banner nobody knows to look at.
             if (missed && missed.length) {
@@ -316,7 +339,7 @@ function KeyDistributor() {
                   message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
               } catch (e) {}
             }
-          }).catch(() => {});
+          }).catch(() => { pending.current[g.id] = false; });   // a throw must not wedge the guard shut
         } else {
           last.current[g.id] = key;                                      // nothing to publish (shrank, or no key API)
         }
