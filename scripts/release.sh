@@ -54,13 +54,6 @@ say "service-worker cache v$cur → v$next"
 run "sed -i 's/trinity-shell-v$cur/trinity-shell-v$next/' sw.js"
 run "git add sw.js && git commit -q -m 'Release: sw cache v$cur -> v$next'"
 
-# 3. web → Cloudflare Pages (production)
-if [[ $DO_WEB == 1 ]]; then
-  say "building + deploying web to production"
-  run "bash scripts/build-pages.sh"
-  run "npx wrangler pages deploy pages-dist --project-name trinityone --branch production --commit-dirty=true"
-fi
-
 # 4. rebuild BOTH Android APKs (member + steward) and stage them for download.
 #    versionName lives in android/app/build.gradle (gitignored = disk-only); set it by hand when you
 #    cut a new pilot build (0.9.0 -> 0.9.1). versionCode (the integer Android compares for updates) is
@@ -86,6 +79,10 @@ if [[ $DO_APK == 1 ]]; then
   if [[ $DRY == 0 ]]; then
     printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "url": "trinityone.apk",\n  "date": "%s"\n}\n' "$nvc" "$vn" "$(date +%F)" > apk-latest.json
     say "update manifest → apk-latest.json (versionCode $nvc)"
+    # COMMIT IT. This file is tracked, and leaving it dirty meant the next release refused to run until
+    # someone committed it by hand — and, worse, that the manifest describing THIS build sat outside the
+    # commit the build came from. It was modified-in-tree for two weeks before anyone noticed.
+    run "git add apk-latest.json && git commit -q -m 'Release: apk manifest -> versionCode $nvc'"
   fi
   # steward APK — own app id + icon; build-steward-apk.sh does its own sync + cap copy and restores
   # the member project on exit.
@@ -94,6 +91,20 @@ if [[ $DO_APK == 1 ]]; then
   # refresh the self-serve index the gateway serves at /apks.html
   run "bash scripts/build-apk-index.sh"
   [[ $DRY == 0 ]] && say "APKs → trinityone.apk ($(du -h trinityone.apk | cut -f1)) + trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))"
+fi
+
+# 5. web → Cloudflare Pages (production) — AFTER the APKs, deliberately.
+#    This used to run BEFORE them, so build-pages.sh copied the PREVIOUS run's trinityone.apk and the
+#    previous apk-latest.json into pages-dist: the APK and manifest built moments later only reached the
+#    site on the NEXT release. Measured 2026-08-15 — immediately after a release that built versionCode
+#    199 (10.5 MB), the site served 197 (31 July, 7.5 MB). The member app's in-app update check reads that
+#    manifest, so members were never offered the build we had just made, and anyone downloading from the
+#    site got a six-week-old APK. Every release had done this; apk-latest.json being left dirty in the tree
+#    afterwards was the visible symptom nobody followed up.
+if [[ $DO_WEB == 1 ]]; then
+  say "building + deploying web to production"
+  run "bash scripts/build-pages.sh"
+  run "npx wrangler pages deploy pages-dist --project-name trinityone --branch production --commit-dirty=true"
 fi
 
 # 5. restart the local dev gateway so it serves the fresh APK + any gateway.mjs change
