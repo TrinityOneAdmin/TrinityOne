@@ -533,6 +533,42 @@ export const CASES = [
     test: 'scripts/group-encryption-honesty.test.mjs',
   },
   {
+    name: 'seal: the flag publish moves back above the key publish',
+    file: 'src/steward.src.js',
+    // the plausible "optimisation": start the doc write first so the UI updates sooner — which recreates the
+    // dead room, because a refused key now lands AFTER the room is already flagged encrypted
+    find: `    let r = null;
+    try { r = await window.Steward.publishGroupKey(group.id, memberPubs); } catch (e) { r = null; }
+    // no usable envelope on the relay → the group doc is never touched; the room stays honestly cleartext
+    if (r === null || r === false) return { sealed: false, reason: r === null ? 'cannot-key' : 'relay-refused' };
+    const ok = await window.Steward.publishGroup({ ...group, encrypted: true });`,
+    replace: `    const ok = await window.Steward.publishGroup({ ...group, encrypted: true });
+    let r = null;
+    try { r = await window.Steward.publishGroupKey(group.id, memberPubs); } catch (e) { r = null; }
+    // no usable envelope on the relay → the group doc is never touched; the room stays honestly cleartext
+    if (r === null || r === false) return { sealed: false, reason: r === null ? 'cannot-key' : 'relay-refused' };`,
+    test: 'scripts/seal-sequencing.test.mjs',
+  },
+  {
+    name: 'seal: the careless boolean that can never refuse',
+    file: 'src/steward.src.js',
+    // `||` to `&&` — r can't be null AND false, so every key failure sails through to the flag publish
+    find: `    if (r === null || r === false) return { sealed: false, reason: r === null ? 'cannot-key' : 'relay-refused' };`,
+    replace: `    if (r === null && r === false) return { sealed: false, reason: r === null ? 'cannot-key' : 'relay-refused' };`,
+    test: 'scripts/seal-sequencing.test.mjs',
+  },
+  {
+    name: 'seal: doSeal goes back to fire-and-forget',
+    file: 'app/stew-dashboard.jsx',
+    // the revert: publish flag and key side by side, read neither result, assume success
+    find: `    let r = null;
+    try { r = await window.Steward.sealGroup(s.g, recipsFor(s.g)); } catch (e) { r = null; }`,
+    replace: `    window.Steward.publishGroup({ ...s.g, encrypted: s.on });
+    if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(s.g.id, recipsFor(s.g));
+    let r = { sealed: true, skipped: [] };`,
+    test: 'scripts/seal-sequencing.test.mjs',
+  },
+  {
     name: 'fnBody: a call-shaped anchor silently widens again',
     file: 'scripts/test-slice.mjs',
     // Restores the pre-fix behaviour: nothing checks what sits between the balanced `)` and the chosen `{`,

@@ -1162,9 +1162,12 @@ window.skPrintable = function (html) {
 };
 
 // On-theme confirm dialog (replaces the browser's native window.confirm, which looks off-brand).
-function SkConfirm({ icon, tint, title, body, confirmLabel, onConfirm, onCancel }) {
+// `busy` and `err` are optional (AUDIT-2026-08-10 item A): a confirm whose action is awaited — sealing a
+// group waits for the key envelope to land before the flag flips — needs somewhere honest to show "working"
+// and "it failed, nothing changed" without closing over the failure. Existing call sites pass neither.
+function SkConfirm({ icon, tint, title, body, confirmLabel, onConfirm, onCancel, busy, err }) {
   const t = tint || 'var(--clay)';
-  const dlgRef = useStewDialog(onCancel);   // a11y: Escape + focus (dialog semantics on the panel below)
+  const dlgRef = useStewDialog(() => { if (!busy) onCancel(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onCancel} style={{ position: 'fixed', inset: 0, zIndex: 220, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'lumenFade .16s ease both' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both', outline: 'none' }}>
@@ -1173,9 +1176,10 @@ function SkConfirm({ icon, tint, title, body, confirmLabel, onConfirm, onCancel 
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1.15 }}>{title}</div>
         </div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px' }}>{body}</p>
+        {err ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, lineHeight: 1.45, margin: '-8px 0 16px' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={onCancel} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={onConfirm} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: t, color: '#fff' }}>{confirmLabel || 'Confirm'}</button>
+          <button onClick={onCancel} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? .5 : 1 }}>Cancel</button>
+          <button onClick={onConfirm} disabled={busy} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: t, color: '#fff', opacity: busy ? .5 : 1 }}>{confirmLabel || 'Confirm'}</button>
         </div>
       </div>
     </div>
@@ -1814,13 +1818,41 @@ function NewGroupModal({ open, onClose }) {
     if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
     if (kind === 'group' && encrypted) g.encrypted = true;
     if (childsafe) g.childsafe = true;
-    Promise.resolve(window.Steward.publishGroup(g)).then(pub => {
-      // encrypted → mint + distribute the group key. Recipients: the allowlist (invite) or everyone (open).
-      if (encrypted && pub && pub.id && window.Steward.publishGroupKey) {
-        const recips = inviteOnly ? [...sel] : members.map(m => m.pubkey);
-        window.Steward.publishGroupKey(pub.id, recips);
+    // AUDIT-2026-08-10 item A. The group id only exists after the doc publish, so key-first isn't available
+    // here — instead every result is read. A failed key publish used to leave the room born dead: flagged
+    // `encrypted` with no envelope, every member's send refused for ever, and nobody told. Now it unflags
+    // the just-created room (nothing sealed yet, no members muted) and says so out loud. The corrective's
+    // own failure window is tolerable because it is LOUD either way.
+    (async () => {
+      let pub = null;
+      try { pub = await window.Steward.publishGroup(g); } catch (e) { pub = null; }
+      // publishGroup resolves an object even when every relay refused — `ts` is false in that case
+      if (!pub || !pub.id || !pub.ts) {
+        try {
+          window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group',
+            message: '“' + g.name + '” could not be created — the relay didn’t accept it. Check your connection and try again.' } }));
+        } catch (e) {}
+        return;
       }
-    });
+      // encrypted → mint + distribute the group key. Recipients: the allowlist (invite) or everyone (open).
+      if (encrypted && window.Steward.publishGroupKey) {
+        const recips = inviteOnly ? [...sel] : members.map(m => m.pubkey);
+        let r = null;
+        try { r = await window.Steward.publishGroupKey(pub.id, recips); } catch (e) { r = null; }
+        if (r === null || r === false) {
+          try { await window.Steward.publishGroup({ ...pub, encrypted: false }); } catch (e) {}
+          try {
+            window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+              message: '“' + g.name + '” was created WITHOUT encryption — its key could not be saved. Seal it from the Groups list once this console is connected.' } }));
+          } catch (e) {}
+        } else if (r && r.skipped && r.skipped.length) {
+          try {
+            window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+              message: r.skipped.length + ' member(s) could not be given the key for “' + g.name + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
+          } catch (e) {}
+        }
+      }
+    })();
     onClose();
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
@@ -1908,7 +1940,28 @@ function EditGroupMembersModal({ group, onClose }) {
     const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
     Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
       .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
-      .then(() => { clearTimeout(guard); onClose(); })
+      .then((r) => {
+        clearTimeout(guard);
+        // AUDIT-2026-08-10 item A, state 6 — the one LEAK-shaped failure here. If the rotate publish didn't
+        // land, the OLD envelope stays current on the relay, so anyone just removed KEEPS READING what
+        // members post — while this console's own key state has already advanced, so its posts seal under a
+        // key no member holds. Closing quietly buries both. Stay open, say it plainly; a retry re-runs the
+        // rotate (the ring grows by one more superseded key, which is harmless).
+        if (group.encrypted && window.Steward.publishGroupKey && (r === null || r === false)) {
+          setBusy(false);
+          setErr(removed
+            ? 'The group’s new key could not be saved — anyone you removed CAN STILL READ this group until Save succeeds. Check your connection and press Save again.'
+            : 'The group’s key could not be updated — members you added won’t be able to read it yet. Check your connection and press Save again.');
+          return;
+        }
+        if (r && r.skipped && r.skipped.length) {
+          try {
+            window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+              message: r.skipped.length + ' member(s) could not be given the key for “' + (group.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
+          } catch (e) {}
+        }
+        onClose();
+      })
       .catch((e) => { clearTimeout(guard); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
@@ -2157,12 +2210,40 @@ function DashGroups() {
   const [catsOpen, setCatsOpen] = React.useState(false);
   const recipsFor = (g) => g.visibility === 'invite' ? (g.members || []) : members.map(m => m.pubkey);
   // seal/unseal a single group. Enabling loses nothing (past plaintext stays); KeyDistributor keys new members after.
-  const [sealing, setSealing] = React.useState(null);   // { g, on } → styled confirm before (un)sealing
+  const [sealing, setSealing] = React.useState(null);   // { g, on, busy, err } → styled confirm before (un)sealing
   const toggleEncrypt = (g) => setSealing({ g, on: !g.encrypted });
-  const doSeal = () => {
-    const s = sealing; setSealing(null); if (!s) return;
-    window.Steward.publishGroup({ ...s.g, encrypted: s.on });
-    if (s.on && window.Steward.publishGroupKey) window.Steward.publishGroupKey(s.g.id, recipsFor(s.g));
+  // AUDIT-2026-08-10 item A. This used to fire the flag publish and the key publish side by side and read
+  // neither result: any key failure left the room flagged `encrypted` with no envelope anywhere — every
+  // member's send refused for ever, and the steward saw success. Steward.sealGroup sequences key-first and
+  // reports; on failure the room stays honestly cleartext and the dialog says why. Unsealing involves no key
+  // and stays a plain flag write.
+  const doSeal = async () => {
+    const s = sealing; if (!s || s.busy) return;
+    if (!s.on) { setSealing(null); window.Steward.publishGroup({ ...s.g, encrypted: false }); return; }
+    setSealing({ ...s, busy: true, err: '' });
+    // don't hang forever if the relay never ACKs — surface it so it's not a dead button (same 8s guard as
+    // EditGroupMembersModal.save). A late success after the guard fired still closes the dialog honestly.
+    const guard = setTimeout(() => setSealing(cur => (cur && cur.busy) ? { ...cur, busy: false, err: 'Couldn’t reach the relay — check your connection and try again. Nothing is sealed yet.' } : cur), 8000);
+    let r = null;
+    try { r = await window.Steward.sealGroup(s.g, recipsFor(s.g)); } catch (e) { r = null; }
+    clearTimeout(guard);
+    if (!r || !r.sealed) {
+      const why = r && r.reason === 'not-authed'
+        ? 'This console isn’t connected to your church’s relay yet, so the group can’t be sealed. Wait for the connection and try again — nothing is sealed yet.'
+        : r && r.reason === 'flag-failed'
+          ? 'The group’s key was saved but the group could not be marked encrypted. Try again — until it succeeds, messages are still readable by the relay.'
+          : 'The relay didn’t accept the group’s key, so “' + (s.g.name || 'this group') + '” stays unencrypted. Check your connection and try again.';
+      setSealing(cur => cur ? { ...cur, busy: false, err: why } : cur);
+      return;
+    }
+    // some members couldn't be sealed to — same warning channel and wording the KeyDistributor uses
+    if (r.skipped && r.skipped.length) {
+      try {
+        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+          message: r.skipped.length + ' member(s) could not be given the key for “' + (s.g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
+      } catch (e) {}
+    }
+    setSealing(null);
   };
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const [chatGroup, setChatGroup] = React.useState(null);
@@ -2264,7 +2345,7 @@ function DashGroups() {
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} onClose={() => setLeadersFor(null)} /> : null}
       {editMembersFor ? <EditGroupMembersModal group={editMembersFor} onClose={() => setEditMembersFor(null)} /> : null}
-      {sealing ? <SkConfirm icon="lock" title={(sealing.on ? 'Seal “' : 'Unseal “') + sealing.g.name + '”?'} confirmLabel={sealing.on ? 'Seal it' : 'Unseal'} body={sealing.on ? 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages already posted stay as they are.' : 'New messages become readable by the relay again. Messages already sealed stay sealed.'} onConfirm={doSeal} onCancel={() => setSealing(null)} /> : null}
+      {sealing ? <SkConfirm icon="lock" title={(sealing.on ? 'Seal “' : 'Unseal “') + sealing.g.name + '”?'} confirmLabel={sealing.busy ? 'Sealing…' : (sealing.on ? 'Seal it' : 'Unseal')} busy={!!sealing.busy} err={sealing.err || ''} body={sealing.on ? 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages already posted stay as they are.' : 'New messages become readable by the relay again. Messages already sealed stay sealed.'} onConfirm={doSeal} onCancel={() => { if (!sealing.busy) setSealing(null); }} /> : null}
     </div>
   );
 }
@@ -4596,10 +4677,29 @@ function DashFeaturesPanel({ church }) {
   const encOn = f.encryptComms === true;
   const [confirmEnc, setConfirmEnc] = React.useState(false);
   const encRecips = (g) => g.visibility === 'invite' ? (g.members || []) : allMembers.map(m => m.pubkey);
-  const doEncryptAll = () => {
+  // AUDIT-2026-08-10 item A. This sweep used to fire flag+key for every group at once and read no results:
+  // any subset that failed became dead rooms en masse, silently. Now each group goes through
+  // Steward.sealGroup (key first, flag second, both awaited) — SEQUENTIALLY on purpose, because a Pi relay
+  // must not receive N near-1 MB envelopes at once. Groups that fail stay honestly unencrypted, one summary
+  // goes through the console's existing warning channel, and the encryptComms flag only flips on when EVERY
+  // group sealed — so "Encrypt all: on" never overstates what happened.
+  const doEncryptAll = async () => {
     setConfirmEnc(false);
-    for (const g of allGroups) { if (g.kind !== 'team' && !g.encrypted) { window.Steward.publishGroup({ ...g, encrypted: true }); if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, encRecips(g)); } }
-    window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
+    const failed = [], partial = [];
+    for (const g of allGroups) {
+      if (g.kind === 'team' || g.encrypted) continue;
+      let r = null;
+      try { r = await window.Steward.sealGroup(g, encRecips(g)); } catch (e) { r = null; }
+      if (!r || !r.sealed) failed.push(g.name || 'a group');
+      else if (r.skipped && r.skipped.length) partial.push(r.skipped.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”');
+    }
+    if (failed.length || partial.length) {
+      const parts = [];
+      if (failed.length) parts.push(failed.length + ' group' + (failed.length === 1 ? '' : 's') + ' could not be sealed and so ' + (failed.length === 1 ? 'stays' : 'stay') + ' unencrypted: ' + failed.join(', ') + '. “Encrypt all” stays off — try again once this console is connected.');
+      if (partial.length) parts.push(partial.join('; ') + '. They will not be able to read or post there. Open each group and save it again to re-send.');
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: parts.join(' ') } })); } catch (e) {}
+    }
+    if (!failed.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
   };
   const toggleEncryptAll = () => { if (encOn) window.Steward.publishProfile({ features: { ...f, encryptComms: false } }); else setConfirmEnc(true); };
   // member photos — ON by default; a church opts out via memberPhotos:false. Children are excluded unless

@@ -17538,6 +17538,36 @@ zoo`.split("\n");
       }
       return true;
     },
+    // ---- seal a group interactively: key FIRST, flag SECOND, both awaited, every result honoured. ----
+    //
+    // AUDIT-2026-08-10 item A. The seal used to fire publishGroup({encrypted:true}) and publishGroupKey side
+    // by side and read neither result, so any failure of the key publish — relay refused the envelope (size,
+    // quota, a socket flap between the two writes), console not yet relay-authed so minting is unsafe, no
+    // church key on this device — left the room FLAGGED encrypted with no envelope anywhere. Every member's
+    // send is then refused ("try again in a moment", for ever), nothing decrypts, and the steward saw success.
+    // Key-first inverts the failure: the worst new outcome is an unused envelope on the relay (benign — a
+    // retry reuses the ring), never a dead room.
+    //
+    // publishGroupKey's null collapses "no church key", "reuseOnly without a ring" and "not authed, so minting
+    // is unsafe" into one answer. "Not connected" is the only one of those a steward can act on, so it is
+    // answered up front, before any bytes are spent.
+    //
+    // For the INTERACTIVE seal only (doSeal / Encrypt-all). The KeyDistributor must NOT come through here —
+    // its reuseOnly path is deliberately different: it must never mint.
+    async sealGroup(group, memberPubs) {
+      if (!group || !group.id || !churchSk) return { sealed: false, reason: "cannot-key" };
+      if (!_isRelayAuthed()) return { sealed: false, reason: "not-authed" };
+      let r = null;
+      try {
+        r = await window.Steward.publishGroupKey(group.id, memberPubs);
+      } catch (e) {
+        r = null;
+      }
+      if (r === null || r === false) return { sealed: false, reason: r === null ? "cannot-key" : "relay-refused" };
+      const ok = await window.Steward.publishGroup({ ...group, encrypted: true });
+      if (!ok || !ok.ts) return { sealed: false, keyPublished: true, reason: "flag-failed" };
+      return { sealed: true, skipped: r && r.skipped || [] };
+    },
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
