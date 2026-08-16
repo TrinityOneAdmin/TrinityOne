@@ -74,3 +74,5 @@ relay/
 !relay/deploy/
 !relay/deploy/**
 relay/rejected.log
+scripts/.boot-*.mjs
+scripts/.sim-*.json
