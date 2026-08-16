@@ -54,6 +54,82 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   const [rBusy, setRBusy] = useId('');
   const [rErr, setRErr] = useId('');
   const [rNoChurch, setRNoChurch] = useId(false);   // restored the account, but found no church to rejoin
+  // ── RESTORE FROM A BACKUP FILE. The route that did not exist. ────────────────────────────────────────
+  // The file is the only thing that brings back what a member WROTE — notes, journal, reading plans — as well
+  // as their account and their church. Until now both file inputs lived behind an account that already
+  // existed, so on a new phone, at the one moment the file is for, it was unreachable. The workaround was to
+  // create an identity and then replace it, which is exactly what the welcome fork exists to prevent.
+  // UX audit 2026-08-16, finding F1.
+  const [rFile, setRFile] = useId(null);        // { name, text } — read and recognised, not yet opened
+  const [rFilePass, setRFilePass] = useId('');
+  const [rShowPass, setRShowPass] = useId(false);
+  const [rPending, setRPending] = useId(null);      // decrypted backup waiting on "yes, replace what's here"
+  const [rReplaceOk, setRReplaceOk] = useId(false); // they said yes — next run through applies it
+  // CHOOSE THE FILE FIRST, AND SAY WHAT IT IS BEFORE ASKING FOR ANYTHING. The old order asked for the
+  // passphrase in a native prompt BEFORE reading the file, so picking the wrong one wasted the passphrase and
+  // produced a confusing error afterwards. Here a wrong file costs nothing: they have typed nothing yet.
+  const pickBackupFile = async (f) => {
+    setRErr(''); setRFile(null); setRFilePass('');
+    if (!f) return;
+    let text = '';
+    try { text = await window.TrinityBackup.readFile(f); }
+    catch (e) { setRErr('Couldn’t read that file. Try choosing it again.'); return; }
+    let env = null; try { env = JSON.parse(text); } catch (e) {}
+    if (!env || env.app !== 'trinityone-backup') {
+      setRErr('That isn’t a TrinityOne backup. Look for a file named like “trinityone-backup-2026-08-16.json”.');
+      return;
+    }
+    setRFile({ name: f.name || 'your backup', text });
+  };
+  const doRestoreFile = async () => {
+    if (!rFile || rBusy) return;
+    setRErr(''); setRBusy('Opening your backup…');
+    let obj = null;
+    try { obj = await window.TrinityBackup.decryptStr(rFile.text, rFilePass); }
+    catch (e) {
+      setRBusy('');
+      // decryptStr already tells "not a backup" apart from "wrong passphrase". The old path threw that
+      // distinction away into one shared toast; keep it, and keep it ON SCREEN beside the field they can fix.
+      setRErr(/passphrase|damaged/i.test((e && e.message) || '')
+        ? 'That password didn’t open the file. Check your paper — the words are separated by spaces.'
+        : ((e && e.message) || 'Couldn’t open that file.'));
+      return;
+    }
+    if (!obj || obj.kind !== 'member') {
+      setRBusy('');
+      setRErr(obj && obj.kind === 'steward'
+        ? 'That’s a church backup, not a member backup. It belongs in the steward console.'
+        : 'That file doesn’t say what it is, so it isn’t safe to restore.');
+      return;
+    }
+    // WARN ONLY WHEN THERE IS GENUINELY SOMETHING TO LOSE — and `whoseMnemonic` alone cannot tell you that.
+    //
+    // Measured 2026-08-16 on a brand-new instance: the app has ALREADY minted an identity by the time the
+    // welcome fork is on screen, so whoseMnemonic answers 'different' for a phone nobody has ever used. On
+    // its own it would put "this replaces the account on this phone" in front of every new member — the exact
+    // fear this route exists to remove, on the screen where they are least able to judge it.
+    //
+    // An account is only worth warning about once it has been USED: onboarding finished, or a church followed.
+    // A freshly minted, unadopted key is nothing to lose.
+    let used = false;
+    try { used = !!JSON.parse(localStorage.getItem('trinityone.onboarded') || 'false'); } catch (e) {}
+    if (!used) { try { used = ((JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]')) || []).length > 0; } catch (e) {} }
+    let standing = 'unknown';
+    try { standing = window.TrinityIdentity.whoseMnemonic(obj.identity || ''); } catch (e) { standing = 'unknown'; }
+    if (used && standing === 'different' && !rReplaceOk) {
+      // IN-APP, not window.confirm. A system dialog here is unreadable on a phone, cannot be styled, and —
+      // measured — blocks the whole page in a WebView with no way back. This is the same defect this route was
+      // built to replace; asking again in our own screen is the point.
+      setRBusy(''); setRPending(obj); return;
+    }
+    try { await window.TrinityBackup.applyMember(obj); }
+    catch (e) { setRBusy(''); setRErr((e && e.message) || 'Couldn’t restore that backup.'); return; }
+    setRBusy('Restored — opening your church…');
+    // Same landing as the other restore routes: the file carries followedChurches and activeChurch, so there
+    // is no "now re-follow your church" step. A reload is how every other route applies a new key.
+    try { localStorage.setItem('trinityone.onboarded', 'true'); } catch (e) {}
+    setTimeout(() => { try { location.reload(); } catch (e) {} }, 700);
+  };
   // WELCOME FORK. Onboarding used to open straight into "choose your name" — i.e. it ASSUMED every launch was
   // a new person, and offered "I already have an account — restore it" as a faint link under the Continue
   // button. A member on a new phone therefore started creating a SECOND identity by default, and the one
@@ -433,6 +509,18 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
           <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 22px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
             However you do this, you come back as the same person — your church will know you.
           </p>
+          {/* ORDERED BY THE SITUATION PEOPLE ARE ACTUALLY IN. This list used to lead with "I still have my old
+              phone", which is no use in the common case — lost, stolen, broken, wiped. The file comes first
+              because it is the only route that brings back what they wrote, and the words second because they
+              are the one most members will have. UX audit 2026-08-16. */}
+          <button onClick={() => { setRErr(''); setRMode('file'); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I have my backup file</div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Brings back everything — your account, your church and your notes</div>
+          </button>
+          <button onClick={() => setRMode('words')} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I have my 12 words</div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Brings back your account and your church — not your notes</div>
+          </button>
           <button onClick={startTransfer} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I still have my old phone</div>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Move it across by scanning — nothing to type</div>
@@ -440,10 +528,6 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
           <button onClick={() => { setRErr(''); setRMode('scan'); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>Someone set this up for me</div>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Scan the code they’re showing you — nothing to type</div>
-          </button>
-          <button onClick={() => setRMode('words')} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I have my 12 words</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Type the phrase you wrote down</div>
           </button>
           {/* The common case, and the one that used to be a dead end: no old phone, no words written down.
               A church can vouch for its own — so this is a real way back, not an apology. */}
@@ -467,6 +551,74 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // The scanner. Reuses QRScanner (camera + a manual-paste fallback for a phone with no camera, or a code
   // that will not focus), and hands whatever it reads to doScanSignIn, which refuses anything it does not
   // recognise rather than guessing.
+  // ── Restore from the backup file. Two steps, and the ORDER is the point: recognise the file before asking
+  // for anything, so a wrong file costs nothing; then take the password in an ordinary masked field, on this
+  // screen, with the error beside it. The old path used window.prompt — a system dialog showing the password
+  // in clear, asked before the file had even been read — and reported failures as a toast that vanished.
+  if (restoring && rMode === 'file') return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="download" size={28} /></div></div>
+          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>Restore from your backup</h1>
+          <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 20px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
+            This brings back everything — your account, your church, and your notes, journal and reading plans.
+          </p>
+
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 7px' }}>1 · Choose your file</div>
+          <label style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 14, border: '1px dashed var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 14.5, fontWeight: 700, color: rFile ? 'var(--sage)' : 'var(--clay-ink)' }}>
+            <input type="file" accept="application/json,.json" onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; pickBackupFile(f); }} style={{ display: 'none' }} />
+            {rFile ? '✓ ' + rFile.name : 'Choose your backup file'}
+          </label>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '7px 2px 0' }}>
+            It is named something like <b>trinityone-backup-2026-08-16.json</b>, wherever you saved it — your phone, a memory stick, or a cloud drive.
+          </div>
+
+          {rFile ? (
+            <React.Fragment>
+              <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '20px 0 7px' }}>2 · Your file password</div>
+              <div style={{ position: 'relative' }}>
+                <input type={rShowPass ? 'text' : 'password'} value={rFilePass} autoFocus autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                  onChange={e => { setRFilePass(e.target.value); setRErr(''); }}
+                  onKeyDown={e => { if (e.key === 'Enter' && rFilePass) doRestoreFile(); }}
+                  placeholder="the words you wrote on your paper"
+                  style={{ width: '100%', boxSizing: 'border-box', height: 50, border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface)', padding: '0 74px 0 15px', fontSize: 15.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+                <button onClick={() => setRShowPass(v => !v)} style={{ position: 'absolute', right: 6, top: 6, height: 38, padding: '0 12px', borderRadius: 11, border: 'none', background: 'var(--surface-2)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700 }}>{rShowPass ? 'Hide' : 'Show'}</button>
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '7px 2px 0' }}>
+                The four words you wrote down when you made the backup — spaces between them.
+              </div>
+            </React.Fragment>
+          ) : null}
+
+          {/* ERRORS STAY PUT, beside the thing that can be fixed. A toast on this screen is a member left
+              guessing whether it was the file or the password. */}
+          {/* The one destructive case, asked IN THE APP. Only reached when this phone holds an account that has
+              actually been used and is a different one — a phone nobody has set up yet never sees this. */}
+          {rPending ? (
+            <div style={{ marginTop: 16, padding: '13px 15px', borderRadius: 14, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, transparent)' }}>
+              <div style={{ fontWeight: 800, fontSize: 14.5, color: 'var(--ink)', marginBottom: 5 }}>There is already an account on this phone</div>
+              <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+                Restoring this backup replaces it. The account that is on here now can only come back if you have <b>its</b> 12 words written down.
+              </div>
+            </div>
+          ) : null}
+          {rErr ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginTop: 14, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)' }}>{rErr}</div> : null}
+          {rBusy ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', fontWeight: 700, marginTop: 14, textAlign: 'center' }}>{rBusy}</div> : null}
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <button onClick={() => { if (rPending) { setRReplaceOk(true); setRPending(null); setTimeout(doRestoreFile, 0); } else doRestoreFile(); }}
+            disabled={!rFile || !rFilePass.trim() || !!rBusy}
+            style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (!rFile || !rFilePass.trim() || rBusy) ? 'not-allowed' : 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700, opacity: (!rFile || !rFilePass.trim() || rBusy) ? .5 : 1 }}>
+            {rBusy || (rPending ? 'Replace it and restore' : 'Bring everything back')}</button>
+          <button onClick={() => { setRErr(''); setRBusy(''); setRFile(null); setRFilePass(''); setRPending(null); setRReplaceOk(false); setRMode('choose'); }} disabled={!!rBusy}
+            style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
+        </div>
+      </div>
+    </div>
+  );
   if (restoring && rMode === 'scan') return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>

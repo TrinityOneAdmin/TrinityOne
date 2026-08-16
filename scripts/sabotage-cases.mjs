@@ -819,4 +819,30 @@ export const CASES = [
     replace: `    const onRelayReturned = () => { sched.force(); };`,
     test: 'scripts/chat-reconnect.test.mjs',
   },
+  {
+    name: 'restore: the file route disappears from the chooser again',
+    file: 'app/identity.jsx',
+    find: `          <button onClick={() => { setRErr(''); setRMode('file'); }}`,
+    replace: `          <button onClick={() => { setRErr(''); setRMode('words'); }}`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
+  {
+    name: 'restore: the password is asked for before the file is looked at',
+    file: 'app/identity.jsx',
+    // the shape every other restore path still had: prompt first, read later
+    find: `          {rFile ? (
+            <React.Fragment>`,
+    replace: `          {true ? (
+            <React.Fragment>`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
+  {
+    name: 'restore: every new member is warned their account will be replaced',
+    file: 'app/identity.jsx',
+    // dropping the "has it actually been used?" half — the app mints a key before the welcome fork, so this
+    // puts a destructive warning in front of someone who has never opened the app
+    find: `    if (used && standing === 'different' && !rReplaceOk) {`,
+    replace: `    if (standing === 'different' && !rReplaceOk) {`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
 ];

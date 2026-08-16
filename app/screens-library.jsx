@@ -183,7 +183,10 @@ function BackupCard({ ctx }) {
       const name = 'trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json';
       const res = await window.TrinityBackup.saveFile(name, text, mode);
       setBusy(''); setDone((res && res.where) || mode);
-      ctx.toast(mode === 'local' ? 'Saved to your device' : 'Backup ready to store');
+      // Name the place and say it is theirs to keep — the file lands in the phone's shared Documents folder,
+      // so "saved" without a location or a next step leaves a member who cannot check it and will not move it.
+      const at = (window.TrinityBackup.savedWhere && window.TrinityBackup.savedWhere(res)) || '';
+      ctx.toast(at ? ('Saved to ' + at + ' — keep a copy somewhere safe') : (mode === 'local' ? 'Saved to your device — keep a copy somewhere safe' : 'Backup ready to store'));
       setTimeout(() => { setDone(null); setPicking(false); setPass(''); }, 2200);
     } catch (e) { setBusy(''); ctx.toast('Backup failed: ' + (e.message || e)); }
   };

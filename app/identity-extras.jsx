@@ -99,7 +99,12 @@ function RecoverySheet({ open, onClose, ctx }) {
       // NAME THE PLACE. "Save it somewhere safe" is advice, not a receipt — and on the app this path used to
       // open a share sheet and write nothing, so the member had no way to tell the two apart.
       const at = window.TrinityBackup.savedWhere ? window.TrinityBackup.savedWhere(res) : '';
-      ctx.toast(at ? ('Backup saved to ' + at) : 'Backup created — save it somewhere safe'); setBk(null); setPass('');
+      // SAY WHERE IT IS, AND THAT IT IS THEIRS TO KEEP. On the app this now lands in the phone's shared
+      // Documents folder, which is the right trade — a backup that exists beats one that never got written —
+      // but it also means the file sits where any app with storage access can read it. It is encrypted, so
+      // that is not a breach; it IS a reason the member should move a copy somewhere they choose. Owner's
+      // call, 2026-08-16.
+      ctx.toast(at ? ('Backup saved to ' + at + ' — keep a copy somewhere safe') : 'Backup created — keep it somewhere safe'); setBk(null); setPass('');
     } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
   };
   const doRestore = async () => {
