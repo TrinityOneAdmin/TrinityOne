@@ -84,7 +84,21 @@ try {
       return t && !t.value ? 'sent' : 'STILL IN COMPOSER — it did not send';})()`);
     out(cleared);
   } else if (cmd === 'back') {
-    await ev('history.back()'); await sleep(1200); out('went back');
+    // DO NOT WALK OFF THE END OF THE APP. history.back() from the app's first screen leaves the page entirely
+    // and lands on the blank tab the browser opened with — a white screen that no tap can recover. Two actors
+    // spent the rest of their run reporting that as a crash in the product, and both cited the project's own
+    // note about silent blank-app bugs to explain it. A phone's back button exits the app; it does not leave
+    // you staring at nothing. So refuse to leave, and say so.
+    const before = await ev('location.href');
+    if (/about:blank/.test(String(before))) { out('the app is not open on this instance (blank tab) — nothing to go back to'); ws.close(); process.exit(0); }
+    await ev('history.back()');
+    await sleep(1200);
+    const after = await ev('location.href');
+    if (/about:blank/.test(String(after))) {
+      await send('Page.navigate', { url: String(before) });
+      await sleep(3000);
+      out('already at the start of the app — stayed put (a real phone would exit here)');
+    } else out('went back');
   } else if (cmd === 'shot') {
     const s = await send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(a1, Buffer.from(s.data, 'base64')); out('wrote ' + a1);

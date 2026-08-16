@@ -6,8 +6,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const BASE = 'http://127.0.0.1:8000';
-const CHURCH = 'npub1an2ta6965yqml0pu0va3wamezxlgz03kltl7xqwm5erfp88a0qxqa3y09s';
-const CAST = [['Ruth', 9501], ['Hannah', 9502], ['Deborah', 9503]];
+const CHURCH = 'npub1n3fpyvu8f6q9slyw07ccr85n6p09muevnncz7qtpwcudcsyunarqtlen0q';
+const CAST = [['Grace', 9511], ['Miriam', 9512], ['Esther', 9513], ['Lydia', 9514], ['Joel', 9515], ['Tobias', 9516], ['Martha', 9517], ['Simeon', 9518]];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 for (const [name, port] of CAST) {
   const profile = mkdtempSync(join(process.env.TRINITY_SCRATCH || '/mnt/storage/tmp/trinity-scratch', 'actor-' + name + '-'));

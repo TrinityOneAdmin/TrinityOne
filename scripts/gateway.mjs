@@ -731,6 +731,34 @@ function reqToken(req, allowQuery) { const h = req.headers['authorization'] || '
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
 // cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
 function adminOK(req, allowQuery) { const t = reqToken(req, allowQuery); if (!t || !ADMIN_TOKEN) return false; const a = Buffer.from(t), b = Buffer.from(ADMIN_TOKEN); return a.length === b.length && timingSafeEqual(a, b); }
+// A LINE PER REFUSED WRITE. The store records everything the relay ACCEPTED, which answers "did this
+// publish?" — and that is how most claims about this system get checked. Nothing recorded what it REFUSED,
+// which is the more useful half when something is wrong: a client whose write is rejected usually looks
+// like a client that succeeded, because the form closes either way.
+//
+// Written after watching a churchwarden spend an afternoon building a rota, a lunch, a hall booking and a
+// notice, every one of them silently discarded — and after two days of findings that could only be confirmed
+// by reading the sqlite by hand. One append-only line per refusal turns "I saved it and it vanished" from an
+// argument into a lookup.
+//
+// Deliberately small: who, what kind, which church, why, when. No content — a rejection log that copies the
+// event body would put refused messages in the clear on the relay's disk, which is precisely what the rest
+// of this file works to avoid.
+const REJECT_LOG = join(DATA_DIR, 'rejected.log');
+function rejectLog(evt, ws, why) {
+  try {
+    const d = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    const line = JSON.stringify({
+      at: new Date().toISOString(),
+      by: String(evt.pubkey || '').slice(0, 16),
+      authed: String((ws && ws._auth) || '').slice(0, 16) || null,
+      kind: evt.kind,
+      d: d.slice(0, 60),
+      why,
+    }) + '\n';
+    appendFileSync(REJECT_LOG, line);
+  } catch (e) { /* logging must never break the relay */ }
+}
 const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
@@ -3826,7 +3854,7 @@ wss.on('connection', (ws, req) => {
       // forge events under any pubkey (church/steward/member) — fake announcements, fake funds (with a
       // hostile lud16 to redirect giving), or flood forged events to evict real ones (MAX_EVENTS DoS).
       if (!verifyEvent(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: signature failed'])); return; }
-      if (!accept(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
+      if (!accept(evt)) { rejectLog(evt, ws, 'not a member or not permitted for this group'); ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
       // was this pubkey ALREADY a known member of the church it's posting to? MEMBER_DOCS is rebuilt from stored
       // docs, so this survives relay restarts — a boot re-announce won't re-alert the steward. Captured before note().
       const _mdD = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
