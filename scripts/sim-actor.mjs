@@ -5,6 +5,7 @@
 //   node scripts/sim-actor.mjs <port> type "Message" "…"  type into the field with that placeholder
 //   node scripts/sim-actor.mjs <port> send "hello"        put text in the composer and press Enter
 //   node scripts/sim-actor.mjs <port> back                go back
+//   node scripts/sim-actor.mjs <port> file /path/x.json   choose that file in a file picker
 //   node scripts/sim-actor.mjs <port> shot <file>         screenshot
 //   node scripts/sim-actor.mjs <port> eval "<js>"         read something out of the page
 //
@@ -39,6 +40,19 @@ await send('Runtime.enable', {}); await send('Page.enable', {});
 
 const out = (x) => { console.log(typeof x === 'string' ? x : JSON.stringify(x)); };
 
+// TYPOGRAPHIC PUNCTUATION COST A WHOLE ROUND. The app's copy is written properly — "I’ll help", "what’s on",
+// "don’t" — with U+2019, while anyone typing a target types an ASCII apostrophe. So `tap "I'll help"` found
+// nothing, and on 2026-08-17 three actors independently reported the care sign-up button as BROKEN when it
+// was simply unreachable to them; one of them was rightly suspicious and called it a harness limit. That was
+// the single control the round existed to exercise. Normalise both sides — curly quotes, dashes, ellipsis —
+// so a person's plain typing matches the product's proper typography.
+const NORM = `(function(s){ return String(s||'')
+  .replace(/[\u2018\u2019\u201B]/g, "'")
+  .replace(/[\u201C\u201D]/g, '"')
+  .replace(/[\u2013\u2014]/g, '-')
+  .replace(/\u2026/g, '...')
+  .replace(/\u00A0/g, ' '); })`;
+
 try {
   if (cmd === 'see') {
     // THIS COMMAND MANUFACTURED A FINDING, so read the note before shortening it again.
@@ -70,9 +84,10 @@ try {
     }
   } else if (cmd === 'tap') {
     const box = await ev(`(function(){
+      var norm=${NORM}; var want=norm(${JSON.stringify(a1)});
       var all=[].slice.call(document.querySelectorAll('button,a,[role="button"],div,span,label')).filter(function(x){
-        var tx=(x.innerText||'').trim(); var r=x.getBoundingClientRect();
-        return tx.indexOf(${JSON.stringify(a1)})===0 && r.width>25 && r.height>10;});
+        var tx=norm((x.innerText||'').trim()); var r=x.getBoundingClientRect();
+        return tx.indexOf(want)===0 && r.width>25 && r.height>10;});
       if(!all.length) return null;
       all.sort(function(a,b){return (a.innerText||'').length-(b.innerText||'').length;});
       var e=all[0]; e.scrollIntoView({block:'center'}); var r=e.getBoundingClientRect();
@@ -87,7 +102,8 @@ try {
     out('tapped ' + a1);
   } else if (cmd === 'type') {
     const r = await ev(`(function(){
-      var i=[].slice.call(document.querySelectorAll('input,textarea')).filter(function(x){return (x.placeholder||'').indexOf(${JSON.stringify(a1)})>=0;})[0];
+      var norm=${NORM}; var want=norm(${JSON.stringify(a1)});
+      var i=[].slice.call(document.querySelectorAll('input,textarea')).filter(function(x){return norm(x.placeholder||'').indexOf(want)>=0;})[0];
       if(!i) return 'no field matching ' + ${JSON.stringify(a1)};
       i.focus();
       var proto = i.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
@@ -124,6 +140,20 @@ try {
       await sleep(3000);
       out('already at the start of the app — stayed put (a real phone would exit here)');
     } else out('went back');
+  } else if (cmd === 'file') {
+    // HAND A FILE TO A FILE PICKER. A member restoring a backup has to choose a file, and a page cannot be
+    // made to do that from script — the picker is the browser's, and its value is not settable. CDP's
+    // DOM.setFileInputFiles is the only honest way to simulate "the member chose this file", so without this
+    // command the entire restore-from-file flow is undrivable and therefore untestable by an actor.
+    await send('DOM.enable', {});
+    const doc = await send('DOM.getDocument', { depth: -1 });
+    const node = await send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: 'input[type=file]' });
+    if (!node.nodeId) { out('no file picker on this screen — open the restore screen first'); }
+    else {
+      await send('DOM.setFileInputFiles', { files: [a1], nodeId: node.nodeId });
+      await sleep(1200);
+      out('chose ' + a1);
+    }
   } else if (cmd === 'shot') {
     const s = await send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(a1, Buffer.from(s.data, 'base64')); out('wrote ' + a1);
