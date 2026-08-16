@@ -6321,7 +6321,7 @@
       const prev = _liveRelay.get(url);
       _liveRelay.set(url, live);
       if (prev === void 0 || prev === live) return;
-      window.dispatchEvent(new CustomEvent("trinity-reconnect", { detail: { url, reason: "socket returned" } }));
+      window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url } }));
     } catch (e) {
     }
   };

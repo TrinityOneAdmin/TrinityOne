@@ -602,6 +602,19 @@ function App() {
     // unlock produced two refetches). Harmless but backwards, on the one path that is already the most
     // expensive thing the app does.
     const onReconnectNeeded = () => { sched.force(); };
+    // A RETURNING SOCKET IS A DIFFERENT SIGNAL, so it gets a different event.
+    //
+    // `trinity-reconnect` means "reconnectAll() has already torn everything down and only you can rebuild it"
+    // — mandatory, never collapsed. A socket coming back means nothing of ours was torn down at all, and it
+    // arrives once per relay: three canonical relays plus the church's own, every time a flaky link flaps.
+    // Through force() that is a full teardown and re-subscribe of ~15 effects PER RELAY PER FLAP, several with
+    // no `since` — a full backlog re-download on a thin pipe. And reconnectAll() closes every socket itself,
+    // so each one returning would fire it again: one unlock, N forced rebuilds. That is the storm the
+    // scheduler exists to prevent, and reconnect-storm.test.mjs is right to insist the two never share a
+    // handler — an earlier version of this branch overloaded the one event name and that test caught it.
+    // So: its own event, on the advisory path. Mirrors the console's `steward-relay-returned`.
+    const onRelayReturned = () => { sched.fire(false); };
+    window.addEventListener('trinity-relay-returned', onRelayReturned);
     window.addEventListener('trinity-reconnect', onReconnectNeeded);
     // Native resume: web visibilitychange/focus are unreliable in the Android WebView, so RETURNING to a
     // backgrounded app often didn't re-subscribe — a steward's change (chat tags, groups, care) then never
@@ -626,7 +639,7 @@ function App() {
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onReconnectNeeded); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));

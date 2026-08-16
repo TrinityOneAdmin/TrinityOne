@@ -1966,20 +1966,29 @@ function EditGroupMembersModal({ group, onClose }) {
     const removed = (group.members || []).some(pk => !sel.has(pk));   // someone dropped → rotate the key
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
     const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
-    Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
-      // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
-      // invite-only group is not a team and has no rota or care role to inherit. If the roster document
-      // has not arrived yet there is nothing to reconcile against, so we leave it rather than publish a
-      // roster we have not read (which would wipe the roles).
-      .then(() => {
+    // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
+    // invite-only group is not a team and has no rota or care role to inherit. If the roster document has
+    // not arrived yet there is nothing to reconcile against, so we leave it rather than publish a roster we
+    // have not read (which would wipe the roles).
+    //
+    // ITS OWN STEP, AND IT MUST NOT BE IN THE CHAIN. This first sat between publishGroup and publishGroupKey,
+    // so anything thrown while reconciling the roster skipped straight to the catch — and the KEY ROTATION
+    // never ran. Removing someone from an encrypted room without rotating leaves their cached key opening
+    // every future message, which is the one leak-shaped failure this function's own comments are about. The
+    // rotation is the safety-critical write; nothing may be allowed to stand in front of it.
+    const reconcileRoster = () => {
+      try {
         const r = (rosters || []).find(x => x && x.team === group.id);
         if (!r || !window.Steward.publishRoster) return;
         const people = teamPeopleForAllowlist(r.people, newM, members);
         const same = people.length === (r.people || []).length && people.every((p, i) => p === (r.people || [])[i]);
         if (same) return;
-        return Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
-          .then(() => publishCareTeamFor(group.id, careTeamId, people));
-      })
+        Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
+          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .catch(() => {});
+      } catch (e) {}
+    };
+    Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
       .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
       .then((r) => {
         clearTimeout(guard);
@@ -1995,6 +2004,7 @@ function EditGroupMembersModal({ group, onClose }) {
             : 'The group’s key could not be updated — members you added won’t be able to read it yet. Check your connection and press Save again.');
           return;
         }
+        reconcileRoster();   // the rotation has landed; now bring the team's roster in step (never blocks it)
         if (r && r.skipped && r.skipped.length) {
           try {
             window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',

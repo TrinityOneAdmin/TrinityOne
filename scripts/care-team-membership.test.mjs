@@ -125,6 +125,37 @@ test('the Groups tab’s member editor writes the roster too', () => {
     'reconcile against the roster we have READ — publishing one we have not would wipe the team’s roles');
 });
 
+test('nothing stands in front of the group-key rotation', () => {
+  // ADVERSARIAL REVIEW, 2026-08-16. The roster reconcile was first written INTO the promise chain, between
+  // publishGroup and publishGroupKey. Anything thrown while reconciling therefore skipped to the catch and the
+  // ROTATION NEVER RAN — so a member the steward had just removed from an encrypted room kept the current key
+  // and went on reading everything posted afterwards, while the console showed a generic save error. That is
+  // the one leak-shaped failure this save path's own comments exist to prevent.
+  const save = stripComments(fnBody(DASH, 'const save = () => {'));
+  const rotate = save.indexOf('publishGroupKey(group.id, newM, { rotate: removed })');
+  const reconcile = save.indexOf('reconcileRoster()');
+  assert.notEqual(rotate, -1, 'the key rotation is gone — re-anchor this test');
+  assert.notEqual(reconcile, -1, 'the roster reconcile is gone — re-anchor this test');
+  assert.ok(rotate < reconcile,
+    'the rotation must be published BEFORE the roster is reconciled: removing someone without rotating leaves ' +
+    'their cached key opening every future message');
+  const body = fnBody(DASH, 'const reconcileRoster = () => {');
+  assert.match(body, /try \{/, 'the reconcile must contain its own failure — it must never be able to break the save chain');
+  assert.match(body, /\.catch\(\(\) => \{\}\)/, 'nor reject asynchronously into it');
+});
+
+test('saving a roster twice in a second is not possible', () => {
+  // Same review. `save` became async and awaits up to four publishes with the modal still open and nothing on
+  // screen changing, where it used to close instantly. A steward who sees no response clicks again, and
+  // replaceable documents are newest-wins TO THE SECOND — so the second write is silently refused, and it can
+  // interleave with the group-key rotation.
+  const save = stripComments(fnBody(SCHEDULE, 'const save = async () => {'));
+  assert.match(save, /if \(saving\) return;/, 'a second click must do nothing');
+  assert.match(save, /setSaving\(true\)/);
+  const btn = stripComments(SCHEDULE.slice(SCHEDULE.indexOf('Save roster') - 400, SCHEDULE.indexOf('Save roster') + 40));
+  assert.match(btn, /disabled=\{saving\}/, 'and the button must say so, or the steward has no reason not to click again');
+});
+
 test('the roster editor keeps the invite allowlist in step', () => {
   const save = stripComments(fnBody(SCHEDULE, 'const save = async () => {'));
   assert.match(save, /publishRoster\(/, 'the roster is still the thing this editor saves');

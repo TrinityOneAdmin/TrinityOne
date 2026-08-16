@@ -793,4 +793,30 @@ export const CASES = [
         await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive\u2026)', url: c.uri });`,
     test: 'scripts/backup-saves-somewhere.test.mjs',
   },
+  {
+    name: 'review: the roster write blocks the group-key rotation again',
+    file: 'app/stew-dashboard.jsx',
+    // the shape this branch shipped with before the pre-merge review: reconcile inside the chain, ahead of
+    // the rotation, so a throw there leaves a removed member still holding the room's key
+    find: `      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })`,
+    replace: `      .then(() => reconcileRoster())
+      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'review: the roster save can be double-clicked again',
+    file: 'app/stew-schedule.jsx',
+    find: `    if (saving) return;
+    setSaving(true);`,
+    replace: ``,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'review: a returning socket forces a full rebuild per relay',
+    file: 'app/app.jsx',
+    // routing an advisory, per-relay signal through the mandatory gate — the storm the scheduler exists to stop
+    find: `    const onRelayReturned = () => { sched.fire(false); };`,
+    replace: `    const onRelayReturned = () => { sched.force(); };`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
 ];

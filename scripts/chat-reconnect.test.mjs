@@ -61,7 +61,8 @@ test('a returning socket announces itself, so the subscriptions can be rebuilt',
   pool.relays.set('wss://church/relay', { id: 'socket-2' });   // the drop and reconnect
   onSuccess('wss://church/relay');
   assert.equal(fired.length, 1, 'a NEW socket means the old REQs are gone — this is the only signal that they are');
-  assert.equal(fired[0].type, 'trinity-reconnect', 'app.jsx already listens for this event; use it, do not invent a second one');
+  assert.equal(fired[0].type, 'trinity-relay-returned',
+    'its OWN event: trinity-reconnect is the mandatory post-teardown rebuild and must not be fired per relay');
 });
 
 test('a socket that closes mid-callback is not recorded as live', () => {
@@ -112,6 +113,33 @@ test('an open room re-subscribes on reconnect, without blinking itself empty', (
     'a fresh `seen` on every reconnect appends the relay’s whole replay a second time — 200 duplicate bubbles');
   assert.match(room, /const seen = seenRef\.current\.ids/,
     '`seen` must outlive the effect so the replay after a reconnect is deduped');
+});
+
+test('a returning socket is advisory, and does not share the mandatory event', () => {
+  // ADVERSARIAL REVIEW, 2026-08-16. `trinity-reconnect` means "reconnectAll() has already torn everything
+  // down and only you can rebuild it" — force(), never debounced. This branch first made a RETURNING SOCKET
+  // fire that same event, which is once per relay per flap: a full teardown and re-subscribe of ~15 effects
+  // per relay, several with no `since`, i.e. a full backlog re-download on a thin pipe. reconnect-storm.test
+  // caught the overload; this holds the shape that replaced it.
+  const effect = stripComments(APP.slice(APP.indexOf('const [connTick, bumpConn]')));
+  const mandatory = effect.slice(effect.indexOf('const onReconnectNeeded'), effect.indexOf('const onReconnectNeeded') + 200);
+  assert.match(mandatory, /sched\.force\(\)/, 'reconnectAll() must still force — nothing else rebuilds what it tore down');
+  assert.doesNotMatch(mandatory, /sched\.fire\(/, 'and it must never share the advisory gate');
+
+  const advisory = effect.slice(effect.indexOf('const onRelayReturned'), effect.indexOf('const onRelayReturned') + 200);
+  assert.match(advisory, /sched\.fire\(false\)/,
+    'a returning socket is advisory — collapse it and jitter it across the congregation');
+  assert.match(effect, /addEventListener\('trinity-relay-returned',\s*onRelayReturned\)/, 'nothing listens for it');
+  assert.match(effect, /removeEventListener\('trinity-relay-returned',\s*onRelayReturned\)/,
+    'an unremoved listener survives every remount and multiplies the rebuilds it was added to reduce');
+
+  // …and the sender must use that name, or the listener is dead code.
+  assert.match(BUNDLE, /'trinity-relay-returned'|"trinity-relay-returned"/,
+    'the socket-return dispatch is gone from the bundle — rebuild: bash scripts/build-fellowship.sh');
+  const at = BUNDLE.indexOf('pool.onRelayConnectionSuccess =');
+  const handler = BUNDLE.slice(at, BUNDLE.indexOf('\n  };', at));
+  assert.doesNotMatch(handler, /trinity-reconnect/,
+    'a socket returning must not fire the MANDATORY event — that is the storm this pair of tests exists to stop');
 });
 
 test('the screens can see the reconnect signal at all', () => {

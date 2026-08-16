@@ -108,6 +108,12 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   const [newPerson, setNewPerson] = useSch('');
   const [linkPub, setLinkPub] = useSch('');
   const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';   // which team is THE care team
+  // SAVE NOW TAKES A MOMENT, SO IT HAS TO SAY SO. It used to be fire-and-forget and closed instantly, which
+  // made a second click impossible. It now awaits up to four publishes with the modal still open and nothing
+  // on screen changing — so a steward who sees no response clicks again, and the second run republishes the
+  // same replaceable documents within the same second. Newest-wins is to the SECOND, so that write is refused,
+  // and it can interleave with the group-key rotation. Guard the button and show the state.
+  const [saving, setSaving] = useSch(false);
   const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
   const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
   const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
@@ -125,8 +131,10 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   const setPodFill = (id, roleId, pid) => setPods(ps => ps.map(p => p.id === id ? { ...p, fills: { ...p.fills, [roleId]: pid } } : p));
   const delPod = (id) => setPods(ps => ps.filter(p => p.id !== id));
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     let t = team;
-    if (!t.id && onCreate) { t = await onCreate(); if (!t || !t.id) { onClose(); return; } }   // new team: create it only now, on Save
+    if (!t.id && onCreate) { t = await onCreate(); if (!t || !t.id) { setSaving(false); onClose(); return; } }   // new team: create it only now, on Save
     await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
     // …and keep the OTHER list in step, so the team the steward just built is also the team that can
     // read its own room. Only invite-only teams have an allowlist to keep — for an ordinary team every
@@ -143,6 +151,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
       }
     }
     await publishCareTeamFor(t.id, careTeamId, people);
+    setSaving(false);
     onClose();
   };
   const m = teamMeta(team);
@@ -209,7 +218,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
 
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14 }}><Icon name="check" size={16} color="var(--on-clay)" /> Save roster</button>
+        <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
       </div>
     </SchModal>
   );

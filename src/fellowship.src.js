@@ -552,7 +552,11 @@ const pool = new SimplePool();
 // holds 7 messages, screen says 4, and one published a minute later never arrives either.
 //
 // The steward console solved this months ago (src/steward.src.js, `_subbedOn`); the member app never got it.
-// Announce a genuine return and let app.jsx's existing `trinity-reconnect` listener rebuild the subscriptions.
+//
+// ITS OWN EVENT, not `trinity-reconnect`. That one means "reconnectAll() has already torn everything down and
+// only you can rebuild it" — mandatory, never debounced. This is the opposite: nothing was torn down, and it
+// arrives once per relay, so a flapping link would force a full teardown and re-subscribe per relay per flap.
+// app.jsx puts this on the advisory path. Mirrors the console's `steward-relay-returned`.
 //
 // KEYED ON THE RELAY INSTANCE, not the url. nostr-tools calls this from its subscribe path on EVERY
 // subscription, not only on a new socket — so comparing urls would fire on every ordinary read and re-subscribe
@@ -566,7 +570,7 @@ pool.onRelayConnectionSuccess = (url) => {
     const prev = _liveRelay.get(url);
     _liveRelay.set(url, live);
     if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew
-    window.dispatchEvent(new CustomEvent('trinity-reconnect', { detail: { url, reason: 'socket returned' } }));
+    window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url } }));
   } catch (e) {}
 };
 
