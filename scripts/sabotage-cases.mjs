@@ -698,4 +698,52 @@ export const CASES = [
     replace: `  const teamLinked = teamPeople;`,
     test: 'scripts/care-team-membership.test.mjs',
   },
+  {
+    name: 'chat: an open room stops re-subscribing after a drop',
+    file: 'app/screens-chat.jsx',
+    // the pre-fix deps exactly — the room is opened once and never re-opened, so a signal blip leaves it deaf
+    find: `  }, [group, ctx.connTick]);`,
+    replace: `  }, [group]);`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: the Community list stops re-subscribing after a drop',
+    file: 'app/screens-chat.jsx',
+    find: `  }, [groupIdsKey, ctx.connTick]);`,
+    replace: `  }, [groupIdsKey]);`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: a reconnect wipes the thread the member is reading',
+    file: 'app/screens-chat.jsx',
+    // the careless version of the same fix: re-subscribe, but keep the old unconditional reset
+    find: `      const sameRoom = seenRef.current && seenRef.current.gid === group.id;
+      if (!sameRoom) {
+        setMsgs([]); setReactions({}); setPickerFor(null);
+        seenRef.current = { gid: group.id, ids: new Set() };
+      }
+      const seen = seenRef.current.ids;`,
+    replace: `      setMsgs([]); setReactions({}); setPickerFor(null);
+      const seen = new Set();`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: nothing notices the socket came back',
+    file: 'src/fellowship.src.js',
+    // removing the whole handler puts the app back where it was: healthy socket, dead subscriptions, and a
+    // 90-second safety net that skips because relaysHealthy() is (correctly) true
+    find: `    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew
+    window.dispatchEvent(new CustomEvent('trinity-reconnect', { detail: { url, reason: 'socket returned' } }));`,
+    replace: ``,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: every read counts as a reconnect (the url-keyed version)',
+    file: 'src/fellowship.src.js',
+    // the plausible wrong fix — key on the url instead of the live relay instance. nostr-tools calls this from
+    // its subscribe path on EVERY subscription, so this re-subscribes the whole app on every ordinary read.
+    find: `    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew`,
+    replace: `    if (prev === undefined) return;`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
 ];

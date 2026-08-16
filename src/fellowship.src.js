@@ -539,6 +539,37 @@ function profile(pub) {
 }
 
 const pool = new SimplePool();
+
+// NOTICE WHEN A SOCKET COMES BACK — because nothing in this file ever did, and every recovery path depended
+// on somebody else noticing first.
+//
+// When a relay socket drops (a phone backgrounded, a screen off, a signal blip, a relay restart) nostr-tools
+// reconnects it, but it does NOT re-issue the REQs that were open on the old one. So the socket is healthy and
+// the subscriptions are dead — and relaysHealthy(), which reads the pool's live connection state, correctly
+// answers `true` for the rest of the session. The app's 90-second safety net skips on exactly that answer, so
+// nothing recovers: a room left open goes quiet under someone who is sitting still reading it, and the group
+// list stops reporting new messages, with no error anywhere. Measured 2026-08-16 against relay.sqlite — relay
+// holds 7 messages, screen says 4, and one published a minute later never arrives either.
+//
+// The steward console solved this months ago (src/steward.src.js, `_subbedOn`); the member app never got it.
+// Announce a genuine return and let app.jsx's existing `trinity-reconnect` listener rebuild the subscriptions.
+//
+// KEYED ON THE RELAY INSTANCE, not the url. nostr-tools calls this from its subscribe path on EVERY
+// subscription, not only on a new socket — so comparing urls would fire on every ordinary read and re-subscribe
+// the whole app in a loop. A real reconnect creates a new AbstractRelay; that is the only thing worth reacting
+// to. (The console's AUDIT-9 note records what the url-keyed version cost: 8 full-roster re-seals against 1.)
+const _liveRelay = new Map();
+pool.onRelayConnectionSuccess = (url) => {
+  try {
+    const live = pool.relays.get(url);
+    if (!live) return;                       // can close between ensureRelay resolving and this callback
+    const prev = _liveRelay.get(url);
+    _liveRelay.set(url, live);
+    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew
+    window.dispatchEvent(new CustomEvent('trinity-reconnect', { detail: { url, reason: 'socket returned' } }));
+  } catch (e) {}
+};
+
 let sk = null, pub = null;
 // Do we answer a relay's NIP-42 challenge? ALWAYS — this is deliberately hardcoded true.
 //

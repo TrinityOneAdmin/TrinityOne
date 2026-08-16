@@ -1475,6 +1475,16 @@ function App() {
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => { setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(null); setGroup(g); },
     desktop, openGroupId: group && group.id,
+    // THE RECONNECT SIGNAL, HANDED TO THE SCREENS. Fourteen subscription effects in this file list connTick
+    // in their deps precisely so a dropped socket is re-subscribed on resume. The two in screens-chat.jsx —
+    // the group list's last-message previews, and the messages in an open room — were never wired to it, and
+    // they are the two a member watches. Measured 2026-08-16: background the app, publish three messages, come
+    // back. The relay holds seven; the list still says four, and a message published a minute later never
+    // arrives either. relaysHealthy() answers true throughout (the socket did come back — the REQ did not), so
+    // the 90-second safety net skips as designed and nothing ever recovers. The room heals only if you close
+    // and reopen it, which is why the same room reads "stale" to someone sitting still and "fine" to someone
+    // wandering. See FINDINGS-2026-08-16 item 2.
+    connTick,
     openDM: (peer) => { setGroup(null); setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(peer); }, openDMInbox: () => { setGroup(null); setOpenServing(false); setPeople(false); setDmPeer(null); setDmInbox(true); markDmSeen(); }, openPeople: () => { setGroup(null); setOpenServing(false); setDmInbox(false); setDmPeer(null); setPeople(true); },
     dmUnread,   // drives the dot on the Community "Direct messages" (paper-plane) button
     walletSats, setWalletSats, giving, setGiving,
