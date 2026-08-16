@@ -655,4 +655,47 @@ export const CASES = [
     replace: `try { return JSON.parse(nip44d(ct, _unhex(_nameKeyRing[0]))); } catch (e) {}`,
     test: 'scripts/church-calendar-sealed.test.mjs',
   },
+  {
+    name: 'care team: the Groups tab stops writing the roster',
+    file: 'app/stew-dashboard.jsx',
+    // the pre-fix behaviour exactly: publish the allowlist, leave the team's roster where it was. This is the
+    // St Brigid's shape — group members 2, roster people 0, care team empty and nothing said so.
+    find: `        return Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
+          .then(() => publishCareTeamFor(group.id, careTeamId, people));`,
+    replace: `        return;`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: an allowlist edit wipes the off-app volunteers',
+    file: 'app/stew-schedule.jsx',
+    // the plausible careless version — "the allowlist IS the team", forgetting that a volunteer with no app
+    // account is in no allowlist and would be deleted from the rota by an edit that never mentioned them
+    find: `  const offApp = had.filter(p => p && !p.pub);`,
+    replace: `  const offApp = [];`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: a reconciled person gets a fresh id, emptying every pod slot',
+    file: 'app/stew-schedule.jsx',
+    find: `    const was = had.find(p => p && p.pub === pk);
+    if (was) return was;`,
+    replace: ``,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: careteam: no longer follows the team it names',
+    file: 'app/stew-schedule.jsx',
+    find: `    await publishCareTeamFor(t.id, careTeamId, people);`,
+    replace: ``,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: the empty-team warning counts names with no key again',
+    file: 'app/stew-meals.jsx',
+    // the exact pre-fix condition. A care team of three off-app names reads as staffed, while careAdmin and
+    // careteam: — both keyed on pubkeys — have nobody.
+    find: `  const teamLinked = teamPeople.filter(p => p && p.pub);`,
+    replace: `  const teamLinked = teamPeople;`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
 ];

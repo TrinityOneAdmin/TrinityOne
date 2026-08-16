@@ -1949,6 +1949,11 @@ function NewGroupModal({ open, onClose }) {
 // group with the new member set — the relay then enforces posting + the read-gate against it.
 function EditGroupMembersModal({ group, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  // A team also has a ROSTER, and that is the list the rota and the care team are read from — see the
+  // note above RosterModal in stew-schedule.jsx. Ticking someone into a care team here and nowhere else
+  // is how a church ends up with a care team the relay treats as empty.
+  const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
+  const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';
   const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
@@ -1962,6 +1967,19 @@ function EditGroupMembersModal({ group, onClose }) {
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
     const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
     Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
+      // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
+      // invite-only group is not a team and has no rota or care role to inherit. If the roster document
+      // has not arrived yet there is nothing to reconcile against, so we leave it rather than publish a
+      // roster we have not read (which would wipe the roles).
+      .then(() => {
+        const r = (rosters || []).find(x => x && x.team === group.id);
+        if (!r || !window.Steward.publishRoster) return;
+        const people = teamPeopleForAllowlist(r.people, newM, members);
+        const same = people.length === (r.people || []).length && people.every((p, i) => p === (r.people || [])[i]);
+        if (same) return;
+        return Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
+          .then(() => publishCareTeamFor(group.id, careTeamId, people));
+      })
       .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
       .then((r) => {
         clearTimeout(guard);
@@ -1994,7 +2012,9 @@ function EditGroupMembersModal({ group, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Who’s in ' + group.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '100%', maxHeight: '88%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '22px 24px 14px' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>Who’s in “{group.name}”</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>Invite-only — only these members can post and read. Remove someone and the relay locks them out of the chat.</div>
+          {/* Say that this also sets the team, because it does — the save reconciles the roster. A hidden
+              side-effect is how the two lists drifted apart in the first place. */}
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>Invite-only — only these members can post and read. Remove someone and the relay locks them out of the chat.{(rosters || []).some(x => x && x.team === group.id) ? ' These are also the people on this team — they fill its rota slots, and if it is your care team, they are the ones who can open and manage needs.' : ''}</div>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={lbl}>MEMBERS · {sel.size}</div>

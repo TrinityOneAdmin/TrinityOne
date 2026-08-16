@@ -47,6 +47,58 @@ function SchModal({ title, children, onClose, width = 480 }) {
   );
 }
 
+// ── A TEAM HAS TWO MEMBERSHIP LISTS, AND ONLY ONE OF THEM IS THE CARE TEAM ──────────────────────
+//
+// `group:<id>.members` is the invite-only chat allowlist — the "Invite · N" button on the Groups tab.
+// `roster:<id>.people` is who is ON the team: it fills rota slots, and for the church's care team it is
+// what the RELAY reads to decide who may open and manage care needs (gateway.mjs careAdmin ->
+// ROSTER_PEOPLE), and the only source for the `careteam:<cp>` document a member's "ask for help" is
+// sealed to (stew-meals.jsx publishes it from the roster's LINKED people).
+//
+// Two doors, two documents, one intention. St Brigid's (simulation, 2026-08-16) staffed its care team
+// from the Groups tab: the group doc took two members, the roster kept `people: []`, and the care team
+// was empty to every part of the product that acts on it — silently, while the console showed
+// "Invite · 2" and the care panel showed no warning. Traced against relay.sqlite: group members 2,
+// roster people 0. Nothing dropped the people; the steward's work went into the other document.
+//
+// So whichever door is used now writes BOTH facts. These two functions are that reconciliation, kept
+// as plain data-in/data-out so a test can drive the real ones.
+
+// The roster's people after the invite allowlist has become `pubs`. Off-app volunteers have no pubkey
+// and are not in any allowlist, so they are never dropped by an allowlist edit; a linked person keeps
+// their existing id and team name (pods reference people BY ID, so minting a fresh one would silently
+// empty every pod slot they fill).
+function teamPeopleForAllowlist(people, pubs, members) {
+  const want = [...new Set((pubs || []).filter(Boolean))];
+  const had = people || [];
+  const offApp = had.filter(p => p && !p.pub);
+  const linked = want.map(pk => {
+    const was = had.find(p => p && p.pub === pk);
+    if (was) return was;
+    const m = (members || []).find(x => x && x.pubkey === pk);
+    return { id: 'p' + Math.random().toString(36).slice(2, 7), name: m ? memDisplay(m) : ('Anon · ' + String(pk).slice(-6)), pub: pk };
+  });
+  return offApp.concat(linked);
+}
+
+// The invite allowlist a roster implies: its linked people, and only those. An off-app volunteer has no
+// key, so there is nothing to admit — which is also why a care team of off-app names is invisible to the
+// relay, and why the care panel warns about exactly that.
+function teamAllowlistForPeople(people) {
+  return [...new Set((people || []).map(p => p && p.pub).filter(Boolean))];
+}
+
+// If this team IS the church's care team, `careteam:<cp>` has to move with it. That document is the list a
+// member's "ask for help" is sealed to, and until now it was republished from exactly one place — an effect
+// in DashMealsPanel, which only runs while Settings → Features is on screen. So someone taken off the care
+// team went on receiving sealed care requests until a steward happened to open that panel, and someone added
+// received none. Republish wherever the roster actually changes.
+function publishCareTeamFor(teamId, careTeamId, people) {
+  if (!teamId || !careTeamId || teamId !== careTeamId) return Promise.resolve(null);
+  if (!(window.StewardMeals && window.StewardMeals.publishCareTeam)) return Promise.resolve(null);
+  try { return Promise.resolve(window.StewardMeals.publishCareTeam(teamAllowlistForPeople(people))); } catch (e) { return Promise.resolve(null); }
+}
+
 // ── manage a team's roster: the roles it needs + the people who can serve ──
 function RosterModal({ team, roster, members, onClose, onCreate }) {
   const [roles, setRoles] = useSch(() => (roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []));
@@ -55,6 +107,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   const [newRole, setNewRole] = useSch('');
   const [newPerson, setNewPerson] = useSch('');
   const [linkPub, setLinkPub] = useSch('');
+  const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';   // which team is THE care team
   const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
   const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
   const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
@@ -74,7 +127,23 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   const save = async () => {
     let t = team;
     if (!t.id && onCreate) { t = await onCreate(); if (!t || !t.id) { onClose(); return; } }   // new team: create it only now, on Save
-    window.Steward.publishRoster(t.id, { roles, people, pods }); onClose();
+    await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
+    // …and keep the OTHER list in step, so the team the steward just built is also the team that can
+    // read its own room. Only invite-only teams have an allowlist to keep — for an ordinary team every
+    // member can already read it, so there is nothing to write. See the note above RosterModal.
+    if (t.visibility === 'invite') {
+      const want = teamAllowlistForPeople(people);
+      const have = Array.isArray(t.members) ? t.members : [];
+      const removed = have.some(pk => !want.includes(pk));
+      if (removed || want.some(pk => !have.includes(pk))) {
+        await Promise.resolve(window.Steward.publishGroup({ ...t, visibility: 'invite', members: want }));
+        // Taking someone OFF the team must rotate the key, or their cached copy keeps opening every
+        // future message — the contract publishGroupKey states for exactly this call.
+        if (t.encrypted && window.Steward.publishGroupKey) { try { await window.Steward.publishGroupKey(t.id, want, { rotate: removed }); } catch (e) {} }
+      }
+    }
+    await publishCareTeamFor(t.id, careTeamId, people);
+    onClose();
   };
   const m = teamMeta(team);
   return (

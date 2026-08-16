@@ -85,6 +85,11 @@ function DashMealsPanel({ church }) {
   // member CareCard (onCareRoster) both read. So manage it with the same RosterModal the Rota page uses.
   const careRoster = rosters.find(r => r.team === s.adminGroupId);
   const teamPeople = (careRoster && careRoster.people) || [];
+  // Only a person LINKED to an app account can be recognised by anything — the relay's careAdmin grant is
+  // keyed on their pubkey, and careteam:<cp> is a list of pubkeys. An off-app volunteer on the roster is a
+  // name on a rota and nothing more, so counting them here would let the panel report a care team that no
+  // part of the product can act on. Counting them is what let a team of names read as staffed.
+  const teamLinked = teamPeople.filter(p => p && p.pub);
   const on = !!s.enabled;
   // Keep the care-team RECIPIENT roster (careteam:<cp>) published so a member's "ask for help" seals to exactly
   // the care team. Re-publish only when the team's membership actually changes (deduped, not every render).
@@ -139,7 +144,7 @@ function DashMealsPanel({ church }) {
             ))}
           </div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>{s.visibility === 'team' ? 'Only the care-team group below sees needs — gentler where guilt-pressure is the concern.' : 'Every member sees needs — best for turnout.'}</div>
-          {s.visibility === 'team' && (!s.adminGroupId || teamPeople.length === 0) ? <div style={{ marginTop: 8, padding: '9px 11px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ {s.adminGroupId ? 'Your care team has no members yet' : 'No care team is selected below'} — with this setting <b>no one will see open needs</b>. {s.adminGroupId ? 'Tap “Members” to add people' : 'Pick or create a care team'}, or switch to “The whole church.”</div> : null}
+          {s.visibility === 'team' && (!s.adminGroupId || teamLinked.length === 0) ? <div style={{ marginTop: 8, padding: '9px 11px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ {s.adminGroupId ? 'Your care team has nobody on it yet' : 'No care team is selected below'} — with this setting <b>no one will see open needs</b>. {s.adminGroupId ? 'Tap “Members” to add people' : 'Pick or create a care team'}, or switch to “The whole church.”</div> : null}
         </div>
         <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 12, border: '1px solid var(--line)' }}>
           <div style={mealsLbl}>WHO CAN OPEN A NEED?</div>
@@ -160,6 +165,11 @@ function DashMealsPanel({ church }) {
             </select>
             {selectedTeam ? <button onClick={() => setEditTeam(selectedTeam)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, flexShrink: 0 }}><Icon name="users" size={15} color="currentColor" /> Members</button> : null}
           </div>
+          {/* SAY IT WHEN THE TEAM IS EMPTY, in every visibility. "Stewards + care team" is the default for
+              who may open a need, and that grant is the relay's careAdmin — which reads the roster's LINKED
+              people. A care team with nobody on it therefore does nothing at all, and until now the only
+              warning was on the one visibility setting most churches don't pick. */}
+          {selectedTeam && teamLinked.length === 0 ? <div style={{ marginTop: 8, padding: '9px 11px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ <b>Nobody is on “{selectedTeam.name || 'this team'}” yet</b>{teamPeople.length ? ' who has the app' : ''} — so it can’t open or manage needs, and “ask for help” won’t reach it. Tap <b>Members</b>{teamPeople.length ? ' and link each person to their app account.' : ' to add people.'}</div> : null}
           <button onClick={createCareTeam} disabled={creating} style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--clay-ink)', borderRadius: 11, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: creating ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', opacity: creating ? 0.6 : 1 }}>
             <Icon name="plus" size={15} color="currentColor" /> {creating ? 'Creating…' : 'Create a care team'}</button>
         </div>
