@@ -76,3 +76,6 @@ relay/
 relay/rejected.log
 scripts/.boot-*.mjs
 scripts/.sim-*.json
+
+# simulation findings + runbooks — local working notes, not repo history
+reference/sim/

@@ -701,7 +701,20 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             <SectionLabel>What’s on</SectionLabel>
             {events.length === 0 ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No socials or events yet — your church will post them here.</div> : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {events.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
+              {/* AN EVENT WE CANNOT OPEN IS NOT AN EVENT WITH NO DETAILS. Calendar entries are sealed under the
+                  church name key; one that will not open carries `_locked` so the transport does not silently
+                  drop it (an empty calendar is indistinguishable from a church with nothing on). But nothing
+                  rendered that flag, so a locked entry fell through as an ordinary event with undefined
+                  fields: no title, no time, "NaN" where the date should be — and working Going/Maybe/Can't
+                  buttons. Seen on a real phone 2026-08-16, and a member RSVP'd to one: "I'm now going to
+                  something and I don't know what." */}
+              {events.filter(e => e && e._locked).length ? (
+                <div style={{ borderRadius: 20, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '14px 16px', marginBottom: 12, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                  <b style={{ color: 'var(--ink)' }}>{events.filter(e => e && e._locked).length} event{events.filter(e => e && e._locked).length === 1 ? '' : 's'} you can\u2019t open yet.</b>{' '}
+                  Your church\u2019s key hasn\u2019t reached this phone. They\u2019ll appear once it does \u2014 nothing is missing.
+                </div>
+              ) : null}
+              {events.slice().filter(e => !(e && e._locked)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
                 <div key={(e._networkPub || '') + e.id} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
                   {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 150, objectFit: 'cover', display: 'block' }} /> : null}
                   <div onClick={() => ctx.openEvent && ctx.openEvent(e)} style={{ display: 'flex', gap: 13, padding: 16, cursor: 'pointer' }}>

@@ -1627,7 +1627,24 @@ function App() {
     // …and whether we stopped trying. Distinct from joinQueued: "still trying" is patience, "we gave up" is
     // an action the member has to take. Both used to render as "has been sent, sit tight".
     joinFailed: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinFailed && window.Fellowship.joinFailed(np)); } catch (e) { return false; } })(),
-    retryConnection: () => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; if (np) { if (window.Fellowship.retryJoin) window.Fellowship.retryJoin(np); if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(np); } } catch (e) {} bumpConn(x => x + 1); },
+    // SAY THAT IT TRIED. This did the work — re-announce, re-subscribe — and showed nothing at all, so the
+    // one control on the waiting-for-approval screen looked broken while working perfectly. Reported
+    // independently by a member of the pilot and by a simulated 71-year-old on the same afternoon, in almost
+    // the same words: "I pressed it twice, nothing happened, I'd have pressed it twenty times." Each of those
+    // presses really did republish a join request. A control that acts silently is indistinguishable from a
+    // dead one, and this is the screen where a member is already unsure whether they have been forgotten.
+    retryConnection: () => {
+      try {
+        const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+        if (np) {
+          if (window.Fellowship.retryJoin) window.Fellowship.retryJoin(np);
+          if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(np);
+        }
+        const t = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        toast('Asked your church again at ' + t + ' — you\u2019ll see it here as soon as a steward lets you in.');
+      } catch (e) { try { toast('Couldn\u2019t reach your church just now — check your connection and try again.'); } catch (e2) {} }
+      bumpConn(x => x + 1);
+    },
     // steward rule: this church asks members to use a real first + last name (two words)
     requireFullName: !!(((churches.find(c => c.id === activeChurch) || {}).rules) || {}).fullName,
     // AUDIT-2026-07-27. This used to read the church's list of children to decide whether to offer a DM. That
