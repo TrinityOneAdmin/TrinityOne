@@ -38,7 +38,7 @@ const check = (name, ok, detail) => { console.log('    ' + (ok ? 'PASS' : 'FAIL'
 
 // ── one app instance = one persona ─────────────────────────────────────────────────────────────────────────
 async function persona(name, port) {
-  const profile = mkdtempSync(join(tmpdir(), 'sim-' + name + '-'));
+  const profile = mkdtempSync(join(process.env.TRINITY_SCRATCH || '/mnt/storage/tmp/trinity-scratch', 'sim-' + name + '-'));
   const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=' + port, '--user-data-dir=' + profile,
     '--no-first-run', '--disable-gpu', '--no-sandbox', 'about:blank'], { stdio: 'ignore' });
   let t;
@@ -158,6 +158,47 @@ async function onboard(p, displayName) {
   return p.ev('(window.Fellowship && window.Fellowship.myPubkey) || ""');
 }
 
+// ── PLAYING BOTH SIDES ──────────────────────────────────────────────────────────────────────────────────────
+//
+// A simulation that drives one persona and checks the relay is not a simulation of an interaction — it is one
+// person talking into a room. Every interaction in this product has at least two ends: someone asks for help
+// and a steward answers; someone sends and someone receives; a steward blocks and a member's app must react.
+// The interesting failures live in the GAP between those ends, which is precisely the part one actor cannot
+// reach. Chat looked fine all week from the sender's side; nothing had ever checked that the words arrived.
+//
+// So a beat names WHO acts, and the next beat names who must SEE it. The runner waits for the second side to
+// catch up rather than asserting immediately — propagation is a round trip through the relay, and asserting
+// straight after an action is how a screen that never updated gets recorded as a pass.
+async function waitUntil(p, jsPredicate, ms = 30000, every = 1500) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    try { if (await p.ev(`(function(){ ${jsPredicate} })()`)) return true; } catch (e) {}
+    await sleep(every);
+  }
+  return false;
+}
+const sees = (text) => `return document.body.innerText.indexOf(${JSON.stringify(text)}) >= 0;`;
+
+// One exchange, played from both ends: A says something in a room, B must see it, B answers, A must see THAT.
+// Either direction failing is a real defect — a message that leaves the sender and never lands is invisible to
+// every test that only watches the sender.
+async function exchange(A, B, room, phraseA, phraseB) {
+  for (const p of [A, B]) {
+    await p.tap('Community', false); await sleep(2000);
+    await p.tap(room, false); await sleep(2500);
+  }
+  const sentA = await A.send(phraseA);
+  check(`${A.name} sends in ${room}`, sentA === 'sent', sentA);
+  const gotA = await waitUntil(B, sees(phraseA), 40000);
+  check(`…and ${B.name} receives it`, gotA, gotA ? 'arrived at the other app' : 'NEVER ARRIVED — the sender saw success');
+
+  const sentB = await B.send(phraseB);
+  check(`${B.name} answers`, sentB === 'sent', sentB);
+  const gotB = await waitUntil(A, sees(phraseB), 40000);
+  check(`…and ${A.name} sees the answer`, gotB, gotB ? 'the round trip closed' : 'the reply never came back');
+  for (const p of [A, B]) { await p.ev('history.back()'); await sleep(1000); }
+}
+
 // ── the steward console — 207 of the 318 public functions live behind it ────────────────────────────────────
 //
 // Nothing in the member app can reach church creation, care approval, safeguarding, rotas or blocking, so a
@@ -232,21 +273,15 @@ for (let i = 0; i < people.length; i++) {
   check(NAMES[i] + ' has an identity and a church', /^[0-9a-f]{64}$/.test(pk || ''), (pk || '').slice(0, 10) + '…');
 }
 
-console.log('\n── a conversation, through the app ─────────────────────────────────────────');
-for (let r = 0; r < ROUNDS; r++) {
-  for (const p of people) {
-    await p.tap('Community', false); await sleep(2500);
-    const opened = await p.tap('Readings', false); await sleep(2500);
-    if (opened) {
-      const r2 = await p.send(`${p.name} says hello (round ${r + 1})`);
-      if (r2 !== 'sent') console.log('    (' + p.name + ': ' + r2 + ')');
-      await p.ev('history.back()'); await sleep(1200);
-    }
+console.log('\n── a conversation, played from both ends ───────────────────────────────────');
+if (people.length >= 2) {
+  for (let r = 0; r < ROUNDS; r++) {
+    const stamp = Date.now().toString(36).slice(-4);
+    await exchange(people[0], people[1], 'Readings',
+      `${people[0].name}: is the reading still Isaiah? [${stamp}]`,
+      `${people[1].name}: yes, Isaiah 40 [${stamp}]`);
   }
-}
-const readBack = await people[0].ev(`(function(){
-  var n=document.body.innerText; return ['${NAMES.slice(0, MEMBERS).join("','")}'].filter(function(x){return n.indexOf(x)>=0;}).length;})()`);
-check('members can see each other in the app', readBack >= 1, readBack + ' names visible on screen');
+} else console.log('    (needs at least two instances)');
 
 console.log('\n── coverage ────────────────────────────────────────────────────────────────');
 const merged = {};

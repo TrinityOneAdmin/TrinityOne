@@ -289,6 +289,29 @@ function ensureSignedBundle() {
     sha = BUILD.sha && !BUILD.sha.startsWith('$Format') ? BUILD.sha : null;
     if (!sha) { console.error('[relay] no release ref (' + RELEASE_REF + ') and no stamped build sha — refusing to serve a bundle'); return null; }
   }
+  // KEEP THE LAST FEW, NOT ALL OF THEM. Each cached bundle is ~26 MB and nothing ever removed one, so the
+  // directory grew by one entry per commit that anything fetched a bundle for. Harmless on a host that cuts a
+  // release now and then; this box is the DEV machine AND the release origin, so `main` moves dozens of times
+  // a week and every move that a8 (or a test, or a verification) fetched left another 26 MB behind. Measured
+  // 2026-08-16: 74 entries, 1.9 GB.
+  //
+  // Older entries are still worth keeping briefly: a relay part-way through an update may re-fetch the sha it
+  // started with, and an operator rolling back wants the previous one to still verify. Four is comfortably
+  // more than either needs.
+  //
+  // Note this only ever affects release hosts — a church relay has no release key and returns above without
+  // building anything, so it accumulates nothing.
+  try {
+    const keep = 4;
+    const entries = readdirSync(BUNDLE_CACHE_DIR)
+      .filter(f => f.endsWith('.tgz'))
+      .map(f => ({ f, t: statSync(join(BUNDLE_CACHE_DIR, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (const e of entries.slice(keep)) {
+      try { unlinkSync(join(BUNDLE_CACHE_DIR, e.f)); } catch (x) {}
+      try { unlinkSync(join(BUNDLE_CACHE_DIR, e.f + '.sig')); } catch (x) {}
+    }
+  } catch (e) {}
   const tgz = join(BUNDLE_CACHE_DIR, sha + '.tgz');
   const sig = join(BUNDLE_CACHE_DIR, sha + '.tgz.sig');
   if (existsSync(tgz)) return { tgz, sig: existsSync(sig) ? sig : null, sha };

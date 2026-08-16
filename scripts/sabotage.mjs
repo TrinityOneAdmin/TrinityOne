@@ -32,7 +32,12 @@ const cases = CASES.filter(c => !filter || c.name.includes(filter));
 if (!cases.length) { console.error('no cases match ' + JSON.stringify(filter)); process.exit(2); }
 
 // A copy of the WORKING TREE, not of HEAD — the fix under test is usually uncommitted at this point.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'sabotage-'));
+// SANDBOX ON THE BIG DISK, NOT THE SYSTEM ONE. Each run copies the working tree (~20 MB) and this box's /tmp
+// lives on a 156 GB root filesystem that is routinely near full, while the project sits on a 1.9 TB volume with
+// room to spare. A harness that competes with the operating system for disk is a harness that fails for reasons
+// that have nothing to do with the code under test — which is exactly what happened on 2026-08-16.
+const SCRATCH = process.env.TRINITY_SCRATCH || '/mnt/storage/tmp/trinity-scratch';
+const SANDBOX = mkdtempSync(join(existsSync(SCRATCH) ? SCRATCH : tmpdir(), 'sabotage-'));
 console.log('sandbox: ' + SANDBOX + '\n');
 for (const d of ['src', 'app', 'scripts', 'vendor']) cpSync(join(ROOT, d), join(SANDBOX, d), { recursive: true });
 // Root-level scripts count too — join.js and pills.js are shipped code with tests of their own, and a case
