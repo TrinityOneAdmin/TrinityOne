@@ -746,4 +746,21 @@ export const CASES = [
     replace: `    if (prev === undefined) return;`,
     test: 'scripts/chat-reconnect.test.mjs',
   },
+  {
+    name: 'restore: Back drops a settled member into new-account setup',
+    file: 'app/identity.jsx',
+    // the pre-fix behaviour exactly — one exit for both entrances, so the settings one falls into the wizard
+    find: `    if (initialRestore) { if (onSkip) onSkip(); return; }   // came from Settings → close, don't fall into setup`,
+    replace: ``,
+    test: 'scripts/restore-exit-route.test.mjs',
+  },
+  {
+    name: 'restore: Back closes the whole wizard on first run too',
+    file: 'app/identity.jsx',
+    // over-correcting the other way: always close, which on first run leaves nothing behind the pane
+    find: `    if (initialRestore) { if (onSkip) onSkip(); return; }   // came from Settings → close, don't fall into setup
+    setRestoring(false);`,
+    replace: `    if (onSkip) onSkip();`,
+    test: 'scripts/restore-exit-route.test.mjs',
+  },
 ];

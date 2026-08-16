@@ -38,6 +38,18 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // back. AUDIT 2026-07-26. Same shape as the console's: paste the phrase, validate, re-derive, then ask the
   // relay what this identity already is.
   const [restoring, setRestoring] = useId(!!initialRestore);
+  // LEAVING THE RESTORE ROUTE GOES BACK WHERE YOU CAME FROM.
+  //
+  // On first run there is a wizard behind this pane, so dropping into it is right. Opened from SETTINGS
+  // (`initialRestore`) there is nothing behind it — so `setRestoring(false)` fell through to the welcome fork,
+  // and one more tap put a member who already HAS an account on "What should your church call you?". Someone
+  // who opened Restore to look at it, and pressed Back, was shown the app apparently starting to replace them.
+  // Reported by the owner, 2026-08-16.
+  const leaveRestore = () => {
+    setRPhrase(''); setRErr(''); setRBusy('');
+    if (initialRestore) { if (onSkip) onSkip(); return; }   // came from Settings → close, don't fall into setup
+    setRestoring(false);
+  };
   const [rPhrase, setRPhrase] = useId('');
   const [rBusy, setRBusy] = useId('');
   const [rErr, setRErr] = useId('');
@@ -444,7 +456,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       </div>
       <div style={{ flexShrink: 0, padding: '10px 22px 26px', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          <button onClick={() => { setRestoring(false); setRPhrase(''); setRErr(''); setRBusy(''); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)' }}>Back</button>
+          <button onClick={leaveRestore} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)' }}>{initialRestore ? 'Back to settings' : 'Back'}</button>
         </div>
       </div>
     </div>
