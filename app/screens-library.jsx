@@ -138,6 +138,16 @@ function BackupCard({ ctx }) {
   const [busy, setBusy] = React.useState('');     // '' | 'local' | 'cloud'
   const [done, setDone] = React.useState(null);   // null | 'device' | 'downloads' | 'cloud'
   const fileRef = React.useRef(null);
+  // RESTORE, IN THIS SCREEN. This used to be window.prompt for the passphrase — a system dialog that shows it
+  // in clear, asked BEFORE the file had been read, so choosing the wrong file wasted it — and failures came
+  // back as a toast that vanished while the member was still reading it. Same shape as the first-run route in
+  // identity.jsx: recognise the file, then ask, then say what went wrong and leave it on screen.
+  // UX audit 2026-08-16, findings F5/F6.
+  const [rFile, setRFile] = React.useState(null);   // { name, text }
+  const [rPass, setRPass] = React.useState('');
+  const [rShow, setRShow] = React.useState(false);
+  const [rErr, setRErr] = React.useState('');
+  const [rBusy, setRBusy] = React.useState('');
   const secure = (typeof window !== 'undefined') && window.isSecureContext && (typeof crypto !== 'undefined') && crypto.subtle;
 
   const INCLUDED = [
@@ -191,30 +201,58 @@ function BackupCard({ ctx }) {
     } catch (e) { setBusy(''); ctx.toast('Backup failed: ' + (e.message || e)); }
   };
 
+  // 1 · read and recognise the file. Nothing is typed yet, so a wrong file costs nothing.
   const onRestoreFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = '';
+    setRErr(''); setRFile(null); setRPass('');
     if (!f) return;
-    const p = window.prompt('Enter the passphrase or PIN for this backup file:'); if (p == null) return;
-    try {
-      const text = await window.TrinityBackup.readFile(f);
-      const obj = await window.TrinityBackup.decryptStr(text, p);
-      // SECURITY-AUDIT-2026-07-20 H1 (was 06-24 L6, fixed in ONE of the two copies): applyMember() calls
-      // importMnemonic() and permanently REPLACES the on-device key. identity-extras.jsx guards this with a
-      // confirm and a comment noting an earlier audit marked it fixed while it was missing from the code
-      // path — and then the same gap survived here, in a card whose copy never mentions identity at all.
-      // Pick the wrong .json out of Downloads and your key is gone. Plain window.confirm is deliberate:
-      // overwriting a self-custodial key should look unambiguous and a little ugly, not slick.
-      if (obj && obj.identity) {
-        const ID = window.TrinityIdentity;
-        const cur = (ID && ((ID.current && ID.current.npub) || ID.npub)) || '';
-        const msg = 'This will REPLACE the account on this phone with the one in the backup.\n\n'
-          + (cur ? 'On this phone now: ' + cur.slice(0, 18) + '…\n' : '')
-          + '\nThe current account will be UNRECOVERABLE unless you saved its 12 words.\n\nContinue?';
-        if (!window.confirm(msg)) return;
-      }
-      await window.TrinityBackup.applyMember(obj);
-      ctx.toast('Backup restored');
-    } catch (err) { ctx.toast(err.message || 'Couldn’t restore that file'); }
+    let text = '';
+    try { text = await window.TrinityBackup.readFile(f); }
+    catch (err) { setRErr('Couldn’t read that file. Try choosing it again.'); return; }
+    let env = null; try { env = JSON.parse(text); } catch (err) {}
+    if (!env || env.app !== 'trinityone-backup') {
+      setRErr('That isn’t a TrinityOne backup. Look for a file named like “trinityone-backup-2026-08-16.json”.');
+      return;
+    }
+    setRFile({ name: f.name || 'your backup', text });
+  };
+  // 2 · open it, and only then talk about replacing anything.
+  const doRestoreFile = async () => {
+    if (!rFile || rBusy) return;
+    setRErr(''); setRBusy('Opening…');
+    let obj = null;
+    try { obj = await window.TrinityBackup.decryptStr(rFile.text, rPass); }
+    catch (err) {
+      setRBusy('');
+      setRErr(/passphrase|damaged/i.test((err && err.message) || '')
+        ? 'That password didn’t open the file. Check your paper — the words are separated by spaces.'
+        : ((err && err.message) || 'Couldn’t open that file.'));
+      return;
+    }
+    if (!obj || obj.kind !== 'member') {
+      setRBusy('');
+      setRErr(obj && obj.kind === 'steward'
+        ? 'That’s a church backup, not a member backup. It belongs in the steward console.'
+        : 'That file doesn’t say what it is, so it isn’t safe to restore.');
+      return;
+    }
+    // SECURITY-AUDIT-2026-07-20 H1 (was 06-24 L6, fixed in ONE of the two copies): applyMember() calls
+    // importMnemonic() and permanently REPLACES the on-device key. Pick the wrong .json out of Downloads and
+    // your key is gone. Plain window.confirm is DELIBERATE and stays — overwriting a self-custodial key
+    // should look unambiguous and a little ugly, not slick (AUDIT-BACKLOG: won't-do). Only the passphrase
+    // prompt moved in-app; this is a different question and a decided one.
+    if (obj.identity) {
+      const ID = window.TrinityIdentity;
+      const cur = (ID && ((ID.current && ID.current.npub) || ID.npub)) || '';
+      const msg = 'This will REPLACE the account on this phone with the one in the backup.\n\n'
+        + (cur ? 'On this phone now: ' + cur.slice(0, 18) + '…\n' : '')
+        + '\nThe current account will be UNRECOVERABLE unless you saved its 12 words.\n\nContinue?';
+      if (!window.confirm(msg)) { setRBusy(''); return; }
+    }
+    try { await window.TrinityBackup.applyMember(obj); }
+    catch (err) { setRBusy(''); setRErr((err && err.message) || 'Couldn’t restore that backup.'); return; }
+    setRBusy(''); setRFile(null); setRPass('');
+    ctx.toast('Backup restored');
   };
 
   return (
@@ -274,7 +312,28 @@ function BackupCard({ ctx }) {
         </div>
         <button onClick={() => fileRef.current && fileRef.current.click()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px', borderRadius: 12,
           border: 'none', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-          <Icon name="refresh" size={15} color="var(--ink-3)" /> Restore from a backup file</button>
+          <Icon name="refresh" size={15} color="var(--ink-3)" /> {rFile ? 'Choose a different file' : 'Restore from a backup file'}</button>
+
+        {/* The password step appears only once a file has been recognised — so a wrong file is caught before
+            anything is typed, and the member never spends a password on the wrong thing. */}
+        {rFile ? (
+          <div style={{ padding: '2px 2px 4px' }}>
+            <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 700, marginBottom: 7 }}>✓ {rFile.name}</div>
+            <div style={{ position: 'relative' }}>
+              <input type={rShow ? 'text' : 'password'} value={rPass} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                onChange={e => { setRPass(e.target.value); setRErr(''); }}
+                onKeyDown={e => { if (e.key === 'Enter' && rPass) doRestoreFile(); }}
+                placeholder="the words you wrote on your paper"
+                style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface)', padding: '0 66px 0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              <button onClick={() => setRShow(v => !v)} style={{ position: 'absolute', right: 5, top: 5, height: 34, padding: '0 11px', borderRadius: 10, border: 'none', background: 'var(--surface-2)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700 }}>{rShow ? 'Hide' : 'Show'}</button>
+            </div>
+            <button onClick={doRestoreFile} disabled={!rPass.trim() || !!rBusy}
+              style={{ width: '100%', marginTop: 8, padding: 12, borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: (!rPass.trim() || rBusy) ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-ui)', opacity: (!rPass.trim() || rBusy) ? .5 : 1 }}>
+              {rBusy || 'Restore this backup'}</button>
+          </div>
+        ) : null}
+        {/* …and the error stays put, next to the thing that can be fixed. */}
+        {rErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.45, margin: '0 2px 6px', padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, transparent)' }}>{rErr}</div> : null}
       </div>
       ) : null}
     </div>);
