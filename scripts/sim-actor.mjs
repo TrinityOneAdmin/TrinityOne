@@ -41,8 +41,33 @@ const out = (x) => { console.log(typeof x === 'string' ? x : JSON.stringify(x));
 
 try {
   if (cmd === 'see') {
-    const txt = await ev('document.body.innerText.replace(/\\n{2,}/g,"\\n").slice(0,1800)');
-    out(txt || '(blank screen)');
+    // THIS COMMAND MANUFACTURED A FINDING, so read the note before shortening it again.
+    //
+    // It used to be `innerText.slice(0, 1800)`. Two things are wrong with that on a busy screen, and together
+    // they produced the 2026-08-16 report "a room shows old messages while its list shows new ones", which
+    // survived into a written findings document and was independently "confirmed" by three agents:
+    //
+    //   1. innerText ignores scroll ENTIRELY. A room scrolled correctly to its newest message still returns
+    //      its whole history, oldest first.
+    //   2. Slicing the first 1800 characters therefore returns the OLDEST messages and drops the newest.
+    //
+    // So a chat room reads as frozen hours in the past, and a QUIET room — which fits inside 1800 characters
+    // — reads as perfectly current. That is exactly the shape of "staleness scales with room busyness", and
+    // it is entirely this function. (Measured: a room whose newest message was 7:46 PM reported 5:12 PM.)
+    //
+    // Now: head AND tail, and it SAYS when it cut. If what you are judging is recency or ordering, take a
+    // screenshot — that is the only thing here that reflects what a person would actually see.
+    const LIMIT = 3000, KEEP = 1200;
+    const txt = await ev('document.body.innerText.replace(/\\n{2,}/g,"\\n")');
+    if (!txt) { out('(blank screen)'); }
+    else if (txt.length <= LIMIT) { out(txt); }
+    else {
+      out(txt.slice(0, KEEP)
+        + `\n\n… [${txt.length - KEEP * 2} characters not shown — this screen is longer than one screenful. `
+        + `What follows is the END of it. innerText ignores scroll, so NEITHER half tells you what is actually `
+        + `visible; use \`shot\` if that matters.] …\n\n`
+        + txt.slice(-KEEP));
+    }
   } else if (cmd === 'tap') {
     const box = await ev(`(function(){
       var all=[].slice.call(document.querySelectorAll('button,a,[role="button"],div,span,label')).filter(function(x){
