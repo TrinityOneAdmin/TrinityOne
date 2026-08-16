@@ -4050,6 +4050,7 @@ function StewBackupModal({ church, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [done, setDone] = React.useState(false);
+  const [savedAt, setSavedAt] = React.useState('');   // where the file actually landed — a steward told "Saved" with no location cannot check it
   const secure = (typeof window !== 'undefined') && window.isSecureContext && (typeof crypto !== 'undefined') && crypto.subtle;
   const strength = pass.length === 0 ? null
     : pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) ? { t: 'Too short for this file', c: 'var(--clay)' }
@@ -4068,8 +4069,12 @@ function StewBackupModal({ church, onClose }) {
     try {
       const obj = window.TrinityBackup.collectSteward();
       const text = await window.TrinityBackup.encryptObj(obj, pass);
-      await window.TrinityBackup.saveFile('trinityone-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '-' + new Date().toISOString().slice(0, 10) + '.json', text);
-      setDone(true); setTimeout(onClose, 1300);
+      // No mode: saveFile writes a durable copy to the device AND offers the share sheet. It used to do only
+      // the sheet, from a CACHE file Android may delete at any time — so a steward who dismissed it had no
+      // copy of the CHURCH KEY and was shown "Saved". See the note above saveFile in backup.jsx.
+      const res = await window.TrinityBackup.saveFile('trinityone-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      setSavedAt((window.TrinityBackup.savedWhere && window.TrinityBackup.savedWhere(res)) || '');
+      setDone(true); setTimeout(onClose, 2600);
     } catch (e) { setErr('Backup failed: ' + (e.message || e)); setBusy(false); }
   };
   const incl = [
@@ -4114,7 +4119,7 @@ function StewBackupModal({ church, onClose }) {
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           <button onClick={make} disabled={busy || done || pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
-            <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? 'Saved' : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
+            <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? (savedAt ? 'Saved to ' + savedAt : 'Saved') : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
         </div>
       </div>
     </div>

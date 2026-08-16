@@ -90,13 +90,16 @@ function RecoverySheet({ open, onClose, ctx }) {
     try {
       const obj = await window.TrinityBackup.collectMember();
       const text = await window.TrinityBackup.encryptObj(obj, pass);
-      await window.TrinityBackup.saveFile('trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      const res = await window.TrinityBackup.saveFile('trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json', text);
       // Mark backed-up ONLY here, on the success path. It used to be called by the button after doExport
       // returned — but doExport resolves normally on its short-passphrase early-return AND in its catch, so
       // the durable "backed up" flag was set even when no valid backup was written, silencing the backup
       // nudge and leaving the member one lost device away from losing their identity with no warning.
       markSaved();
-      ctx.toast('Backup created — save it somewhere safe'); setBk(null); setPass('');
+      // NAME THE PLACE. "Save it somewhere safe" is advice, not a receipt — and on the app this path used to
+      // open a share sheet and write nothing, so the member had no way to tell the two apart.
+      const at = window.TrinityBackup.savedWhere ? window.TrinityBackup.savedWhere(res) : '';
+      ctx.toast(at ? ('Backup saved to ' + at) : 'Backup created — save it somewhere safe'); setBk(null); setPass('');
     } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
   };
   const doRestore = async () => {

@@ -763,4 +763,34 @@ export const CASES = [
     replace: `    if (onSkip) onSkip();`,
     test: 'scripts/restore-exit-route.test.mjs',
   },
+  {
+    name: 'backup: the WebView anchor claims success again',
+    file: 'app/backup.jsx',
+    // the pre-fix behaviour: an <a download> the WebView cannot perform, reported as saved
+    find: `      if (isNative) throw new Error('This app can\u2019t write the file here. Update the app, or use \u201cSave to device\u201d.');`,
+    replace: ``,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
+  {
+    name: 'backup: the default path goes back to share-sheet-only',
+    file: 'app/backup.jsx',
+    // the exact shape it had: a CACHE copy Android may delete, and nothing durable
+    find: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });
+      if (mode !== 'local' && P.Share) {`,
+    replace: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: mode === 'local' ? 'DOCUMENTS' : 'CACHE', encoding: 'utf8' });
+      if (mode !== 'local' && P.Share) {`,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
+  {
+    name: 'backup: a dismissed share sheet fails the whole save',
+    file: 'app/backup.jsx',
+    // dropping the try/catch: closing the sheet then throws away a file that IS already written
+    find: `        try {
+          const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+          await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive\u2026)', url: c.uri });
+        } catch (e) {}`,
+    replace: `        const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+        await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive\u2026)', url: c.uri });`,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
 ];
