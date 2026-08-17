@@ -796,6 +796,11 @@ const _applyNoPhotoList = (list) => { _noPhoto = pubSet(list); };   // shared no
 // lowercased on both sides (the blockedSet normalisation), because a case-mismatch here would silently drop
 // LEGITIMATE members from envelopes.
 let _localBlocked = new Set();
+// WHO MAY CREATE AN EVENT IN A GROUP. Order matters: index 0 is the default and is never written to the
+// document, so a church that has not touched this setting publishes exactly the group definition it always
+// did. 'leaders' is that default because it is what the relay has always enforced — the named leaders may
+// post events, and a group naming nobody is stewards-only as a consequence.
+const EVENT_POLICIES = ['leaders', 'stewards', 'everyone'];
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
 // ONE NAME-KEY PUBLISH AT A TIME. ensureNameKeyForMembers assigns the new ring synchronously and only
 // updates the recipient map after the envelope publishes — a gap that used to be nanoseconds. Sealing
@@ -3130,13 +3135,23 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const id = group.id || ('grp' + Date.now());
     const inviteOnly = group.visibility === 'invite';
-    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined, category: group.category || undefined, visibility: inviteOnly ? 'invite' : undefined, members: inviteOnly && Array.isArray(group.members) ? group.members : undefined, encrypted: group.encrypted ? true : undefined, childsafe: group.childsafe ? true : undefined });
+    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined, category: group.category || undefined, visibility: inviteOnly ? 'invite' : undefined, members: inviteOnly && Array.isArray(group.members) ? group.members : undefined, encrypted: group.encrypted ? true : undefined, childsafe: group.childsafe ? true : undefined, eventPolicy: EVENT_POLICIES.indexOf(group.eventPolicy) > 0 ? group.eventPolicy : undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
   // set which members can post events for a group (re-publishes the group def, preserving its fields)
   setGroupLeaders(group, leaderPubs) {
     return window.Steward.publishGroup({ ...group, leaders: (leaderPubs || []).filter(Boolean) });
+  },
+  // WHO MAY CREATE AN EVENT IN THIS GROUP: 'stewards' | 'leaders' | 'everyone'.
+  // 'leaders' is the default and is what this app has always done — the named leaders may post, and a group
+  // naming nobody is stewards-only as a consequence. So a church that never opens this screen keeps exactly
+  // the behaviour it has today. The relay enforces all three (gateway.mjs, the EVENT_D branch of accept), and
+  // enforces safeguarding on top of them: a minor may never publish an event, and into a CHILD-SAFE group a
+  // delegated member must be on the church's cleared-adults list.
+  setGroupEventPolicy(group, policy) {
+    if (!EVENT_POLICIES.includes(policy)) return Promise.resolve(null);
+    return window.Steward.publishGroup({ ...group, eventPolicy: policy });
   },
   removeGroup(id) {
     if (!sk) return Promise.resolve(null);

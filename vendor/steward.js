@@ -15117,6 +15117,7 @@ zoo`.split("\n");
     _noPhoto = pubSet(list);
   };
   var _localBlocked = /* @__PURE__ */ new Set();
+  var EVENT_POLICIES = ["leaders", "stewards", "everyone"];
   var _nameKeyRing = [];
   var _nameKeyBusy = null;
   var _nameKeyDocKeys = null;
@@ -17495,12 +17496,22 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const id = group.id || "grp" + Date.now();
       const inviteOnly = group.visibility === "invite";
-      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0, category: group.category || void 0, visibility: inviteOnly ? "invite" : void 0, members: inviteOnly && Array.isArray(group.members) ? group.members : void 0, encrypted: group.encrypted ? true : void 0, childsafe: group.childsafe ? true : void 0 });
+      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0, category: group.category || void 0, visibility: inviteOnly ? "invite" : void 0, members: inviteOnly && Array.isArray(group.members) ? group.members : void 0, encrypted: group.encrypted ? true : void 0, childsafe: group.childsafe ? true : void 0, eventPolicy: EVENT_POLICIES.indexOf(group.eventPolicy) > 0 ? group.eventPolicy : void 0 });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content })).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     // set which members can post events for a group (re-publishes the group def, preserving its fields)
     setGroupLeaders(group, leaderPubs) {
       return window.Steward.publishGroup({ ...group, leaders: (leaderPubs || []).filter(Boolean) });
+    },
+    // WHO MAY CREATE AN EVENT IN THIS GROUP: 'stewards' | 'leaders' | 'everyone'.
+    // 'leaders' is the default and is what this app has always done — the named leaders may post, and a group
+    // naming nobody is stewards-only as a consequence. So a church that never opens this screen keeps exactly
+    // the behaviour it has today. The relay enforces all three (gateway.mjs, the EVENT_D branch of accept), and
+    // enforces safeguarding on top of them: a minor may never publish an event, and into a CHILD-SAFE group a
+    // delegated member must be on the church's cleared-adults list.
+    setGroupEventPolicy(group, policy) {
+      if (!EVENT_POLICIES.includes(policy)) return Promise.resolve(null);
+      return window.Steward.publishGroup({ ...group, eventPolicy: policy });
     },
     removeGroup(id) {
       if (!sk) return Promise.resolve(null);

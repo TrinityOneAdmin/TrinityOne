@@ -6542,6 +6542,7 @@
   }
   var _churchRoster = /* @__PURE__ */ new Map();
   var _groupLeaders = /* @__PURE__ */ new Map();
+  var _groupPolicy = /* @__PURE__ */ new Map();
   var _fireTrust = () => {
     try {
       window.dispatchEvent(new CustomEvent("trinity-church-trust"));
@@ -6566,10 +6567,19 @@
   function _noteGroupLeaders(cp, id, content, author) {
     if (author !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(author))) return;
     _groupLeaders.set(id, new Set(Array.isArray(content && content.leaders) ? content.leaders : []));
+    const p = String(content && content.eventPolicy || "");
+    if (p === "stewards" || p === "leaders" || p === "everyone") _groupPolicy.set(id, p);
+    else _groupPolicy.delete(id);
     _fireTrust();
   }
   function _groupEventTrusted(cp, gid, by) {
-    return by === void 0 || by === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(by)) || !!(gid && _groupLeaders.get(gid) && _groupLeaders.get(gid).has(by));
+    if (by === void 0 || by === cp) return true;
+    if (_churchRoster.get(cp) && _churchRoster.get(cp).has(by)) return true;
+    if (!gid) return false;
+    const policy = _groupPolicy.get(gid) || "leaders";
+    if (policy === "stewards") return false;
+    if (_groupLeaders.get(gid) && _groupLeaders.get(gid).has(by)) return true;
+    return policy === "everyone";
   }
   var SINCE_SLOP = 3 * 86400;
   var FUTURE_SKEW = 900;
@@ -6708,6 +6718,30 @@
       try {
         window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
       } catch (x) {
+      }
+    }
+  }
+  var CHURCH_SEALED_PFXS = [
+    "trinityone/event:",
+    "trinityone/service:",
+    "trinityone/runsheet:",
+    "trinityone/rota:",
+    "trinityone/roster:",
+    "trinityone/room:",
+    "trinityone/booking:"
+  ];
+  function _replayChurchCalendar(cp, hub) {
+    if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
+    if (!hub.handlers || !hub.handlers.size) return;
+    for (const e2 of hub.buf.values()) {
+      const d2 = _dtag(e2);
+      if (!CHURCH_SEALED_PFXS.some((p) => d2.startsWith(p))) continue;
+      for (const h of [...hub.handlers]) {
+        try {
+          h.onevent(e2, d2);
+        } catch (err) {
+          _featureFailed("name-key calendar replay", d2, err);
+        }
       }
     }
   }
@@ -6929,6 +6963,7 @@
     for (const e of hub.buf.values()) {
       if (_dtag(e) === "trinityone/namekey:" + cp) _ingestNameKey(cp, e);
     }
+    _replayChurchCalendar(cp, hub);
     for (const e of hub.buf.values()) {
       const d0 = _dtag(e);
       if (d0 === "trinityone/name:" + cp) {
@@ -6966,6 +7001,7 @@
           for (const e2 of hub.buf.values()) {
             if (_dtag(e2) === "trinityone/name:" + cp) _openSealedName(cp, e2.pubkey, e2.content);
           }
+          _replayChurchCalendar(cp, hub);
           try {
             window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
           } catch (x) {
@@ -6987,6 +7023,7 @@
             else if (d2 === NAMEKEY_D + cp) {
               _ingestNameKey(cp, e2);
               _replaySealedNames(cp, hub);
+              _replayChurchCalendar(cp, hub);
             }
           }
           for (const h of [...hub.handlers]) {
@@ -7324,6 +7361,7 @@
         else if (d === NAMEKEY_D + hub.cp) {
           _ingestNameKey(hub.cp, e);
           _replaySealedNames(hub.cp, hub);
+          _replayChurchCalendar(hub.cp, hub);
         }
       }
     }
@@ -10242,6 +10280,30 @@
         } catch {
         }
       };
+    },
+    // MAY I ADD AN EVENT TO THIS GROUP? Asked by the UI so the button appears exactly where the write would be
+    // accepted. Deliberately one function rather than a rule re-typed in a screen: a chat room offering a button
+    // the relay will refuse is worse than no button, because the member writes the whole thing before finding out.
+    //
+    // It answers the AUTHORITY question only. The relay additionally refuses a minor outright, and — in a
+    // child-safe group — anyone not on the church's cleared-adults list. Those lists are church-key-only and are
+    // NOT published to members (a member app cannot be told who the children are), so this cannot pre-empt them
+    // and must not pretend to: see the caller, which states the safeguarding rule in the failure message.
+    canAddGroupEvent(churchNpub, group) {
+      const cp = toPub(churchNpub);
+      if (!cp || !group || !group.id || !pub) return false;
+      if (String(group.kind || "").toLowerCase() === "broadcast") return false;
+      if (pub === cp) return true;
+      if (_churchRoster.get(cp) && _churchRoster.get(cp).has(pub)) return true;
+      const policy = ["stewards", "leaders", "everyone"].includes(group.eventPolicy) ? group.eventPolicy : "leaders";
+      if (policy === "stewards") return false;
+      if (Array.isArray(group.leaders) && group.leaders.includes(pub)) return true;
+      if (policy !== "everyone") return false;
+      if (group.visibility === "invite" || group.invite) {
+        const allow = Array.isArray(group.memberPubs) ? group.memberPubs : Array.isArray(group.members) ? group.members : null;
+        return !!allow && allow.some((p) => toPub(p) === pub);
+      }
+      return true;
     },
     // a group leader posts an event for their group: signed by ME, scoped to the group, p-tagged to the church.
     async publishGroupEvent(churchNpub, groupId, ev) {

@@ -829,6 +829,10 @@ function saveDocCache(prefix, cp, list) { if (!_mayCache()) return; try { localS
 // revoked steward's old content — is dropped on display.
 const _churchRoster = new Map();   // cp -> Set(steward pubkeys), from the church-key-signed stewards: doc
 const _groupLeaders = new Map();   // groupId -> Set(empowered member pubkeys), from TRUSTED group defs only
+// groupId -> 'stewards' | 'leaders' | 'everyone' — the church's choice of who may create an event here.
+// Absent means 'leaders', which is what this app did before the setting existed. Read from the same TRUSTED
+// group definition as the leaders list, so a forged group doc cannot widen it.
+const _groupPolicy = new Map();
 const _fireTrust = () => { try { window.dispatchEvent(new CustomEvent('trinity-church-trust')); } catch {} };   // re-evaluate dependent reads when trust changes
 // returns true (and updates the roster) if this event IS the church's signed steward roster
 function _absorbRoster(cp, d, e) {
@@ -842,10 +846,34 @@ function _churchVoice(cp, doc) { const by = doc && doc._by; return by === undefi
 // record a group's empowered leaders — only from a TRUSTED group def (church key or current roster steward)
 function _noteGroupLeaders(cp, id, content, author) {
   if (author !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(author))) return;
-  _groupLeaders.set(id, new Set(Array.isArray(content && content.leaders) ? content.leaders : [])); _fireTrust();
+  _groupLeaders.set(id, new Set(Array.isArray(content && content.leaders) ? content.leaders : []));
+  const p = String((content && content.eventPolicy) || '');
+  if (p === 'stewards' || p === 'leaders' || p === 'everyone') _groupPolicy.set(id, p); else _groupPolicy.delete(id);
+  _fireTrust();
 }
-// a group EVENT is trustworthy if authored by the church, a current roster steward, OR an empowered leader of that group
-function _groupEventTrusted(cp, gid, by) { return by === undefined || by === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(by)) || !!(gid && _groupLeaders.get(gid) && _groupLeaders.get(gid).has(by)); }
+// Is a group EVENT trustworthy? Authored by the church, by a current roster steward, or by a member the
+// church empowered for that group — where "empowered" now depends on the tier the church chose:
+//
+//   'stewards'  the leaders list confers nothing for events; only the church and its stewards above.
+//   'leaders'   (default, and the historical behaviour) the named leaders of that group.
+//   'everyone'  any member — the church has said this group organises itself.
+//
+// THIS MUST TRACK THE RELAY'S RULE (gateway.mjs, the EVENT_D branch of accept). If the client is stricter,
+// the relay accepts an event that every member's app then hides — published, stored, invisible, and no error
+// anywhere. That is the silent-blank failure this codebase treats as its worst, so the two rules are written
+// to be read side by side.
+//
+// The client is deliberately NOT the safeguarding boundary: the minor and cleared-adult checks live on the
+// relay, where a modified or outdated build cannot skip them. This is display trust, not a permission.
+function _groupEventTrusted(cp, gid, by) {
+  if (by === undefined || by === cp) return true;
+  if (_churchRoster.get(cp) && _churchRoster.get(cp).has(by)) return true;
+  if (!gid) return false;
+  const policy = _groupPolicy.get(gid) || 'leaders';
+  if (policy === 'stewards') return false;
+  if (_groupLeaders.get(gid) && _groupLeaders.get(gid).has(by)) return true;
+  return policy === 'everyone';
+}
 
 // ── shared per-church subscription hubs (efficiency fix E2) ─────────────────────────────────────────
 // Every church-docs reader used to open its OWN relay subscription carrying the byte-identical broad
@@ -1026,6 +1054,42 @@ function _replaySealedNames(cp, hub) {
 // Returns null when it is sealed and this member holds no key for it. The caller MUST render that as a locked
 // state, never as nothing: an empty calendar is indistinguishable from a church with nothing on, which is the
 // silent-blank failure this project treats as its worst.
+// Every d-prefix the church seals under its NAME key (steward.src.js `_sealChurchDoc`). Kept as one list
+// because the name key arriving late has to re-open ALL of them, not just the one someone remembered.
+// Cross-checked against the publish sites: service / room / booking / rota / event / runsheet / roster.
+const CHURCH_SEALED_PFXS = ['trinityone/event:', 'trinityone/service:', 'trinityone/runsheet:',
+  'trinityone/rota:', 'trinityone/roster:', 'trinityone/room:', 'trinityone/booking:'];
+
+// Re-open every sealed CALENDAR document already buffered for a church, once its name key is usable.
+//
+// THE DEFECT (measured 2026-08-17, live app on the funnel relay). A member is admitted; the console
+// re-issues the name key to include them; their calendar stays locked until the app is RESTARTED. Cause:
+// _subChurchAddr stores `{ _locked: true }` and throws the ciphertext away, so when the key lands there is
+// nothing left to retry — and nothing was asking it to retry in the first place. Measured: three events
+// `_locked: true` before a reload, all three open afterwards.
+//
+// Why it matters more than it looks: this is the FIRST thing a new member sees. They join, they are let in,
+// and the church's calendar is empty or padlocked — at the exact moment they are deciding whether this thing
+// works. Nobody will think to force-close the app, and a restart is not a step we should be relying on.
+//
+// The names path already solved this (_replaySealedNames), and so did the care key, which replays its needs
+// through onevent for exactly this reason. The calendar was simply never given the same treatment, because
+// the name key is thought of as "the key for names" — it seals the calendar too.
+function _replayChurchCalendar(cp, hub) {
+  if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
+  // Nothing registered yet — the hub-hydration path runs before any feature subscribes, and _onChurchDocs
+  // replays the buffer to each handler as it registers (by which point the key is in hand). Returning here
+  // keeps "every name-key ingest re-opens the calendar" true everywhere without walking the corpus for free.
+  if (!hub.handlers || !hub.handlers.size) return;
+  for (const e2 of hub.buf.values()) {
+    const d2 = _dtag(e2);
+    if (!CHURCH_SEALED_PFXS.some(p => d2.startsWith(p))) continue;
+    for (const h of [...hub.handlers]) {
+      try { h.onevent(e2, d2); } catch (err) { _featureFailed('name-key calendar replay', d2, err); }
+    }
+  }
+}
+
 function _openChurchDoc(cp, content) {
   let o;
   try { o = JSON.parse(content); } catch (e) { return null; }
@@ -1194,7 +1258,7 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
   for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
-  for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); }   // the key FIRST
+  for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); } _replayChurchCalendar(cp, hub);   // the key FIRST (no handlers yet, so the replay is a no-op — it holds the invariant)
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) { _recoverOwnName(cp, e); _openSealedName(cp, e.pubkey, e.content); } }
   return hub;
 }
@@ -1225,6 +1289,9 @@ function _docsHubOpen(hub) {
         setTimeout(() => { try { window.Fellowship.syncSealedNames([cp]); } catch (x) {} }, 0);
         // the key may arrive AFTER names we could not open — retry them, or the roster stays anonymous
         for (const e2 of hub.buf.values()) { if (_dtag(e2) === 'trinityone/name:' + cp) _openSealedName(cp, e2.pubkey, e2.content); }
+        // …and the CALENDAR, which is sealed under this same key. Without this a newly admitted member's
+        // events/services/rotas stay padlocked until they restart the app — see _replayChurchCalendar.
+        _replayChurchCalendar(cp, hub);
         try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {}
       } else if (d === 'trinityone/name:' + cp) {
         _recoverOwnName(cp, e);   // our own doc carries the copy that restores us after a locked boot
@@ -1238,7 +1305,7 @@ function _docsHubOpen(hub) {
         // The name key needs this too, and for exactly the L7 reason: _ingestNameKey requires the author to
         // be the church or a CURRENT roster steward, so an envelope that arrives before the roster does is
         // dropped and never retried. AUDIT-2026-07-27.
-        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); } }
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); _replayChurchCalendar(cp, hub); } }
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { _featureFailed('steward-roster refresh', d, err); } } return;
       }
       if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);   // just approved? re-announce + re-fetch once
@@ -1473,7 +1540,7 @@ async function deriveFromIdentity() {
   // a persisted since-cursor, and a name key is published once at church setup, so it does not re-arrive. On any
   // launch where the hub cache was warm and the signing key derived a moment late, the ring stayed empty for the
   // whole session and every member showed as anonymous. AUDIT-2026-07-27.
-  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); else if (d === NAMEKEY_D + hub.cp) { _ingestNameKey(hub.cp, e); _replaySealedNames(hub.cp, hub); } } }
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); else if (d === NAMEKEY_D + hub.cp) { _ingestNameKey(hub.cp, e); _replaySealedNames(hub.cp, hub); _replayChurchCalendar(hub.cp, hub); } } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}
@@ -3579,6 +3646,35 @@ window.Fellowship = {
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
     return () => { window.removeEventListener('trinity-church-trust', onTrust); try { sub.close(); } catch {} };
+  },
+  // MAY I ADD AN EVENT TO THIS GROUP? Asked by the UI so the button appears exactly where the write would be
+  // accepted. Deliberately one function rather than a rule re-typed in a screen: a chat room offering a button
+  // the relay will refuse is worse than no button, because the member writes the whole thing before finding out.
+  //
+  // It answers the AUTHORITY question only. The relay additionally refuses a minor outright, and — in a
+  // child-safe group — anyone not on the church's cleared-adults list. Those lists are church-key-only and are
+  // NOT published to members (a member app cannot be told who the children are), so this cannot pre-empt them
+  // and must not pretend to: see the caller, which states the safeguarding rule in the failure message.
+  canAddGroupEvent(churchNpub, group) {
+    const cp = toPub(churchNpub);
+    if (!cp || !group || !group.id || !pub) return false;
+    // The member app re-maps its group list and re-cases this ('broadcast' -> 'Broadcast'), so accept either
+    // rather than silently failing open on a channel that is the church's own voice.
+    if (String(group.kind || '').toLowerCase() === 'broadcast') return false;
+    if (pub === cp) return true;
+    if (_churchRoster.get(cp) && _churchRoster.get(cp).has(pub)) return true;   // a steward
+    const policy = (['stewards', 'leaders', 'everyone'].includes(group.eventPolicy) ? group.eventPolicy : 'leaders');
+    if (policy === 'stewards') return false;
+    if (Array.isArray(group.leaders) && group.leaders.includes(pub)) return true;
+    if (policy !== 'everyone') return false;
+    // 'everyone' in an invite-only group still means everyone IN it
+    // …and it turns `members` into a COUNT, carrying the real allowlist as `memberPubs`. Read whichever is
+    // actually an array; a number here must never be treated as "no allowlist, let them in".
+    if (group.visibility === 'invite' || group.invite) {
+      const allow = Array.isArray(group.memberPubs) ? group.memberPubs : (Array.isArray(group.members) ? group.members : null);
+      return !!allow && allow.some(p => toPub(p) === pub);
+    }
+    return true;
   },
   // a group leader posts an event for their group: signed by ME, scoped to the group, p-tagged to the church.
   async publishGroupEvent(churchNpub, groupId, ev) {

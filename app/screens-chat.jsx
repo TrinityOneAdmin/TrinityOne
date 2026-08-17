@@ -328,6 +328,13 @@ function ChatScreen({ ctx }) {
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
         .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
+          // CARRY THE PERMISSION FIELDS. This map builds a NEW object from an explicit list, so anything
+          // not named here is dropped — and `members` below is deliberately turned into a COUNT. The
+          // event-permission check needs the church's chosen tier, the group's named leaders and, for an
+          // invite-only group, the actual allowlist. Without them the room offered no way to add an event
+          // to the very people the church had just empowered, and the console's own message told them to
+          // look for it. Same shape of defect as publishGroup rebuilding a group document from scratch.
+          eventPolicy: g.eventPolicy, leaders: g.leaders, memberPubs: Array.isArray(g.members) ? g.members : null,
           // member count: invite groups carry an explicit list; public groups are church-wide, so show the church's count (never a bare "0")
           members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : (((ctx.church && ctx.church.members) || 0) || null) }))
     : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, ctx.church]);   // eslint-disable-line
@@ -965,14 +972,21 @@ function GroupEventComposer({ group, ctx, onClose }) {
   const [where, setWhere] = useC('');
   const [blurb, setBlurb] = useC('');
   const [busy, setBusy] = useC(false);
+  const [err, setErr] = useC('');
   const accent = safeCssColor(group.accent);   // SECURITY-AUDIT-2026-07-06 L6: guard against url() beacon in the accent
   const save = async () => {
     if (!title.trim() || !date) return;
-    setBusy(true);
+    setBusy(true); setErr('');
     const r = await ctx.publishGroupEvent(group.id, { title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent });
     setBusy(false);
-    if (r) { ctx.toast('Event posted to ' + group.name); onClose(); }
-    else ctx.toast('Couldn’t post the event — you may not be a leader of this group.');
+    if (r) { ctx.toast('Event posted to ' + group.name); onClose(); return; }
+    // WHY THIS DOES NOT NAME A REASON. The relay refuses for three different reasons and the member app is
+    // told none of them: the church may have changed who can post here, or this is a child-safe group and the
+    // author is not on the church's cleared-adults list, or the author is recorded as a minor. Those last two
+    // are safeguarding lists that are church-key-only and are deliberately never published to members — a
+    // member app must not be able to work out who the children are. So the message says what to DO and keeps
+    // the words in the form beside the work already typed, rather than a toast that takes it away.
+    setErr('This didn’t post. Your church decides who can add events to a group, and that may have changed — ask a steward, and they can post it for you. Nothing you’ve typed has been lost.');
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
   const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 2px 6px' };
@@ -994,6 +1008,7 @@ function GroupEventComposer({ group, ctx, onClose }) {
         <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Church café" style={fld} />
         <div style={lbl}>Note (optional)</div>
         <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
+        {err ? <div role="alert" style={{ marginTop: 16, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
           <button onClick={save} disabled={busy || !title.trim() || !date} style={{ flex: 1.4, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !title.trim() || !date) ? 0.55 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {busy ? 'Posting…' : 'Post event'}</button>
@@ -1266,6 +1281,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const groupEvents = (ctx.churchEvents || [])
     .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= todayIso)
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
+  // Ask Fellowship rather than re-deriving the rule here — the tiers live in one place so a screen can never
+  // drift from what the relay will actually accept.
+  const canAddEvent = !!(window.Fellowship && window.Fellowship.canAddGroupEvent
+    && window.Fellowship.canAddGroupEvent(ctx.church && ctx.church.npub, group));
 
   return (
     <Overlay open={open} onClose={onClose} docked={docked}>
@@ -1309,9 +1328,17 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
             <Icon name="lock" size={13} /> {encState === 'sealed' ? 'End-to-end encrypted' : encState === 'nokey' ? 'Encrypted · no key yet' : 'Not encrypted'}</span>
         </div>
-        {groupEvents.length ? (
+        {(groupEvents.length || canAddEvent) ? (
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}><Icon name="calendar" size={14} color="var(--clay)" /> UPCOMING IN THIS GROUP</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
+              <Icon name="calendar" size={14} color="var(--clay)" /> <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
+              {/* The church empowered this member to run the group, and the console's own message tells them to
+                  "open the group and tap Event" — so the button has to be here, and only here, or that promise
+                  is broken. Hidden entirely for members without the authority: an offer the relay would refuse
+                  costs someone the whole form before they find out. */}
+              {canAddEvent ? <button onClick={() => setComposeEvt(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 999, cursor: 'pointer', border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'var(--surface)', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 11, letterSpacing: '.3px' }}><Icon name="plus" size={12} color="var(--clay)" /> EVENT</button> : null}
+            </div>
+            {!groupEvents.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', paddingBottom: 2 }}>Nothing planned yet — add the group’s next gathering so everyone sees it.</div> : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {groupEvents.map(e => {
                 const p = (window.svParts ? window.svParts(e.date) : null) || {};
@@ -1414,7 +1441,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                   <button key={f.id} onClick={() => { setFlag(on ? null : f); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: on ? 'color-mix(in oklab, ' + ac + ' 14%, var(--surface))' : 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name={f.icon} size={18} color={ac} fill={on} /> {f.label}{on ? ' · on' : ''}</button>
                 ); })}
                 <button onClick={() => { setPollOpen(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="sliders" size={18} color="var(--clay)" /> Poll</button>
-                {isLeader ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
+                {canAddEvent ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
               </div>
             ) : null}
           </div>

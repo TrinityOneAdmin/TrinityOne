@@ -799,6 +799,11 @@ function rebuildNetworks() { NETWORKS.clear(); for (const s of NETWORKS_BY.value
 // the ONLY correct network check when a church is in scope: is `pub` a network THIS church joined?
 const networkOf = (pub, cp) => { const s = cp && NETWORKS_BY.get(cp); return !!(s && s.has(pub)); };
 const GROUP_LEADERS = new Map(); // groupId -> Set(pubkey) — members a leader empowered to post events for that group
+// groupId -> 'stewards' | 'leaders' | 'everyone'. WHO MAY CREATE AN EVENT IN THIS GROUP.
+// Absent means 'leaders', which is exactly what this relay did before the setting existed: the named leaders
+// could post, and a group naming nobody was stewards-only for free. So an existing church's behaviour is
+// unchanged until it chooses otherwise.
+const GROUP_EVENTPOLICY = new Map();
 const GROUP_LEADER_BY = new Map(); // groupId -> { by, cp } — who authored the leader grant (M2: void it if they're later revoked)
 const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the owner-signed stewards: roster (delegated, revocable authority)
 // Meal trains / care module state (rebuilt from stored events by note()):
@@ -1169,10 +1174,14 @@ let _hydrating = false;
 // read from disk rather than derived.
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
-                   GROUP_LEADERS, GROUP_LEADER_BY, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
+                   GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
-  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER]) { try { s.clear(); } catch {} }
+  // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
+  // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
+  // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
+  // flag that lets minors read a room.
+  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE]) { try { s.clear(); } catch {} }
 }
 let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
@@ -1253,11 +1262,14 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
     if (!idOwnerOk(GROUP_CHURCH.get(id), e)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); GROUP_CHILDSAFE.delete(id); return; }
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); return; }
     if (c.childsafe === true) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);   // safeguarding: adults-only unless the church says otherwise
     GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
     if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
     if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
+    // WHO MAY CREATE EVENTS HERE. Only the three known values are honoured; anything else (a typo, an
+    // older client, a forged value) falls back to the safe historical behaviour rather than being trusted.
+    { const p = String(c.eventPolicy || ''); if (p === 'stewards' || p === 'leaders' || p === 'everyone') GROUP_EVENTPOLICY.set(id, p); else GROUP_EVENTPOLICY.delete(id); }
     // a group def may name member leaders who can post events for that group
     GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : [])); GROUP_LEADER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
     // invite-only groups carry the allowlist of member pubkeys who may post
@@ -1375,8 +1387,43 @@ function accept(e) {
       const g = eventGroup(e); const owner = g && GROUP_CHURCH.get(g);
       if (owner) {
         if (e.pubkey === owner || isNetwork || stewardOf(e.pubkey, owner)) return true;   // owner church, its network, or a steward OF THE OWNER
+
+        // ── SAFEGUARDING. Everything past this line is a MEMBER acting under delegated authority, and until
+        // now this path asked only "do you have authority over the group?" — never "are you a child?" or "is
+        // this a room children read?". The chat path has asked both since AUDIT-2026-07-30; events, pins and
+        // hides never did. It was invisible while only stewards could write them. It stops being invisible the
+        // moment a church opens event-creation to its members, which is what eventPolicy now allows.
+        //
+        // 1. A MINOR NEVER PUBLISHES an event, a pin or a hide — not even in a child-safe room. The chat rule
+        //    refuses a child's MESSAGE in an adults-only room; these are stronger than a message. An event
+        //    carries a time and a PLACE and lands on the calendar of everyone in the group; a pin puts words
+        //    at the top of a room; a hide deletes someone else's. None is a child's to do unsupervised.
+        if (minorOf(e.pubkey, owner)) return false;
+        // 2. Into a CHILD-SAFE group — by definition one that children actually read — a delegated member must
+        //    be on the church's CLEARED-ADULTS list (its DBS/vetting list, church-key-only and undelegatable).
+        //    Without this, "Youth meetup, Saturday 2pm, my house" is publishable into a children's room by any
+        //    member the church empowered for ordinary purposes. The church itself and its stewards passed
+        //    above: this constrains who a church may DELEGATE that reach to, which is exactly what a vetting
+        //    list is for.
+        if (GROUP_CHILDSAFE.has(g) && !approvedIn(e.pubkey, owner)) return false;
+
+        // ── the tier this church chose for this group ──
         const leaders = GROUP_LEADERS.get(g);
-        return !!(leaders && leaders.has(e.pubkey) && grantorOk(GROUP_LEADER_BY.get(g)));   // an empowered leader of that group (grant voided if its granter was revoked)
+        const isLeaderHere = !!(leaders && leaders.has(e.pubkey) && grantorOk(GROUP_LEADER_BY.get(g)));   // grant voided if its granter was revoked
+        // Pins and hides are MODERATION, not event creation: they stay on the leaders rule whatever the church
+        // chose about events. Muddling them would mean turning event-creation down to 'stewards' silently
+        // stripped a group's moderator of the ability to pin a notice or remove an abusive message.
+        if (!d.startsWith(EVENT_D)) return isLeaderHere;
+
+        const policy = GROUP_EVENTPOLICY.get(g) || 'leaders';   // absent = the historical behaviour
+        if (policy === 'stewards') return false;                // the church has locked this group to its stewards
+        if (isLeaderHere) return true;
+        if (policy !== 'everyone') return false;
+        // 'everyone': any member who may post in this group at all — asked of the group's OWNING church, so a
+        // co-tenant church's member never qualifies (the scoping AUDIT-2026-07-30 S1 had to add for chat).
+        if (BROADCAST.has(g)) return false;                     // a broadcast channel is the church's own voice by definition
+        if (GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(e.pubkey)); }
+        return churchWriter(e.pubkey, owner);
       }
       return isLeader || stewardOf(e.pubkey, namedChurch(e));   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
     }

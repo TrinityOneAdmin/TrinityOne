@@ -2414,12 +2414,16 @@ function DashGroups() {
 function GroupLeadersModal({ group, onClose }) {
   const members = window.useStewardMembers().filter(m => m.pubkey);
   const [sel, setSel] = React.useState(() => new Set(group.leaders || []));
+  const [pol, setPol] = React.useState(() => (['leaders', 'stewards', 'everyone'].includes(group.eventPolicy) ? group.eventPolicy : 'leaders'));
   const [saving, setSaving] = React.useState(false);
   const toggle = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const save = async () => {
     setSaving(true);
     const before = new Set(group.leaders || []);
-    await window.Steward.setGroupLeaders(group, [...sel]);
+    // ONE publish, not two. publishGroup rebuilds the group document from scratch, and both setGroupLeaders
+    // and setGroupEventPolicy spread the SAME `group` prop — so calling them in sequence would have the second
+    // publish rebuild from the stale copy and silently undo the first. Set both fields together.
+    await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol });
     // tell newly-added leaders, so they know they can now manage this group
     const added = [...sel].filter(pk => !before.has(pk));
     for (const pk of added) {
@@ -2436,6 +2440,29 @@ function GroupLeadersModal({ group, onClose }) {
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Group leaders</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{group.name}</div></div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Leaders help run this group. They can create events for it from their app (shown on everyone’s calendar and in the group’s chat), and we’ll message them to let them know. You can change this anytime.</p>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 8 }}>WHO CAN ADD AN EVENT HERE?</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 14 }}>
+          {[['stewards', 'Stewards only', 'Just you and your stewards. Nobody else can add an event to this group.'],
+            ['leaders', 'The leaders you choose', 'The people you tick below. This is the usual setting.'],
+            ['everyone', 'Anyone in this group', 'Every member of this group can add an event. Good for a small group that organises itself.']].map(([v, lbl, sub]) => {
+            const on = pol === v;
+            return (
+              <button key={v} onClick={() => setPol(v)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)', border: '1px solid ' + (on ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface-2)' }}>
+                <div style={{ width: 18, height: 18, borderRadius: 999, marginTop: 1, flexShrink: 0, border: '1.5px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on ? <Icon name="check" size={11} stroke={3} color="#fff" /> : null}</div>
+                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5 }}>{lbl}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{sub}</div></div>
+              </button>
+            );
+          })}
+        </div>
+        {/* SAFEGUARDING, stated where the decision is made rather than buried in a help page. The relay enforces
+            both of these whatever is chosen above — this text exists so a steward is not surprised by a refusal
+            they cannot explain, and so the protection is visible to the person responsible for it. */}
+        {group.childsafe ? (
+          <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', marginBottom: 14 }}>
+            <Icon name="shield" size={15} color="var(--gold-ink, var(--ink-2))" />
+            <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>This group is marked <strong>child-safe</strong>, so children can read it. Whoever you allow above, only adults on your <strong>cleared list</strong> can actually add an event here — and no child can, ever. That is enforced for you.</div>
+          </div>
+        ) : null}
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7 }}>
           {members.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No app members yet. Once people join your church they’ll be selectable here.</div>
             : members.map(m => {
@@ -2452,7 +2479,7 @@ function GroupLeadersModal({ group, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save leaders'}</button>
+          <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
