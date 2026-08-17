@@ -1,7 +1,7 @@
 // DRIVE ONE LIVE APP INSTANCE, ONE COMMAND AT A TIME — so an agent can behave as a person.
 //
 //   node scripts/sim-actor.mjs <port> see                 what is on screen right now
-//   node scripts/sim-actor.mjs <port> tap "Community"     tap a control by its visible text
+//   node scripts/sim-actor.mjs <port> tap "Community"     tap a control by its visible text (or aria-label)
 //   node scripts/sim-actor.mjs <port> type "Message" "…"  type into the field with that placeholder
 //   node scripts/sim-actor.mjs <port> send "hello"        put text in the composer and press Enter
 //   node scripts/sim-actor.mjs <port> back                go back
@@ -83,11 +83,27 @@ try {
         + txt.slice(-KEEP));
     }
   } else if (cmd === 'tap') {
+    // ICON-ONLY CONTROLS HAVE NO TEXT TO MATCH, and this cost a second round.
+    //
+    // A back chevron, an × close, an icon action — their innerText is EMPTY, and they carry their meaning in
+    // `aria-label` or `title`. Matching visible text alone made every one of them unreachable, so an actor who
+    // walked into a full-screen pane whose only exit was a chevron could not leave it. On 2026-08-17 three
+    // actors independently reported the Currency screen as an "inescapable modal blocking the entire app";
+    // one made forty attempts and lost her whole round to it. It is a screen with an `aria-label="Back"`
+    // button that works perfectly — the harness simply could not see it.
+    //
+    // So: visible text first (that is what a person reads), then the accessible name. Same order a screen
+    // reader would use, and it means anything a sighted person can tap, an actor can tap.
     const box = await ev(`(function(){
       var norm=${NORM}; var want=norm(${JSON.stringify(a1)});
+      var vis=function(x){ var r=x.getBoundingClientRect(); return r.width>18 && r.height>10; };
       var all=[].slice.call(document.querySelectorAll('button,a,[role="button"],div,span,label')).filter(function(x){
-        var tx=norm((x.innerText||'').trim()); var r=x.getBoundingClientRect();
-        return tx.indexOf(want)===0 && r.width>25 && r.height>10;});
+        return norm((x.innerText||'').trim()).indexOf(want)===0 && vis(x);});
+      if(!all.length){
+        all=[].slice.call(document.querySelectorAll('button,a,[role="button"],input[type=button],input[type=submit]')).filter(function(x){
+          var n=norm(((x.getAttribute('aria-label')||'')+' '+(x.title||'')).trim());
+          return n && n.indexOf(want)===0 && vis(x);});
+      }
       if(!all.length) return null;
       all.sort(function(a,b){return (a.innerText||'').length-(b.innerText||'').length;});
       var e=all[0]; e.scrollIntoView({block:'center'}); var r=e.getBoundingClientRect();
