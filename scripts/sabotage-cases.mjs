@@ -771,10 +771,8 @@ export const CASES = [
     name: 'backup: the default path goes back to share-sheet-only',
     file: 'app/backup.jsx',
     // the exact shape it had: a CACHE copy Android may delete, and nothing durable
-    find: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });
-      if (mode !== 'local' && P.Share) {`,
-    replace: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: mode === 'local' ? 'DOCUMENTS' : 'CACHE', encoding: 'utf8' });
-      if (mode !== 'local' && P.Share) {`,
+    find: `      try { w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' }); }`,
+    replace: `      try { w = mode === 'local' ? await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' }) : null; }`,
     test: 'scripts/backup-saves-somewhere.test.mjs',
   },
   {
