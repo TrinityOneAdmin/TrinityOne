@@ -221,7 +221,13 @@ function EventDetail({ event, open, onClose, ctx }) {
   const e = event || {};
   const rsvps = ctx.myRsvps || {};
   return (
-    <BottomSheet open={open} onClose={onClose}>
+    // z ABOVE Overlay's 55. This sheet is opened from a group chat's "Upcoming in this group" strip, and a
+    // chat room IS an Overlay (ui.jsx, zIndex 55) — so at the default z=50 the sheet mounted UNDERNEATH the
+    // room the member was standing in. Measured 2026-08-17: elementFromPoint at the centre of the "Going"
+    // button returned the chat composer. The tap looked like a dead control; the member could not RSVP to
+    // their own group's event at all, and nothing on screen changed to suggest anything had happened.
+    // Every other sheet in this file already passes 70-75 explicitly; this one took the default.
+    <BottomSheet open={open} onClose={onClose} z={70}>
       {event ? (
         <div style={{ paddingBottom: 8 }}>
           {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 170, objectFit: 'cover', borderRadius: 16, display: 'block', marginBottom: 14 }} /> : null}

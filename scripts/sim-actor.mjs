@@ -140,6 +140,22 @@ try {
     const cleared = await ev(`(function(){var t=[].slice.call(document.querySelectorAll('textarea')).filter(function(x){return /Message|Share a/.test(x.placeholder||'');})[0];
       return t && !t.value ? 'sent' : 'STILL IN COMPOSER — it did not send';})()`);
     out(cleared);
+  } else if (cmd === 'reload') {
+    // A REAL RELOAD, not location.reload(). The gateway serves app/*.jsx with a `?v=<sha>` cache-buster tied to
+    // the RELEASE commit, so a working-tree edit keeps the same URL and the browser keeps serving the version it
+    // already has. Clearing the service worker is not enough — that is a different cache from the HTTP one, and
+    // on 2026-08-17 a fix verified as "still broken" purely because of this. So: disable the HTTP cache, drop
+    // any service worker, then reload ignoring the cache.
+    await send('Network.enable', {});
+    await send('Network.setCacheDisabled', { cacheDisabled: true });
+    await ev(`(async function(){
+      try { if (navigator.serviceWorker) { var rs = await navigator.serviceWorker.getRegistrations(); for (var i=0;i<rs.length;i++) await rs[i].unregister(); } } catch (e) {}
+      try { if (window.caches) { var ks = await caches.keys(); for (var j=0;j<ks.length;j++) await caches.delete(ks[j]); } } catch (e) {}
+      return 'cleared';
+    })()`);
+    await send('Page.reload', { ignoreCache: true });
+    await sleep(Number(a1) > 0 ? Number(a1) : 9000);
+    out('reloaded (http cache + service worker bypassed)');
   } else if (cmd === 'back') {
     // DO NOT WALK OFF THE END OF THE APP. history.back() from the app's first screen leaves the page entirely
     // and lands on the blank tab the browser opened with — a white screen that no tap can recover. Two actors
