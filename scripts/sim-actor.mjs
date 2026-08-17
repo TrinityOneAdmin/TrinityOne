@@ -1,10 +1,11 @@
 // DRIVE ONE LIVE APP INSTANCE, ONE COMMAND AT A TIME — so an agent can behave as a person.
 //
 //   node scripts/sim-actor.mjs <port> see                 what is on screen right now
-//   node scripts/sim-actor.mjs <port> tap "Community"     tap a control by its visible text
+//   node scripts/sim-actor.mjs <port> tap "Community"     tap a control by its visible text (or aria-label)
 //   node scripts/sim-actor.mjs <port> type "Message" "…"  type into the field with that placeholder
 //   node scripts/sim-actor.mjs <port> send "hello"        put text in the composer and press Enter
 //   node scripts/sim-actor.mjs <port> back                go back
+//   node scripts/sim-actor.mjs <port> file /path/x.json   choose that file in a file picker
 //   node scripts/sim-actor.mjs <port> shot <file>         screenshot
 //   node scripts/sim-actor.mjs <port> eval "<js>"         read something out of the page
 //
@@ -39,15 +40,70 @@ await send('Runtime.enable', {}); await send('Page.enable', {});
 
 const out = (x) => { console.log(typeof x === 'string' ? x : JSON.stringify(x)); };
 
+// TYPOGRAPHIC PUNCTUATION COST A WHOLE ROUND. The app's copy is written properly — "I’ll help", "what’s on",
+// "don’t" — with U+2019, while anyone typing a target types an ASCII apostrophe. So `tap "I'll help"` found
+// nothing, and on 2026-08-17 three actors independently reported the care sign-up button as BROKEN when it
+// was simply unreachable to them; one of them was rightly suspicious and called it a harness limit. That was
+// the single control the round existed to exercise. Normalise both sides — curly quotes, dashes, ellipsis —
+// so a person's plain typing matches the product's proper typography.
+const NORM = `(function(s){ return String(s||'')
+  .replace(/[\u2018\u2019\u201B]/g, "'")
+  .replace(/[\u201C\u201D]/g, '"')
+  .replace(/[\u2013\u2014]/g, '-')
+  .replace(/\u2026/g, '...')
+  .replace(/\u00A0/g, ' '); })`;
+
 try {
   if (cmd === 'see') {
-    const txt = await ev('document.body.innerText.replace(/\\n{2,}/g,"\\n").slice(0,1800)');
-    out(txt || '(blank screen)');
+    // THIS COMMAND MANUFACTURED A FINDING, so read the note before shortening it again.
+    //
+    // It used to be `innerText.slice(0, 1800)`. Two things are wrong with that on a busy screen, and together
+    // they produced the 2026-08-16 report "a room shows old messages while its list shows new ones", which
+    // survived into a written findings document and was independently "confirmed" by three agents:
+    //
+    //   1. innerText ignores scroll ENTIRELY. A room scrolled correctly to its newest message still returns
+    //      its whole history, oldest first.
+    //   2. Slicing the first 1800 characters therefore returns the OLDEST messages and drops the newest.
+    //
+    // So a chat room reads as frozen hours in the past, and a QUIET room — which fits inside 1800 characters
+    // — reads as perfectly current. That is exactly the shape of "staleness scales with room busyness", and
+    // it is entirely this function. (Measured: a room whose newest message was 7:46 PM reported 5:12 PM.)
+    //
+    // Now: head AND tail, and it SAYS when it cut. If what you are judging is recency or ordering, take a
+    // screenshot — that is the only thing here that reflects what a person would actually see.
+    const LIMIT = 3000, KEEP = 1200;
+    const txt = await ev('document.body.innerText.replace(/\\n{2,}/g,"\\n")');
+    if (!txt) { out('(blank screen)'); }
+    else if (txt.length <= LIMIT) { out(txt); }
+    else {
+      out(txt.slice(0, KEEP)
+        + `\n\n… [${txt.length - KEEP * 2} characters not shown — this screen is longer than one screenful. `
+        + `What follows is the END of it. innerText ignores scroll, so NEITHER half tells you what is actually `
+        + `visible; use \`shot\` if that matters.] …\n\n`
+        + txt.slice(-KEEP));
+    }
   } else if (cmd === 'tap') {
+    // ICON-ONLY CONTROLS HAVE NO TEXT TO MATCH, and this cost a second round.
+    //
+    // A back chevron, an × close, an icon action — their innerText is EMPTY, and they carry their meaning in
+    // `aria-label` or `title`. Matching visible text alone made every one of them unreachable, so an actor who
+    // walked into a full-screen pane whose only exit was a chevron could not leave it. On 2026-08-17 three
+    // actors independently reported the Currency screen as an "inescapable modal blocking the entire app";
+    // one made forty attempts and lost her whole round to it. It is a screen with an `aria-label="Back"`
+    // button that works perfectly — the harness simply could not see it.
+    //
+    // So: visible text first (that is what a person reads), then the accessible name. Same order a screen
+    // reader would use, and it means anything a sighted person can tap, an actor can tap.
     const box = await ev(`(function(){
+      var norm=${NORM}; var want=norm(${JSON.stringify(a1)});
+      var vis=function(x){ var r=x.getBoundingClientRect(); return r.width>18 && r.height>10; };
       var all=[].slice.call(document.querySelectorAll('button,a,[role="button"],div,span,label')).filter(function(x){
-        var tx=(x.innerText||'').trim(); var r=x.getBoundingClientRect();
-        return tx.indexOf(${JSON.stringify(a1)})===0 && r.width>25 && r.height>10;});
+        return norm((x.innerText||'').trim()).indexOf(want)===0 && vis(x);});
+      if(!all.length){
+        all=[].slice.call(document.querySelectorAll('button,a,[role="button"],input[type=button],input[type=submit]')).filter(function(x){
+          var n=norm(((x.getAttribute('aria-label')||'')+' '+(x.title||'')).trim());
+          return n && n.indexOf(want)===0 && vis(x);});
+      }
       if(!all.length) return null;
       all.sort(function(a,b){return (a.innerText||'').length-(b.innerText||'').length;});
       var e=all[0]; e.scrollIntoView({block:'center'}); var r=e.getBoundingClientRect();
@@ -62,7 +118,8 @@ try {
     out('tapped ' + a1);
   } else if (cmd === 'type') {
     const r = await ev(`(function(){
-      var i=[].slice.call(document.querySelectorAll('input,textarea')).filter(function(x){return (x.placeholder||'').indexOf(${JSON.stringify(a1)})>=0;})[0];
+      var norm=${NORM}; var want=norm(${JSON.stringify(a1)});
+      var i=[].slice.call(document.querySelectorAll('input,textarea')).filter(function(x){return norm(x.placeholder||'').indexOf(want)>=0;})[0];
       if(!i) return 'no field matching ' + ${JSON.stringify(a1)};
       i.focus();
       var proto = i.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
@@ -99,6 +156,20 @@ try {
       await sleep(3000);
       out('already at the start of the app — stayed put (a real phone would exit here)');
     } else out('went back');
+  } else if (cmd === 'file') {
+    // HAND A FILE TO A FILE PICKER. A member restoring a backup has to choose a file, and a page cannot be
+    // made to do that from script — the picker is the browser's, and its value is not settable. CDP's
+    // DOM.setFileInputFiles is the only honest way to simulate "the member chose this file", so without this
+    // command the entire restore-from-file flow is undrivable and therefore untestable by an actor.
+    await send('DOM.enable', {});
+    const doc = await send('DOM.getDocument', { depth: -1 });
+    const node = await send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: 'input[type=file]' });
+    if (!node.nodeId) { out('no file picker on this screen — open the restore screen first'); }
+    else {
+      await send('DOM.setFileInputFiles', { files: [a1], nodeId: node.nodeId });
+      await sleep(1200);
+      out('chose ' + a1);
+    }
   } else if (cmd === 'shot') {
     const s = await send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(a1, Buffer.from(s.data, 'base64')); out('wrote ' + a1);

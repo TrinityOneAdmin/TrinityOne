@@ -655,4 +655,231 @@ export const CASES = [
     replace: `try { return JSON.parse(nip44d(ct, _unhex(_nameKeyRing[0]))); } catch (e) {}`,
     test: 'scripts/church-calendar-sealed.test.mjs',
   },
+  {
+    name: 'care team: the Groups tab stops writing the roster',
+    file: 'app/stew-dashboard.jsx',
+    // the pre-fix behaviour exactly: publish the allowlist, leave the team's roster where it was. This is the
+    // St Brigid's shape — group members 2, roster people 0, care team empty and nothing said so.
+    find: `        Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
+          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .catch(() => {});`,
+    replace: `        return;`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: an allowlist edit wipes the off-app volunteers',
+    file: 'app/stew-schedule.jsx',
+    // the plausible careless version — "the allowlist IS the team", forgetting that a volunteer with no app
+    // account is in no allowlist and would be deleted from the rota by an edit that never mentioned them
+    find: `  const kept = had.filter(p => p && !(p.pub && gone.has(p.pub)));`,
+    replace: `  const kept = had.filter(p => p && p.pub && !gone.has(p.pub));`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: a reconciled person gets a fresh id, emptying every pod slot',
+    file: 'app/stew-schedule.jsx',
+    find: `  const have = new Set(kept.map(p => p && p.pub).filter(Boolean));
+  const fresh = [...new Set((added || []).filter(Boolean))].filter(pk => !have.has(pk)).map(pk => {`,
+    replace: `  const have = new Set();
+  const fresh = [...new Set((added || []).filter(Boolean))].filter(pk => !have.has(pk)).map(pk => {`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: careteam: no longer follows the team it names',
+    file: 'app/stew-schedule.jsx',
+    find: `    await publishCareTeamFor(t.id, careTeamId, people);`,
+    replace: ``,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'care team: the empty-team warning counts names with no key again',
+    file: 'app/stew-meals.jsx',
+    // the exact pre-fix condition. A care team of three off-app names reads as staffed, while careAdmin and
+    // careteam: — both keyed on pubkeys — have nobody.
+    find: `  const teamLinked = teamPeople.filter(p => p && p.pub);`,
+    replace: `  const teamLinked = teamPeople;`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'chat: an open room stops re-subscribing after a drop',
+    file: 'app/screens-chat.jsx',
+    // the pre-fix deps exactly — the room is opened once and never re-opened, so a signal blip leaves it deaf
+    find: `  }, [group, ctx.connTick]);`,
+    replace: `  }, [group]);`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: the Community list stops re-subscribing after a drop',
+    file: 'app/screens-chat.jsx',
+    find: `  }, [groupIdsKey, ctx.connTick]);`,
+    replace: `  }, [groupIdsKey]);`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: a reconnect wipes the thread the member is reading',
+    file: 'app/screens-chat.jsx',
+    // the careless version of the same fix: re-subscribe, but keep the old unconditional reset
+    find: `      const sameRoom = seenRef.current && seenRef.current.gid === group.id;`,
+    replace: `      const sameRoom = false;`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: nothing notices the socket came back',
+    file: 'src/fellowship.src.js',
+    // removing the whole handler puts the app back where it was: healthy socket, dead subscriptions, and a
+    // 90-second safety net that skips because relaysHealthy() is (correctly) true
+    find: `    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew
+    window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url } }));`,
+    replace: ``,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: every read counts as a reconnect (the url-keyed version)',
+    file: 'src/fellowship.src.js',
+    // the plausible wrong fix — key on the url instead of the live relay instance. nostr-tools calls this from
+    // its subscribe path on EVERY subscription, so this re-subscribes the whole app on every ordinary read.
+    find: `    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew`,
+    replace: `    if (prev === undefined) return;`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'restore: Back drops a settled member into new-account setup',
+    file: 'app/identity.jsx',
+    // the pre-fix behaviour exactly — one exit for both entrances, so the settings one falls into the wizard
+    find: `    if (initialRestore) { if (onSkip) onSkip(); return; }   // came from Settings → close, don't fall into setup`,
+    replace: ``,
+    test: 'scripts/restore-exit-route.test.mjs',
+  },
+  {
+    name: 'restore: Back closes the whole wizard on first run too',
+    file: 'app/identity.jsx',
+    // over-correcting the other way: always close, which on first run leaves nothing behind the pane
+    find: `    if (initialRestore) { if (onSkip) onSkip(); return; }   // came from Settings → close, don't fall into setup
+    setRestoring(false);`,
+    replace: `    if (onSkip) onSkip();`,
+    test: 'scripts/restore-exit-route.test.mjs',
+  },
+  {
+    name: 'backup: the WebView anchor claims success again',
+    file: 'app/backup.jsx',
+    // the pre-fix behaviour: an <a download> the WebView cannot perform, reported as saved
+    find: `      if (isNative) throw new Error('This app can\u2019t write the file here. Update the app, or use \u201cSave to device\u201d.');`,
+    replace: ``,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
+  {
+    name: 'backup: the default path goes back to share-sheet-only',
+    file: 'app/backup.jsx',
+    // the exact shape it had: a CACHE copy Android may delete, and nothing durable
+    find: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });
+      if (mode !== 'local' && P.Share) {`,
+    replace: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: mode === 'local' ? 'DOCUMENTS' : 'CACHE', encoding: 'utf8' });
+      if (mode !== 'local' && P.Share) {`,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
+  {
+    name: 'backup: a dismissed share sheet fails the whole save',
+    file: 'app/backup.jsx',
+    // dropping the try/catch: closing the sheet then throws away a file that IS already written
+    find: `        try {
+          const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+          await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive\u2026)', url: c.uri });
+        } catch (e) {}`,
+    replace: `        const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+        await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive\u2026)', url: c.uri });`,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
+  {
+    name: 'review: the roster write blocks the group-key rotation again',
+    file: 'app/stew-dashboard.jsx',
+    // the shape this branch shipped with before the pre-merge review: reconcile inside the chain, ahead of
+    // the rotation, so a throw there leaves a removed member still holding the room's key
+    find: `      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })`,
+    replace: `      .then(() => reconcileRoster())
+      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })`,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'review: the roster save can be double-clicked again',
+    file: 'app/stew-schedule.jsx',
+    find: `    if (saving) return;
+    setSaving(true);`,
+    replace: ``,
+    test: 'scripts/care-team-membership.test.mjs',
+  },
+  {
+    name: 'review: a returning socket forces a full rebuild per relay',
+    file: 'app/app.jsx',
+    // routing an advisory, per-relay signal through the mandatory gate — the storm the scheduler exists to stop
+    find: `    const onRelayReturned = () => { sched.fire(false); };`,
+    replace: `    const onRelayReturned = () => { sched.force(); };`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'restore: the file route disappears from the chooser again',
+    file: 'app/identity.jsx',
+    find: `          <button onClick={() => { setRErr(''); setRMode('file'); }}`,
+    replace: `          <button onClick={() => { setRErr(''); setRMode('words'); }}`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
+  {
+    name: 'restore: the password is asked for before the file is looked at',
+    file: 'app/identity.jsx',
+    // the shape every other restore path still had: prompt first, read later
+    find: `          {rFile ? (
+            <React.Fragment>`,
+    replace: `          {true ? (
+            <React.Fragment>`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
+  {
+    name: 'restore: every new member is warned their account will be replaced',
+    file: 'app/identity.jsx',
+    // dropping the "has it actually been used?" half — the app mints a key before the welcome fork, so this
+    // puts a destructive warning in front of someone who has never opened the app
+    find: `    if (used && standing === 'different' && !rReplaceOk && consented !== true) {`,
+    replace: `    if (standing === 'different' && !rReplaceOk && consented !== true) {`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
+  {
+    name: 'restore: the screen promises four words the app never issued',
+    file: 'app/identity.jsx',
+    // the copy this branch shipped before a simulated member walked into it
+    find: `                Whatever you chose when you made this backup. If you wrote down several words, type them with
+                spaces between.`,
+    replace: `                The four words you wrote down when you made the backup — spaces between them.`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
+  {
+    name: 'backup: an old phone gets no fallback and no warning',
+    file: 'app/backup.jsx',
+    // the shape before option (a): one DOCUMENTS write, and if the OS refuses it the member simply gets an
+    // error — on the file that holds their account, and on the one that holds the church key
+    find: `      let w = null;
+      try { w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' }); }
+      catch (e) { w = null; }`,
+    replace: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });`,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
+  {
+    name: 'crash: the member app mounts unprotected again',
+    file: 'app/app.jsx',
+    find: `  <TrinityErrorBoundary><App /></TrinityErrorBoundary>`,
+    replace: `  <App />`,
+    test: 'scripts/render-crash-boundary.test.mjs',
+  },
+  {
+    name: 'crash: the console mounts unprotected again',
+    file: 'app/steward-root.jsx',
+    find: `  <TrinityErrorBoundary><StewardRoot /></TrinityErrorBoundary>`,
+    replace: `  <StewardRoot />`,
+    test: 'scripts/render-crash-boundary.test.mjs',
+  },
+  {
+    name: 'crash: the detail stops being written down',
+    file: 'app/error-boundary.jsx',
+    find: `      localStorage.setItem('trinityone.lastcrash', JSON.stringify({`,
+    replace: `      ({}).nothing = JSON.stringify({`,
+    test: 'scripts/render-crash-boundary.test.mjs',
+  },
 ];

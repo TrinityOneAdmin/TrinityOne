@@ -335,12 +335,19 @@ function ChatScreen({ ctx }) {
   const teamGroups = churchGroups.filter(g => g.team);
   const plainGroups = churchGroups.filter(g => !g.team);
   const groupIdsKey = churchGroups.map(g => g.id).join(',');
+  const countedRef = useCR(new Set());   // message ids already counted as unread — survives a re-subscribe
 
   // watch every group for last-message previews + unread badges
   useCE(() => {
     if (!live) return;
     const ids = churchGroups.map(g => g.id);
     const seen = readChatSeen();
+    // COUNT EACH MESSAGE ONCE, EVER. subscribeGroups asks for `limit: 500` with no `since`, so every
+    // re-subscribe replays the stored history — and this effect now re-runs on ctx.connTick. setActivity below
+    // is idempotent (it compares timestamps); the unread counter was a bare +1, so a member sitting on the
+    // Community tab with 12 unread saw 24 after backgrounding the app, then 36, then 48. The room got a
+    // seenRef for exactly this replay; the list had nothing.
+    const counted = countedRef.current;
     const unsub = window.Fellowship.subscribeGroups(ids, (gid, e) => {
       msgBuf.current.unshift({ gid, e });        // buffer for search
       if (msgBuf.current.length > 400) msgBuf.current.length = 400;
@@ -351,11 +358,17 @@ function ChatScreen({ ctx }) {
           : k === 'note' ? '📝 Shared a note' : k === 'prayer' ? '🙏 ' + e.content : e.content;
         return { ...prev, [gid]: { text: preview, ts: e.created_at } };
       });
-      if (e.created_at > (seen[gid] || 0) && e.pubkey !== window.Fellowship.myPubkey)
+      if (e.created_at > (seen[gid] || 0) && e.pubkey !== window.Fellowship.myPubkey && !counted.has(e.id)) {
+        counted.add(e.id);
         setUnread(prev => ({ ...prev, [gid]: (prev[gid] || 0) + 1 }));
+      }
     });
     return () => unsub();
-  }, [groupIdsKey]);   // re-subscribe when the group set changes (church switch or real groups load)
+    // …and on ctx.connTick, which bumps when the app comes back to the foreground or the network returns.
+    // Without it this subscription is opened once and never again: when its socket drops, every "last message"
+    // and every unread badge in the Community list freezes for the rest of the session, while the app reports
+    // the relay as healthy because the SOCKET reconnected — only the REQ did not.
+  }, [groupIdsKey, ctx.connTick]);
 
   const openGroup = (g) => {
     const seen = readChatSeen();
@@ -1019,12 +1032,30 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const isBroadcast = !!group && group.kind === 'Broadcast';   // one-to-many: members read, only church/leaders post
   const id = useIdentity();
   const scRef = useCR();
+  // { gid, ids } — the message ids already shown, kept ACROSS a reconnect so the relay's replay is deduped
+  // rather than appended a second time. Reset only when the room changes. See the effect below.
+  const seenRef = useCR(null);
   useCE(() => {
-    setDraft(''); setFlag(null);
     if (!group) return;
     if (window.Fellowship) {                       // live: subscribe to the group over Nostr
-      setMsgs([]); setReactions({}); setPickerFor(null);
-      const seen = new Set();
+      // A RECONNECT MUST NOT WIPE THE ROOM. This effect now also re-runs on ctx.connTick, and the room is by
+      // definition on screen when that happens — clearing would blink every message away under someone who is
+      // reading. So the thread, and the ids we have already shown, are reset only when the ROOM changes; a
+      // reconnect re-opens the subscription over the top and `seen` swallows the relay's replay, so nothing is
+      // duplicated and nothing flickers. (`seen` must therefore outlive the effect: a fresh Set on every
+      // reconnect would append all 200 replayed messages a second time.)
+      const sameRoom = seenRef.current && seenRef.current.gid === group.id;
+      if (!sameRoom) {
+        // A HALF-TYPED MESSAGE IS NOT DISPOSABLE. These two used to sit above, unconditionally — which was
+        // harmless while this effect only ran on a room change, and became a data-loss bug the moment
+        // ctx.connTick was added to the deps: every foreground, every `online`, every returning socket wiped
+        // the composer and the message tag out from under someone mid-sentence. It also emptied the prefill
+        // that "share this verse to chat" depends on.
+        setDraft(''); setFlag(null);
+        setMsgs([]); setReactions({}); setPickerFor(null);
+        seenRef.current = { gid: group.id, ids: new Set() };
+      }
+      const seen = seenRef.current.ids;
       const add = (e) => {
         if (e.kind === 5) {   // NIP-09 deletion — drop the deleter's OWN referenced messages (client mirrors the relay's self-only rule)
           seen.add(e.id);
@@ -1041,7 +1072,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           const next = [...prev, nm]; next.sort((a, b) => (a._ts || 0) - (b._ts || 0)); return next;
         });
       };
-      setPin(null); setHidden(null); setMenuFor(null);
+      if (!sameRoom) { setPin(null); setHidden(null); setMenuFor(null); }   // same reason: a reconnect must not blank the pin
       const unsub = window.Fellowship.subscribeGroup(group.id, add);
       const unsubR = window.Fellowship.subscribeReactions(group.id, (r) => {
         setReactions(prev => {
@@ -1056,7 +1087,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       return () => { unsub(); unsubR(); if (unsubP) unsubP(); if (unsubH) unsubH(); };
     }
     setMsgs((window.TrinityData.GROUP_MESSAGES[group.id] || []).map(m => ({ ...m }))); // fallback: mock seed
-  }, [group]);
+    // ctx.connTick: a room LEFT OPEN across a signal drop, a screen-off or an app switch went permanently deaf
+    // — its REQ was never re-issued and no timer recovered it, because relaysHealthy() correctly reports the
+    // socket as back. The member sits still, the room stops moving, and nothing anywhere says so.
+  }, [group, ctx.connTick]);
   useCE(() => {
     if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight;
   }, [msgs, open]);

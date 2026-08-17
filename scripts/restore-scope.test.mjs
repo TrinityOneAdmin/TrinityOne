@@ -31,7 +31,10 @@ test('each restore step stands alone, so one failure cannot take the others', ()
   const t = code(ID);
   const nameAt = t.indexOf('if (found.name)');
   const churchAt = t.indexOf('if (found.churches.length)');
-  const flagAt = t.indexOf("localStorage.setItem('trinityone.onboarded'");
+  // Anchored FROM the church line, not from the top of the file. Other restore routes legitimately set this
+  // same flag (the backup-file route added 2026-08-16 sets it before its reload), and a bare indexOf found
+  // whichever appeared first in the file — which silently measured the gap between two unrelated blocks.
+  const flagAt = t.indexOf("localStorage.setItem('trinityone.onboarded'", churchAt);
   assert.ok(nameAt !== -1 && churchAt !== -1 && flagAt !== -1, 'the restore block changed shape — re-read it');
   const between = (a, b) => t.slice(a, b);
   assert.match(between(nameAt, churchAt), /catch \(e\) \{\}\s*try \{/,

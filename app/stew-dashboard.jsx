@@ -1949,6 +1949,11 @@ function NewGroupModal({ open, onClose }) {
 // group with the new member set — the relay then enforces posting + the read-gate against it.
 function EditGroupMembersModal({ group, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  // A team also has a ROSTER, and that is the list the rota and the care team are read from — see the
+  // note above RosterModal in stew-schedule.jsx. Ticking someone into a care team here and nowhere else
+  // is how a church ends up with a care team the relay treats as empty.
+  const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
+  const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';
   const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
@@ -1961,6 +1966,34 @@ function EditGroupMembersModal({ group, onClose }) {
     const removed = (group.members || []).some(pk => !sel.has(pk));   // someone dropped → rotate the key
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
     const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
+    // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
+    // invite-only group is not a team and has no rota or care role to inherit. If the roster document has
+    // not arrived yet there is nothing to reconcile against, so we leave it rather than publish a roster we
+    // have not read (which would wipe the roles).
+    //
+    // ITS OWN STEP, AND IT MUST NOT BE IN THE CHAIN. This first sat between publishGroup and publishGroupKey,
+    // so anything thrown while reconciling the roster skipped straight to the catch — and the KEY ROTATION
+    // never ran. Removing someone from an encrypted room without rotating leaves their cached key opening
+    // every future message, which is the one leak-shaped failure this function's own comments are about. The
+    // rotation is the safety-critical write; nothing may be allowed to stand in front of it.
+    const reconcileRoster = () => {
+      try {
+        const r = (rosters || []).find(x => x && x.team === group.id);
+        if (!r || !window.Steward.publishRoster) return;
+        // ONLY WHAT THE STEWARD CHANGED. roster:<id>.people is what the relay reads to grant careAdmin — a
+        // read grant over every care need and every "ask for help" in the church. Reconciling the whole list
+        // meant that opening this dialog on a church whose two lists had drifted and pressing Save WITHOUT
+        // CHANGING ANYTHING promoted every member of that chat room to careAdmin. A delta cannot do that.
+        const before = Array.isArray(group.members) ? group.members : [];
+        const added = newM.filter(pk => !before.includes(pk));
+        const removed = before.filter(pk => !newM.includes(pk));
+        if (!added.length && !removed.length) return;
+        const people = teamPeopleForAllowlist(r.people, added, removed, members);
+        Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
+          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .catch(() => {});
+      } catch (e) {}
+    };
     Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
       .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
       .then((r) => {
@@ -1977,6 +2010,7 @@ function EditGroupMembersModal({ group, onClose }) {
             : 'The group’s key could not be updated — members you added won’t be able to read it yet. Check your connection and press Save again.');
           return;
         }
+        reconcileRoster();   // the rotation has landed; now bring the team's roster in step (never blocks it)
         if (r && r.skipped && r.skipped.length) {
           try {
             window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
@@ -1994,7 +2028,9 @@ function EditGroupMembersModal({ group, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Who’s in ' + group.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '100%', maxHeight: '88%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '22px 24px 14px' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>Who’s in “{group.name}”</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>Invite-only — only these members can post and read. Remove someone and the relay locks them out of the chat.</div>
+          {/* Say that this also sets the team, because it does — the save reconciles the roster. A hidden
+              side-effect is how the two lists drifted apart in the first place. */}
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>Invite-only — only these members can post and read. Remove someone and the relay locks them out of the chat.{(rosters || []).some(x => x && x.team === group.id) ? ' These are also the people on this team — they fill its rota slots, and if it is your care team, they are the ones who can open and manage needs.' : ''}</div>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={lbl}>MEMBERS · {sel.size}</div>
@@ -4030,6 +4066,7 @@ function StewBackupModal({ church, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [done, setDone] = React.useState(false);
+  const [savedAt, setSavedAt] = React.useState('');   // where the file actually landed — a steward told "Saved" with no location cannot check it
   const secure = (typeof window !== 'undefined') && window.isSecureContext && (typeof crypto !== 'undefined') && crypto.subtle;
   const strength = pass.length === 0 ? null
     : pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) ? { t: 'Too short for this file', c: 'var(--clay)' }
@@ -4048,8 +4085,13 @@ function StewBackupModal({ church, onClose }) {
     try {
       const obj = window.TrinityBackup.collectSteward();
       const text = await window.TrinityBackup.encryptObj(obj, pass);
-      await window.TrinityBackup.saveFile('trinityone-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '-' + new Date().toISOString().slice(0, 10) + '.json', text);
-      setDone(true); setTimeout(onClose, 1300);
+      // No mode: saveFile writes a durable copy to the device AND offers the share sheet. It used to do only
+      // the sheet, from a CACHE file Android may delete at any time — so a steward who dismissed it had no
+      // copy of the CHURCH KEY and was shown "Saved". See the note above saveFile in backup.jsx.
+      const res = await window.TrinityBackup.saveFile('trinityone-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      if (res && res.warn) { setErr(res.warn); setBusy(false); return; }   // the church key deserves the honest sentence most of all
+      setSavedAt((window.TrinityBackup.savedWhere && window.TrinityBackup.savedWhere(res)) || '');
+      setDone(true); setTimeout(onClose, 2600);
     } catch (e) { setErr('Backup failed: ' + (e.message || e)); setBusy(false); }
   };
   const incl = [
@@ -4094,7 +4136,7 @@ function StewBackupModal({ church, onClose }) {
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           <button onClick={make} disabled={busy || done || pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
-            <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? 'Saved' : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
+            <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? (savedAt ? 'Saved to ' + savedAt : 'Saved') : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
         </div>
       </div>
     </div>
@@ -5416,6 +5458,15 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const [backupOpen, setBackupOpen] = React.useState(false);
   const [restorePhrase, setRestorePhrase] = React.useState('');
   const [restoreErr, setRestoreErr] = React.useState('');
+  // The church backup file, restored IN THIS SCREEN. It used to ask for the passphrase through window.prompt —
+  // a system dialog that shows it in clear, asked before the file had been read, so the wrong file wasted it —
+  // and reported every failure through window.alert. This is the church key; it deserves better than that.
+  // The confirm before applySteward stays deliberately as it is (AUDIT-BACKLOG: key overwrite should look
+  // unambiguous and a little ugly). UX audit 2026-08-16, finding F9.
+  const [cFile, setCFile] = React.useState(null);   // { name, text }
+  const [cPass, setCPass] = React.useState('');
+  const [cShow, setCShow] = React.useState(false);
+  const [cErr, setCErr] = React.useState('');
   const [confirmRemove, setConfirmRemove] = React.useState(false);   // "remove church from this device" guard
   const [showQR, setShowQR] = React.useState(false);                 // handoff QR (new steward scans it)
   const [scanning, setScanning] = React.useState(false);             // camera open to scan ANOTHER device's handoff QR
@@ -5444,16 +5495,44 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       window.Steward.restoreKey(restorePhrase);
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
-  const restoreFromFile = (e) => {
-    const f = e.target.files && e.target.files[0]; if (!f) return;
-    const p = window.prompt('Enter the passphrase for this backup file:'); if (p == null) return;
-    window.TrinityBackup.readFile(f).then(t => window.TrinityBackup.decryptStr(t, p)).then(obj => {
-      // confirm BEFORE applySteward replaces the on-device key
-      if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — back it up first.\n\nRestore from the file?')) return;
-      // NO reload — applySteward() calls the same restoreKey() (and removes church-key.enc itself), so the
-      // restored seed is memory-only until the forced-PIN modal persists it. See doRestore above.
-      window.TrinityBackup.applySteward(obj);
-    }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
+  // 1 · read and recognise the file first, so a wrong one costs the steward nothing.
+  const pickChurchFile = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    setCErr(''); setCFile(null); setCPass('');
+    if (!f) return;
+    let text = '';
+    try { text = await window.TrinityBackup.readFile(f); }
+    catch (err) { setCErr('Couldn’t read that file. Try choosing it again.'); return; }
+    let env = null; try { env = JSON.parse(text); } catch (err) {}
+    if (!env || env.app !== 'trinityone-backup') {
+      setCErr('That isn’t a TrinityOne backup file. Look for one named like “trinityone-<church>-2026-08-16.json”.');
+      return;
+    }
+    setCFile({ name: f.name || 'the backup', text });
+  };
+  const restoreFromFile = async () => {
+    if (!cFile) return;
+    setCErr('');
+    let obj = null;
+    try { obj = await window.TrinityBackup.decryptStr(cFile.text, cPass); }
+    catch (err) {
+      setCErr(/passphrase|damaged/i.test((err && err.message) || '')
+        ? 'That passphrase didn’t open the file. Check the copy you wrote down.'
+        : ((err && err.message) || 'Couldn’t open that file.'));
+      return;
+    }
+    if (!obj || obj.kind !== 'steward') {
+      setCErr(obj && obj.kind === 'member'
+        ? 'That’s a member’s backup, not a church backup. It belongs in the member app.'
+        : 'That file doesn’t say what it is, so it isn’t safe to restore.');
+      return;
+    }
+    // confirm BEFORE applySteward replaces the on-device key — deliberately a plain confirm, see above
+    if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — back it up first.\n\nRestore from the file?')) return;
+    // NO reload — applySteward() calls the same restoreKey() (and removes church-key.enc itself), so the
+    // restored seed is memory-only until the forced-PIN modal persists it. See doRestore above.
+    try { window.TrinityBackup.applySteward(obj); setCFile(null); setCPass(''); }
+    catch (err) { setCErr((err && err.message) || 'Couldn’t restore that backup.'); }
   };
   return (
     <div style={{ paddingBottom: 24 }}>
@@ -5555,8 +5634,24 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         )}
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => setBackupOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="share" size={15} color="currentColor" /> Back up to a file</button>
-          <label className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="refresh" size={15} color="currentColor" /> Restore from a file<input type="file" accept=".json,application/json" onChange={restoreFromFile} style={{ display: 'none' }} /></label>
+          <label className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="refresh" size={15} color="currentColor" /> {cFile ? 'Choose a different file' : 'Restore from a file'}<input type="file" accept=".json,application/json" onChange={pickChurchFile} style={{ display: 'none' }} /></label>
         </div>
+        {/* The passphrase step, in this screen, and only once a file has been recognised. */}
+        {cFile ? (
+          <div style={{ marginTop: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 700, marginBottom: 7 }}>✓ {cFile.name}</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type={cShow ? 'text' : 'password'} value={cPass} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                onChange={e => { setCPass(e.target.value); setCErr(''); }}
+                onKeyDown={e => { if (e.key === 'Enter' && cPass) restoreFromFile(); }}
+                placeholder="the passphrase for this backup"
+                style={{ flex: 1, boxSizing: 'border-box', height: 42, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              <button onClick={() => setCShow(v => !v)} className="sk-btn sk-btn--ghost" style={{ padding: '0 13px', fontSize: 12.5 }}>{cShow ? 'Hide' : 'Show'}</button>
+              <button onClick={restoreFromFile} disabled={!cPass.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 15px', fontSize: 13, opacity: cPass.trim() ? 1 : .5 }}>Restore</button>
+            </div>
+          </div>
+        ) : null}
+        {cErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.45, marginTop: 9, padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, transparent)' }}>{cErr}</div> : null}
         <div style={{ marginTop: 12 }}>
           {!restoreOpen ? (
             <button onClick={() => setRestoreOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Restore from a recovery phrase</button>

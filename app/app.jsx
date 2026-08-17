@@ -602,6 +602,19 @@ function App() {
     // unlock produced two refetches). Harmless but backwards, on the one path that is already the most
     // expensive thing the app does.
     const onReconnectNeeded = () => { sched.force(); };
+    // A RETURNING SOCKET IS A DIFFERENT SIGNAL, so it gets a different event.
+    //
+    // `trinity-reconnect` means "reconnectAll() has already torn everything down and only you can rebuild it"
+    // — mandatory, never collapsed. A socket coming back means nothing of ours was torn down at all, and it
+    // arrives once per relay: three canonical relays plus the church's own, every time a flaky link flaps.
+    // Through force() that is a full teardown and re-subscribe of ~15 effects PER RELAY PER FLAP, several with
+    // no `since` — a full backlog re-download on a thin pipe. And reconnectAll() closes every socket itself,
+    // so each one returning would fire it again: one unlock, N forced rebuilds. That is the storm the
+    // scheduler exists to prevent, and reconnect-storm.test.mjs is right to insist the two never share a
+    // handler — an earlier version of this branch overloaded the one event name and that test caught it.
+    // So: its own event, on the advisory path. Mirrors the console's `steward-relay-returned`.
+    const onRelayReturned = () => { sched.fire(false); };
+    window.addEventListener('trinity-relay-returned', onRelayReturned);
     window.addEventListener('trinity-reconnect', onReconnectNeeded);
     // Native resume: web visibilitychange/focus are unreliable in the Android WebView, so RETURNING to a
     // backgrounded app often didn't re-subscribe — a steward's change (chat tags, groups, care) then never
@@ -626,7 +639,7 @@ function App() {
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onReconnectNeeded); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
@@ -1475,6 +1488,16 @@ function App() {
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => { setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(null); setGroup(g); },
     desktop, openGroupId: group && group.id,
+    // THE RECONNECT SIGNAL, HANDED TO THE SCREENS. Fourteen subscription effects in this file list connTick
+    // in their deps precisely so a dropped socket is re-subscribed on resume. The two in screens-chat.jsx —
+    // the group list's last-message previews, and the messages in an open room — were never wired to it, and
+    // they are the two a member watches. Measured 2026-08-16: background the app, publish three messages, come
+    // back. The relay holds seven; the list still says four, and a message published a minute later never
+    // arrives either. relaysHealthy() answers true throughout (the socket did come back — the REQ did not), so
+    // the 90-second safety net skips as designed and nothing ever recovers. The room heals only if you close
+    // and reopen it, which is why the same room reads "stale" to someone sitting still and "fine" to someone
+    // wandering. See FINDINGS-2026-08-16 item 2.
+    connTick,
     openDM: (peer) => { setGroup(null); setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(peer); }, openDMInbox: () => { setGroup(null); setOpenServing(false); setPeople(false); setDmPeer(null); setDmInbox(true); markDmSeen(); }, openPeople: () => { setGroup(null); setOpenServing(false); setDmInbox(false); setDmPeer(null); setPeople(true); },
     dmUnread,   // drives the dot on the Community "Direct messages" (paper-plane) button
     walletSats, setWalletSats, giving, setGiving,
@@ -1954,4 +1977,8 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+ReactDOM.createRoot(document.getElementById('root')).render(
+  // Without this, ANY error thrown during render unmounts the whole tree and leaves a white screen
+  // with no message and no way back — the failure class this project calls its worst.
+  <TrinityErrorBoundary><App /></TrinityErrorBoundary>
+);

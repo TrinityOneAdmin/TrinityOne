@@ -6313,6 +6313,18 @@
     return { pubkey: pub2, handle: "", color: COLORS[(h >>> 8) % COLORS.length] };
   }
   var pool = new SimplePool();
+  var _liveRelay = /* @__PURE__ */ new Map();
+  pool.onRelayConnectionSuccess = (url) => {
+    try {
+      const live = pool.relays.get(url);
+      if (!live) return;
+      const prev = _liveRelay.get(url);
+      _liveRelay.set(url, live);
+      if (prev === void 0 || prev === live) return;
+      window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url } }));
+    } catch (e) {
+    }
+  };
   var sk = null;
   var pub = null;
   var _needAuth = true;

@@ -172,35 +172,99 @@
     restoreLocal(obj.local, STEWARD_PREFIXES.concat([]).filter(Boolean));
   }
 
-  // save the encrypted text. mode 'local' writes a file straight onto the device (no share sheet);
-  // mode 'cloud' (default) hands it to the OS so the user can drop it into Drive / OneDrive / Files.
+  // SAVE THE ENCRYPTED TEXT — AND NEVER REPORT A SAVE THAT DID NOT HAPPEN.
+  //
+  // Measured on the OPPO (2026-08-16): an `<a download>` click inside the Capacitor WebView produces NO FILE
+  // ANYWHERE. Not in Downloads, not in Documents, not in app storage — nothing, and no error. This function
+  // returned `{ saved: true, where: 'downloads' }` from exactly that path, so every caller then marked the
+  // member as backed up (silencing the backup nudge) and told them the file was safe. That is the worst
+  // failure this feature can have: the member believes they hold a copy of their account, and does not.
+  //
+  // The second half is the share sheet. It was the ONLY thing the default path did, and it wrote its copy to
+  // CACHE — which Android clears whenever it likes. So a member who opened "Save a backup", saw a share sheet
+  // and dismissed it (or whose chosen app quietly failed) ended with nothing on the phone, while the app said
+  // "Backup created". Three of the four callers of this function passed no mode and therefore took that path,
+  // including the CHURCH key backup. Owner-reported as "back up to device doesn't actually download".
+  //
+  // So: on native we now always write a durable copy to DOCUMENTS first, and the share sheet becomes an
+  // OFFER on top of a file that already exists. Dismissing it is no longer a silent loss. And where nothing
+  // can be written at all, this throws — a caller must not be able to turn "nothing happened" into "saved".
+  //
+  // mode 'local' = device only, no sheet. Anything else = device + offer to share.
   async function saveFile(filename, text, mode) {
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
-    const native = P && P.Filesystem && Cap.isNativePlatform && Cap.isNativePlatform();
-    if (mode === 'local') {
-      if (native) {
-        const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });
-        return { saved: true, where: 'device', uri: w.uri };
-      }
-      // web/PWA: a download is the on-device equivalent
+    const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
+    const native = !!(P && P.Filesystem && isNative);
+    // The browser download. Real in a browser or PWA; a no-op inside a WebView, so refuse there rather than
+    // claim it worked. `saved: false` is not enough — every caller treats a returned object as success.
+    const anchorSave = () => {
+      if (isNative) throw new Error('This app can’t write the file here. Update the app, or use “Save to device”.');
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
       a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
       return { saved: true, where: 'downloads' };
+    };
+    if (native) {
+      // TRY THE DEVICE, THEN FALL BACK — behaviour, not a version check.
+      //
+      // @capacitor/filesystem gates Directory.DOCUMENTS behind isStoragePermissionGranted(), which
+      // short-circuits only on Android 11+. This app declares no storage permission and deliberately should
+      // not: asking a persecuted congregation for "access to photos and files" is a real cost, and it grants
+      // far more than writing one file needs. So on Android 10 and below this write can simply be refused —
+      // for the member's account file AND for the CHURCH KEY. (Read from the plugin source and the manifest,
+      // 2026-08-17; NOT measured on hardware, because every device here is Android 12.)
+      //
+      // Catching the failure rather than testing the version also covers a full disk, a locked profile, and
+      // whatever the next OEM does — all of which look the same to the member and all of which need the same
+      // answer: fall back to the path that worked before, and be honest that it is weaker.
+      let w = null;
+      try { w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' }); }
+      catch (e) { w = null; }
+      if (!w) {
+        // CACHE needs no permission. It is also cleared at Android's discretion, so this copy is a courier,
+        // not a backup — which is exactly what the member has to be told, because dismissing the sheet here
+        // really does leave them with nothing.
+        if (!P.Share) throw new Error('This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.');
+        const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+        await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
+        return { saved: true, where: 'shared', uri: c.uri,
+          warn: 'This phone wouldn’t let the app save the file itself, so it was handed to whatever you chose. If you closed that without saving it, no copy was kept — please try again and save it somewhere.' };
+      }
+      if (mode !== 'local' && P.Share) {
+        // Share the CACHE copy, not this one: sharing goes through a FileProvider and CACHE is the path that
+        // is exposed to it. A throw here means the member closed the sheet — the durable file above is
+        // already written, so that is a choice, not a failure.
+        try {
+          const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+          await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
+        } catch (e) {}
+      }
+      // Report which BUTTON was pressed, not only where the bytes landed. Both modes now write to DOCUMENTS,
+      // so returning 'device' for both left BackupCard marking "Save to device" as Saved when the member had
+      // pressed "Save to cloud" — which reads as the cloud save having failed.
+      return { saved: true, where: mode === 'local' ? 'device' : 'cloud', uri: w.uri };
     }
-    if (native && P.Share) {
-      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-      await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: w.uri });
-      return { saved: true, where: 'cloud' };
-    }
+    if (mode === 'local') return anchorSave();
     try {
       const file = new File([text], filename, { type: 'application/json' });
       if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'TrinityOne backup' }); return { saved: true, where: 'cloud' }; }
     } catch {}
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-    a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    return { saved: true, where: 'downloads' };
+    return anchorSave();
+  }
+  // "file:///storage/emulated/0/Documents/x.json" → "Documents/x.json". A member told "saved to your device"
+  // and given no location has been given a claim they cannot check, which is how a save that WORKED still
+  // reads as a failure — the other half of the same report.
+  function savedWhere(res) {
+    if (!res) return '';
+    if ((res.where === 'device' || res.where === 'cloud') && res.uri) {
+      const m = String(res.uri).match(/\/([^/]+\/[^/]+)$/);
+      return m ? m[1] : 'your Documents folder';
+    }
+    if (res.where === 'device' || res.where === 'cloud') return 'your Documents folder';
+    if (res.where === 'shared') return '';   // we do not know where they sent it — never guess a location
+    if (res.where === 'downloads') return 'your downloads';
+    return '';
   }
   const readFile = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Couldn’t read that file.')); r.readAsText(file); });
 
-  window.TrinityBackup = { encryptObj, decryptStr, checkPass, PASS_MIN, collectMember, applyMember, collectSteward, applySteward, saveFile, readFile };
+  window.TrinityBackup = { encryptObj, decryptStr, checkPass, PASS_MIN, collectMember, applyMember, collectSteward, applySteward, saveFile, savedWhere, readFile };
 })();

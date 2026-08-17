@@ -90,13 +90,24 @@ function RecoverySheet({ open, onClose, ctx }) {
     try {
       const obj = await window.TrinityBackup.collectMember();
       const text = await window.TrinityBackup.encryptObj(obj, pass);
-      await window.TrinityBackup.saveFile('trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      const res = await window.TrinityBackup.saveFile('trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json', text);
       // Mark backed-up ONLY here, on the success path. It used to be called by the button after doExport
       // returned — but doExport resolves normally on its short-passphrase early-return AND in its catch, so
       // the durable "backed up" flag was set even when no valid backup was written, silencing the backup
       // nudge and leaving the member one lost device away from losing their identity with no warning.
       markSaved();
-      ctx.toast('Backup created — save it somewhere safe'); setBk(null); setPass('');
+      // NAME THE PLACE. "Save it somewhere safe" is advice, not a receipt — and on the app this path used to
+      // open a share sheet and write nothing, so the member had no way to tell the two apart.
+      const at = window.TrinityBackup.savedWhere ? window.TrinityBackup.savedWhere(res) : '';
+      // SAY WHERE IT IS, AND THAT IT IS THEIRS TO KEEP. On the app this now lands in the phone's shared
+      // Documents folder, which is the right trade — a backup that exists beats one that never got written —
+      // but it also means the file sits where any app with storage access can read it. It is encrypted, so
+      // that is not a breach; it IS a reason the member should move a copy somewhere they choose. Owner's
+      // call, 2026-08-16.
+      // A fallback save is weaker than a direct one, and the member is the only person who can put that
+      // right — so if saveFile says so, that sentence wins over the cheerful one.
+      if (res && res.warn) { setBkErr(res.warn); setBusy(''); markSaved(); return; }
+      ctx.toast(at ? ('Backup saved to ' + at + ' — keep a copy somewhere safe') : 'Backup created — keep it somewhere safe'); setBk(null); setPass('');
     } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
   };
   const doRestore = async () => {
@@ -191,7 +202,7 @@ function RecoverySheet({ open, onClose, ctx }) {
             {bk === 'restore' ? (
               <input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files && e.target.files[0])} style={{ width: '100%', fontSize: 13, marginBottom: 10, fontFamily: 'var(--font-ui)' }} />
             ) : null}
-            <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? 'Choose a PIN or passphrase (6+)' : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? ('Choose a passphrase — at least ' + ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) + ' characters') : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
             <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
               <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
