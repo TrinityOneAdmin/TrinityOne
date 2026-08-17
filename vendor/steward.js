@@ -17497,7 +17497,7 @@ zoo`.split("\n");
       const id = group.id || (String(pub || "").slice(0, 16) || "grp") + "-" + Date.now().toString(36);
       const inviteOnly = group.visibility === "invite";
       const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0, category: group.category || void 0, visibility: inviteOnly ? "invite" : void 0, members: inviteOnly && Array.isArray(group.members) ? group.members : void 0, encrypted: group.encrypted ? true : void 0, childsafe: group.childsafe ? true : void 0, eventPolicy: EVENT_POLICIES.indexOf(group.eventPolicy) > 0 ? group.eventPolicy : void 0 });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content })).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
+      return _publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content })).then((e) => e ? { id, ...JSON.parse(content), ts: e.created_at } : null);
     },
     // set which members can post events for a group (re-publishes the group def, preserving its fields)
     setGroupLeaders(group, leaderPubs) {
@@ -18072,13 +18072,13 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
     setApproved(pubkeys) {
       _requireTrustedView("cleared-adults list");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -18148,7 +18148,7 @@ zoo`.split("\n");
         const arr = [...new Set((ps || []).filter(Boolean))];
         if (c && arr.length) clean4[c] = arr;
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean4 }) }, sk));
+      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean4 }) }, sk));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,

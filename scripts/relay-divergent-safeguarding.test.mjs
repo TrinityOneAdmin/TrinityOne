@@ -208,9 +208,11 @@ test('KNOWN RESIDUAL: an id from before namespacing is still exposed', async () 
   // Honest limit of the id-ownership fix. `mensgroup1` carries no owner, so a relay missing its definition has
   // nothing to resolve and the minor rule still cannot run. Ids like this exist in the field.
   //
-  // This is what P0 is for — publishing `minors:` and the group definitions to EVERY relay the church's
-  // traffic reaches, so the relay never has to infer anything. This test asserts the CURRENT behaviour so the
-  // gap is visible in the suite rather than remembered; when P0 lands, flip the assertion and delete this note.
+  // P0 HAS LANDED (setMinors / setApproved / setGuardians / publishGroup now use the all-must-accept path), so
+  // a relay the church actually publishes to will HAVE these documents and will not need to infer anything.
+  // What remains is the case P0 cannot reach: a relay the church never published to at all, carrying a member's
+  // fanned-out traffic. For a legacy unprefixed id there is still nothing to resolve there. Closing that is
+  // P1 — scoping a church's private traffic to the church's own relays.
   const ws = await connect();
   try {
     const [ok] = await publish(ws, groupPost(child, LEGACY_GROUP, 'legacy room, no owner in the id'));

@@ -3139,8 +3139,17 @@ window.Steward = {
     const id = group.id || ((String(pub || '').slice(0, 16) || 'grp') + '-' + Date.now().toString(36));
     const inviteOnly = group.visibility === 'invite';
     const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined, category: group.category || undefined, visibility: inviteOnly ? 'invite' : undefined, members: inviteOnly && Array.isArray(group.members) ? group.members : undefined, encrypted: group.encrypted ? true : undefined, childsafe: group.childsafe ? true : undefined, eventPolicy: EVENT_POLICIES.indexOf(group.eventPolicy) > 0 ? group.eventPolicy : undefined });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }))
-      .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
+    // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
+    // document; a relay that never received it cannot police anything and fails open. `publish()` is
+    // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
+    // configured relay, so the rule landed on one and the traffic on all of them. Measured 2026-08-17: a
+    // 12-year-old's message refused by the relay holding her church's minors list, and delivered anyway.
+    //
+    // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
+    // told the protection is in force; if the record reached one relay of three, it is in force on one of
+    // three. An error is recoverable, false reassurance is not.
+    return _publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }))
+      .then(e => (e ? { id, ...JSON.parse(content), ts: e.created_at } : null));
   },
   // set which members can post events for a group (re-publishes the group def, preserving its fields)
   setGroupLeaders(group, leaderPubs) {
@@ -3866,13 +3875,31 @@ window.Steward = {
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
+    // document; a relay that never received it cannot police anything and fails open. `publish()` is
+    // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
+    // configured relay, so the rule landed on one and the traffic on all of them. Measured 2026-08-17: a
+    // 12-year-old's message refused by the relay holding her church's minors list, and delivered anyway.
+    //
+    // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
+    // told the protection is in force; if the record reached one relay of three, it is in force on one of
+    // three. An error is recoverable, false reassurance is not.
+    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
   setApproved(pubkeys) {   // replace the whole approved-adults list (pass hex pubkeys)
     _requireTrustedView('cleared-adults list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
+    // document; a relay that never received it cannot police anything and fails open. `publish()` is
+    // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
+    // configured relay, so the rule landed on one and the traffic on all of them. Measured 2026-08-17: a
+    // 12-year-old's message refused by the relay holding her church's minors list, and delivered anyway.
+    //
+    // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
+    // told the protection is in force; if the record reached one relay of three, it is in force on one of
+    // three. An error is recoverable, false reassurance is not.
+    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
 
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
@@ -3923,7 +3950,16 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const clean = {};
     for (const [c, ps] of Object.entries(links || {})) { const arr = [...new Set((ps || []).filter(Boolean))]; if (c && arr.length) clean[c] = arr; }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }, sk));
+    // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
+    // document; a relay that never received it cannot police anything and fails open. `publish()` is
+    // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
+    // configured relay, so the rule landed on one and the traffic on all of them. Measured 2026-08-17: a
+    // 12-year-old's message refused by the relay holding her church's minors list, and delivered anyway.
+    //
+    // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
+    // told the protection is in force; if the record reached one relay of three, it is in force on one of
+    // three. An error is recoverable, false reassurance is not.
+    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }, sk));
   },
   // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
   // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,

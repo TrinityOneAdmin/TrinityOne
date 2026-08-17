@@ -1021,4 +1021,18 @@ export const CASES = [
     replace: `    const gcp = GROUP_CHURCH.get(g);`,
     test: 'scripts/relay-divergent-safeguarding.test.mjs',
   },
+  {
+    name: 'safeguarding: the minors list goes back to single-accept publishing',
+    file: 'src/steward.src.js',
+    find: `    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));`,
+    replace: `    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));`,
+    test: 'scripts/safeguarding-replicates.test.mjs',
+  },
+  {
+    name: 'safeguarding: a partial write reports success again',
+    file: 'src/steward.src.js',
+    find: `  return accepted === targets.length ? evt : false;`,
+    replace: `  return accepted ? evt : false;`,
+    test: 'scripts/safeguarding-replicates.test.mjs',
+  },
 ];
