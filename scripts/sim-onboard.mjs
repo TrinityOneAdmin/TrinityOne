@@ -65,6 +65,11 @@ const setup = await ev(`(function(){
   try {
     if (!localStorage.getItem('trinityone.nostr.mnemonic')) return 'ERR the app kept no mnemonic to persist';
     localStorage.setItem('trinityone.onboarded', 'true');
+    // ACTIVE, not merely followed. Writing only followedChurches leaves activeChurch null, and every church
+    // subscription resolves through `churches.find(c => c.id === activeChurch)` — so the app subscribes to
+    // nothing, publishes no name, and reports the church as empty while chat still works. Seventeen of
+    // twenty-nine members landed in exactly that state on 2026-08-18 and showed as "Anonymous" to everyone.
+    localStorage.setItem('trinityone.activeChurch', ${JSON.stringify(CHURCH)});
     localStorage.setItem('trinityone.profile', JSON.stringify({ name: ${JSON.stringify(name)} }));
     localStorage.setItem('trinityone.followedChurches', JSON.stringify([{
       id: ${JSON.stringify(CHURCH)}, npub: ${JSON.stringify(CHURCH)}, name: ${JSON.stringify(CHURCH_NAME)},

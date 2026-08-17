@@ -2348,8 +2348,14 @@ function serveStatic(req, res) {
       relayPub: RELAY_PUB,   // this relay's identity pubkey — a church authorises it as a trusted sync peer
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
-      // the list from the token-gated /config; /status carries only non-sensitive counts.
-      counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 },
+      // the list from the token-gated /config; the counts below are now ALSO token-gated (red-team 2026-08-18).
+      // COUNTS ARE FOR THE OPERATOR, NOT A STRANGER. An unauthenticated /status used to hand back
+      // `members: 29` for the named church on it. No identities — but "this named church is real, active,
+      // and has ~29 people" is exactly the aggregate the UK-pilot threat model exists to deny a hostile party
+      // who arrived with only the church's name (red-team, 2026-08-18). The neighbouring /stats already treats
+      // per-church counts as seizure-sensitive; /status now agrees. Everything above — health, disk, build —
+      // stays public, because a fleet dashboard legitimately needs it and none of it identifies a soul.
+      ...(adminOK(req) ? { counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 } } : {}),
       serves: { app: SETTINGS.serveApp, modules: SETTINGS.serveModules, audio: SETTINGS.serveAudio },   // what this relay also hosts (toggleable in the control dashboard)
     }));
     return;

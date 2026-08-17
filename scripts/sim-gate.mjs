@@ -67,6 +67,17 @@ const unkeyed = cast.filter(c => !keyed.has(c.pubkey));
 check('every cast member is in the name-key envelope', unkeyed.length === 0,
   unkeyed.length + ' not enrolled (' + unkeyed.slice(0, 6).map(m => m.name).join(', ') + ') — they will see "Member" everywhere and a locked calendar');
 
+// A member who can READ names but has published none of their own is invisible to everyone else. The vicar
+// found this from the console's Members page — 17 of 29 showing "Anonymous" — while the envelope check above
+// passed cleanly, because being able to read a name and having one are different things. The cause in every
+// case was an empty `followedChurches`: no followed church means no active church, no document hub, no name
+// key ingested and therefore nothing to seal a name with.
+const named = new Set(rows(`SELECT DISTINCT pubkey FROM events WHERE dtag LIKE 'trinityone/name:%';`));
+const nameless = cast.filter(c => !named.has(c.pubkey));
+check('every cast member has published their own name', nameless.length === 0,
+  nameless.length + ' show as "Anonymous" to the whole church (' + nameless.slice(0, 6).map(m => m.name).join(', ') +
+  ') — and a steward cannot apply safeguarding to a member they cannot identify');
+
 // ── 4. the features the round is about are actually switched ON ─────────────────────────────────────────
 check('Care is switched on', rows(`SELECT 1 FROM events WHERE dtag LIKE '%meals%' OR dtag LIKE '%carecfg%' LIMIT 1;`).length > 0,
   'no care settings document — "Ask for help" will not appear for anyone, and a care round tests nothing');

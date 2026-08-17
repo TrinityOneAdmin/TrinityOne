@@ -1035,4 +1035,11 @@ export const CASES = [
     replace: `  return accepted ? evt : false;`,
     test: 'scripts/safeguarding-replicates.test.mjs',
   },
+  {
+    name: 'privacy: /status leaks the congregation size to strangers again',
+    file: 'scripts/gateway.mjs',
+    find: `      ...(adminOK(req) ? { counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 } } : {}),`,
+    replace: `      counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 },`,
+    test: 'scripts/status-hides-congregation-size.test.mjs',
+  },
 ];
