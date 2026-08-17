@@ -5054,8 +5054,17 @@ window.Steward = {
     //
     // The relay's own refusal is well written ("this relay is already set up for its church — ask the operator
     // to add yours, or turn on Offer to host other churches"), so pass it through rather than inventing one.
-    if (!accepted && (refused.length || unreachable.length)) {
-      const why = (refused.find(x => x.why) || {}).why;
+    // JUDGE IT ON THE RELAY THIS CHURCH ACTUALLY USES, not on whether anybody anywhere said yes.
+    //
+    // `bases` includes the CANONICAL_RELAYS as well as this console's own, so a church set up against a
+    // self-hosted or local relay can be REFUSED there and still get an acceptance from a canonical one — and
+    // `accepted` was then true, and the steward was told nothing, while every subsequent write to their own
+    // relay was rejected. Measured 2026-08-17: ok:true alongside a 403 from the relay the church was actually
+    // pointed at, and 17 lost setup writes.
+    const ownBase = window.Steward.configBase();
+    const ownRefused = refused.find(x => x.base === ownBase) || unreachable.includes(ownBase);
+    if (ownRefused) {
+      const why = (refused.find(x => x.base === ownBase) || {}).why;
       try {
         window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'church registration',
           message: why

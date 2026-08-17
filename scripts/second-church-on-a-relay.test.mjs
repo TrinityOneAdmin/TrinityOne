@@ -46,8 +46,14 @@ test('a refused registration reaches the steward, in the relay’s own words', (
   assert.match(fn, /steward-write-blocked/,
     'the console already renders this banner — a silent refusal is how a steward ends up with a church that ' +
     'does not exist');
-  assert.match(fn, /if \(!accepted && \(refused\.length \|\| unreachable\.length\)\)/,
-    'only when NOBODY accepted: a church registered on one relay of several is fine and must not be alarmed');
+  // JUDGED ON THE CHURCH'S OWN RELAY. `bases` includes the CANONICAL_RELAYS, so a church set up against a
+  // self-hosted or local relay can be refused THERE and still get an acceptance from a canonical one.
+  // Measured 2026-08-17: selfRegister returned ok:true alongside a 403 from the relay the church was actually
+  // pointed at, and seventeen setup writes were lost in silence.
+  assert.match(fn, /const ownBase = window\.Steward\.configBase\(\)/,
+    'the question is whether THIS church\'s relay took it, not whether anybody did');
+  assert.match(fn, /if \(ownRefused\)/,
+    'an acceptance from a canonical relay must not mask a refusal from the one the church will actually use');
   assert.match(fn, /return \{ ok: accepted/, 'callers should be able to act on it too');
 });
 

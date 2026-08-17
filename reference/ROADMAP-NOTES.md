@@ -125,3 +125,31 @@ short-circuits. Settle it on an Android 9/10 handset before choosing a fix.
 Preferred fix if confirmed: fall back to the old CACHE + share-sheet path on those versions rather than
 declaring a storage permission — a persecuted-church app should not be asking for file access it can avoid —
 and say plainly on that path that dismissing the sheet keeps no copy.
+
+---
+
+## 4. DECIDED, NOT A BUG: churches self-register on the public T1 relays
+
+**Owner, 2026-08-17.** Recorded because I misread it as a defect and nearly "fixed" it.
+
+`selfRegister()` (`src/steward.src.js`) loops over `CANONICAL_RELAYS` as well as the console's own base, so a
+newly created church announces itself to `app.trinityone.church` and the ts.net fallback. Measured: a8 went
+from 18 churches to 22 during one session of simulation setup.
+
+**That is intended.** The open T1 relays exist to support churches that cannot easily run their own, and
+self-registration is how such a church gets somewhere to live without an operator doing anything. Test and
+simulation churches accumulating there is a housekeeping matter — they clean up easily — not a design problem.
+
+It is also NOT a contradiction of FEDERATION-PLAN principle 4 ("visibility is a choice"): that principle is
+about a church ADVERTISING a relay or publishing a relay list for discovery, which stays opt-in. Registering
+with a relay so it will accept your writes is a different act.
+
+**Do not "fix" this.** If it is ever revisited, the question is not whether to stop it but whether a
+self-hosted church should be able to opt OUT of the canonical registration — and that is a preference, not a
+correctness issue.
+
+**What WAS a real defect, and is fixed:** `selfRegister` judged success as "did anybody accept?", so a church
+whose OWN relay refused (403) still saw `ok: true` because a canonical relay had taken it. The steward was
+told nothing and lost seventeen setup writes. It now judges the relay the church is actually pointed at. The
+broadcast is untouched.
+

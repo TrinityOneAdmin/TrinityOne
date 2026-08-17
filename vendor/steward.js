@@ -19784,8 +19784,10 @@ zoo`.split("\n");
           unreachable.push(base);
         }
       }
-      if (!accepted && (refused.length || unreachable.length)) {
-        const why = (refused.find((x) => x.why) || {}).why;
+      const ownBase = window.Steward.configBase();
+      const ownRefused = refused.find((x) => x.base === ownBase) || unreachable.includes(ownBase);
+      if (ownRefused) {
+        const why = (refused.find((x) => x.base === ownBase) || {}).why;
         try {
           window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
             what: "church registration",
