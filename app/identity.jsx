@@ -94,7 +94,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       // decryptStr already tells "not a backup" apart from "wrong passphrase". The old path threw that
       // distinction away into one shared toast; keep it, and keep it ON SCREEN beside the field they can fix.
       setRErr(/passphrase|damaged/i.test((e && e.message) || '')
-        ? 'That password didn’t open the file. Check your paper — the words are separated by spaces.'
+        ? 'That password didn’t open the file. Check what you wrote down when you made it — if it was several words, type them with spaces between.'
         : ((e && e.message) || 'Couldn’t open that file.'));
       return;
     }
@@ -588,12 +588,18 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
                 <input type={rShowPass ? 'text' : 'password'} value={rFilePass} autoFocus autoCapitalize="none" autoCorrect="off" spellCheck={false}
                   onChange={e => { setRFilePass(e.target.value); setRErr(''); }}
                   onKeyDown={e => { if (e.key === 'Enter' && rFilePass) doRestoreFile(); }}
-                  placeholder="the words you wrote on your paper"
+                  placeholder="the password you chose for this backup"
                   style={{ width: '100%', boxSizing: 'border-box', height: 50, border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface)', padding: '0 74px 0 15px', fontSize: 15.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
                 <button onClick={() => setRShowPass(v => !v)} style={{ position: 'absolute', right: 6, top: 6, height: 38, padding: '0 12px', borderRadius: 11, border: 'none', background: 'var(--surface-2)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700 }}>{rShowPass ? 'Hide' : 'Show'}</button>
               </div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '7px 2px 0' }}>
-                The four words you wrote down when you made the backup — spaces between them.
+                {/* DESCRIBE WHAT THEY ACTUALLY HAVE. This said "the four words you wrote down", which is the
+                    passphrase the audit proposed GENERATING — a screen that has not been built. Anyone who
+                    typed their own passphrase reads an instruction describing a different secret, at the exact
+                    moment they are least able to tell "wrong password" from "wrong file". A simulated member
+                    hit this and it only matched because her password happened to be four words. */}
+                Whatever you chose when you made this backup. If you wrote down several words, type them with
+                spaces between.
               </div>
             </React.Fragment>
           ) : null}

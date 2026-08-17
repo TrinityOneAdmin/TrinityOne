@@ -841,4 +841,13 @@ export const CASES = [
     replace: `    if (standing === 'different' && !rReplaceOk && consented !== true) {`,
     test: 'scripts/restore-from-file.test.mjs',
   },
+  {
+    name: 'restore: the screen promises four words the app never issued',
+    file: 'app/identity.jsx',
+    // the copy this branch shipped before a simulated member walked into it
+    find: `                Whatever you chose when you made this backup. If you wrote down several words, type them with
+                spaces between.`,
+    replace: `                The four words you wrote down when you made the backup — spaces between them.`,
+    test: 'scripts/restore-from-file.test.mjs',
+  },
 ];

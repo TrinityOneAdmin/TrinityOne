@@ -88,6 +88,25 @@ test('the destructive warning is in-app, and only when something is really at st
   assert.match(pane, /rPending \? 'Replace it and restore'/, 'the button must change to say what it will do');
 });
 
+test('the restore screen describes the password the member actually has', () => {
+  // OVERCLAIM, caught by a simulated member on 2026-08-17. The screen said "the four words you wrote down
+  // when you made the backup" — but the four-word generator is a PROPOSAL in the UX audit that has not been
+  // built, and the export screen asks for "a passphrase — at least 12 characters". Anyone who typed their own
+  // reads an instruction describing a different secret, at the moment they are least able to tell "wrong
+  // password" from "wrong file". It only matched in the simulation because that password happened to be four
+  // words. This project treats overclaiming as a defect, not a copy nitpick.
+  //
+  // If the generator is built later, this guard should be REPLACED, not deleted — at that point the app does
+  // issue four words and may say so.
+  const pane = stripComments(ID.slice(ID.indexOf("if (restoring && rMode === 'file')")));
+  assert.doesNotMatch(pane, /four words/i,
+    'the app does not issue four words, so the restore screen must not claim it did');
+  const body = stripComments(fnBody(ID, 'const doRestoreFile = async (consented) => {'));
+  assert.doesNotMatch(body, /four words/i, 'nor may the wrong-password message');
+  assert.match(body, /if it was several words/i,
+    'it should still HELP — a member who did write words down needs to know to type the spaces');
+});
+
 test('a restore lands the member in their church, not back in the wizard', () => {
   const body = stripComments(fnBody(ID, 'const doRestoreFile = async (consented) => {'));
   assert.match(body, /applyMember\(obj\)/, 'the backup must actually be applied');

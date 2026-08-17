@@ -225,7 +225,7 @@ function BackupCard({ ctx }) {
     catch (err) {
       setRBusy('');
       setRErr(/passphrase|damaged/i.test((err && err.message) || '')
-        ? 'That password didn’t open the file. Check your paper — the words are separated by spaces.'
+        ? 'That password didn’t open the file. Check what you wrote down when you made it — if it was several words, type them with spaces between.'
         : ((err && err.message) || 'Couldn’t open that file.'));
       return;
     }
@@ -323,7 +323,7 @@ function BackupCard({ ctx }) {
               <input type={rShow ? 'text' : 'password'} value={rPass} autoCapitalize="none" autoCorrect="off" spellCheck={false}
                 onChange={e => { setRPass(e.target.value); setRErr(''); }}
                 onKeyDown={e => { if (e.key === 'Enter' && rPass) doRestoreFile(); }}
-                placeholder="the words you wrote on your paper"
+                placeholder="the password you chose for this backup"
                 style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface)', padding: '0 66px 0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
               <button onClick={() => setRShow(v => !v)} style={{ position: 'absolute', right: 5, top: 5, height: 34, padding: '0 11px', borderRadius: 10, border: 'none', background: 'var(--surface-2)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700 }}>{rShow ? 'Hide' : 'Show'}</button>
             </div>
