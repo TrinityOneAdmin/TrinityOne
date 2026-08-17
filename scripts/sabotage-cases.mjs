@@ -861,4 +861,25 @@ export const CASES = [
     replace: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });`,
     test: 'scripts/backup-saves-somewhere.test.mjs',
   },
+  {
+    name: 'crash: the member app mounts unprotected again',
+    file: 'app/app.jsx',
+    find: `  <TrinityErrorBoundary><App /></TrinityErrorBoundary>`,
+    replace: `  <App />`,
+    test: 'scripts/render-crash-boundary.test.mjs',
+  },
+  {
+    name: 'crash: the console mounts unprotected again',
+    file: 'app/steward-root.jsx',
+    find: `  <TrinityErrorBoundary><StewardRoot /></TrinityErrorBoundary>`,
+    replace: `  <StewardRoot />`,
+    test: 'scripts/render-crash-boundary.test.mjs',
+  },
+  {
+    name: 'crash: the detail stops being written down',
+    file: 'app/error-boundary.jsx',
+    find: `      localStorage.setItem('trinityone.lastcrash', JSON.stringify({`,
+    replace: `      ({}).nothing = JSON.stringify({`,
+    test: 'scripts/render-crash-boundary.test.mjs',
+  },
 ];

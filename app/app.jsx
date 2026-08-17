@@ -1977,4 +1977,8 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+ReactDOM.createRoot(document.getElementById('root')).render(
+  // Without this, ANY error thrown during render unmounts the whole tree and leaves a white screen
+  // with no message and no way back — the failure class this project calls its worst.
+  <TrinityErrorBoundary><App /></TrinityErrorBoundary>
+);

@@ -1509,7 +1509,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <Row icon="swap" label="Move to a new phone" sub="Carry this account across by scanning — nothing to write down or type." accent="var(--clay)" onClick={() => ctx.openMovePhone()} />
           {/* U1: restore needs a PERMANENT home. It used to exist only inside the first-run wizard, which
               "Skip setup for now" hides for ever. Same flow, same church-can-vouch fallback — just reachable. */}
-          <Row icon="refresh" label="Bring an account back" sub="Moving from another phone, or reinstalled? Restore with your 12 words." accent="var(--sage)" onClick={() => ctx.openRestore()} />
+          <Row icon="refresh" label="Bring an account back" sub="Moving from another phone, or reinstalled? Use your backup file, your 12 words, or your old phone." accent="var(--sage)" onClick={() => ctx.openRestore()} />
           <Row icon="key" label="Your account ID" sub={identity.npub.slice(0, 24) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Your account ID copied'); }} />
         </Group>
 

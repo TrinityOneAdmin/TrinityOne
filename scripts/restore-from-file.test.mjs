@@ -37,6 +37,15 @@ test('the restore chooser offers the backup file, first', () => {
     'second (most members have them), the old phone after — it is no use when the phone is lost, stolen or broken');
 });
 
+test('the way IN to restore mentions the file too', () => {
+  // A simulated member found this: the chooser now leads with "I have my backup file", but the Settings row
+  // that OPENS it still said "Restore with your 12 words" — so someone holding a backup file had no reason to
+  // tap it, and someone who did was told, on the way in, that they needed a different thing entirely.
+  // Adding a route without updating its entrance is how a good route stays unused.
+  const row = stripComments(ID.slice(ID.indexOf('label="Bring an account back"'), ID.indexOf('label="Bring an account back"') + 300));
+  assert.match(row, /backup file/i, 'the entrance must name the route that brings back the most');
+});
+
 test('the file is recognised before any password is asked for', () => {
   const pick = stripComments(fnBody(ID, 'const pickBackupFile = async (f) => {'));
   assert.match(pick, /readFile\(f\)/, 'the file must be read up front');
