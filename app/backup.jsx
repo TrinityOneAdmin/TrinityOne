@@ -204,7 +204,31 @@
       return { saved: true, where: 'downloads' };
     };
     if (native) {
-      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });
+      // TRY THE DEVICE, THEN FALL BACK — behaviour, not a version check.
+      //
+      // @capacitor/filesystem gates Directory.DOCUMENTS behind isStoragePermissionGranted(), which
+      // short-circuits only on Android 11+. This app declares no storage permission and deliberately should
+      // not: asking a persecuted congregation for "access to photos and files" is a real cost, and it grants
+      // far more than writing one file needs. So on Android 10 and below this write can simply be refused —
+      // for the member's account file AND for the CHURCH KEY. (Read from the plugin source and the manifest,
+      // 2026-08-17; NOT measured on hardware, because every device here is Android 12.)
+      //
+      // Catching the failure rather than testing the version also covers a full disk, a locked profile, and
+      // whatever the next OEM does — all of which look the same to the member and all of which need the same
+      // answer: fall back to the path that worked before, and be honest that it is weaker.
+      let w = null;
+      try { w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' }); }
+      catch (e) { w = null; }
+      if (!w) {
+        // CACHE needs no permission. It is also cleared at Android's discretion, so this copy is a courier,
+        // not a backup — which is exactly what the member has to be told, because dismissing the sheet here
+        // really does leave them with nothing.
+        if (!P.Share) throw new Error('This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.');
+        const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+        await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
+        return { saved: true, where: 'shared', uri: c.uri,
+          warn: 'This phone wouldn’t let the app save the file itself, so it was handed to whatever you chose. If you closed that without saving it, no copy was kept — please try again and save it somewhere.' };
+      }
       if (mode !== 'local' && P.Share) {
         // Share the CACHE copy, not this one: sharing goes through a FileProvider and CACHE is the path that
         // is exposed to it. A throw here means the member closed the sheet — the durable file above is
@@ -236,6 +260,7 @@
       return m ? m[1] : 'your Documents folder';
     }
     if (res.where === 'device' || res.where === 'cloud') return 'your Documents folder';
+    if (res.where === 'shared') return '';   // we do not know where they sent it — never guess a location
     if (res.where === 'downloads') return 'your downloads';
     return '';
   }

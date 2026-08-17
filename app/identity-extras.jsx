@@ -104,6 +104,9 @@ function RecoverySheet({ open, onClose, ctx }) {
       // but it also means the file sits where any app with storage access can read it. It is encrypted, so
       // that is not a breach; it IS a reason the member should move a copy somewhere they choose. Owner's
       // call, 2026-08-16.
+      // A fallback save is weaker than a direct one, and the member is the only person who can put that
+      // right — so if saveFile says so, that sentence wins over the cheerful one.
+      if (res && res.warn) { setBkErr(res.warn); setBusy(''); markSaved(); return; }
       ctx.toast(at ? ('Backup saved to ' + at + ' — keep a copy somewhere safe') : 'Backup created — keep it somewhere safe'); setBk(null); setPass('');
     } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
   };

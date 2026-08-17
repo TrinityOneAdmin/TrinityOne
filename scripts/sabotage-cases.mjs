@@ -850,4 +850,15 @@ export const CASES = [
     replace: `                The four words you wrote down when you made the backup — spaces between them.`,
     test: 'scripts/restore-from-file.test.mjs',
   },
+  {
+    name: 'backup: an old phone gets no fallback and no warning',
+    file: 'app/backup.jsx',
+    // the shape before option (a): one DOCUMENTS write, and if the OS refuses it the member simply gets an
+    // error — on the file that holds their account, and on the one that holds the church key
+    find: `      let w = null;
+      try { w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' }); }
+      catch (e) { w = null; }`,
+    replace: `      const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });`,
+    test: 'scripts/backup-saves-somewhere.test.mjs',
+  },
 ];

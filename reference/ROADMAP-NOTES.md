@@ -88,6 +88,25 @@ gets a reason to adopt the whole thing. It reuses machinery that already exists.
 
 Call it a noticeboard, not a feed. The name will shape what gets built.
 
+**Owner's view, 2026-08-17:** the noticeboard sits naturally on the church-network feature that already
+works — this is an extension of something shipped, not a new subsystem. That materially lowers the cost and
+raises the confidence, and it is the strongest argument for the network tier being first.
+
+### Prerequisite: church networks have never been simulated
+
+Networks are built and working, and nothing has ever driven them the way the care system was driven on
+2026-08-17 — two churches, real stewards, a network key, watching what each side can actually see. Before any
+noticeboard is designed on top, run that round and find out what the feature really does today:
+
+* Two churches joining one network, each with its own relay and its own steward.
+* What does a network key actually grant? `grantorOk()` treats a network as a valid grantor alongside the
+  church and its stewards — so a network key carries real authority over member churches. Does the console
+  make that visible to the church that joined?
+* Can a church LEAVE, and does everything the network granted come away with it?
+* What does a member of church A see of church B — deliberately, and by accident?
+
+That last question is the one the noticeboard depends on, and it is unanswered. Do it as its own round.
+
 **Sequence:** after the pilot, and specifically after the privacy model has survived real use — because this is
 the feature that would turn a privacy mistake from local into permanent and public.
 

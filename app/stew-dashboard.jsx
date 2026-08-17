@@ -4089,6 +4089,7 @@ function StewBackupModal({ church, onClose }) {
       // the sheet, from a CACHE file Android may delete at any time — so a steward who dismissed it had no
       // copy of the CHURCH KEY and was shown "Saved". See the note above saveFile in backup.jsx.
       const res = await window.TrinityBackup.saveFile('trinityone-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      if (res && res.warn) { setErr(res.warn); setBusy(false); return; }   // the church key deserves the honest sentence most of all
       setSavedAt((window.TrinityBackup.savedWhere && window.TrinityBackup.savedWhere(res)) || '');
       setDone(true); setTimeout(onClose, 2600);
     } catch (e) { setErr('Backup failed: ' + (e.message || e)); setBusy(false); }

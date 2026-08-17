@@ -82,6 +82,35 @@ test('on the app, a path that cannot write THROWS instead of claiming success', 
   }
 });
 
+test('a phone that refuses the durable write falls back — and says the copy is not kept', async () => {
+  // ANDROID <=10. @capacitor/filesystem gates Directory.DOCUMENTS behind a storage permission this app
+  // deliberately does not declare, so the write can be refused outright — for the member's account file and
+  // for the CHURCH KEY. Rather than ask persecuted users for file access, fall back to the path that worked
+  // before (CACHE + the share sheet) and be honest that it is weaker: CACHE is cleared at Android's
+  // discretion, so dismissing that sheet really does leave them with nothing.
+  const writes = [], shares = [];
+  const Plugins = {
+    Filesystem: { writeFile: async (o) => { if (o.directory === 'DOCUMENTS') throw new Error('permission denied'); writes.push(o); return { uri: 'file:///cache/' + o.path }; } },
+    Share: { share: async (o) => { shares.push(o); } },
+  };
+  const win = { Capacitor: { Plugins, isNativePlatform: () => true } };
+  const fn = new Function('window', 'document', 'navigator', 'URL', 'Blob', 'File', 'setTimeout',
+    fnBody(BACKUP, 'async function saveFile(') + '; return saveFile;')(
+    win, { createElement: () => ({ click() {}, remove() {}, set href(v) {}, get href() { return ''; } }), body: { appendChild() {} } },
+    {}, { createObjectURL: () => 'blob:x', revokeObjectURL() {} }, function Blob() {}, function File() {}, () => {});
+
+  const res = await fn('backup.json', '{}', 'local');
+  assert.equal(res.saved, true, 'the file did reach the share sheet — that is a save, of a weaker kind');
+  assert.equal(res.where, 'shared');
+  assert.ok(writes.some(w => w.directory === 'CACHE'), 'the fallback copy needs no permission');
+  assert.equal(shares.length, 1, 'and it must actually be offered');
+  assert.match(res.warn, /no copy was kept/i,
+    'the member must be told that closing the sheet leaves them with nothing — this path cannot verify itself');
+
+  const savedWhere = new Function(fnBody(BACKUP, 'function savedWhere(') + '; return savedWhere;')();
+  assert.equal(savedWhere(res), '', 'we do not know where they sent it, so we must not name a place');
+});
+
 test('in a real browser the download still works', async () => {
   const { saveFile, anchors } = loadSaveFile({ native: false, filesystem: false, share: false });
   const res = await saveFile('backup.json', '{}', 'local');
