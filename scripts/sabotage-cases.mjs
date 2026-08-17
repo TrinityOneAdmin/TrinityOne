@@ -944,4 +944,32 @@ export const CASES = [
     replace: `          memberPubs: Array.isArray(g.members) ? g.members : null,`,
     test: 'scripts/event-permission-tiers.test.mjs',
   },
+  {
+    name: 'chat: the 12-word check becomes a dead end again',
+    file: 'app/screens-help-main.jsx',
+    find: `                const show = picked != null && correct;`,
+    replace: `                const show = picked != null;`,
+    test: 'scripts/chat-parity-and-retry.test.mjs',
+  },
+  {
+    name: 'chat: direct messages get their own reaction set again',
+    file: 'app/screens-chat.jsx',
+    find: `  const DM_EMOJI = REACT_EMOJIS;`,
+    replace: `  const DM_EMOJI = ['\u2764\ufe0f', '\ud83d\ude4f'];`,
+    test: 'scripts/chat-parity-and-retry.test.mjs',
+  },
+  {
+    name: 'chat: a DM reply leaks into a public tag',
+    file: 'src/fellowship.src.js',
+    find: `    const body = window.Fellowship._dmWrap(content, replyTo);`,
+    replace: `    const body = content;`,
+    test: 'scripts/chat-parity-and-retry.test.mjs',
+  },
+  {
+    name: 'jsx: a literal \\uXXXX escape returns to a member-facing string',
+    file: 'app/screens-serving.jsx',
+    find: `you can\u2019t open yet.</b>`,
+    replace: `you can\\u2019t open yet.</b>`,
+    test: 'scripts/no-literal-escapes-in-jsx.test.mjs',
+  },
 ];

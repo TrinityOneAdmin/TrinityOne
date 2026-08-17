@@ -657,7 +657,11 @@ function ChatScreen({ ctx }) {
 }
 
 // ── message bubble ──
-const REACT_EMOJIS = ['🙏', '❤️', '🔥', '🙌', '✨'];
+// ONE SET, EVERY CHAT SURFACE. Group rooms had ['🙏','❤️','🔥','🙌','✨'] and direct messages had a
+// different six including 👍 and 😂 — so the two most ordinary reactions a person reaches for existed in
+// the app but not in the room where the church actually talks. Owner-reported 2026-08-17. Keep this the
+// single source: a second literal list is how the two drifted apart in the first place.
+const REACT_EMOJIS = ['👍', '❤️', '😂', '🙏', '🔥', '🙌'];
 
 // reaction pills + a small react button (with emoji picker), shown under each bubble
 function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) {
@@ -832,9 +836,49 @@ function Row({ me, m, children, ctx, mod }) {
   const startLP = () => { clearTimeout(lp.current); lp.current = setTimeout(doShare, 480); };
   const cancelLP = () => { clearTimeout(lp.current); lp.current = null; };
   const M = mod || {};
+  // SWIPE TO REPLY. Drag a bubble to the right and let go. It sits on Row rather than on each bubble kind so
+  // a verse, a poll and an ordinary message all behave the same — the alternative was four copies drifting
+  // apart, which is how this app ended up with two different reaction sets.
+  //
+  // It cooperates with the press-and-hold share that was already here: any movement cancels the long-press
+  // timer (that was true before), and a mostly-VERTICAL drag resets the offset and gets out of the way so the
+  // message list still scrolls normally. Only a clearly horizontal drag arms the reply.
+  const swipe = React.useRef({ x: 0, y: 0, on: false });
+  const [dx, setDx] = React.useState(0);
+  const canReply = typeof M.onReply === 'function';
+  const SWIPE_ARM = 48;    // how far to drag before letting go replies
+  const SWIPE_MAX = 76;    // and how far the bubble will move at all
+  const onTS = (e) => {
+    startLP();
+    const t = e.touches && e.touches[0];
+    swipe.current = t ? { x: t.clientX, y: t.clientY, on: true } : { x: 0, y: 0, on: false };
+  };
+  const onTM = (e) => {
+    cancelLP();
+    const t = e.touches && e.touches[0];
+    if (!t || !swipe.current.on || !canReply) return;
+    const ddx = t.clientX - swipe.current.x, ddy = t.clientY - swipe.current.y;
+    if (Math.abs(ddy) > Math.abs(ddx)) { swipe.current.on = false; if (dx) setDx(0); return; }   // scrolling, not swiping
+    setDx(Math.max(0, Math.min(SWIPE_MAX, ddx)));
+  };
+  const onTE = () => {
+    cancelLP();
+    if (canReply && dx >= SWIPE_ARM) { try { M.onReply(); } catch (err) {} }
+    swipe.current.on = false;
+    if (dx) setDx(0);
+  };
   return (
-    <div onTouchStart={startLP} onTouchEnd={cancelLP} onTouchMove={cancelLP} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both' }}>
+    <div onTouchStart={onTS} onTouchEnd={onTE} onTouchCancel={onTE} onTouchMove={onTM} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
+        position: 'relative', transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
+      {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
+      {dx ? (
+        <div aria-hidden="true" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / SWIPE_ARM),
+          width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: dx >= SWIPE_ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <Icon name="reply" size={14} color={dx >= SWIPE_ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
+        </div>
+      ) : null}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
         <UserAvatar av={avOf(d)} name={d.handle} size={22} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{d.handle}</span>
@@ -862,12 +906,20 @@ function Row({ me, m, children, ctx, mod }) {
           </div>
         ) : null}
         {children}
-        {(M.onReply || M.canModerate || M.onDelete) ? (
+        {(M.onReply || M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)) ? (
           <React.Fragment>
             <button onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
             {M.menuOpen ? (
               <div style={{ position: 'absolute', top: 18, [me ? 'left' : 'right']: -26, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
+                {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
+                    · not my own message (replying privately to yourself is nonsense), and
+                    · canDM, which is the SAFEGUARDING gate. The relay refuses a DM to a child from anyone who
+                      is not a cleared adult or that child's guardian, so offering the button where the message
+                      would be refused would hand someone a one-tap route to a silent failure — or, worse, the
+                      impression that a private line to a 13-year-old is on offer. Hidden, not disabled: an
+                      inert control invites the question "why not?" about a particular child. */}
+                {(!me && canDM && ctx && ctx.openDM) ? <button onClick={() => { if (M.onOpenMenu) M.onOpenMenu(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="lock" size={15} color="var(--sage)" /> Reply privately</button> : null}
                 {M.canModerate ? <button onClick={M.isPinned ? M.onUnpin : M.onPin} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button> : null}
                 {M.canModerate ? <button onClick={M.onRemove} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button> : null}
                 {M.onDelete ? <button onClick={M.onDelete} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Delete</button> : null}
@@ -1622,13 +1674,47 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 }
 
 // ── direct message thread (1:1, encrypted) ──
+// Swipe a DM to the right to answer it. The same gesture, thresholds and arrow as a group room (see Row) —
+// deliberately duplicated in behaviour rather than shared as a component, because a DM bubble has no Row and
+// no moderation menu, and threading one through would have meant a prop for every branch. Keep the two in
+// step: the owner's ask was explicitly that every chat window behave the same way.
+function DMSwipe({ mine, onReply, children }) {
+  const st = React.useRef({ x: 0, y: 0, on: false });
+  const [dx, setDx] = React.useState(0);
+  const ARM = 48, MAX = 76;
+  const onTS = (e) => { const t = e.touches && e.touches[0]; st.current = t ? { x: t.clientX, y: t.clientY, on: true } : { x: 0, y: 0, on: false }; };
+  const onTM = (e) => {
+    const t = e.touches && e.touches[0];
+    if (!t || !st.current.on) return;
+    const ddx = t.clientX - st.current.x, ddy = t.clientY - st.current.y;
+    if (Math.abs(ddy) > Math.abs(ddx)) { st.current.on = false; if (dx) setDx(0); return; }   // a scroll, not a swipe
+    setDx(Math.max(0, Math.min(MAX, ddx)));
+  };
+  const onTE = () => { if (dx >= ARM && onReply) { try { onReply(); } catch (e) {} } st.current.on = false; if (dx) setDx(0); };
+  return (
+    <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onTouchCancel={onTE}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative',
+        transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
+      {dx ? (
+        <div aria-hidden="true" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / ARM),
+          width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: dx >= ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <Icon name="reply" size={14} color={dx >= ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
+        </div>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
 function DMThread({ peer, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [rxFor, setRxFor] = useC('');
+  const [dmReply, setDmReply] = useC(null);   // the message being answered, or null — mirrors group rooms
   const scRef = useCR();
   const FS = window.Fellowship;
-  const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
+  const DM_EMOJI = REACT_EMOJIS;   // shared with group rooms — see the note on REACT_EMOJIS
   const d = (FS && FS.displayFor && peer) ? FS.displayFor(peer) : { handle: 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
   useCE(() => {
     setMsgs([]); setDraft('');
@@ -1643,7 +1729,8 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   useCE(() => { if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, open]);
   if (!peer) return null;
   const allowDM = !ctx || !ctx.canDMPeer || ctx.canDMPeer(peer);   // safeguarding: a child↔non-cleared-adult DM is blocked (the relay rejects it too)
-  const send = () => { if (!draft.trim() || !FS || !allowDM) return; FS.sendDM(peer, draft.trim()); setDraft(''); };
+  const send = () => { if (!draft.trim() || !FS || !allowDM) return; FS.sendDM(peer, draft.trim(), dmReply); setDraft(''); setDmReply(null); };
+  const msgById = {}; msgs.forEach(m => { msgById[m.id] = m; });
   const react = (m, emoji) => { if (FS && FS.reactDM) FS.reactDM(peer, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   return (
     <Overlay open={open} onClose={onClose} docked={docked}>
@@ -1663,7 +1750,18 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
             <Icon name="lock" size={13} /> Only you two can read these messages</span>
         </div>
         {msgs.map(m => (
-          <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
+          <DMSwipe key={m.id} mine={m.mine} onReply={() => setDmReply(m)}>
+            {/* the message this one answers, shown the same way a group room shows it */}
+            {m.replyTo && msgById[m.replyTo] ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: 274 }}>
+                <Icon name="reply" size={11} color="var(--ink-3)" />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{msgById[m.replyTo].content}</span>
+              </div>
+            ) : m.replyTo ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--ink-3)', margin: '0 4px 3px' }}>
+                <Icon name="reply" size={11} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
+              </div>
+            ) : null}
             <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
@@ -1683,9 +1781,20 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                 ))}
               </div>
             ) : null}
-          </div>
+          </DMSwipe>
         ))}
       </div>
+      {/* the message being answered, above the composer — the same affordance a group room shows */}
+      {dmReply ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+          <Icon name="reply" size={14} color="var(--ink-3)" />
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
+            <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--ink-3)' }}>Replying to {dmReply.mine ? 'yourself' : d.handle}</div>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{dmReply.content}</div>
+          </div>
+          <button onClick={() => setDmReply(null)} aria-label="Stop replying" style={{ border: 'none', background: 'var(--surface)', borderRadius: 999, width: 26, height: 26, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="x" size={14} /></button>
+        </div>
+      ) : null}
       {allowDM ? (
         <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9 }}>

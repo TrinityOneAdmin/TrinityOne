@@ -124,7 +124,14 @@ function BackupWalkthrough({ onClose, onComplete, ctx, fs = 1 }) {
               {options.current.map(w => {
                 const correct = w === words[checkN - 1];
                 const chosen = picked === w;
-                const show = picked != null;
+                // A WRONG ANSWER MUST NOT END THE CEREMONY. `disabled` was `picked != null`, so the FIRST tap
+                // — right or wrong — froze all three buttons for good, under a sentence that says "check your
+                // paper and tap the right word". The ✕ that looks like a clear-and-retry is inside a disabled
+                // button, so that was dead too; the only way out was to reload the app. It fired for exactly
+                // one person: the member who copied their words down wrong, on the step this app calls the
+                // one thing that must not be missed. Found by a simulated member, 2026-08-17.
+                // Freeze only once they have it RIGHT, and only for the 700ms hand-off to the next step.
+                const show = picked != null && correct;
                 return (
                   <button key={w} disabled={show} onClick={() => { setPicked(w); if (correct) setTimeout(() => setStep(4), 700); }} style={{
                     padding: '16px 18px', borderRadius: 16, cursor: show ? 'default' : 'pointer', textAlign: 'left',

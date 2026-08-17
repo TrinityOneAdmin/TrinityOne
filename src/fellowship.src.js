@@ -2561,9 +2561,30 @@ window.Fellowship = {
   // ── direct messages (1:1, encrypted) ──
   // NIP-04 encrypted kind-4: the content is private to the two parties; the relay sees only that two
   // pubkeys are talking (full metadata privacy = NIP-17, a later/Stage-6 upgrade). Peer = a hex pubkey.
-  async sendDM(peerPub, content) {
+  // A DM THAT QUOTES ANOTHER DM. The reply reference goes INSIDE the ciphertext, not into an `e` tag the way
+  // group messages do it. A kind-4's tags are public, so a NIP-10 reply tag would publish "these two
+  // ciphertexts are part of one exchange" to anyone holding the relay — real metadata about a private
+  // conversation, in a product whose threat model is a seized relay. Encrypted, it costs nothing.
+  //
+  // Backward compatible in BOTH directions: every DM ever sent is a bare string, so a body that does not
+  // parse as an envelope is simply the message; and an older build receiving an envelope shows the JSON
+  // rather than losing the words. Hence `t` carries the full text and nothing is stored only in the wrapper.
+  _dmWrap(text, replyTo) {
+    if (!replyTo || !replyTo.id) return text;
+    try { return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) }); } catch (e) { return text; }
+  },
+  _dmUnwrap(body) {
+    if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null };
+    try {
+      const o = JSON.parse(body);
+      if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null };
+    } catch (e) {}
+    return { text: body, replyTo: null };
+  },
+  async sendDM(peerPub, content, replyTo) {
     if (!sk) await window.Fellowship.ready;
-    let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, content); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
+    const body = window.Fellowship._dmWrap(content, replyTo);
+    let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, body); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
     try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; }   // bounded so offline sets _delivered=false within 12s, not never
     catch (e) { console.warn('[fellowship] DM publish failed', e); evt._delivered = false; }   // E1: same as publishMessage — the caller must be able to tell
@@ -2584,7 +2605,8 @@ window.Fellowship = {
       if (seen.has(e.id)) return; seen.add(e.id);
       const mine = e.pubkey === pub;
       let content = ''; try { content = await _dmDecrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
-      const m = { id: e.id, mine, content, ts: e.created_at, pubkey: e.pubkey };
+      const un = window.Fellowship._dmUnwrap(content);
+      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, ts: e.created_at, pubkey: e.pubkey };
       msgs.set(e.id, m); push(m);
     };
     const deliverRx = (e) => {

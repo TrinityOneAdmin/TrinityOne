@@ -153,3 +153,44 @@ whose OWN relay refused (403) still saw `ok: true` because a canonical relay had
 told nothing and lost seventeen setup writes. It now judges the relay the church is actually pointed at. The
 broadcast is untouched.
 
+---
+
+## 5. NEXT UP — owner asks, 2026-08-17
+
+**Build these next.** Numbers 2-4 were asked for in a previous session and did not get built; recording them
+here so that cannot happen twice.
+
+### 5a. Network content is NOT encrypted (DECIDED)
+
+Measured 2026-08-17: a network's events are sealed by `_sealChurchDoc` under a CHURCH name key, but a member
+opens them with `_openChurchDoc(networkPub, …)`, which needs a name key for the NETWORK — and there is none
+(zero `namekey:<networkpub>` documents exist, and nothing would ever publish one). So deanery events are
+published, stored, and permanently unreadable by every member. Announcements escape this only because they
+are plain kind-1.
+
+Owner's decision: **leave network content unencrypted.** It is the right answer on the merits too — a network
+noticeboard is deliberately the least private thing in the product, meant to be read ACROSS churches, so
+sealing it under any single church's key cannot work by construction.
+
+### 5b. Swipe to reply, in chat
+
+Not built. There is no `swipe` handler anywhere in `app/screens-chat.jsx` (it exists in the Bible reader and
+the serving screens, which is probably why it was believed done). Reply today is: tap the "…" on a bubble,
+then Reply.
+
+### 5c. More reactions — a laugh and a thumbs up
+
+The reaction set needs 😂 and 👍 alongside what is already there.
+
+### 5d. Reply privately
+
+From a message in a group, reply DIRECTLY to whoever wrote it, as a private message rather than to the room.
+`sendDM` already exists on the member side; this is the entry point and the carried context (the quoted
+message) rather than new plumbing.
+
+Worth stating the safeguarding question BEFORE building 5d: this creates a one-tap path from a group room to
+a private conversation with a stranger. The relay already restricts DMs to a minor — only the child, adults on
+the cleared list, and the child's guardians may contact them — so the gate exists. But the BUTTON must not
+appear where the DM would be refused, or a member taps "reply privately" to a 13-year-old and gets a silent
+failure. Ask `safeguardAllows` (or the same check the DM screen uses) before offering it.
+

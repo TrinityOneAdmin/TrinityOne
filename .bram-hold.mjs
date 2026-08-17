@@ -1,0 +1,13 @@
+import { WebSocket } from 'ws';
+const port = process.argv[2];
+const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+const t = list.find(x => x.type === 'page');
+const ws = new WebSocket(t.webSocketDebuggerUrl, { perMessageDeflate: false });
+let id = 0;
+const send = (method, params) => { ws.send(JSON.stringify({ id: ++id, method, params })); };
+await new Promise(r => ws.on('open', r));
+send('Network.enable', {});
+const apply = () => send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+apply();
+setInterval(apply, 500);
+console.log('OFFLINE HELD reapply500');

@@ -716,8 +716,12 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   something and I don't know what." */}
               {events.filter(e => e && e._locked).length ? (
                 <div style={{ borderRadius: 20, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '14px 16px', marginBottom: 12, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-                  <b style={{ color: 'var(--ink)' }}>{events.filter(e => e && e._locked).length} event{events.filter(e => e && e._locked).length === 1 ? '' : 's'} you can\u2019t open yet.</b>{' '}
-                  Your church\u2019s key hasn\u2019t reached this phone. They\u2019ll appear once it does \u2014 nothing is missing.
+                  {/* REAL CHARACTERS, NOT \uXXXX. These are JSX TEXT CHILDREN, where a backslash escape is
+                      not an escape at all — it is four literal characters. A simulated member read this banner
+                      on 2026-08-17 and saw "you can\u2019t open yet… hasn\u2019t reached… They\u2019ll appear".
+                      Escapes only work inside a JS string; in markup text they must be typed. */}
+                  <b style={{ color: 'var(--ink)' }}>{events.filter(e => e && e._locked).length} event{events.filter(e => e && e._locked).length === 1 ? '' : 's'} you can’t open yet.</b>{' '}
+                  Your church’s key hasn’t reached this phone. They’ll appear once it does — nothing is missing.
                 </div>
               ) : null}
               {events.slice().filter(e => !(e && e._locked)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
