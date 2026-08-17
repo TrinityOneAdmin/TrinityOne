@@ -880,4 +880,19 @@ export const CASES = [
     replace: `      ({}).nothing = JSON.stringify({`,
     test: 'scripts/render-crash-boundary.test.mjs',
   },
+  {
+    name: 'second church: starter groups collide again',
+    file: 'app/steward-root.jsx',
+    // the fixed-id form — the first church on the relay owns announce/men/women/youth/prayer for ever
+    find: `      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: nsp ? (nsp + '-' + g.id) : g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));`,
+    replace: `      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));`,
+    test: 'scripts/second-church-on-a-relay.test.mjs',
+  },
+  {
+    name: 'second church: a refused registration goes quiet again',
+    file: 'src/steward.src.js',
+    find: `    if (!accepted && (refused.length || unreachable.length)) {`,
+    replace: `    if (false) {`,
+    test: 'scripts/second-church-on-a-relay.test.mjs',
+  },
 ];

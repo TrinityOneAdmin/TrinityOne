@@ -19756,6 +19756,8 @@ zoo`.split("\n");
         done = JSON.parse(localStorage.getItem(SELFREG_KEY) || "{}") || {};
       } catch (e) {
       }
+      let accepted = false;
+      const refused = [], unreachable = [];
       for (const base of bases) {
         const mark = churchPub + "@" + base;
         if (!force && done[mark]) continue;
@@ -19769,10 +19771,30 @@ zoo`.split("\n");
               localStorage.setItem(SELFREG_KEY, JSON.stringify(done));
             } catch (e) {
             }
+            accepted = true;
+          } else if (r) {
+            let why = "";
+            try {
+              why = (await r.json() || {}).error || "";
+            } catch (e) {
+            }
+            refused.push({ base, status: r.status, why });
           }
+        } catch (e) {
+          unreachable.push(base);
+        }
+      }
+      if (!accepted && (refused.length || unreachable.length)) {
+        const why = (refused.find((x) => x.why) || {}).why;
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+            what: "church registration",
+            message: why ? "This relay has not accepted your church, so nothing you set up will save: \u201C" + why + "\u201D" : "This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings \u2014 your church key is safe on this device."
+          } }));
         } catch (e) {
         }
       }
+      return { ok: accepted, refused, unreachable };
     },
     // register this church with ONE specific relay by PROVING key ownership (NIP-98 signed by the church key,
     // bound to that relay's /config) — no admin token. Used by "connect by name": after adding a relay, the

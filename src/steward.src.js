@@ -5032,6 +5032,7 @@ window.Steward = {
     for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, ''));
     let done = {};
     try { done = JSON.parse(localStorage.getItem(SELFREG_KEY) || '{}') || {}; } catch (e) {}
+    let accepted = false; const refused = [], unreachable = [];
     for (const base of bases) {
       const mark = churchPub + '@' + base;
       if (!force && done[mark]) continue;                     // already registered this key with this relay
@@ -5041,9 +5042,28 @@ window.Steward = {
         const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }) });
         // Only remember a real acceptance. A 400 ("name your church first") or 403 (invite-only / already set
         // up) must stay un-marked so a later, correct attempt is still made.
-        if (r && r.ok) { done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} }
+        if (r && r.ok) { done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; }
+        else if (r) { let why = ''; try { why = ((await r.json()) || {}).error || ''; } catch (e) {} refused.push({ base, status: r.status, why }); }
+      } catch (e) { unreachable.push(base); }
+    }
+    // SAY IT WHEN NOBODY ACCEPTED. This used to return nothing at all, so a church whose registration was
+    // REFUSED completed its whole setup — name, recovery phrase, groups, meetings — with every write silently
+    // rejected, and the steward ended holding a church that looks set up and does not exist on the relay.
+    // Measured 2026-08-17: 17 refusals in a row for the second church on a relay, and the only thing the
+    // console said was that the meetings had not saved, advising a retry that could never work.
+    //
+    // The relay's own refusal is well written ("this relay is already set up for its church — ask the operator
+    // to add yours, or turn on Offer to host other churches"), so pass it through rather than inventing one.
+    if (!accepted && (refused.length || unreachable.length)) {
+      const why = (refused.find(x => x.why) || {}).why;
+      try {
+        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'church registration',
+          message: why
+            ? ('This relay has not accepted your church, so nothing you set up will save: “' + why + '”')
+            : 'This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings — your church key is safe on this device.' } }));
       } catch (e) {}
     }
+    return { ok: accepted, refused, unreachable };
   },
   // register this church with ONE specific relay by PROVING key ownership (NIP-98 signed by the church key,
   // bound to that relay's /config) — no admin token. Used by "connect by name": after adding a relay, the

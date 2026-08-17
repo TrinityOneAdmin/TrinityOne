@@ -318,7 +318,17 @@ function seedNewChurch() {
       // Seed with honest descriptions — NOT the showcase stats on SK.groups ("312 reached", "18 members"),
       // which would show invented member counts to a brand-new church's first real member.
       const SEED_SUB = { announce: 'Announcements for everyone', men: 'A midweek small group', women: 'A weekly Bible study', youth: 'For the young people', prayer: 'Share & lift requests' };
-      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));
+      // NAMESPACE THE SEEDED IDS. Group ids are a relay-GLOBAL namespace and the relay enforces first-writer
+      // ownership (gateway.mjs idOwnerOk, AUDIT-2026-07-24 CRITICAL-1) — correctly, since it stops one church
+      // rewriting another's group and flipping it public. But these seeds used FIXED ids, so the first church
+      // on a relay claimed `announce`/`men`/`women`/`youth`/`prayer` and every church after it silently got
+      // none of its starter groups: a wizard that completed, and an empty Groups page with no explanation.
+      //
+      // Measured 2026-08-17 with two churches on one relay — all four seeds refused, the same seeds under
+      // prefixed ids accepted immediately. It had never bitten because nothing had ever set up a SECOND church
+      // on one relay, which is exactly what a network relay, a diocese relay or a shared pilot relay is.
+      const nsp = String(window.Steward.pubkey || '').slice(0, 8);
+      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: nsp ? (nsp + '-' + g.id) : g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));
     }
   } catch (e) {}
 }
