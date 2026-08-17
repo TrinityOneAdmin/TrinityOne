@@ -972,4 +972,32 @@ export const CASES = [
     replace: `you can\\u2019t open yet.</b>`,
     test: 'scripts/no-literal-escapes-in-jsx.test.mjs',
   },
+  {
+    name: 'restore: the display name is dropped from the backup again',
+    file: 'app/backup.jsx',
+    find: `  const MEMBER_EXACT = ['trinityone.profile'];`,
+    replace: `  const MEMBER_EXACT = [];`,
+    test: 'scripts/rejoin-name-and-leaving.test.mjs',
+  },
+  {
+    name: 'restore: the exact list becomes a prefix, sweeping in the church directory',
+    file: 'app/backup.jsx',
+    find: `      if (k && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
+    replace: `      if (k && ([...ex].some(p => k.startsWith(p)) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
+    test: 'scripts/rejoin-name-and-leaving.test.mjs',
+  },
+  {
+    name: 'join: apostrophes are rejected again, so a church cannot be typed',
+    file: 'app/screens-church.jsx',
+    find: `  const joinable = hasNpub || /^@?[a-z0-9._,'’&()\\- ]{2,}(@[a-z0-9.-]+)?$/i.test(code.trim());`,
+    replace: `  const joinable = hasNpub || /^@?[a-z0-9._\\- ]{2,}(@[a-z0-9.-]+)?$/i.test(code.trim());`,
+    test: 'scripts/rejoin-name-and-leaving.test.mjs',
+  },
+  {
+    name: 'console: enrolment stops catching up after an unlock',
+    file: 'app/stew-dashboard.jsx',
+    find: `    window.addEventListener('steward-key', onKey);`,
+    replace: `    void onKey;`,
+    test: 'scripts/rejoin-name-and-leaving.test.mjs',
+  },
 ];

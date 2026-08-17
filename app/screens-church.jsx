@@ -152,16 +152,30 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
   const hasNpub = /npub1[0-9a-z]{20,}/.test(code);
   // joinable = a bare npub / invite link, OR a typed nice name. UX #5: allow SPACES ("St Marys") — the button used
   // to silently grey out on a space with no hint, a classic drop-off. We normalise the name on submit.
-  const joinable = hasNpub || /^@?[a-z0-9._\- ]{2,}(@[a-z0-9.-]+)?$/i.test(code.trim());
+  // APOSTROPHES AND COMMAS ARE IN CHURCH NAMES. This character class had neither, so "St Aidan's, Netherby" —
+  // the church's own name, as the app displays it — could never enable the button, and nothing on screen said
+  // why. Two simulated members hit it independently on 2026-08-17; one had just left their church and could
+  // not get back in. Saint names are possessive far more often than not.
+  const joinable = hasNpub || /^@?[a-z0-9._,'’&()\- ]{2,}(@[a-z0-9.-]+)?$/i.test(code.trim());
   // follow by npub (from a bare npub, invite link, or scanned QR), else resolve a typed name → npub.
   const resolve = async (raw) => {
     const input = raw != null ? raw : code;
     setErr('');
     if (ctx.followChurch(input) !== false) { onFollowed(); return true; }   // fast path: npub / invite link / QR
     setBusy(true);
-    const nice = input.trim().replace(/\s+/g, '-').toLowerCase();   // "St Marys" → "st-marys" so a typed church name resolves
+    // TRY THE NAME THE CONSOLE ACTUALLY REGISTERED. steward.src.js builds a church's nice-name by STRIPPING
+    // everything outside [a-z0-9._-] ("St Aidan's, Netherby" → "staidansnetherby"), while this screen replaced
+    // spaces with hyphens ("st-aidan's,-netherby"). The two normalisations disagreed, so typing a church's
+    // real name never resolved — it only ever worked if the member happened to type the slug itself. Measured
+    // 2026-08-17. Try the generator's form FIRST, then the hyphenated one, which is still right for a steward
+    // who set a nice-name with hyphens by hand.
+    const typed = input.trim().toLowerCase();
+    const forms = [typed.replace(/[^a-z0-9._-]+/g, ''), typed.replace(/\s+/g, '-'), typed];
     let npub = null;
-    try { npub = (window.Fellowship && window.Fellowship.resolveChurch) ? await window.Fellowship.resolveChurch(nice) : null; } catch (e) {}
+    for (const nice of [...new Set(forms.filter(Boolean))]) {
+      try { npub = (window.Fellowship && window.Fellowship.resolveChurch) ? await window.Fellowship.resolveChurch(nice) : null; } catch (e) {}
+      if (npub) break;
+    }
     setBusy(false);
     if (npub && ctx.followChurch(npub) !== false) { onFollowed(); return true; }
     setScanning(false);
@@ -222,8 +236,28 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
   // two churches can share a name — disambiguate clashes with the verified @handle, else a short key
   const churchLabel = window.makeNameDisambiguator(churches || [], c => c.name || '', c => c.nip05, c => c.npub || c.id);
 
+  const leavingChurch = churches.find(c => c.id === confirmLeave);
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="86%" z={60}>
+      {/* z ABOVE this sheet's 60, or the warning opens underneath the list it is warning about. */}
+      {leavingChurch ? (
+        <div onClick={() => setConfirmLeave(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(20,15,10,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 22 }}>
+          <div role="dialog" aria-modal="true" aria-label={'Leave ' + (leavingChurch.name || 'this church')} onClick={e => e.stopPropagation()}
+            style={{ width: 400, maxWidth: '100%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 10 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="alert" size={20} /></div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, lineHeight: 1.2 }}>Leave {leavingChurch.name}?</div>
+            </div>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>You’ll stop seeing this church’s groups, events, prayer requests and care — and its people won’t see you.</p>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>Anything that belongs to this church goes with it, including <b>any children’s accounts you look after here</b>.</p>
+            <p style={{ fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '0 0 18px' }}>Your own account, your 12 words and your reading stay on this phone. To come back you’ll need the church’s invite link or code — so make sure you have it before you leave.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setConfirmLeave(null)} style={{ flex: 1.2, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Stay</button>
+              <button onClick={() => { const id = confirmLeave; setConfirmLeave(null); ctx.leaveChurch(id); }} style={{ flex: 1, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {mode === 'list' ? (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -254,10 +288,14 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
                       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> members</React.Fragment>}</div>
                     </div>
                   </div>
+                  {/* LEAVING IS NOT A TOGGLE. This was two taps of the SAME small button — Leave, then Confirm
+                      leave appearing in its place — so a careless tap twice in the same spot left the church
+                      outright. A simulated member did exactly that, and it took his two children's accounts
+                      with it, with no warning of either. Leaving is also not symmetrical with joining: he then
+                      could not get back in. So: a real dialog, naming what goes, in the middle of the screen
+                      rather than under the finger that just tapped Leave. */}
                   {followed ? (
-                    confirmLeave === c.id
-                      ? <button onClick={() => { setConfirmLeave(null); ctx.leaveChurch(c.id); }} style={{ flexShrink: 0, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Confirm leave</button>
-                      : <button onClick={() => setConfirmLeave(c.id)} title="Leave this church" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
+                    <button onClick={() => setConfirmLeave(c.id)} title="Leave this church" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
                   ) : (on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={15} stroke={2.8} color="var(--on-clay)" /></div>
                     : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)', flexShrink: 0 }} />)}
                 </div>

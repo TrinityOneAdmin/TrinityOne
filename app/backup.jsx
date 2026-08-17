@@ -101,9 +101,13 @@
     return JSON.parse(TD.decode(pt));
   }
 
-  function snapshot(prefixes) {
+  function snapshot(prefixes, exact) {
     const out = {};
-    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && prefixes.some(p => k.startsWith(p))) out[k] = localStorage.getItem(k); }
+    const ex = new Set(exact || []);
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);
+    }
     return out;
   }
   // AN UNTRUSTED FILE MAY NOT WRITE ANYWHERE IT LIKES. Export filtered by prefix; import filtered by nothing,
@@ -115,8 +119,12 @@
   //
   // Restoring through the same allowlist the export uses closes both: the identity can now only change via
   // the `identity` field, which is exactly what the confirm already guards.
-  function restoreLocal(map, allow) {
-    const ok = (k) => (allow || []).some(p => String(k).startsWith(p))
+  function restoreLocal(map, allow, exact) {
+    const exSet = new Set(exact || []);
+    // An exact-key allowance must stay exact on the way IN as well. Treating it as a prefix here would let a
+    // crafted file write `trinityone.profiles` — overwriting the member's whole view of who is in their church
+    // with names of an attacker's choosing. Import is the side that faces an untrusted file.
+    const ok = (k) => (exSet.has(String(k)) || (allow || []).some(p => String(k).startsWith(p)))
       && !/^trinityone\.nostr\.mnemonic/.test(k)    // never the seed, whatever the prefix list says
       // …and never a DEVICE-BOUND key wrap. church-key.enc is bound to the machine that wrote it: on web it is
       // ciphertext only that device's PIN opens, and on native it is merely the MARKER saying the real blob is
@@ -134,12 +142,26 @@
   }
 
   const MEMBER_PREFIXES = ['trinityone.mydata', 'trinityone.followedChurches', 'trinityone.activeChurch', 'trinityone.reminders', 'trinityone.onboarded', 'trinityone.relays', 'trinityone.dark', 'trinityone.theme', 'trinityone.settings'];
+  // EXACT keys, never prefixes — and the difference is a privacy one, not a tidiness one.
+  //
+  // `trinityone.profile` is the member's OWN display name and avatar. It was never in the backup at all, so a
+  // member who restored on a new phone came back cryptographically themselves and, to every human at their
+  // church, "Anonymous". Measured 2026-08-17: a simulated member did the whole journey twice and got their
+  // journal, church, plan and streak back — and no name. The screen one tap earlier promises "you come back as
+  // the same person — your church will know you".
+  //
+  // It could not simply be added to the prefix list above, because `startsWith('trinityone.profile')` ALSO
+  // matches `trinityone.profiles` — the cached directory of everyone else in the church, 8.4 KB of names bolted
+  // to public keys in one measured instance. That would quietly turn a personal backup into a copy of the
+  // congregation's roster, sitting in whatever cloud folder the member saved it to. Under this project's threat
+  // model — a seized phone, a compelled account — that is a much worse bug than the one being fixed.
+  const MEMBER_EXACT = ['trinityone.profile'];
   const STEWARD_PREFIXES = ['trinityone.steward'];
 
   async function collectMember() {
     let identity = '';
     try { identity = (window.TrinityIdentity && await window.TrinityIdentity.exportMnemonic()) || ''; } catch {}
-    return { v: 1, app: 'trinityone', kind: 'member', createdAt: new Date().toISOString(), identity, local: snapshot(MEMBER_PREFIXES) };
+    return { v: 1, app: 'trinityone', kind: 'member', createdAt: new Date().toISOString(), identity, local: snapshot(MEMBER_PREFIXES, MEMBER_EXACT) };
   }
   async function applyMember(obj) {
     // A MISSING `kind` IS NOT CONSENT. `obj.kind &&` treated a file with no kind at all as a member backup.
@@ -147,7 +169,7 @@
     if (obj.identity && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
       try { await window.TrinityIdentity.importMnemonic(obj.identity); } catch { throw new Error('The backup’s identity phrase is invalid.'); }
     }
-    restoreLocal(obj.local, MEMBER_PREFIXES);
+    restoreLocal(obj.local, MEMBER_PREFIXES, MEMBER_EXACT);
   }
   function collectSteward() {
     let key = ''; try { key = (window.Steward && window.Steward.exportMnemonic && window.Steward.exportMnemonic()) || ''; } catch {}

@@ -46,7 +46,7 @@ function harness(store) {
   const restored = [];
   const Steward = { restoreKey: (m) => { restored.push(m); return { npub: 'npub1fake' }; } };
   const body = [
-    grab(SRC, 'function restoreLocal(map, allow)'),
+    grab(SRC, 'function restoreLocal(map, allow, exact)'),
     grab(SRC, 'function applySteward(obj)'),
     "const STEWARD_PREFIXES = ['trinityone.steward'];",
   ].join('\n');

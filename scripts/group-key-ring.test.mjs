@@ -237,7 +237,10 @@ test('unblocking someone gives their keys back', () => {
   const at = D.indexOf('const memberPubs = members.map');
   assert.notEqual(at, -1, 'the key distributor effect is gone');
   const deps = D.slice(at, D.indexOf('React.useEffect', at + 10));
-  assert.match(deps, /\}, \[groups, members, stewardRoster, blockedList\]\)/,
+  // Assert blockedList is PRESENT, not that the array is exactly those four. Pinning the whole list made this
+  // fail the moment `unlockTick` was added — a fix for a different bug entirely (the console stopped enrolling
+  // anyone after an idle lock) — which is a test objecting to a change rather than to a defect.
+  assert.match(deps, /\}, \[[^\]]*\bblockedList\b[^\]]*\]\)/,
     'blockedList is not a dependency of the key distributor — unblocking a member never restores their keys');
 });
 

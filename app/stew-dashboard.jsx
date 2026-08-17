@@ -274,6 +274,30 @@ function KeyDistributor() {
   const nextTry = React.useRef({});    // group id → earliest Date.now() a REFUSED publish may retry
   const failCount = React.useRef({});  // group id → consecutive refusals, for the exponential backoff
   const membersRef = React.useRef([]); membersRef.current = members;
+  // CATCH UP AFTER A LOCK. The console auto-locks after 10 minutes idle and `Steward.lock()` forgets the key,
+  // so every envelope published in that window is refused — and the backoff above then records those refusals
+  // as if the RELAY had rejected them. When the steward comes back and unlocks, none of this effect's
+  // dependencies (groups / members / stewards / blocked) has changed, so it never ran again: the members who
+  // joined while the console slept were never enrolled, and nothing anywhere said so.
+  //
+  // Measured on 2026-08-17: 33 admitted members, 4 recipients in the name-key envelope. To every one of the
+  // other 29 — and to everyone reading a room they wrote in — the whole congregation appeared as "Member".
+  // The owner spotted it on their own phone before any test did.
+  //
+  // A relay cannot do this instead. It holds public keys only and never the church's secret, which is the
+  // point of the whole design — so wrapping a key to a new member is something ONLY a console with the key in
+  // memory can do. What it must not do is fail silently and then never try again.
+  const [unlockTick, setUnlockTick] = React.useState(0);
+  React.useEffect(() => {
+    const onKey = () => {
+      // the failures were the lock, not the relay — start the backoff clean rather than making a returning
+      // steward wait out a penalty for an outage they caused by walking away
+      pending.current = {}; nextTry.current = {}; failCount.current = {};
+      setUnlockTick(t => t + 1);
+    };
+    window.addEventListener('steward-key', onKey);
+    return () => window.removeEventListener('steward-key', onKey);
+  }, []);
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
@@ -361,7 +385,7 @@ function KeyDistributor() {
     // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
     // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
     // suspect keys weeks after a reconciliation. AUDIT-2026-07-27.
-  }, [groups, members, stewardRoster, blockedList]);
+  }, [groups, members, stewardRoster, blockedList, unlockTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {

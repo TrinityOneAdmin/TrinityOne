@@ -194,3 +194,17 @@ the cleared list, and the child's guardians may contact them — so the gate exi
 appear where the DM would be refused, or a member taps "reply privately" to a 13-year-old and gets a silent
 failure. Ask `safeguardAllows` (or the same check the DM screen uses) before offering it.
 
+### 5e. NEXT SIM: a steward agent must fill the church with content
+
+**Owner ask, 2026-08-17.** Every round so far has stood up a church that is technically correct and
+*editorially empty* — no sermons, no notices, no posts, no pictures, no reading plans. So every actor spends
+their attention on empty states, and the round reports "no groups yet" instead of finding what breaks when
+there is something to break.
+
+Next round: give one agent the STEWARD CONSOLE and the brief a pastor would have — write the week's notices,
+upload a sermon, post to the announcements channel, set up the rota, add a reading plan, put photos on the
+church profile. Do it BEFORE the members arrive, the way a real church would.
+
+It also exercises the console itself, which no actor has ever driven: everything the console does in these
+rounds so far has been driven by me from the command line.
+
