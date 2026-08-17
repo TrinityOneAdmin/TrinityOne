@@ -874,9 +874,18 @@ function App() {
   // it never recovered on its own — the member just had a permanently empty app that looked fine.
   // Found on the test phone: the stored id named a church no longer followed and every subscription read 0.
   useAE(() => {
-    if (!activeChurch || churches.find(c => c.id === activeChurch)) return;   // resolves fine — nothing to do
+    // NULL COUNTS TOO. This read `if (!activeChurch || …) return` — so it healed a DANGLING id but skipped a
+    // MISSING one, which is the commoner case: a member who follows a church by code or link can end up with
+    // no active church at all. Everything then resolves through
+    // `churches.find(c => c.id === activeChurch)` → undefined, and the entire serving subsystem — groups,
+    // events, rotas, teams, the group-events strip — subscribes to nothing and renders confident empty states
+    // ("St Aidan's hasn't opened any chat rooms yet", "no socials or events yet", "0 people") while CHAT keeps
+    // working, because chat resolves its church by a different route. Measured on 2026-08-17: a simulated
+    // group leader with activeChurch=null, one followed church, eight groups live on the relay, and an empty
+    // Serving screen; several other actors reported the same church as empty for their whole run.
+    if (activeChurch && churches.find(c => c.id === activeChurch)) return;    // resolves fine — nothing to do
     const next = (churches.find(c => c.npub) || churches[0] || {}).id || null;
-    if (next === activeChurch) return;                                        // no better option; don't loop
+    if (!next || next === activeChurch) return;                               // no better option; don't loop
     console.warn('[trinity] active church', activeChurch, 'is not in the followed list — falling back to', next);
     setActiveChurch(next); lsSet('trinityone.activeChurch', next);
   }, [activeChurch, churches]);

@@ -19,12 +19,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { stripComments } from './test-slice.mjs';
 
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 
 // The effect's own body, so assertions read what actually RUNS rather than what merely appears in the file.
 function healBody() {
-  const marker = 'if (!activeChurch || churches.find(c => c.id === activeChurch)) return;';
+  const marker = 'if (activeChurch && churches.find(c => c.id === activeChurch)) return;';
   const at = APP.indexOf(marker);
   assert.notEqual(at, -1, 'the self-heal guard is gone — a stale active church would silently blank every church feature again');
   const start = APP.lastIndexOf('useAE(() => {', at);
@@ -32,14 +33,19 @@ function healBody() {
   const end = APP.indexOf('\n  }, [', start);
   assert.notEqual(end, -1);
   const depsEnd = APP.indexOf(');', end);
-  return { body: APP.slice(start, end), deps: APP.slice(end, depsEnd + 2), guardAt: at, start };
+  // COMMENT-STRIPPED body. The note above this guard quotes the OLD `!activeChurch ||` form verbatim, to
+  // record what changed and why — without stripping, the test fails on its own documentation.
+  return { body: stripComments(APP.slice(start, end)), deps: APP.slice(end, depsEnd + 2), guardAt: at, start };
 }
 
 test('the effect cannot be short-circuited before it heals', () => {
   // The previous version asserted the guard LINE existed. Inserting `if (true) return;` directly above it left
   // every regex satisfied while the effect did nothing at all — the silent-blank bug, fully restored, green suite.
   const { body, guardAt, start } = healBody();
-  const before = APP.slice(start + 'useAE(() => {'.length, guardAt);
+  // stripComments FIRST. A comment cannot short-circuit an effect, and the note explaining WHY this guard
+  // exists necessarily contains the word `return` — without this the test fails on its own documentation,
+  // which is the mirror of the trap recorded in comments-can-satisfy-assertions.
+  const before = stripComments(APP.slice(start + 'useAE(() => {'.length, guardAt));
   assert.doesNotMatch(before, /\breturn\b/,
     'something returns BEFORE the heal guard — the effect would be inert while still matching every structural check');
   assert.match(body, /setActiveChurch\(next\);/, 'the effect must actually re-point the active church');
@@ -55,19 +61,19 @@ test('the effect re-runs when the church list arrives', () => {
 });
 
 test('the reconciliation effect is present', () => {
-  assert.match(APP, /if \(!activeChurch \|\| churches\.find\(c => c\.id === activeChurch\)\) return;/,
+  assert.match(APP, /if \(activeChurch && churches\.find\(c => c\.id === activeChurch\)\) return;/,
     'the self-heal guard is gone — a stale active church would silently blank every church feature again');
   assert.match(APP, /setActiveChurch\(next\); lsSet\('trinityone\.activeChurch', next\);/,
     'the fallback must persist, or the app re-heals on every launch and never settles');
 });
 
 test('it prefers a real followed church, and cannot loop', () => {
-  const at = APP.indexOf('if (!activeChurch || churches.find(c => c.id === activeChurch)) return;');
+  const at = APP.indexOf('if (activeChurch && churches.find(c => c.id === activeChurch)) return;');
   assert.notEqual(at, -1);
   const block = APP.slice(at, at + 700);
   assert.match(block, /churches\.find\(c => c\.npub\)/,
     'the fallback must prefer a church with a real npub — a sample/demo church cannot be subscribed to');
-  assert.match(block, /if \(next === activeChurch\) return;/,
+  assert.match(block, /if \(!next \|\| next === activeChurch\) return;/,
     'without this guard the effect re-fires on its own state change and spins');
 });
 
@@ -75,12 +81,37 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // If a new call site resolves the active church differently, it would not benefit from the heal above and
   // could reintroduce the silent-blank path on its own.
   // An exact count, not a floor: the old `>= 4` passed while 26 of the 30 real sites could have been rewritten.
-  const sites = [...APP.matchAll(/churches\.find\((\w+) => \1\.id === activeChurch\)/g)];
+  // COMMENT-STRIPPED. The count is of real resolution SITES; a comment that quotes the pattern to explain a
+  // change is not one, and on 2026-08-17 exactly that pushed 33 to 34 and failed this test on prose.
+  const sites = [...stripComments(APP).matchAll(/churches\.find\((\w+) => \1\.id === activeChurch\)/g)];
   // 30 → 32 on 2026-08-04: ctx.joinQueued and ctx.retryConnection both resolve the active church to answer
   // "is this member's join announce still queued?" and to RE-ANNOUNCE on "Check again". Both are ordinary
   // active-church reads and benefit from the same heal as the rest.
   // 32 → 33 on 2026-08-05: ctx.joinFailed, the third state of the same question ("did we give up on it?").
   // Identical shape to joinQueued directly above it, so it benefits from the heal for the same reason.
-  assert.equal(sites.length, 33,
+  // 33 → 32 on 2026-08-17, and the drop is NOT a removed site: the old figure counted one occurrence that
+  // lived inside a comment. Now that the scan strips comments, 32 is the real number of code resolutions.
+  assert.equal(sites.length, 32,
     `the active-church resolution sites changed (${sites.length} vs 33) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+});
+
+test('a MISSING active church heals too, not only a dangling one', () => {
+  // This file was written for a STALE id — one naming a church no longer followed. The guard it described
+  // began `if (!activeChurch || …) return`, which meant a NULL active church was skipped entirely, and null is
+  // the commoner case: a member who follows a church by code or link can end up with no active church at all.
+  //
+  // The consequence is identical and just as silent. Everything resolves through
+  // `churches.find(c => c.id === activeChurch)` → undefined, so groups, events, rotas and teams subscribe to
+  // nothing while CHAT keeps working (it resolves its church another way) — an app that looks half-alive and
+  // tells the member their church has opened no rooms.
+  //
+  // Measured 2026-08-17 in a simulated member's live app: activeChurch null, one followed church, eight groups
+  // on the relay, `trinityone.serv.groups` empty. After the widening: eight.
+  const { body } = healBody();
+  assert.doesNotMatch(body, /if \(!activeChurch \|\|/,
+    'the `!activeChurch ||` form returns before healing exactly the case that needs healing most');
+  assert.match(body, /if \(activeChurch && churches\.find/,
+    'heal whenever the active church does not resolve — whether it is stale or absent');
+  assert.match(body, /if \(!next \|\| next === activeChurch\) return;/,
+    'and still refuse to loop when there is no better option — including when there is no church at all');
 });
