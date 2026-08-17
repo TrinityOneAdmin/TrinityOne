@@ -214,7 +214,10 @@
           await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
         } catch (e) {}
       }
-      return { saved: true, where: 'device', uri: w.uri };
+      // Report which BUTTON was pressed, not only where the bytes landed. Both modes now write to DOCUMENTS,
+      // so returning 'device' for both left BackupCard marking "Save to device" as Saved when the member had
+      // pressed "Save to cloud" — which reads as the cloud save having failed.
+      return { saved: true, where: mode === 'local' ? 'device' : 'cloud', uri: w.uri };
     }
     if (mode === 'local') return anchorSave();
     try {
@@ -228,11 +231,11 @@
   // reads as a failure — the other half of the same report.
   function savedWhere(res) {
     if (!res) return '';
-    if (res.where === 'device' && res.uri) {
+    if ((res.where === 'device' || res.where === 'cloud') && res.uri) {
       const m = String(res.uri).match(/\/([^/]+\/[^/]+)$/);
       return m ? m[1] : 'your Documents folder';
     }
-    if (res.where === 'device') return 'your Documents folder';
+    if (res.where === 'device' || res.where === 'cloud') return 'your Documents folder';
     if (res.where === 'downloads') return 'your downloads';
     return '';
   }

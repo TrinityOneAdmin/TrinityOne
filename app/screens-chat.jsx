@@ -335,12 +335,19 @@ function ChatScreen({ ctx }) {
   const teamGroups = churchGroups.filter(g => g.team);
   const plainGroups = churchGroups.filter(g => !g.team);
   const groupIdsKey = churchGroups.map(g => g.id).join(',');
+  const countedRef = useCR(new Set());   // message ids already counted as unread — survives a re-subscribe
 
   // watch every group for last-message previews + unread badges
   useCE(() => {
     if (!live) return;
     const ids = churchGroups.map(g => g.id);
     const seen = readChatSeen();
+    // COUNT EACH MESSAGE ONCE, EVER. subscribeGroups asks for `limit: 500` with no `since`, so every
+    // re-subscribe replays the stored history — and this effect now re-runs on ctx.connTick. setActivity below
+    // is idempotent (it compares timestamps); the unread counter was a bare +1, so a member sitting on the
+    // Community tab with 12 unread saw 24 after backgrounding the app, then 36, then 48. The room got a
+    // seenRef for exactly this replay; the list had nothing.
+    const counted = countedRef.current;
     const unsub = window.Fellowship.subscribeGroups(ids, (gid, e) => {
       msgBuf.current.unshift({ gid, e });        // buffer for search
       if (msgBuf.current.length > 400) msgBuf.current.length = 400;
@@ -351,8 +358,10 @@ function ChatScreen({ ctx }) {
           : k === 'note' ? '📝 Shared a note' : k === 'prayer' ? '🙏 ' + e.content : e.content;
         return { ...prev, [gid]: { text: preview, ts: e.created_at } };
       });
-      if (e.created_at > (seen[gid] || 0) && e.pubkey !== window.Fellowship.myPubkey)
+      if (e.created_at > (seen[gid] || 0) && e.pubkey !== window.Fellowship.myPubkey && !counted.has(e.id)) {
+        counted.add(e.id);
         setUnread(prev => ({ ...prev, [gid]: (prev[gid] || 0) + 1 }));
+      }
     });
     return () => unsub();
     // …and on ctx.connTick, which bumps when the app comes back to the foreground or the network returns.
@@ -1027,7 +1036,6 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   // rather than appended a second time. Reset only when the room changes. See the effect below.
   const seenRef = useCR(null);
   useCE(() => {
-    setDraft(''); setFlag(null);
     if (!group) return;
     if (window.Fellowship) {                       // live: subscribe to the group over Nostr
       // A RECONNECT MUST NOT WIPE THE ROOM. This effect now also re-runs on ctx.connTick, and the room is by
@@ -1038,6 +1046,12 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       // reconnect would append all 200 replayed messages a second time.)
       const sameRoom = seenRef.current && seenRef.current.gid === group.id;
       if (!sameRoom) {
+        // A HALF-TYPED MESSAGE IS NOT DISPOSABLE. These two used to sit above, unconditionally — which was
+        // harmless while this effect only ran on a room change, and became a data-loss bug the moment
+        // ctx.connTick was added to the deps: every foreground, every `online`, every returning socket wiped
+        // the composer and the message tag out from under someone mid-sentence. It also emptied the prefill
+        // that "share this verse to chat" depends on.
+        setDraft(''); setFlag(null);
         setMsgs([]); setReactions({}); setPickerFor(null);
         seenRef.current = { gid: group.id, ids: new Set() };
       }

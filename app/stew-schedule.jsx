@@ -64,28 +64,47 @@ function SchModal({ title, children, onClose, width = 480 }) {
 // So whichever door is used now writes BOTH facts. These two functions are that reconciliation, kept
 // as plain data-in/data-out so a test can drive the real ones.
 
-// The roster's people after the invite allowlist has become `pubs`. Off-app volunteers have no pubkey
-// and are not in any allowlist, so they are never dropped by an allowlist edit; a linked person keeps
-// their existing id and team name (pods reference people BY ID, so minting a fresh one would silently
-// empty every pod slot they fill).
-function teamPeopleForAllowlist(people, pubs, members) {
-  const want = [...new Set((pubs || []).filter(Boolean))];
+// APPLY THE STEWARD'S CHANGE, NOT THEIR WHOLE LIST. Both of these take a DELTA — who was ticked on, who was
+// ticked off — and leave everyone else alone.
+//
+// The first version replaced one list with the other wholesale, and an adversarial review found what that
+// costs in both directions:
+//   · roster → allowlist: anyone in an invite-only team's CHAT who is not a rota person (a leader, a steward,
+//     someone simply in the conversation) was ejected on the next roster save, and for an encrypted team the
+//     key rotated away from them. Worse, a roster document that had not arrived yet reads as `people: []`, so
+//     Save published `members: []` and locked the whole team out of their own room.
+//   · allowlist → roster: `roster:<id>.people` is what the RELAY reads to grant careAdmin — a read grant over
+//     every care need and every "ask for help" in the church. Opening "Who's in <care team>" on a church whose
+//     two lists had drifted and pressing Save WITHOUT CHANGING ANYTHING promoted every member of that chat
+//     room to careAdmin. That is the granting direction running silently on migration, which is precisely the
+//     population this branch exists to repair.
+// A delta cannot do either: no change in the dialog means no change to the other list.
+
+// The roster's people after the steward ADDED `added` and REMOVED `removed` from the invite allowlist.
+// Off-app volunteers have no pubkey and are in no allowlist, so they are never touched; a linked person keeps
+// their existing id and team name (pods reference people BY ID, so a fresh one would empty every pod slot
+// they fill).
+function teamPeopleForAllowlist(people, added, removed, members) {
   const had = people || [];
-  const offApp = had.filter(p => p && !p.pub);
-  const linked = want.map(pk => {
-    const was = had.find(p => p && p.pub === pk);
-    if (was) return was;
+  const gone = new Set((removed || []).filter(Boolean));
+  const kept = had.filter(p => p && !(p.pub && gone.has(p.pub)));
+  const have = new Set(kept.map(p => p && p.pub).filter(Boolean));
+  const fresh = [...new Set((added || []).filter(Boolean))].filter(pk => !have.has(pk)).map(pk => {
     const m = (members || []).find(x => x && x.pubkey === pk);
     return { id: 'p' + Math.random().toString(36).slice(2, 7), name: m ? memDisplay(m) : ('Anon · ' + String(pk).slice(-6)), pub: pk };
   });
-  return offApp.concat(linked);
+  return kept.concat(fresh);
 }
 
-// The invite allowlist a roster implies: its linked people, and only those. An off-app volunteer has no
-// key, so there is nothing to admit — which is also why a care team of off-app names is invisible to the
-// relay, and why the care panel warns about exactly that.
-function teamAllowlistForPeople(people) {
-  return [...new Set((people || []).map(p => p && p.pub).filter(Boolean))];
+// The allowlist after the steward added/removed people on the ROSTER. Additive for the people they linked,
+// subtractive only for the ones they actually took off — never a wholesale replacement, for the reasons above.
+// An off-app volunteer has no key, so there is nothing to admit; that is also why a care team of off-app names
+// is invisible to the relay, and why the care panel warns about exactly that.
+function teamAllowlistForPeople(members, added, removed) {
+  const gone = new Set((removed || []).filter(Boolean));
+  const kept = (members || []).filter(pk => pk && !gone.has(pk));
+  const have = new Set(kept);
+  return kept.concat([...new Set((added || []).filter(Boolean))].filter(pk => !have.has(pk)));
 }
 
 // If this team IS the church's care team, `careteam:<cp>` has to move with it. That document is the list a
@@ -96,7 +115,10 @@ function teamAllowlistForPeople(people) {
 function publishCareTeamFor(teamId, careTeamId, people) {
   if (!teamId || !careTeamId || teamId !== careTeamId) return Promise.resolve(null);
   if (!(window.StewardMeals && window.StewardMeals.publishCareTeam)) return Promise.resolve(null);
-  try { return Promise.resolve(window.StewardMeals.publishCareTeam(teamAllowlistForPeople(people))); } catch (e) { return Promise.resolve(null); }
+  // Its OWN extraction: teamAllowlistForPeople now takes a delta, and quietly reusing it here made this
+  // publish the roster objects instead of their pubkeys.
+  const pubs = [...new Set((people || []).map(p => p && p.pub).filter(Boolean))];
+  try { return Promise.resolve(window.StewardMeals.publishCareTeam(pubs)); } catch (e) { return Promise.resolve(null); }
 }
 
 // ── manage a team's roster: the roles it needs + the people who can serve ──
@@ -114,6 +136,10 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   // same replaceable documents within the same second. Newest-wins is to the SECOND, so that write is refused,
   // and it can interleave with the group-key rotation. Guard the button and show the state.
   const [saving, setSaving] = useSch(false);
+  const [saveErr, setSaveErr] = useSch('');
+  // The allowlist as it stood when this modal opened, so Save can apply what the steward CHANGED rather than
+  // replacing the room's membership with the rota.
+  const startPubs = useSchR((roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean));
   const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
   const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
   const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
@@ -132,25 +158,49 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   const delPod = (id) => setPods(ps => ps.filter(p => p.id !== id));
   const save = async () => {
     if (saving) return;
-    setSaving(true);
+    setSaving(true); setSaveErr('');
     let t = team;
-    if (!t.id && onCreate) { t = await onCreate(); if (!t || !t.id) { setSaving(false); onClose(); return; } }   // new team: create it only now, on Save
-    await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
-    // …and keep the OTHER list in step, so the team the steward just built is also the team that can
-    // read its own room. Only invite-only teams have an allowlist to keep — for an ordinary team every
-    // member can already read it, so there is nothing to write. See the note above RosterModal.
-    if (t.visibility === 'invite') {
-      const want = teamAllowlistForPeople(people);
-      const have = Array.isArray(t.members) ? t.members : [];
-      const removed = have.some(pk => !want.includes(pk));
-      if (removed || want.some(pk => !have.includes(pk))) {
-        await Promise.resolve(window.Steward.publishGroup({ ...t, visibility: 'invite', members: want }));
-        // Taking someone OFF the team must rotate the key, or their cached copy keeps opening every
-        // future message — the contract publishGroupKey states for exactly this call.
-        if (t.encrypted && window.Steward.publishGroupKey) { try { await window.Steward.publishGroupKey(t.id, want, { rotate: removed }); } catch (e) {} }
+    try {
+      if (!t.id && onCreate) { t = await onCreate(); if (!t || !t.id) { setSaving(false); onClose(); return; } }   // new team: create it only now, on Save
+      await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
+      // …and keep the OTHER list in step, so the team the steward just built is also the team that can read
+      // its own room. Only invite-only teams have an allowlist, and only the DELTA is applied — see the note
+      // above teamPeopleForAllowlist for what a wholesale rewrite here cost.
+      if (t.visibility === 'invite') {
+        const was = new Set(startPubs.current);
+        const now = new Set(people.map(p => p && p.pub).filter(Boolean));
+        const added = [...now].filter(pk => !was.has(pk));
+        const removed = [...was].filter(pk => !now.has(pk));
+        if (added.length || removed.length) {
+          const members0 = Array.isArray(t.members) ? t.members : [];
+          const want = teamAllowlistForPeople(members0, added, removed);
+          await Promise.resolve(window.Steward.publishGroup({ ...t, visibility: 'invite', members: want }));
+          // TAKING SOMEONE OFF MUST ROTATE THE KEY, and a rotation that did not happen must not read as one
+          // that did. publishGroupKey does not throw on its failure modes — it returns null (no church key,
+          // or the relay is unauthenticated) and false (every relay refused) — and it advances this console's
+          // own key ring BEFORE publishing. So a swallowed failure leaves the removed member's cached key
+          // opening every future message AND the console posting under a key no member holds. The sibling
+          // door says this plainly; this one used to say nothing at all.
+          if (t.encrypted && window.Steward.publishGroupKey) {
+            let r = null;
+            try { r = await window.Steward.publishGroupKey(t.id, want, { rotate: removed.length > 0 }); } catch (e) { r = null; }
+            if (r === null || r === false) {
+              setSaving(false);
+              setSaveErr(removed.length
+                ? 'The team is saved, but this room’s new key could not be published — anyone you removed CAN STILL READ it until this succeeds. Check your connection and press Save again.'
+                : 'The team is saved, but this room’s key could not be updated — the people you added won’t be able to read it yet. Check your connection and press Save again.');
+              return;
+            }
+          }
+        }
       }
+      await publishCareTeamFor(t.id, careTeamId, people);
+    } catch (e) {
+      // WITHOUT THIS the button sat on "Saving…", disabled, for ever, and the steward had no idea what landed.
+      setSaving(false);
+      setSaveErr((e && e.message) || 'Couldn’t save this team — check your connection and try again.');
+      return;
     }
-    await publishCareTeamFor(t.id, careTeamId, people);
     setSaving(false);
     onClose();
   };
@@ -218,6 +268,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
 
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+        {saveErr ? <div style={{ flexBasis: '100%', fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)' }}>{saveErr}</div> : null}
         <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
       </div>
     </SchModal>

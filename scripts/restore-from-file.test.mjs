@@ -57,7 +57,7 @@ test('the password is taken in-app, masked, with a way to see it', () => {
 });
 
 test('a wrong password and a wrong file are told apart, and the message stays on screen', () => {
-  const body = stripComments(fnBody(ID, 'const doRestoreFile = async () => {'));
+  const body = stripComments(fnBody(ID, 'const doRestoreFile = async (consented) => {'));
   assert.match(body, /passphrase\|damaged/, 'decryptStr already distinguishes them — do not throw that away');
   assert.match(body, /didn’t open the file/, 'a wrong password must say so in words the member can act on');
   assert.match(body, /church backup, not a member backup/, 'restoring the console’s file here must be named, not "failed"');
@@ -66,7 +66,7 @@ test('a wrong password and a wrong file are told apart, and the message stays on
 });
 
 test('the destructive warning is in-app, and only when something is really at stake', () => {
-  const body = stripComments(fnBody(ID, 'const doRestoreFile = async () => {'));
+  const body = stripComments(fnBody(ID, 'const doRestoreFile = async (consented) => {'));
   assert.doesNotMatch(body, /window\.confirm/,
     'a system dialog here is unreadable on a phone and — measured — blocks the whole page in a WebView');
   assert.match(body, /trinityone\.onboarded/,
@@ -75,6 +75,12 @@ test('the destructive warning is in-app, and only when something is really at st
   assert.match(body, /followedChurches/, 'a followed church also counts as an account in use');
   assert.match(body, /used && standing === 'different'/,
     'both halves are required — used, AND a different account. Either alone gets it wrong');
+  // FAIL CLOSED. These used to default to "there is nothing here", so an unreadable localStorage silently
+  // authorised replacing whatever key was on the device. Pre-merge review.
+  assert.match(body, /let used = true;/, 'if we cannot tell whether there is something to lose, we must ask');
+  assert.match(body, /catch \(e\) \{ used = true; \}/, 'and a read that throws must not read as "nothing here"');
+  // …and the consent must be carried as an argument, not through state a queued closure cannot see.
+  assert.match(body, /consented !== true/, 'the confirm must reach the retry, or the member has to press it twice');
   assert.match(body, /setRPending\(obj\)/, 'the confirmation is a step in this screen');
 
   const pane = stripComments(ID.slice(ID.indexOf("if (restoring && rMode === 'file')")));
@@ -83,7 +89,7 @@ test('the destructive warning is in-app, and only when something is really at st
 });
 
 test('a restore lands the member in their church, not back in the wizard', () => {
-  const body = stripComments(fnBody(ID, 'const doRestoreFile = async () => {'));
+  const body = stripComments(fnBody(ID, 'const doRestoreFile = async (consented) => {'));
   assert.match(body, /applyMember\(obj\)/, 'the backup must actually be applied');
   assert.match(body, /trinityone\.onboarded/, 'the wizard must not greet a member who has just restored');
   assert.match(body, /location\.reload\(\)/, 'the same landing every other restore route uses');

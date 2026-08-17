@@ -47,44 +47,69 @@ const MEMBERS = [
 ];
 const PUB = { martha: 'aa'.repeat(32), esther: 'bb'.repeat(32), unnamed: 'cc'.repeat(32) };
 
-test('an allowlist edit fills the roster it used to leave empty', () => {
+test('ticking someone in puts them on the team', () => {
   const { teamPeopleForAllowlist } = loadReconcilers({});
-  const people = teamPeopleForAllowlist([], [PUB.martha, PUB.esther], MEMBERS);
-  assert.equal(people.length, 2, 'ticking two people into an invite-only team must put two people on its roster');
-  assert.deepEqual(people.map(p => p.pub).sort(), [PUB.martha, PUB.esther].sort());
+  const people = teamPeopleForAllowlist([], [PUB.martha, PUB.esther], [], MEMBERS);
+  assert.equal(people.length, 2);
   assert.deepEqual(people.map(p => p.name).sort(), ['Esther Okonjo', 'Martha Nkemelu'],
-    'the roster must carry their names, not raw hex — this list is read by a human building a rota');
-  assert.ok(people.every(p => p.id), 'every roster person needs an id: pods reference people BY id');
+    'the roster must carry their names, not raw hex — a human builds a rota from this list');
+  assert.ok(people.every(p => p.id), 'pods reference people BY id, so everyone needs one');
 });
 
 test('off-app volunteers survive an allowlist edit', () => {
   const { teamPeopleForAllowlist } = loadReconcilers({});
   const before = [{ id: 'p1', name: 'Mrs Hendry', pub: '' }, { id: 'p2', name: 'Martha Nkemelu', pub: PUB.martha }];
-  const after = teamPeopleForAllowlist(before, [PUB.martha, PUB.esther], MEMBERS);
+  const after = teamPeopleForAllowlist(before, [PUB.esther], [], MEMBERS);
   assert.ok(after.some(p => p.name === 'Mrs Hendry' && !p.pub),
     'someone with no app account is in no allowlist, so an allowlist edit must never remove them');
   assert.equal(after.find(p => p.pub === PUB.martha).id, 'p2',
     'a person already on the team keeps their id — a fresh one silently empties every pod slot they fill');
+
+  // …and re-adding someone who is ALREADY there must not duplicate them or re-mint their id. This is the case
+  // that actually exercises the dedupe: ticking a person who is on the roster already is the commonest edit.
+  const again = teamPeopleForAllowlist(before, [PUB.martha], [], MEMBERS);
+  assert.equal(again.filter(p => p.pub === PUB.martha).length, 1, 'nobody may appear on a team twice');
+  assert.equal(again.find(p => p.pub === PUB.martha).id, 'p2', 'and their id must survive, or their pod slots empty');
+  assert.equal(again.length, before.length, 'a no-op add changes nothing');
 });
 
-test('taking someone off the allowlist takes them off the team', () => {
+test('unticking someone takes them off the team', () => {
   const { teamPeopleForAllowlist } = loadReconcilers({});
-  const before = [{ id: 'p2', name: 'Martha Nkemelu', pub: PUB.martha }, { id: 'p3', name: 'Esther Okonjo', pub: PUB.esther }];
-  const after = teamPeopleForAllowlist(before, [PUB.martha], MEMBERS);
+  const before = [{ id: 'p2', name: 'Martha', pub: PUB.martha }, { id: 'p3', name: 'Esther', pub: PUB.esther }];
+  const after = teamPeopleForAllowlist(before, [], [PUB.esther], MEMBERS);
   assert.deepEqual(after.map(p => p.pub), [PUB.martha],
-    'someone locked out of the room must not keep the care-team grant the relay reads from the roster');
+    'someone locked out of the room must not keep the careAdmin grant the relay reads from the roster');
 });
 
-test('the allowlist a roster implies is its LINKED people, and only those', () => {
+// ── THE TWO DEFECTS THE PRE-MERGE REVIEW FOUND. Both came from replacing one list with the other wholesale.
+
+test('an unchanged dialog changes nothing — no silent mass promotion', () => {
+  // roster:<id>.people is what the relay reads to grant careAdmin: a read grant over every care need and
+  // every "ask for help" in the church. A wholesale reconcile meant that opening "Who's in <care team>" on a
+  // church whose lists had drifted and pressing Save WITHOUT CHANGING ANYTHING promoted every member of that
+  // chat room. That is the granting direction firing on exactly the population this work exists to repair.
+  const { teamPeopleForAllowlist } = loadReconcilers({});
+  const roster = [{ id: 'p1', name: 'Mrs Hendry', pub: '' }, { id: 'p2', name: 'Martha', pub: PUB.martha }];
+  const after = teamPeopleForAllowlist(roster, [], [], MEMBERS);
+  assert.deepEqual(after, roster, 'an empty delta must leave the roster byte-identical');
+});
+
+test('a roster edit does not evict the room — and an unloaded roster evicts nobody', () => {
+  // The mirror defect: anyone in an invite-only team's CHAT who is not a rota person — a leader, a steward,
+  // someone simply in the conversation — was ejected on the next roster save, and for an encrypted team the
+  // key rotated away from them. Worse, a roster document that had not arrived reads as `people: []`, so Save
+  // published `members: []` and locked the whole team out of their own room.
   const { teamAllowlistForPeople } = loadReconcilers({});
-  const people = [
-    { id: 'p1', name: 'Mrs Hendry', pub: '' },
-    { id: 'p2', name: 'Martha Nkemelu', pub: PUB.martha },
-    { id: 'p4', name: 'Martha again', pub: PUB.martha },
-  ];
-  assert.deepEqual(teamAllowlistForPeople(people), [PUB.martha],
-    'an off-app name has no key to admit, and a duplicate must not be admitted twice');
-  assert.deepEqual(teamAllowlistForPeople([]), []);
+  const room = [PUB.martha, PUB.esther, PUB.unnamed];
+  assert.deepEqual(teamAllowlistForPeople(room, [], []), room,
+    'no change on the roster must mean no change to who can read the room');
+  assert.deepEqual(teamAllowlistForPeople(room, [], []).length, 3,
+    'an empty roster must not empty the room — that is the whole team locked out');
+  assert.deepEqual(teamAllowlistForPeople(room, [], [PUB.esther]), [PUB.martha, PUB.unnamed],
+    'someone actually taken off the roster does come out of the room');
+  const added = teamAllowlistForPeople(room, [PUB.martha, 'dd'.repeat(32)], []);
+  assert.equal(added.length, 4, 'a newly linked person is admitted');
+  assert.equal(added.filter(p => p === PUB.martha).length, 1, 'and nobody is admitted twice');
 });
 
 test('careteam: is republished when the CARE team changes, and only then', async () => {
@@ -119,6 +144,8 @@ test('the Groups tab’s member editor writes the roster too', () => {
   const save = stripComments(fnBody(DASH, 'function EditGroupMembersModal(')).slice(
     stripComments(fnBody(DASH, 'function EditGroupMembersModal(')).indexOf('const save = '));
   assert.match(save, /teamPeopleForAllowlist\(/, 'ticking someone into an invite-only team must reach its roster');
+  assert.match(save, /if \(!added\.length && !removed\.length\) return;/,
+    'an unchanged dialog must write nothing — otherwise Save promotes the whole chat room to careAdmin');
   assert.match(save, /window\.Steward\.publishRoster\(/, 'the reconciled people must be published, not just computed');
   assert.match(save, /publishCareTeamFor\(/, 'and the care-request audience must follow the care team');
   assert.match(save, /rosters \|\| \[\]\)\.find/,

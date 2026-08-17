@@ -69,7 +69,10 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // passphrase in a native prompt BEFORE reading the file, so picking the wrong one wasted the passphrase and
   // produced a confusing error afterwards. Here a wrong file costs nothing: they have typed nothing yet.
   const pickBackupFile = async (f) => {
-    setRErr(''); setRFile(null); setRFilePass('');
+    // CONSENT BELONGS TO ONE FILE. These two were not reset here, so: pick file A, get the "there is already
+    // an account on this phone" warning, then pick a DIFFERENT file B and tap once — and B replaced the
+    // on-device key with no warning at all, on the strength of consent given for A.
+    setRErr(''); setRFile(null); setRFilePass(''); setRPending(null); setRReplaceOk(false);
     if (!f) return;
     let text = '';
     try { text = await window.TrinityBackup.readFile(f); }
@@ -81,7 +84,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     }
     setRFile({ name: f.name || 'your backup', text });
   };
-  const doRestoreFile = async () => {
+  const doRestoreFile = async (consented) => {
     if (!rFile || rBusy) return;
     setRErr(''); setRBusy('Opening your backup…');
     let obj = null;
@@ -111,12 +114,16 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     //
     // An account is only worth warning about once it has been USED: onboarding finished, or a church followed.
     // A freshly minted, unadopted key is nothing to lose.
-    let used = false;
-    try { used = !!JSON.parse(localStorage.getItem('trinityone.onboarded') || 'false'); } catch (e) {}
-    if (!used) { try { used = ((JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]')) || []).length > 0; } catch (e) {} }
+    // FAIL CLOSED. Both of these used to default to "there is nothing here", so an unreadable localStorage
+    // silently authorised replacing whatever key was on the device. If we cannot tell, assume there IS
+    // something to lose and ask — the cost of a needless question is a tap; the cost of a wrong answer is an
+    // account nobody can get back.
+    let used = true;
+    try { used = !!JSON.parse(localStorage.getItem('trinityone.onboarded') || 'false'); } catch (e) { used = true; }
+    if (!used) { try { used = ((JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]')) || []).length > 0; } catch (e) { used = true; } }
     let standing = 'unknown';
     try { standing = window.TrinityIdentity.whoseMnemonic(obj.identity || ''); } catch (e) { standing = 'unknown'; }
-    if (used && standing === 'different' && !rReplaceOk) {
+    if (used && standing === 'different' && !rReplaceOk && consented !== true) {
       // IN-APP, not window.confirm. A system dialog here is unreadable on a phone, cannot be styled, and —
       // measured — blocks the whole page in a WebView with no way back. This is the same defect this route was
       // built to replace; asking again in our own screen is the point.
@@ -609,7 +616,11 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       </div>
       <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          <button onClick={() => { if (rPending) { setRReplaceOk(true); setRPending(null); setTimeout(doRestoreFile, 0); } else doRestoreFile(); }}
+          {/* Pass the consent as an ARGUMENT, not through state. `setTimeout(doRestoreFile, 0)` queued THIS
+              render's closure, in which rReplaceOk was still false — so the warning simply reappeared and the
+              member had to press "Replace it and restore" twice, the first press looking like a dead button
+              on the most consequential screen in the product. */}
+          <button onClick={() => { if (rPending) { setRReplaceOk(true); setRPending(null); doRestoreFile(true); } else doRestoreFile(); }}
             disabled={!rFile || !rFilePass.trim() || !!rBusy}
             style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (!rFile || !rFilePass.trim() || rBusy) ? 'not-allowed' : 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700, opacity: (!rFile || !rFilePass.trim() || rBusy) ? .5 : 1 }}>
             {rBusy || (rPending ? 'Replace it and restore' : 'Bring everything back')}</button>

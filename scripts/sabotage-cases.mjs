@@ -660,8 +660,9 @@ export const CASES = [
     file: 'app/stew-dashboard.jsx',
     // the pre-fix behaviour exactly: publish the allowlist, leave the team's roster where it was. This is the
     // St Brigid's shape — group members 2, roster people 0, care team empty and nothing said so.
-    find: `        return Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
-          .then(() => publishCareTeamFor(group.id, careTeamId, people));`,
+    find: `        Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
+          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .catch(() => {});`,
     replace: `        return;`,
     test: 'scripts/care-team-membership.test.mjs',
   },
@@ -670,16 +671,17 @@ export const CASES = [
     file: 'app/stew-schedule.jsx',
     // the plausible careless version — "the allowlist IS the team", forgetting that a volunteer with no app
     // account is in no allowlist and would be deleted from the rota by an edit that never mentioned them
-    find: `  const offApp = had.filter(p => p && !p.pub);`,
-    replace: `  const offApp = [];`,
+    find: `  const kept = had.filter(p => p && !(p.pub && gone.has(p.pub)));`,
+    replace: `  const kept = had.filter(p => p && p.pub && !gone.has(p.pub));`,
     test: 'scripts/care-team-membership.test.mjs',
   },
   {
     name: 'care team: a reconciled person gets a fresh id, emptying every pod slot',
     file: 'app/stew-schedule.jsx',
-    find: `    const was = had.find(p => p && p.pub === pk);
-    if (was) return was;`,
-    replace: ``,
+    find: `  const have = new Set(kept.map(p => p && p.pub).filter(Boolean));
+  const fresh = [...new Set((added || []).filter(Boolean))].filter(pk => !have.has(pk)).map(pk => {`,
+    replace: `  const have = new Set();
+  const fresh = [...new Set((added || []).filter(Boolean))].filter(pk => !have.has(pk)).map(pk => {`,
     test: 'scripts/care-team-membership.test.mjs',
   },
   {
@@ -717,14 +719,8 @@ export const CASES = [
     name: 'chat: a reconnect wipes the thread the member is reading',
     file: 'app/screens-chat.jsx',
     // the careless version of the same fix: re-subscribe, but keep the old unconditional reset
-    find: `      const sameRoom = seenRef.current && seenRef.current.gid === group.id;
-      if (!sameRoom) {
-        setMsgs([]); setReactions({}); setPickerFor(null);
-        seenRef.current = { gid: group.id, ids: new Set() };
-      }
-      const seen = seenRef.current.ids;`,
-    replace: `      setMsgs([]); setReactions({}); setPickerFor(null);
-      const seen = new Set();`,
+    find: `      const sameRoom = seenRef.current && seenRef.current.gid === group.id;`,
+    replace: `      const sameRoom = false;`,
     test: 'scripts/chat-reconnect.test.mjs',
   },
   {
@@ -733,7 +729,7 @@ export const CASES = [
     // removing the whole handler puts the app back where it was: healthy socket, dead subscriptions, and a
     // 90-second safety net that skips because relaysHealthy() is (correctly) true
     find: `    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew
-    window.dispatchEvent(new CustomEvent('trinity-reconnect', { detail: { url, reason: 'socket returned' } }));`,
+    window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url } }));`,
     replace: ``,
     test: 'scripts/chat-reconnect.test.mjs',
   },
@@ -841,8 +837,8 @@ export const CASES = [
     file: 'app/identity.jsx',
     // dropping the "has it actually been used?" half — the app mints a key before the welcome fork, so this
     // puts a destructive warning in front of someone who has never opened the app
-    find: `    if (used && standing === 'different' && !rReplaceOk) {`,
-    replace: `    if (standing === 'different' && !rReplaceOk) {`,
+    find: `    if (used && standing === 'different' && !rReplaceOk && consented !== true) {`,
+    replace: `    if (standing === 'different' && !rReplaceOk && consented !== true) {`,
     test: 'scripts/restore-from-file.test.mjs',
   },
 ];

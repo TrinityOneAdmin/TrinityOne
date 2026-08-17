@@ -1980,9 +1980,15 @@ function EditGroupMembersModal({ group, onClose }) {
       try {
         const r = (rosters || []).find(x => x && x.team === group.id);
         if (!r || !window.Steward.publishRoster) return;
-        const people = teamPeopleForAllowlist(r.people, newM, members);
-        const same = people.length === (r.people || []).length && people.every((p, i) => p === (r.people || [])[i]);
-        if (same) return;
+        // ONLY WHAT THE STEWARD CHANGED. roster:<id>.people is what the relay reads to grant careAdmin — a
+        // read grant over every care need and every "ask for help" in the church. Reconciling the whole list
+        // meant that opening this dialog on a church whose two lists had drifted and pressing Save WITHOUT
+        // CHANGING ANYTHING promoted every member of that chat room to careAdmin. A delta cannot do that.
+        const before = Array.isArray(group.members) ? group.members : [];
+        const added = newM.filter(pk => !before.includes(pk));
+        const removed = before.filter(pk => !newM.includes(pk));
+        if (!added.length && !removed.length) return;
+        const people = teamPeopleForAllowlist(r.people, added, removed, members);
         Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
           .then(() => publishCareTeamFor(group.id, careTeamId, people))
           .catch(() => {});

@@ -107,8 +107,14 @@ test('an open room re-subscribes on reconnect, without blinking itself empty', (
   // …and the re-run must not throw the thread away under someone who is reading it.
   assert.match(room, /const sameRoom = seenRef\.current && seenRef\.current\.gid === group\.id/,
     'the effect now re-runs while the room is on screen, so it must be able to tell a reconnect from a room change');
-  assert.match(room, /if \(!sameRoom\) \{\s*setMsgs\(\[\]\)/,
+  assert.match(room, /if \(!sameRoom\) \{[\s\S]{0,900}setMsgs\(\[\]\)/,
     'clearing on a reconnect would blink every message away mid-read');
+  // A HALF-TYPED MESSAGE IS NOT DISPOSABLE. setDraft/setFlag sat above the guard, unconditionally — harmless
+  // while this effect only ran on a room change, and a data-loss bug the moment ctx.connTick joined the deps.
+  assert.match(room, /if \(!sameRoom\) \{[\s\S]{0,900}setDraft\(''\)/,
+    'a reconnect must not wipe the composer out from under someone mid-sentence');
+  const beforeGuard = room.slice(0, room.indexOf('const sameRoom'));
+  assert.doesNotMatch(beforeGuard, /setDraft\(''\)/, 'and it must not be cleared before the guard either');
   assert.doesNotMatch(room, /const seen = new Set\(\)/,
     'a fresh `seen` on every reconnect appends the relay’s whole replay a second time — 200 duplicate bubbles');
   assert.match(room, /const seen = seenRef\.current\.ids/,

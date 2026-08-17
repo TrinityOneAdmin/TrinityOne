@@ -49,7 +49,7 @@ test('on the app, a plain "save a backup" writes a durable file — not just a s
   const { saveFile, writes, shares } = loadSaveFile({ native: true });
   const res = await saveFile('backup.json', '{}');          // no mode: the path 3 of 4 callers take
   assert.equal(res.saved, true);
-  assert.equal(res.where, 'device', 'the member must end up with a file on the phone, whatever they do with the sheet');
+  assert.equal(res.where, 'cloud', 'the button they pressed was "somewhere else" — say so, or the OTHER button lights up as Saved');
   assert.ok(writes.some(w => w.directory === 'DOCUMENTS'), 'a durable copy must be written before anything is offered');
   assert.match(res.uri, /Documents/, 'the caller needs the location to be able to say where it went');
   assert.equal(shares.length, 1, 'sharing is still offered — it is how a copy reaches Drive');
@@ -59,7 +59,7 @@ test('dismissing the share sheet does not lose the backup', async () => {
   const { saveFile, writes } = loadSaveFile({ native: true, shareThrows: true });
   const res = await saveFile('backup.json', '{}');
   assert.equal(res.saved, true, 'closing the sheet is a choice, not a failure — the file is already written');
-  assert.equal(res.where, 'device');
+  assert.equal(res.where, 'cloud');
   assert.ok(writes.some(w => w.directory === 'DOCUMENTS'));
 });
 
