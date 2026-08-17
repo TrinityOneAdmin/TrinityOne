@@ -327,7 +327,12 @@ function seedNewChurch() {
       // Measured 2026-08-17 with two churches on one relay — all four seeds refused, the same seeds under
       // prefixed ids accepted immediately. It had never bitten because nothing had ever set up a SECOND church
       // on one relay, which is exactly what a network relay, a diocese relay or a shared pilot relay is.
-      const nsp = String(window.Steward.pubkey || '').slice(0, 8);
+      // SIXTEEN, not eight. The relay now REFUSES a claim on an id whose embedded owner is not the signer's
+      // church, so this prefix is load-bearing rather than cosmetic. Eight hex characters is 32 bits and can be
+      // ground out on a GPU — an attacker could mint a key sharing a church's prefix and claim ids in its
+      // namespace. Sixteen is 64 bits, which cannot. Ids already in the field keep working: the relay accepts
+      // any prefix of 8 or more that matches a church it carries.
+      const nsp = String(window.Steward.pubkey || '').slice(0, 16);
       (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: nsp ? (nsp + '-' + g.id) : g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));
     }
   } catch (e) {}

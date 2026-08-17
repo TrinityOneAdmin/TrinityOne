@@ -31,8 +31,15 @@ const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'u
 
 test('the starter groups are namespaced to the church that seeds them', () => {
   const seed = stripComments(fnBody(ROOT, 'function seedNewChurch()'));
-  assert.match(seed, /window\.Steward\.pubkey \|\| ''\)\.slice\(0, 8\)/,
-    'the seeded ids must be scoped to this church, or the first church on the relay owns them all for ever');
+  // 8 → 16 on 2026-08-17. The prefix stopped being cosmetic: the relay now REFUSES a claim on an id whose
+  // embedded owner is not the signer's church, so a grindable 32-bit prefix would have been an authorisation
+  // check an attacker could satisfy by minting keys. Asserted as "at least 16" rather than pinned, so making
+  // it longer later is not a test failure.
+  const m = seed.match(/window\.Steward\.pubkey \|\| ''\)\.slice\(0, (\d+)\)/);
+  assert.ok(m, 'the seeded ids must be scoped to this church, or the first church on the relay owns them all for ever');
+  assert.ok(Number(m[1]) >= 16,
+    `the namespace is ${m[1]} hex characters — under 16 it is grindable, and the relay now authorises id ` +
+    'claims against it (gateway.mjs idNamesOwner)');
   assert.match(seed, /id: nsp \? \(nsp \+ '-' \+ g\.id\) : g\.id/,
     'every seeded group needs the prefix — one unprefixed id is one group the second church silently loses');
   assert.doesNotMatch(seed, /publishGroup\(\{ id: g\.id,/,

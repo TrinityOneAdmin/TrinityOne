@@ -3133,7 +3133,10 @@ window.Steward = {
   // ---- groups (the church's chat rooms) ----
   publishGroup(group) {
     if (!sk) return Promise.resolve(null);
-    const id = group.id || ('grp' + Date.now());
+    // NAMESPACE NEW IDS. The relay refuses a claim on an id whose embedded owner is not the signer's church, so
+    // a room created here is protected on relays that have never seen its definition. A bare `grp<timestamp>`
+    // names nobody and can be claimed by any co-tenant on such a relay.
+    const id = group.id || ((String(pub || '').slice(0, 16) || 'grp') + '-' + Date.now().toString(36));
     const inviteOnly = group.visibility === 'invite';
     const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined, category: group.category || undefined, visibility: inviteOnly ? 'invite' : undefined, members: inviteOnly && Array.isArray(group.members) ? group.members : undefined, encrypted: group.encrypted ? true : undefined, childsafe: group.childsafe ? true : undefined, eventPolicy: EVENT_POLICIES.indexOf(group.eventPolicy) > 0 ? group.eventPolicy : undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }))

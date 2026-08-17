@@ -1000,4 +1000,25 @@ export const CASES = [
     replace: `    void onKey;`,
     test: 'scripts/rejoin-name-and-leaving.test.mjs',
   },
+  {
+    name: 'relay: a co-tenant can claim another church\'s namespaced id again',
+    file: 'scripts/gateway.mjs',
+    find: `    const named = idNamesOwner(id);`,
+    replace: `    const named = '';`,
+    test: 'scripts/relay-divergent-safeguarding.test.mjs',
+  },
+  {
+    name: 'relay: the minor gate stops resolving the church from the id',
+    file: 'scripts/gateway.mjs',
+    find: `const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g); const m = gcp && MINORS_BY.get(gcp); if (m && m.has(e.pubkey)) return false; }`,
+    replace: `const gcp = GROUP_CHURCH.get(g); const m = gcp && MINORS_BY.get(gcp); if (m && m.has(e.pubkey)) return false; }`,
+    test: 'scripts/relay-divergent-safeguarding.test.mjs',
+  },
+  {
+    name: 'relay: the READ gate stops resolving the church from the id',
+    file: 'scripts/gateway.mjs',
+    find: `    const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);   // …and the same fallback here: see the note in accept()`,
+    replace: `    const gcp = GROUP_CHURCH.get(g);`,
+    test: 'scripts/relay-divergent-safeguarding.test.mjs',
+  },
 ];

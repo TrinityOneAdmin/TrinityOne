@@ -849,9 +849,39 @@ const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); cons
 // take it over — flipping an invite-only group to public (its whole history then served to anonymous REQs) or
 // installing itself on a care-team roster. Once an id is known, only its owning church (or that church's
 // network/steward) may rewrite it. Mirrors the pattern EVENT_D/PIN_D/HIDE_D already use via GROUP_CHURCH.
-function idOwnerOk(owner, e) {
-  if (!owner) return true;                       // unknown id → first writer takes it
+// AN ID THAT NAMES ITS OWNER MAY ONLY BE CLAIMED BY THAT OWNER.
+//
+// The client namespaces group / roster / care ids with the owning church's pubkey prefix
+// (`94a53b5b-announce`), and until now nothing here checked that the prefix matched the signer. So on a relay
+// that had never received the real definition, `idOwnerOk` fell to first-writer-wins and ANY co-tenant church
+// could publish `<someone-else's-prefix>-announce` and become its owner — then mark the room child-safe, flip
+// invite-only to open, or install itself as that team's care-admin. That does not merely fail to block a
+// rule; it hands a congregation's room to another church.
+//
+// Which relay lacks which definition is not hypothetical: the console publishes group definitions with
+// `publish()` (Promise.any — resolves on the FIRST relay to accept) while members' apps fan their traffic to
+// every configured relay. The two paths routinely diverge.
+//
+// Deliberately NOT authorisation on its own. Eight hex characters is 32 bits and can be ground out on a GPU,
+// so a determined attacker could mint a key whose pubkey shares a victim's prefix. It is a REFUSAL rule: it
+// can only ever deny a claim, never grant one, and the owner still has to satisfy the ordinary church /
+// network / steward check below. New ids carry 16 characters (64 bits), which is not grindable; 8 is accepted
+// for the ids already in the field.
+const ID_OWNER_RE = /^([0-9a-f]{8,64})-/;
+function idNamesOwner(id) {
+  const m = ID_OWNER_RE.exec(String(id || ''));
+  if (!m) return '';                             // no embedded owner — nothing to check
+  for (const cp of CHURCH_PUBS) if (cp.startsWith(m[1])) return cp;
+  return '';                                     // names a church this relay does not carry — not our business
+}
+function idOwnerOk(owner, e, id) {
   const cp = namedChurch(e) || e.pubkey;
+  if (!owner) {
+    const named = idNamesOwner(id);
+    if (!named) return true;                     // unknown id, no embedded owner → first writer takes it
+    // the id says whose it is; only that church, its network or its stewards may claim it
+    return cp === named || networkOf(e.pubkey, named) || stewardOf(e.pubkey, named);
+  }
   return cp === owner || networkOf(e.pubkey, owner) || stewardOf(e.pubkey, owner);
 }
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
@@ -1261,7 +1291,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
-    if (!idOwnerOk(GROUP_CHURCH.get(id), e)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
+    if (!idOwnerOk(GROUP_CHURCH.get(id), e, id)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
     if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); return; }
     if (c.childsafe === true) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);   // safeguarding: adults-only unless the church says otherwise
     GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
@@ -1308,7 +1338,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
-    { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
+    { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e, id)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
     const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
     ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
@@ -1330,7 +1360,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const id = d.slice(NEED_D.length);
     // AUDIT-2026-07-30 S2: enforced HERE as well as in accept(), for the same reason ROSTER_D is — a forgery
     // already on disk must not win on rehydrate, when accept() is not in the path at all.
-    { if (!idOwnerOk(CARE_CHURCH.get(id), e)) return; }
+    { if (!idOwnerOk(CARE_CHURCH.get(id), e, id)) return; }
     if (removed) { CARE_RECIPIENT.delete(id); CARE_SKIPHASH.delete(id); CARE_CHURCH.delete(id); return; }
     { const owner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : ''); if (owner) CARE_CHURCH.set(id, owner); }
     // Opaque skip-token hashes in clear TAGS. v3 = one PER DAY: ['skiphash', <iso>, <hash>]; v2 = a single
@@ -1515,8 +1545,8 @@ function accept(e) {
       // AUDIT-2026-07-24 CRITICAL-1/2: group: and roster: ids are relay-GLOBAL, so being *a* church key was
       // enough to rewrite ANOTHER church's group (→ flip invite-only to public) or care-team roster (→ grant
       // yourself care-admin over their private corpus). Refuse at the door once an id has an owner.
-      if (d.startsWith(GROUP_D) && !idOwnerOk(GROUP_CHURCH.get(d.slice(GROUP_D.length)), e)) return false;
-      if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e)) return false; }
+      if (d.startsWith(GROUP_D) && !idOwnerOk(GROUP_CHURCH.get(d.slice(GROUP_D.length)), e, d.slice(GROUP_D.length))) return false;
+      if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e, d.slice(ROSTER_D.length))) return false; }
       return isLeader || stewardOf(e.pubkey, namedChurch(e));   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     }
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
@@ -1546,7 +1576,7 @@ function accept(e) {
       // congregation's care id. note() then overwrote CARE_SKIPHASH for that bare id, and the genuine recipient's
       // own correct per-day token stopped matching — nobody brings food, and they cannot fix it, silently. Same
       // guard group: and roster: were given in AUDIT-2026-07-24 C1/C2.
-      if (!idOwnerOk(CARE_CHURCH.get(d.slice(NEED_D.length)), e)) return false;
+      if (!idOwnerOk(CARE_CHURCH.get(d.slice(NEED_D.length)), e, d.slice(NEED_D.length))) return false;
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
       // B-2: was `isLeader ||`, which an untagged event from any church's network key satisfied for EVERY
       // church — a forged care need in someone else's congregation. Require a resolved owning church.
@@ -1648,7 +1678,13 @@ function accept(e) {
     // meant a child marking made by ANY of the churches sharing this relay silenced that person in EVERY other
     // congregation's adult rooms — caught on the live box, where an adult member could not post. Whether
     // someone is a child is a judgement only their own church makes, exactly as safeguardAllows() already does.
-    if (g && !GROUP_CHILDSAFE.has(g)) { const gcp = GROUP_CHURCH.get(g); const m = gcp && MINORS_BY.get(gcp); if (m && m.has(e.pubkey)) return false; }
+    // RESOLVE THE GOVERNING CHURCH EVEN WITHOUT THE GROUP DEFINITION. `GROUP_CHURCH` is populated only from a
+    // stored `group:` doc, so on a relay that never received one this read `undefined` and the whole minor
+    // check silently did not apply — a child posted into an adults-only room and nothing anywhere refused it.
+    // The id names its owner, and `minors:<churchpub>` is self-identifying, so this relay can still answer the
+    // question it was asked. And an unknown group stays NOT child-safe (GROUP_CHILDSAFE is empty for it), which
+    // is the safe direction: a child is refused until this relay can prove the room is meant for them.
+    if (g && !GROUP_CHILDSAFE.has(g)) { const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g); const m = gcp && MINORS_BY.get(gcp); if (m && m.has(e.pubkey)) return false; }
     // AUDIT-2026-07-30 S1/S1b: the ORDINARY OPEN GROUP — the one every congregation actually talks in — ended on
     // the relay-wide `isMember`, so a member of ANY church on the box could put arbitrary text and links into
     // another church's chat, delivered to its members as ordinary chat. The identical hole was closed for
@@ -1930,7 +1966,7 @@ function canRead(e, authed) {
   // kind-30078 branch above already applied.
   if (g) {
     if (!authed) return false;
-    const gcp = GROUP_CHURCH.get(g);
+    const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);   // …and the same fallback here: see the note in accept()
     if (gcp) {
       if (!churchReader(authed, gcp)) return false;
       // safeguarding, unchanged in intent: an adults-only group is withheld from a minor OF THAT CHURCH.

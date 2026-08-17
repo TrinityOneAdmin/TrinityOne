@@ -17494,7 +17494,7 @@ zoo`.split("\n");
     // ---- groups (the church's chat rooms) ----
     publishGroup(group) {
       if (!sk) return Promise.resolve(null);
-      const id = group.id || "grp" + Date.now();
+      const id = group.id || (String(pub || "").slice(0, 16) || "grp") + "-" + Date.now().toString(36);
       const inviteOnly = group.visibility === "invite";
       const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0, category: group.category || void 0, visibility: inviteOnly ? "invite" : void 0, members: inviteOnly && Array.isArray(group.members) ? group.members : void 0, encrypted: group.encrypted ? true : void 0, childsafe: group.childsafe ? true : void 0, eventPolicy: EVENT_POLICIES.indexOf(group.eventPolicy) > 0 ? group.eventPolicy : void 0 });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content })).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
