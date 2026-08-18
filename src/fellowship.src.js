@@ -51,6 +51,10 @@ async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', 
 // Meal trains / Care module (optional, per church). meals-settings is church-signed; care: needs come from
 // church/steward/care-team admins; careslot: are member offers to help; careskip: is RECIPIENT-only.
 const MEALS_SETTINGS_D = 'trinityone/meals-settings';
+// Who the church lets FETCH its rota — 'church' (default, every member), 'team' (the people on its serving
+// rosters) or 'stewards'. The relay enforces it; this read exists so the app can stop offering a screen the
+// relay will refuse to fill, and say which of the two kinds of empty it is showing.
+const ROTA_SETTINGS_D = 'trinityone/rota-settings';
 // steward-defined chat message tags (Testimony, Praise, …) — one church-signed doc alongside the built-in
 // "Prayer request". Validated against fixed allowlists on read so a forged doc can't inject CSS/icons.
 const MSGTAGS_D = 'trinityone/msgtags';
@@ -3229,6 +3233,36 @@ window.Fellowship = {
         try { const c = JSON.parse(e.content || '{}'); best = { ts: e.created_at || 0, doc: { enabled: !!c.enabled, visibility: c.visibility === 'team' ? 'team' : 'all', openedBy: c.openedBy === 'member' ? 'member' : 'steward', adminGroupId: String(c.adminGroupId || '') } }; cb({ ...best.doc }); } catch {}
       },
       oneose() { if (best.ts) cb({ ...best.doc }); },   // sticky: only emit on EOSE if we actually received settings — don't flip the card off on a reconnect's empty
+    });
+  },
+  // ── Rota visibility (member side) ──
+  // The church's choice of who may see the rota. Church-signed, and the RELAY is what enforces it — this
+  // subscription only lets the app avoid offering a screen the relay will refuse to fill, and tell "your
+  // church keeps this to the teams" apart from "nothing is published yet".
+  //
+  // Defaults to 'church' and stays there unless a document says otherwise, which matters twice over: every
+  // church that existed before this setting has no such document and must not lose its rota, and a relay
+  // that simply never serves the settings doc must not be able to blank the screen by silence.
+  subscribeRotaSettings(churchNpub, cb) {
+    const pubk = toPub(churchNpub);
+    const OPEN = { visibility: 'church' };
+    if (!pubk) { cb({ ...OPEN }); return () => {}; }
+    let best = { ts: 0, doc: { ...OPEN } };
+    return _onChurchDocs(pubk, {
+      want: [ROTA_SETTINGS_D],
+      onevent(e, d) {
+        if (d !== ROTA_SETTINGS_D) return;   // relay write-gates this to the church/stewards, as with meals-settings
+        if ((e.created_at || 0) <= best.ts) return;
+        try {
+          const v = String((JSON.parse(e.content || '{}') || {}).visibility || '');
+          // Unknown values read as the OPEN setting, matching the relay's own fallback. The two must agree:
+          // if the app hid the tab on a value the relay still serves, the rota would be invisible for a
+          // reason no one could see.
+          best = { ts: e.created_at || 0, doc: { visibility: (v === 'team' || v === 'stewards') ? v : 'church' } };
+          cb({ ...best.doc });
+        } catch {}
+      },
+      oneose() { if (best.ts) cb({ ...best.doc }); },
     });
   },
   // The church's steward-defined chat message tags (Testimony, Praise, …). cb([{ id, label, icon, accent }]).

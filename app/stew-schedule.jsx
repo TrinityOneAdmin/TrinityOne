@@ -6,6 +6,9 @@ const { useState: useSch, useEffect: useSchE, useRef: useSchR } = React;
 
 const SCH_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const SCH_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// The toolbar label for each rota-visibility setting. Short enough for the button; the menu carries the
+// explanation, and the caveat that this applies from now on rather than retroactively.
+const ROTA_VIS_LABEL = { church: 'Everyone', team: 'Serving teams', stewards: 'Stewards only' };
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
@@ -411,6 +414,11 @@ function DashRota({ onNewTeam }) {
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;   // stack the toolbar on phones
   const runsheets = (typeof window.useStewardRunsheets === 'function') ? window.useStewardRunsheets() : [];
   const [runsheetOpen, setRunsheetOpen] = useSch(false);
+  // Who may fetch the rota. Defaults to 'church' — the open setting every church had before this existed —
+  // both here and in the relay, so a console running against an older relay shows the truth rather than a
+  // promise that relay is not keeping.
+  const rotaVis = ((typeof window.useStewardRotaSettings === 'function') ? window.useStewardRotaSettings() : { visibility: 'church' }).visibility || 'church';
+  const [visMenu, setVisMenu] = useSch(false);
 
   // verdict for an assigned slot: 'accept' | 'decline' | 'swap' | 'pending' (asked, no reply) | '' (not asked)
   const replyById = {}; replies.forEach(r => { if (r.id) replyById[r.id] = r.v; });
@@ -626,6 +634,32 @@ function DashRota({ onNewTeam }) {
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
                       </button>
                     ))}
+                  </div>
+                </React.Fragment>
+              ) : null}
+            </div>
+            {/* WHO SEES THE ROTA. The wording here is deliberate and must stay honest: rota documents are
+                sealed under the church name key that EVERY member holds, so this changes who the relay will
+                SEND the rota to from now on — it cannot reach back onto a phone that already downloaded one.
+                Real protection against everyone who has not fetched it, and not a wall between members. */}
+            <div style={{ position: 'relative' }}>
+              <button onClick={() => setVisMenu(v => !v)} title="Choose who can see this church's rota" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>
+                <Icon name="users" size={15} color="currentColor" /> {ROTA_VIS_LABEL[rotaVis] || ROTA_VIS_LABEL.church} <Icon name="chevD" size={13} color="currentColor" /></button>
+              {visMenu ? (
+                <React.Fragment>
+                  <div onClick={() => setVisMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 268, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
+                    {[['church', 'Everyone in the church', 'Any member can see who is serving'],
+                      ['team', 'People on the serving teams', 'Only members on a team roster'],
+                      ['stewards', 'Stewards only', 'Nobody else can open the rota']].map(([v, t, s]) => (
+                      <button key={v} onClick={() => { setVisMenu(false); if (v !== rotaVis) window.Steward.publishRotaSettings(v); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}{v === rotaVis ? ' ✓' : ''}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
+                      </button>
+                    ))}
+                    <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.45, padding: '7px 11px 4px', borderTop: '1px solid var(--line)', marginTop: 4 }}>
+                      Applies from now on. Anyone whose phone already downloaded the rota keeps that copy.
+                    </div>
                   </div>
                 </React.Fragment>
               ) : null}

@@ -116,6 +116,7 @@ const ROSTER_D = 'trinityone/roster:';      // per-team roles + people (church)
 const SERVICE_D = 'trinityone/service:';    // a dated gathering (church)
 const RUNSHEET_D = 'trinityone/runsheet:';  // a service's order-of-service + songs (church) — d=runsheet:<serviceId>
 const ROTA_D = 'trinityone/rota:';          // per-service assignments (church)
+const ROTA_SETTINGS_D = 'trinityone/rota-settings'; // single church-signed doc — who may FETCH rota:/runsheet:
 const EVENT_D = 'trinityone/event:';        // calendar event (church)
 const ROOM_D = 'trinityone/room:';          // a bookable room/space (church)
 const BOOKING_D = 'trinityone/booking:';    // a dated room booking (church)
@@ -4637,6 +4638,31 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + serviceId], ['t', NET], ['deleted', '1']], content: '' }));
   },
   subscribeRotas(onRotas) { return this._subAddr(ROTA_D, (c, id) => ({ service: id, published: !!c.published, assign: c.assign || {} }), onRotas); },
+
+  // ---- who may SEE the rota: 'church' (default) | 'team' (people on the serving rosters) | 'stewards' ----
+  // NOT sealed, unlike the rota itself: the relay has to read this one to enforce it, and it says nothing
+  // about any person — only which of three settings the church chose.
+  //
+  // What this buys and what it does not: rota:/runsheet: are sealed under the church name key that every
+  // member already holds, so the relay can refuse to SERVE the document but cannot stop a member decrypting
+  // a copy they already fetched — and the member app caches them. Narrowing the setting therefore protects
+  // the rota from here on; it does not reach back onto phones. Anything the console says about this must be
+  // written to that standard.
+  publishRotaSettings(visibility) {
+    if (!sk) return Promise.resolve(null);
+    const v = (visibility === 'team' || visibility === 'stewards') ? visibility : 'church';
+    const content = JSON.stringify({ visibility: v, updated: now() });
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_SETTINGS_D], ['t', NET]], content })).then(() => ({ visibility: v }));
+  },
+  // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
+  // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
+  // read as 'church' (the open default) and not as "no answer".
+  subscribeRotaSettings(cb) {
+    return this._subAddr(ROTA_SETTINGS_D, (c) => ({ visibility: String((c && c.visibility) || '') }), (docs) => {
+      const v = (Array.isArray(docs) && docs.length) ? docs[0].visibility : '';
+      cb({ visibility: (v === 'team' || v === 'stewards') ? v : 'church' });
+    });
+  },
 
   // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
   // event = { id?, date, time, title, where, blurb, accent }

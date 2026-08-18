@@ -1105,6 +1105,10 @@ function App() {
   // the church's published rota/rosters/services — lets a member see who else is on the team that
   // day, who they can ask to swap, and a month view of services + events.
   const [churchRotas, setChurchRotas] = useA([]);
+  // The church's choice of who may SEE the rota. 'church' — the open default — is the value for every
+  // church that has never touched the setting, and the value we keep if the relay never answers: the
+  // relay is what enforces this, so the app guessing 'restricted' would hide a screen nobody restricted.
+  const [rotaVis, setRotaVis] = useA('church');
   const [churchRosters, setChurchRosters] = useA([]);
   const [churchServices, setChurchServices] = useA([]);
   const [churchRunsheets, setChurchRunsheets] = useA([]);   // per-service order-of-service + songs
@@ -1112,7 +1116,7 @@ function App() {
   const [churchGroups, setChurchGroups] = useA([]); // all groups/rooms/teams (for group-leader event posting)
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-    if (!np || !window.Fellowship) { setChurchRotas([]); setChurchRosters([]); setChurchServices([]); setChurchRunsheets([]); setChurchTeams([]); setChurchGroups([]); return; }
+    if (!np || !window.Fellowship) { setRotaVis('church'); setChurchRotas([]); setChurchRosters([]); setChurchServices([]); setChurchRunsheets([]); setChurchTeams([]); setChurchGroups([]); return; }
     // paint from cache first so the serving cards (rota / services / run sheets / teams) don't flash blank
     // while the network sub catches up — the same cache-first trick the Care cards already use.
     setChurchRotas(lsGet('trinityone.serv.rotas.' + np, []));
@@ -1122,6 +1126,7 @@ function App() {
     { const cg = lsGet('trinityone.serv.groups.' + np, []); setChurchGroups(cg); setChurchTeams(cg.filter(g => g && g.kind === 'team')); }
     const F = window.Fellowship, subs = [];
     if (F.subscribeChurchRotas) subs.push(F.subscribeChurchRotas(np, x => { setChurchRotas(x); lsSet('trinityone.serv.rotas.' + np, x); }));
+    if (F.subscribeRotaSettings) subs.push(F.subscribeRotaSettings(np, s => setRotaVis((s && s.visibility) || 'church')));
     if (F.subscribeChurchRosters) subs.push(F.subscribeChurchRosters(np, x => { setChurchRosters(x); lsSet('trinityone.serv.rosters.' + np, x); }));
     if (F.subscribeChurchServices) subs.push(F.subscribeChurchServices(np, x => { setChurchServices(x); lsSet('trinityone.serv.services.' + np, x); }));
     if (F.subscribeChurchRunsheets) subs.push(F.subscribeChurchRunsheets(np, x => { setChurchRunsheets(x); lsSet('trinityone.serv.runsheets.' + np, x); }));
@@ -1633,7 +1638,7 @@ function App() {
     churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); const all = [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
-    churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups,
+    churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups, rotaVis,
     // Care / Meal trains: settings + open needs + everyone's fills/skips, plus this member's sign-up actions.
     // Only meaningful when care.settings.enabled; the Today card and Care screen render off this.
     care: {

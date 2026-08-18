@@ -5817,6 +5817,7 @@
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
   var MEALS_SETTINGS_D = "trinityone/meals-settings";
+  var ROTA_SETTINGS_D = "trinityone/rota-settings";
   var MSGTAGS_D = "trinityone/msgtags";
   var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
   var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
@@ -9548,6 +9549,40 @@
           if (best.ts) cb({ ...best.doc });
         }
         // sticky: only emit on EOSE if we actually received settings — don't flip the card off on a reconnect's empty
+      });
+    },
+    // ── Rota visibility (member side) ──
+    // The church's choice of who may see the rota. Church-signed, and the RELAY is what enforces it — this
+    // subscription only lets the app avoid offering a screen the relay will refuse to fill, and tell "your
+    // church keeps this to the teams" apart from "nothing is published yet".
+    //
+    // Defaults to 'church' and stays there unless a document says otherwise, which matters twice over: every
+    // church that existed before this setting has no such document and must not lose its rota, and a relay
+    // that simply never serves the settings doc must not be able to blank the screen by silence.
+    subscribeRotaSettings(churchNpub, cb) {
+      const pubk = toPub(churchNpub);
+      const OPEN = { visibility: "church" };
+      if (!pubk) {
+        cb({ ...OPEN });
+        return () => {
+        };
+      }
+      let best = { ts: 0, doc: { ...OPEN } };
+      return _onChurchDocs(pubk, {
+        want: [ROTA_SETTINGS_D],
+        onevent(e, d) {
+          if (d !== ROTA_SETTINGS_D) return;
+          if ((e.created_at || 0) <= best.ts) return;
+          try {
+            const v = String((JSON.parse(e.content || "{}") || {}).visibility || "");
+            best = { ts: e.created_at || 0, doc: { visibility: v === "team" || v === "stewards" ? v : "church" } };
+            cb({ ...best.doc });
+          } catch {
+          }
+        },
+        oneose() {
+          if (best.ts) cb({ ...best.doc });
+        }
       });
     },
     // The church's steward-defined chat message tags (Testimony, Praise, …). cb([{ id, label, icon, accent }]).

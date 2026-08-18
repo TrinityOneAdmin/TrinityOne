@@ -45,6 +45,32 @@ function svServiceRoster(ctx, serviceId) {
     return { name: who.name, pub: who.pub, role: role ? role.name : '', me: !!(me && who.pub === me) };
   }).filter(Boolean);
 }
+// ── the CHURCH'S rota: every upcoming service and who is on it ────────────────────────────────────────────
+// svServiceRoster above answers "who is serving WITH ME", and is wired to the member's own next slot only. So
+// a member could see their own Sunday and nothing else: no answer to "who is on next week?", and no way to
+// see the rota at all unless they were on it. Nine agents in the round of 2026-08-18 went looking for the
+// church's rota and none found one.
+//
+// This needs no new fetch. app.jsx already subscribes to every church rota, roster and service and caches all
+// three in localStorage — the documents are on the phone already, which is also why a visibility setting can
+// only govern who FETCHES them in future, never who can read a copy already held.
+//
+// `published` is checked HERE and deliberately: a rota is a draft until a steward publishes it, and a
+// congregation must never be shown a draft that still has people penciled in. svServiceRoster does not check
+// it (its one caller is the member's own confirmed slot), so this must.
+function svChurchRota(ctx) {
+  const today = svTodayIso();
+  const rotas = ctx.churchRotas || [];
+  return (ctx.churchServices || [])
+    .filter(s => s && s.id && (s.date || '') >= today)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.time || '').localeCompare(b.time || ''))
+    .map(s => {
+      const rota = rotas.find(r => r.service === s.id);
+      return { ...s, people: (rota && rota.published) ? svServiceRoster(ctx, s.id) : [] };
+    })
+    .filter(s => s.people.length);
+}
+
 // teammates I could ask to swap (the team's roster people, minus me)
 function svTeamMates(ctx, teamId) {
   const roster = (ctx.churchRosters || []).find(r => r.team === teamId);
@@ -477,6 +503,10 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // openServing('care') deep link from the "you're being cared for" banner opened with the selected tab
   // off the right edge, which is the exact symptom the scroll was added to fix. block:'nearest' keeps
   // this horizontal; measured, no ancestor and no window scroll moves.
+  // A tab that stops being available while it is OPEN must not leave the screen on a branch that no longer
+  // renders — the steward can narrow the rota mid-session, and the member would be left looking at a tab
+  // strip with nothing selected. Snap back to Serving, which is always there.
+  useSvE(() => { if (open && tab === 'rota' && !canSeeRota) setTab('serving'); }, [open, tab, canSeeRota]);
   useSvE(() => {
     if (!open) return;
     const el = tabEls.current[tab];
@@ -505,6 +535,22 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // The Care tab is also the permanent home for a live safety check's "I'm safe / I need help" — which is what
   // lets the Today banner be dismissible. The safety check rides on this same toggle: care off = no check at all.
   const careOn = !!(ctx.care && ctx.care.settings && ctx.care.settings.enabled);
+  // MAY I SEE THE CHURCH'S ROTA? The relay is what enforces this; the tab honours it so a member is never
+  // offered a screen the relay will refuse to fill. An empty screen with no explanation is the failure class
+  // this codebase keeps re-learning — it reads as "the app is broken" or "the church is dead", and it was the
+  // single most common report in the round of 2026-08-18.
+  //
+  // Default open, and open whenever the answer is unknown: every church that predates this setting has no
+  // document, and a relay that simply never answers must not be able to hide a rota nobody chose to hide.
+  // 'team' is resolved against the rosters the member can already read — the same list the relay gates on.
+  const rotaVisibility = ctx.rotaVis || 'church';
+  const onAServingRoster = (ctx.churchRosters || []).some(r => ((r && r.people) || []).some(p => p && p.pub && ctx.myPubkey && p.pub === ctx.myPubkey));
+  // Only the two KNOWN narrow settings narrow anything; every other value — absent, unrecognised, garbled,
+  // or written by a newer console — reads as open, which is exactly how the relay falls back (gateway.mjs,
+  // the ROTA_VIS ingest). Written the other way round, as `=== 'church' || …`, an unknown value hid the tab
+  // while the relay went on serving the document: the rota would vanish for a reason invisible from either
+  // side. That is what the first draft of this line did.
+  const canSeeRota = rotaVisibility === 'stewards' ? false : rotaVisibility === 'team' ? onAServingRoster : true;
   const close = () => setSheet(null);
 
   return (
@@ -535,7 +581,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             side gets. scroll-padding covers the other scroll — scrollIntoView aligns the BUTTON to the
             nearest edge and reads straight past a spacer. */}
         <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '4px 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
-          {[['serving', 'Serving', 'hand'], ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
+          {[['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
             const on = tab === k;
             return (
               <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
@@ -713,6 +759,59 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                 </div>
               </React.Fragment>
             ) : null}
+          </React.Fragment>
+        ) : (tab === 'rota' && canSeeRota) ? (
+          <React.Fragment>
+            {/* THE CHURCH'S ROTA, not just mine. Empty here has three different causes and they must not be
+                said in the same sentence: not admitted yet, nothing published yet, or the church has chosen
+                to keep the rota to the serving teams. Stating any of them as "there is no rota" is the
+                mistake the round of 2026-08-18 caught across six screens. */}
+            {(() => {
+              const svcs = svChurchRota(ctx);
+              const pendingNow = !!(ctx.joinState && ctx.joinState.isPending);
+              if (!svcs.length) {
+                return (
+                  <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--ink-3)' }}>
+                    <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="users" size={26} /></div>
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>{pendingNow ? 'Not shared with you yet' : 'No rota published yet'}</div>
+                    <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>{pendingNow
+                      ? 'Your church may already have a full rota — it isn’t shared until a steward approves you.'
+                      : 'When your church publishes who’s serving, every upcoming service will be listed here.'}</p>
+                  </div>
+                );
+              }
+              return (
+                <React.Fragment>
+                  <SectionLabel>Who’s serving</SectionLabel>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+                    {svcs.map(s => {
+                      const mine = s.people.some(p => p.me);
+                      return (
+                        <div key={s.id} style={{ borderRadius: 18, padding: 14, background: 'var(--surface)', border: mine ? '1.5px solid color-mix(in oklab, var(--clay) 45%, var(--line))' : '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 11 }}>
+                            <ServDateBlock iso={s.date} accent="var(--clay)" />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{s.name || 'Service'}</div>
+                              <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 2 }}>{s.time || ''}{s.time ? ' · ' : ''}{s.people.length} serving</div>
+                            </div>
+                            {mine ? <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--on-clay)', background: 'var(--clay)', borderRadius: 999, padding: '4px 10px', flexShrink: 0 }}>You’re on</span> : null}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {s.people.map((p, i) => (
+                              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: i ? '1px solid var(--line)' : 'none' }}>
+                                <ServAvatar name={p.name} size={28} me={p.me} accent="var(--clay)" />
+                                <span style={{ fontSize: 13.5, fontWeight: 700, flex: 1, minWidth: 0 }}>{p.me ? 'You' : p.name}</span>
+                                <span style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'right' }}>{p.role}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </React.Fragment>
+              );
+            })()}
           </React.Fragment>
         ) : tab === 'events' ? (
           <React.Fragment>

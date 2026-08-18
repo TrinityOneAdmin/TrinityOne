@@ -407,6 +407,7 @@ const STEWARDREQ_D = D.STEWARDREQ; // a would-be steward's REQUEST to a church �
 // careslot: are member-signed offers to help; careskip: are RECIPIENT-only ("I don't need help that day"). See SPINE.md + src/steward-meals.src.js.
 // NOTE: 'trinityone/care:' is NOT a prefix of careslot:/careskip: — the colon makes them distinct, so startsWith() is unambiguous.
 const MEALS_SETTINGS_D = D.MEALS_SETTINGS; // church-signed config — {enabled, visibility, openedBy, adminGroupId} (single doc, no suffix)
+const ROTA_SETTINGS_D = D.ROTA_SETTINGS;  // church-signed config — {visibility} deciding who may FETCH rota:/runsheet: (single doc, no suffix)
 const NEED_D = D.NEED;        // a care need — d=care:<id> (church / steward / care-team admin; or any member when openedBy='member')
 const SLOT_D = D.SLOT;    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
 const SKIP_D = D.SKIP;    // recipient marks a day they don't need help — d=careskip:<careId>:<iso> (RECIPIENT-only)
@@ -812,6 +813,23 @@ const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who a
 const FINANCE_SEQ = new Map();        // churchpub -> last accepted finance-journal seq — the relay is the ordering authority; the next write must be seq+1 (single-writer, no gaps/forks/edits)
 const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
 const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
+// churchpub -> who may FETCH this church's rota:/runsheet:. Absent (the default, and every church that
+// existed before this) means 'church' — every member, exactly as before. See the gate in canRead().
+const ROTA_VIS = new Map();
+// Is `pub` on ANY of this church's team rosters? The rota itself is SEALED under the church name key, so the
+// relay cannot read who is assigned to what and cannot gate on the assignment. The roster is the nearest
+// thing it can see, and it is the right unit anyway: "the people who serve" is what a steward means by
+// keeping the rota to the teams. Mirrors careAdmin()'s use of ROSTER_BY/ROSTER_PEOPLE, including grantorOk —
+// a roster published by a since-revoked steward must not keep granting reads.
+const onAnyRoster = (pub, cp) => {
+  if (!pub || !cp) return false;
+  for (const [id, src] of ROSTER_BY) {
+    if (!src || src.cp !== cp || !grantorOk(src)) continue;
+    const ppl = ROSTER_PEOPLE.get(id);
+    if (ppl && ppl.has(pub)) return true;
+  }
+  return false;
+};
 // careId -> sha256 of the need's SKIP TOKEN. The recipient of a care need may mark a day "I don't need help",
 // and only they may do it — but once the need's `recipient` field is sealed (H3), the relay can no longer
 // see who that is, and gating on a cleartext pubkey would mean publishing "who in this congregation is
@@ -1356,6 +1374,19 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (removed) { MEALS_ADMIN_GROUP.delete(owner); MEALS_OPEN_MEMBER.delete(owner); return; }
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
   }
+  else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardOf(e.pubkey, cp = namedChurch(e)) ? cp : '');
+    if (!owner) return;
+    if (removed) { ROTA_VIS.delete(owner); return; }
+    // UNKNOWN VALUES FALL BACK TO 'church', THE OPEN SETTING — deliberately. This gate can hide a church's
+    // rota from its own congregation, so a typo or a future value this relay has never heard of must not
+    // silently lock people out of a screen that worked yesterday. The narrow settings are named explicitly;
+    // everything else is the status quo ante.
+    try {
+      const v = String((JSON.parse(e.content) || {}).visibility || '');
+      if (v === 'team' || v === 'stewards') ROTA_VIS.set(owner, v); else ROTA_VIS.delete(owner);
+    } catch { ROTA_VIS.delete(owner); }
+  }
   else if (d.startsWith(NEED_D)) {   // a care need (already passed accept(): church/steward/care-admin/allowed-member) — record its recipient for careskip gating
     const id = d.slice(NEED_D.length);
     // AUDIT-2026-07-30 S2: enforced HERE as well as in accept(), for the same reason ROSTER_D is — a forgery
@@ -1570,6 +1601,7 @@ function accept(e) {
     }
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
     if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
+    if (d === ROTA_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));    // who may fetch the rota: church or rostered steward, same authority that publishes it
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
       // AUDIT-2026-07-30 S2: `care:<id>` is a relay-GLOBAL id and the rule below resolves the owning church from
       // the EVENT, so a co-tenant church naming ITSELF satisfied `e.pubkey === cp` and could republish another
@@ -1886,6 +1918,23 @@ function canRead(e, authed) {
     // and care PII. On the shared community relay (where /config self-registration is open by default) that
     // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
     if (authed === cp || networkOf(authed, cp) || stewardOf(authed, cp) || careAdmin(authed, cp)) return true;
+    // WHO MAY FETCH THE ROTA. Default — and every church that existed before this setting — is unchanged:
+    // any member of the church. A steward may narrow it to the people who actually serve, or to stewards.
+    // The church key, its network, its stewards and care admins have already returned true above, so this
+    // only ever narrows the ORDINARY MEMBER grant that follows.
+    //
+    // Say plainly what this does and does not do. rota:/runsheet: are sealed under the church name key and
+    // EVERY MEMBER HOLDS THAT KEY, so this decides who may FETCH the document, never who could decrypt one
+    // they already hold — and the member app caches every rota it has already fetched in localStorage. So
+    // narrowing the setting does not reach back and take the rota off the phones that already have it. That
+    // is real enforcement against anyone who has not fetched it, and it is the same standard the rest of the
+    // church corpus runs on; it is NOT a cryptographic wall between members, and no copy anywhere may say it
+    // is. (Care's own team/whole-church toggle is weaker still: it is honoured client-side only.)
+    if (d.startsWith(ROTA_D) || d.startsWith(RUNSHEET_D)) {
+      const vis = ROTA_VIS.get(cp) || 'church';
+      if (vis === 'stewards') return false;                        // stewards already returned true above
+      if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
+    }
     const md = MEMBER_DOCS.get(cp);
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     return !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
