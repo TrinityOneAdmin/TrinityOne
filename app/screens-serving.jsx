@@ -235,7 +235,10 @@ function UnavailSheet({ open, onClose, ctx }) {
           onClose();
         } catch (e) {
           setErr('That didn’t reach your church, so nothing was saved. ' +
-            (ctx.isPending ? 'You’re still waiting to be approved — try again once you’re in.' : 'Check your connection and try again.'));
+            // ctx.joinState, NOT ctx.isPending — there is no such field, and reading it gave every member
+            // the connection message even when the real reason was that their church had not admitted them
+            // yet, which is the single most common cause of this failure.
+            ((ctx.joinState && ctx.joinState.isPending) ? 'You’re still waiting to be approved — try again once you’re in.' : 'Check your connection and try again.'));
           setBusy(false);
         }
       }} disabled={busy || (!sel.length && !had)} style={{ ...svPrimary(), background: (sel.length || had) ? 'var(--clay)' : 'var(--line)', opacity: busy ? 0.6 : 1 }}>
@@ -414,7 +417,7 @@ function MyMonth({ ctx, onManage, onRunsheet }) {
       {/* selected-day detail */}
       <SectionLabel>{svParts(sel).dow} {svParts(sel).day} {svParts(sel).mon}{sel === todayIso ? ' · Today' : ''}</SectionLabel>
       {(selServ.length === 0 && selEv.length === 0 && selSvc.length === 0) ? (
-        <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '6px 2px 4px', lineHeight: 1.5 }}>Nothing on this day.</div>
+        <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '6px 2px 4px', lineHeight: 1.5 }}>{(ctx.joinState && ctx.joinState.isPending) ? 'Hidden until you’re approved — not necessarily empty.' : 'Nothing on this day.'}</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
           {selSvc.map((s, i) => (
@@ -743,7 +746,18 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               );
             })()}
             <SectionLabel>What’s on</SectionLabel>
-            {events.length === 0 ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No socials or events yet — your church will post them here.</div> : null}
+            {/* AN EMPTY SCREEN MUST NOT BE STATED AS A FACT ABOUT THE CHURCH. Until a member is admitted the
+                relay serves them none of the church's corpus, so this read "No socials or events yet — your
+                church will post them here" to people looking at a parish with eighteen services on its
+                calendar. Six agents in the round of 2026-08-18 reported the church as empty; only the
+                Community tab ever admitted anyone was waiting. The church gate itself is not the problem and
+                is not changing — a steward has always approved members — but the app must say which of the
+                two it is showing. */}
+            {events.length === 0 ? (
+              (ctx.joinState && ctx.joinState.isPending)
+                ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>You’ll see what’s on once a steward lets you in. Your church may already have plenty here — it just isn’t shared until you’re approved.</div>
+                : <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No socials or events yet — your church will post them here.</div>
+            ) : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {/* AN EVENT WE CANNOT OPEN IS NOT AN EVENT WITH NO DETAILS. Calendar entries are sealed under the
                   church name key; one that will not open carries `_locked` so the transport does not silently

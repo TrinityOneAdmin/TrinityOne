@@ -52,7 +52,15 @@ test('save AWAITS the publish and only then reports success', () => {
   const awaitAt = handler.indexOf('await');
   assert.ok(awaitAt !== -1 && awaitAt < toastAt,
     'the success toast still fires before the publish resolves — that is what made a refused write look saved');
-  assert.match(handler, /catch|ok|err/i, 'a failed publish must be handled, not swallowed');
+  assert.match(handler, /catch/, 'a failed publish must be handled, not swallowed');
+  // A FIELD THAT DOES NOT EXIST IS ALWAYS FALSY, so a wrong ctx read shows the wrong explanation for ever
+  // and nothing ever throws. The first version of this fix said `ctx.isPending`, which is not a field —
+  // ctx exposes `joinState` — so every member was told to check their connection even when the real cause
+  // was that their church had not admitted them yet.
+  if (/isPending/.test(handler)) {
+    assert.match(handler, /ctx\.joinState/,
+      'pending state lives on ctx.joinState; ctx.isPending does not exist and reads as undefined');
+  }
 });
 
 test('the fellowship call reports failure instead of swallowing it', () => {

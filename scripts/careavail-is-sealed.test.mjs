@@ -61,10 +61,13 @@ test('the shipped bundle carries it', () => {
   assert.match(VEN, /_sealChurchDocMember/, 'rebuild: bash scripts/build-fellowship.sh');
 });
 
-// PROVE IT WOULD HAVE CAUGHT THE BUG. Read the committed version and assert it fails.
+// PROVE IT WOULD HAVE CAUGHT THE BUG, against the commit where the bug actually lived.
+// Pinned to a SHA, not HEAD: once the fix is committed, HEAD contains it and a HEAD-relative check
+// starts failing for the opposite of the reason it was written. The sha below is the last commit
+// before this fix, so this assertion keeps meaning the same thing for ever.
 test('the pre-fix source would have failed this', () => {
   let old = '';
-  try { old = execFileSync('git', ['show', 'HEAD:src/fellowship.src.js'], { encoding: 'utf8', cwd: ROOT }); }
+  try { old = execFileSync('git', ['show', '38f04d3ee75402bf8f36dc74dc6ca990a603b4b0:src/fellowship.src.js'], { encoding: 'utf8', cwd: ROOT }); }
   catch (e) { return; }   // no git in the sabotage sandbox — skip rather than fail for an unrelated reason
   const fn = fnOf(stripComments(old), 'async setCareAvail(', 'async clearCareAvail(');
   assert.match(fn, /content: JSON\.stringify\(\{ available/,

@@ -44,11 +44,12 @@ test('the confirmation does not claim to have asked someone unreachable', () => 
     'to the leader, so the named teammate hears nothing');
 });
 
-// PROVE THIS GOES RED AGAINST THE CODE THAT SHIPPED. A test written after a fix is worthless unless it would
-// have caught the bug; this reads the committed version straight out of git and asserts it fails.
+// PROVE THIS GOES RED AGAINST THE CODE THAT SHIPPED. A test written after a fix is worthless unless it
+// would have caught the bug. Pinned to the SHA where the bug lived — against HEAD this would start
+// failing the moment the fix was committed, which is the opposite of what it is asserting.
 test('the pre-fix source would have failed these assertions', () => {
   let old = '';
-  try { old = execFileSync('git', ['show', 'HEAD:app/screens-serving.jsx'], { encoding: 'utf8', cwd: new URL('..', import.meta.url).pathname }); }
+  try { old = execFileSync('git', ['show', '38f04d3ee75402bf8f36dc74dc6ca990a603b4b0:app/screens-serving.jsx'], { encoding: 'utf8', cwd: new URL('..', import.meta.url).pathname }); }
   catch (e) { return; }   // no git (sabotage sandbox) — skip rather than fail for an unrelated reason
   const OLD = cut(stripComments(old));
   assert.doesNotMatch(OLD, /[Nn]ot on the app/,
