@@ -79,7 +79,12 @@ function RecoverySheet({ open, onClose, ctx }) {
   const [bkErr, setBkErr] = useIx('');
   const [file, setFile] = useIx(null);
   useIxE(() => { if (!open) { setBk(null); setPass(''); setBkErr(''); setFile(null); } }, [open]);
-  const markSaved = () => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; if (np) localStorage.setItem('trinityone.backedup.' + np, '1'); } catch (e) {} };
+  // Record WHEN, not just that it happened. The success toast lasts a few seconds and then nothing on the
+  // screen says a backup exists, so members re-ran it or assumed it had failed (measured repeatedly,
+  // 2026-08-18). A durable "last backed up" line needs a date; an ISO string is still truthy, so the existing
+  // backed-up nudge that checks this key keeps working, and old '1' values read as "backed up, date unknown".
+  const markSaved = () => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; if (np) localStorage.setItem('trinityone.backedup.' + np, new Date().toISOString()); } catch (e) {} };
+  const lastBackup = (() => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; const v = np && localStorage.getItem('trinityone.backedup.' + np); if (!v || v === '1') return null; const d = new Date(v); return isNaN(d) ? null : d; } catch (e) { return null; } })();
   const doExport = async () => {
     // SECURITY-AUDIT-2026-07-18: floor lowered 10 → 6 because the KDF is now memory-hard Argon2id (backup.jsx),
     // which makes a 6-digit PIN genuinely costly to brute-force even against a leaked/cloud-stored file — the
@@ -190,6 +195,7 @@ function RecoverySheet({ open, onClose, ctx }) {
           <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '2px 7px', borderRadius: 999 }}>Easier</span>
         </div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 8px' }}>One file with your account <i>and</i> your notes, journal and plans — locked with a PIN or passphrase you choose. Restore it on any phone.</p>
+        {lastBackup ? <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--sage)', fontWeight: 700, margin: '0 0 8px' }}><Icon name="check" size={13} color="var(--sage)" /> Last backed up {lastBackup.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</div> : null}
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 12px', padding: '9px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
           <b>Where you keep it matters.</b> Kept on your phone or a USB stick, only someone holding that device can try to open it — a short PIN is fine. Kept in the cloud (Drive, iCloud) it survives a lost phone — but if anyone got into your cloud they’d have the file to try your PIN against, so <b>use a few words, not a short PIN</b>.</div>
         {!bk ? (

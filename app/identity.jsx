@@ -1167,7 +1167,7 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
   // RecoverySheet — the in-memory identity.backedUp was never set true, so this warning fired even after backup.
   const backedUp = !!(identity && identity.backedUp) || (() => { try {
     const np = identity && identity.npub;
-    if (np && localStorage.getItem('trinityone.backedup.' + np) === '1') return true;
+    if (np && localStorage.getItem('trinityone.backedup.' + np)) return true;   // truthy = backed up; the value is now an ISO date (legacy '1' still counts)
     if (np && localStorage.getItem('trinityone.backedup') === 'true') { localStorage.setItem('trinityone.backedup.' + np, '1'); return true; }   // migrate the legacy global flag
     return false;
   } catch (e) { return false; } })();

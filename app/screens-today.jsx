@@ -881,7 +881,7 @@ function RecoveryNudge({ ctx }) {
   // `trinityone.backedup`='true', not the per-npub key this reads — so members who backed up in the wizard
   // were still nagged. Migrate it to the per-npub key on read so it's a one-time fallback.
   const backedUp = (() => { try {
-    if (np && localStorage.getItem('trinityone.backedup.' + np) === '1') return true;
+    if (np && localStorage.getItem('trinityone.backedup.' + np)) return true;   // truthy = backed up; the value is now an ISO date (legacy '1' still counts)
     if (np && localStorage.getItem('trinityone.backedup') === 'true') { localStorage.setItem('trinityone.backedup.' + np, '1'); return true; }
     return false;
   } catch (e) { return false; } })();

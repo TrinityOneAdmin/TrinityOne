@@ -336,7 +336,12 @@ function ChatScreen({ ctx }) {
           // look for it. Same shape of defect as publishGroup rebuilding a group document from scratch.
           eventPolicy: g.eventPolicy, leaders: g.leaders, memberPubs: Array.isArray(g.members) ? g.members : null,
           // member count: invite groups carry an explicit list; public groups are church-wide, so show the church's count (never a bare "0")
-          members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : (((ctx.church && ctx.church.members) || 0) || null) }))
+          // MEMBER COUNT, HONESTLY. An OPEN group has no per-group membership — everyone in the church can
+          // read it — so showing the church's total as "29 members" reads as "29 people in THIS study", which
+          // it is not (measured confusion, 2026-08-18). Only an invite-only group has a real roster to count.
+          // Open groups carry no number and render "open to your church" instead.
+          members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : null,
+          openToChurch: g.visibility !== 'invite' && g.kind !== 'team' && g.kind !== 'Team' }))
     : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, ctx.church]);   // eslint-disable-line
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
@@ -406,7 +411,7 @@ function ChatScreen({ ctx }) {
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
           <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
-          {g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : (g.sub ? ` · ${g.sub}` : '')}
+          {g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : (g.sub ? ` · ${g.sub}` : (g.openToChurch ? ' · open to your church' : ''))}
         </div>
       </div>
     </div>
@@ -1360,7 +1365,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} members` : 'Members only'} · private to your church</div>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} members` : (group.openToChurch ? 'Open to your church' : 'Members only')} · private to your church</div>
           </div>
           <IconBtn name="shield" onClick={() => ctx.toast('Private to your church — only members can see this room.')} />
         </div>

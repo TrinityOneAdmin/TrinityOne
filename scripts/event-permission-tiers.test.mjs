@@ -150,7 +150,7 @@ test('the chat screen carries the permission fields through its group re-map', (
   const CHAT = readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8');
   const at = CHAT.indexOf('const churchGroups = React.useMemo(');
   assert.notEqual(at, -1, 're-anchor: the group re-map has moved');
-  const map = stripComments(CHAT.slice(at, at + 2000));
+  const map = stripComments(CHAT.slice(at, at + 2600));   // widened 2000→2600: the openToChurch honesty fix added lines to this memo (2026-08-18)
   for (const f of ['eventPolicy:', 'leaders:', 'memberPubs:']) {
     assert.ok(map.includes(f),
       `the re-map drops \`${f}\` — the chat room then cannot tell whether this member may add an event, and ` +
