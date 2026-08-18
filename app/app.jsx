@@ -1156,11 +1156,21 @@ function App() {
     // show a neutral loading until the sub resolves — stops the community flashing before a pending join resolves.
     // reset only on an actual church change, not a mere reconnect (connTick), else the tab would blink each reconnect.
     if (joinChurchRef.current !== activeChurch) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: false }); joinChurchRef.current = activeChurch; }
+    const WAS_KEY = 'trinityone.wasadmitted.' + activeChurch;
     const unsub = F.subscribeChurchJoin(np, (s) => {
-      setJoinState({ ...s, loaded: true });
+      // REMOVED IS NOT PENDING. A member who was once admitted and is now pending has been taken OUT — blocked,
+      // or dropped from the admitted list — not left waiting for a first approval. Shown the newcomer's
+      // "your request has been sent, a steward usually lets people in within a day", a removed member waits
+      // for a day that never comes, and for a safeguarding removal that is precisely the wrong message. The
+      // signal is local and certain: this church once told us isAdmitted, and now does not. A brand-new
+      // applicant never saw isAdmitted true.
+      let wasAdmitted = false; try { wasAdmitted = lsGet(WAS_KEY) === '1'; } catch (e) {}
+      if (s.isAdmitted) { wasAdmitted = true; try { lsSet(WAS_KEY, '1'); } catch (e) {} }
+      const removed = !!(wasAdmitted && s.approval && !s.isAdmitted);
+      setJoinState({ ...s, removed, loaded: true });
       // Cache this church's LAST-KNOWN real join state, so an offline reopen can show the TRUTH (pending stays
       // pending, admitted stays admitted) instead of a hardcoded "you're in".
-      lsSet('trinityone.joinstate.' + activeChurch, { approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending });
+      lsSet('trinityone.joinstate.' + activeChurch, { approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending, removed });
     });
     // OFFLINE FALLBACK: if the relay never answers (offline / hostile network / relay down), don't spin forever —
     // and DON'T pretend the member is admitted (the old fallback hardcoded isAdmitted:true, so a brand-new member

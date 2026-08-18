@@ -496,6 +496,17 @@ function ChatScreen({ ctx }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '72px 24px' }}>
           <div style={{ width: 28, height: 28, borderRadius: 999, border: '3px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
         </div>
+      ) : (ctx.joinState && ctx.joinState.removed) ? (
+        // REMOVED, not waiting. A once-admitted member who is now pending has been taken out — do not show them
+        // the newcomer's "a steward usually lets people in within a day". Say plainly what happened, without
+        // guessing why (a block and an accidental drop look identical from here), and point them at the only
+        // real next step: the person who runs the church. No "Check again" — there is nothing to re-check.
+        <div style={{ textAlign: 'center', padding: '40px 24px', animation: 'trinityFade .4s ease both' }}>
+          <div style={{ width: 76, height: 76, borderRadius: 22, margin: '0 auto 18px', background: 'color-mix(in oklab, var(--ink-3) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="shield" size={38} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, marginBottom: 10 }}>You’re no longer in this church</div>
+          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>Your access to <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been removed, so you can no longer see its groups or messages. If you think this is a mistake, speak to whoever runs the church — they can add you back.</p>
+          <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55, maxWidth: 340, margin: '14px auto 0' }}>Your own account, your Bible and your notes are untouched and stay on this phone.</p>
+        </div>
       ) : (ctx.joinState && ctx.joinState.isPending) ? (
         <div style={{ textAlign: 'center', padding: '40px 24px', animation: 'trinityFade .4s ease both' }}>
           <div style={{ width: 76, height: 76, borderRadius: 22, margin: '0 auto 18px', background: 'color-mix(in oklab, var(--gold) 16%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a6717' }}><Icon name="shield" size={38} /></div>
