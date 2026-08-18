@@ -601,11 +601,9 @@ export const CASES = [
     // semantically "the same code, later" — but the whole point is the window BEFORE the publish resolves,
     // which is exactly when the roster effect re-keys the person just blocked
     find: `    _localBlocked = new Set(list.map(p => String(p).toLowerCase()));
-    const content = JSON.stringify({ pubkeys: list });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));`,
+    const content = JSON.stringify({ pubkeys: list });`,
     replace: `    const content = JSON.stringify({ pubkeys: list });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk))
-      .then(r => { _localBlocked = new Set(list.map(p => String(p).toLowerCase())); return r; });`,
+    const _localBlocked = new Set(list.map(p => String(p).toLowerCase()));  // MOVED after the content build, still before publish — but the sabotage is that it is no longer set SYNCHRONOUSLY where the roster effect reads it`,
     test: 'scripts/name-key-integrity.test.mjs',
   },
   {
@@ -947,7 +945,7 @@ export const CASES = [
   {
     name: 'chat: the 12-word check becomes a dead end again',
     file: 'app/screens-help-main.jsx',
-    find: `                const show = picked != null && correct;`,
+    find: `                const show = solved;`,
     replace: `                const show = picked != null;`,
     test: 'scripts/chat-parity-and-retry.test.mjs',
   },

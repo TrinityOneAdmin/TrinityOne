@@ -124,14 +124,16 @@ function BackupWalkthrough({ onClose, onComplete, ctx, fs = 1 }) {
               {options.current.map(w => {
                 const correct = w === words[checkN - 1];
                 const chosen = picked === w;
-                // A WRONG ANSWER MUST NOT END THE CEREMONY. `disabled` was `picked != null`, so the FIRST tap
-                // — right or wrong — froze all three buttons for good, under a sentence that says "check your
-                // paper and tap the right word". The ✕ that looks like a clear-and-retry is inside a disabled
-                // button, so that was dead too; the only way out was to reload the app. It fired for exactly
-                // one person: the member who copied their words down wrong, on the step this app calls the
-                // one thing that must not be missed. Found by a simulated member, 2026-08-17.
-                // Freeze only once they have it RIGHT, and only for the 700ms hand-off to the next step.
-                const show = picked != null && correct;
+                // A WRONG ANSWER MUST NOT END THE CEREMONY, AND MUST NOT DISABLE THE RIGHT ONE. The first fix
+                // for this (2026-08-17) wrote `picked != null && correct` — but `correct` is PER BUTTON, so
+                // after any tap the CORRECT button (correct===true) disabled ITSELF, which is the one the
+                // member now needs. It disabled exactly the answer it was telling them to tap. A simulated
+                // 81-year-old reproduced it on 2026-08-18: wrong tap, then the right word does nothing.
+                // The freeze is a property of the WHOLE step, not of a button: freeze all three only once the
+                // CHOSEN word is the right one, for the 700ms hand-off to the next screen. A wrong pick leaves
+                // every button live so the member can simply tap again.
+                const solved = picked === words[checkN - 1];
+                const show = solved;
                 return (
                   <button key={w} disabled={show} onClick={() => { setPicked(w); if (correct) setTimeout(() => setStep(4), 700); }} style={{
                     padding: '16px 18px', borderRadius: 16, cursor: show ? 'default' : 'pointer', textAlign: 'left',

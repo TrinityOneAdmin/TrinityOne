@@ -70,16 +70,39 @@ test('a DM reply is carried INSIDE the encryption, not in a public tag', () => {
 });
 
 test('the 12-word check lets you try again when you get it wrong', () => {
+  // DRIVE THE ACTUAL disabled LOGIC, not the source text. The first two attempts at this fix both PASSED a
+  // string-matching test while being wrong — `picked != null` froze every button, then `picked != null &&
+  // correct` (with `correct` per-button) disabled the CORRECT button after any tap. Both shipped. So this
+  // extracts the three expressions the render computes and evaluates them for every (picked, button) pair.
   const src = stripComments(HELP);
   const at = src.indexOf('One quick check');
   assert.notEqual(at, -1, 're-anchor: the verification step has moved');
-  const step = src.slice(at, at + 2200);
-  assert.match(step, /const show = picked != null && correct;/,
-    'freeze the answers only once the member has it RIGHT. `picked != null` froze them on any tap, so the ' +
-    'one person this check exists for — the member who wrote their words down wrong — was told to tap the ' +
-    'right word by a screen that would no longer accept a tap');
-  assert.doesNotMatch(step, /const show = picked != null;/, 'that is the dead-end form');
-  assert.match(step, /disabled=\{show\}/, 'and the buttons still lock during the hand-off to the next step');
+  const step = src.slice(at, at + 2600);
+
+  const correctExpr = (step.match(/const correct = (w === words\[checkN - 1\]);/) || [])[1];
+  const showExpr = (step.match(/const show = ([^;]+);/) || [])[1];
+  assert.ok(correctExpr && showExpr, 're-anchor: could not find the correct/show expressions');
+  assert.match(step, /disabled=\{show\}/, 'the button’s disabled state must be `show`');
+
+  // model the render for a three-option question; the answer is index 1
+  const words = ['alpha', 'answer', 'gamma'];
+  const checkN = 2;                                   // words[checkN-1] === 'answer'
+  const disabledFor = (picked, w) => {
+    const correct = eval(correctExpr);               // eslint-disable-line no-eval — evaluating the app's own expr
+    const solved = picked === words[checkN - 1];      // available to showExpr if it references it
+    return !!eval(showExpr);                          // eslint-disable-line no-eval
+  };
+
+  // before any tap: everything is live
+  for (const w of words) assert.equal(disabledFor(null, w), false, `nothing is disabled before a tap (${w})`);
+
+  // AFTER A WRONG TAP: the correct answer MUST still be tappable. This is the whole bug.
+  for (const w of words) assert.equal(disabledFor('alpha', w), false,
+    `after a wrong tap, every button must stay live so the member can try again — '${w}' was disabled`);
+
+  // after the RIGHT tap: freeze, for the 700ms hand-off to the next screen
+  for (const w of words) assert.equal(disabledFor('answer', w), true,
+    `once the right word is chosen the step freezes for the hand-off — '${w}' stayed live`);
 });
 
 test('the shipped bundle carries the DM reply', () => {
