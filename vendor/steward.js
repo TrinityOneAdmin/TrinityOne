@@ -14877,10 +14877,8 @@ zoo`.split("\n");
   function relays() {
     const own = ownRelay();
     const out = [own];
-    if (own === CANONICAL_RELAY) {
-      for (const r of CANONICAL_RELAYS) {
-        if (r && !out.includes(r)) out.push(r);
-      }
+    for (const r of CANONICAL_RELAYS) {
+      if (r && !out.includes(r)) out.push(r);
     }
     for (const r of extraRelays()) {
       if (r && r !== own && !out.includes(r)) out.push(r);

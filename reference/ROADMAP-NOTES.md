@@ -208,3 +208,54 @@ church profile. Do it BEFORE the members arrive, the way a real church would.
 It also exercises the console itself, which no actor has ever driven: everything the console does in these
 rounds so far has been driven by me from the command line.
 
+
+---
+
+## 6. DECIDED 2026-08-18 — the relay model, and three safeguarding calls
+
+### 6a. P1: NOBODY picks relays — everything defaults to the public T1 set, rules published to all of it
+
+**Owner, reframed twice, final form: the CHURCH should not have to choose either.** Neither member nor church
+selects relays. There is a default set of public TrinityOne relays (`CANONICAL_RELAYS`); the console and every
+member use that same set automatically; and the church's rules (block, minors, approved, guardians, group
+definitions) are published to ALL of them so each enforces from its own copy.
+
+THE ACTUAL BUG, correctly scoped. The console's relays() fans out to the public set only when
+`own === CANONICAL_RELAY` (steward.src.js). So:
+- a production-default church (own = app.trinityone.church = canonical) DOES fan out to all canonical relays,
+  members use the same set, and the rules reach every relay — this case already works;
+- any church whose own relay is NOT exactly the canonical one — a self-hoster, a dev box, the tailscale
+  funnel — publishes governing docs to that one relay only, while members still read from the public
+  canonical set. That is the divergence measured on 2026-08-18 (banned member read from two canonical relays
+  the funnel-based console never published the block to).
+
+CORRECTION TO WHAT I TOLD THE OWNER: I called that ban-divergence "live on a8". It is not, for a normal
+production church — a8 IS canonical, so its console fans out and members match. The divergence needs the
+console to sit on a DIFFERENT relay than the members' canonical set, which is a dev/self-host/funnel topology,
+which is exactly what the sim used. The fragility is real; the production-default risk I stated was overstated.
+
+THE FIX (one change, no per-church or per-member choice):
+1. **Publish governing documents to the full public relay set unconditionally** — the union of the console's
+   own relay and CANONICAL_RELAYS — not gated on `own === CANONICAL_RELAY`. This makes the rules reach every
+   relay a member reads from, in every topology, without anyone choosing anything.
+2. Members keep using the canonical public set (already do). No member-facing relay UI, by design.
+3. Fix the loopback advertisement (kind-10002 says `127.0.0.1`) as hygiene — it is what made the divergence
+   invisible — but it is no longer load-bearing under this model, because the set is well-known, not
+   per-church-advertised.
+
+The genuinely self-hosted PRIVATE church that does NOT want its traffic on public relays is the documented
+exception (opt-in), consistent with ROADMAP §4 (open relays support churches that cannot self-host; public
+self-registration is intended).
+
+### 6b. P2: the block list stays cleartext (owner). It is `{"pubkeys":[...]}` on the relay. Sealing it is
+possible but the owner judged it unnecessary — a list of excluded pubkeys is lower-sensitivity than the
+membership/care/name data, which stays sealed.
+
+### 6c. P3: no member-facing report/block for the pilot (owner). These are churches; a member who is being
+abused goes to a steward, who has the tools. Revisit as a feature AFTER the pilot, not before.
+
+### 6d. Child-account creation has no age gate — NOT a safeguarding hole. Verified 2026-08-18: a self-created
+child account publishes a join REQUEST and sits unadmitted. The relay's effectiveMember gate refuses a
+non-admitted key in an approval-gated church, so the account can read and post nothing until a steward admits
+it. "A 15-year-old joined the church" was "a 15-year-old asked to join". The steward approval gate holds.
+Worth a cosmetic tidy (the wizard could say "this creates a request"), not urgent.

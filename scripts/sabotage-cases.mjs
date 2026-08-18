@@ -1040,4 +1040,13 @@ export const CASES = [
     replace: `      counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 },`,
     test: 'scripts/status-hides-congregation-size.test.mjs',
   },
+  {
+    name: 'relays: the console stops publishing to the shared public pool',
+    file: 'src/steward.src.js',
+    find: `  for (const r of CANONICAL_RELAYS) { if (r && !out.includes(r)) out.push(r); }
+  for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }`,
+    replace: `  if (own === CANONICAL_RELAY) { for (const r of CANONICAL_RELAYS) { if (r && !out.includes(r)) out.push(r); } }
+  for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }`,
+    test: 'scripts/relays-always-canonical.test.mjs',
+  },
 ];

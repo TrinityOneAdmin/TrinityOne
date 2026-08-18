@@ -535,8 +535,17 @@ try { setTimeout(refreshSelfPublicRelay, 1500); setInterval(refreshSelfPublicRel
 function relays() {
   const own = ownRelay();
   const out = [own];
-  // on a static CDN host the console has no relay of its own → fan out across the whole shared pool
-  if (own === CANONICAL_RELAY) { for (const r of CANONICAL_RELAYS) { if (r && !out.includes(r)) out.push(r); } }
+  // ALWAYS THE SHARED PUBLIC POOL, not only when this console happens to sit on it. Owner's model, 2026-08-18:
+  // nobody picks relays — the console and every member use the same default public set, and the church's rules
+  // (block, minors, approved, guardians, group definitions) must be published to ALL of it so each relay
+  // enforces from its own copy. This fanned out only when `own === CANONICAL_RELAY`, so a console on a
+  // self-hosted / dev / funnel relay published the church's rules to that ONE relay while members still read
+  // from the canonical set — and a member banned from a funnel-based console read the adult group from two
+  // canonical relays that never received the block (measured). The own relay stays first (fastest, and works
+  // even when the shared hosts are blocked); canonical is always appended so the traffic and the rules land on
+  // the same relays. The genuinely self-hosted PRIVATE church that wants NO public reach is the opt-in
+  // exception (ROADMAP §4/§6a), not built here.
+  for (const r of CANONICAL_RELAYS) { if (r && !out.includes(r)) out.push(r); }
   for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }
   return out;
 }
