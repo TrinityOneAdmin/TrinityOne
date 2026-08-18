@@ -143,6 +143,30 @@ async function joinChurch(keys) {
   return ok;
 }
 
+// WAIT FOR THE STATE, DON'T GUESS HOW LONG IT TAKES.
+//
+// This test drives a REAL relay: the console publishes minors/guardians/admitted documents, the gateway
+// ingests them into its in-memory maps, and only then does a DM decision reflect them. That gap is real work,
+// not a fixed cost, so the `await sleep(400)` this replaced was a bet on how loaded the machine was. It won
+// when the test ran alone and lost about two runs in three inside the full suite — always failing on the
+// FIXTURE line ("the parent could not reach their child even before the reconnect"), never on the assertion
+// the test exists to make.
+//
+// That matters more than an ordinary flake: this is a safeguarding test, and one that reddens at random
+// teaches the reflex "just run it again" — which is precisely how a genuine safeguarding regression would be
+// waved through. Polling keeps the assertion exactly as strict (a condition that never becomes true still
+// fails, just later) while removing the guess.
+async function waitUntil(check, ms = 10000, every = 120) {
+  const t0 = Date.now();
+  for (;;) {
+    let v = false;
+    try { v = await check(); } catch (e) { v = false; }
+    if (v) return true;
+    if (Date.now() - t0 >= ms) return false;
+    await sleep(every);
+  }
+}
+
 // may this key DM that one, as far as the relay is concerned?
 async function parentDM(from, toPub) {
   const w = await new Promise((res, rej) => { const x = new WebSocket(WS_URL); x.on('open', () => res(x)); x.on('error', rej); });
@@ -222,11 +246,11 @@ test('a reconnected child is still a child on their own phone', async () => {
     await s.api.setMinors([child.pub]);
     await s.api.setGuardians({ [child.pub]: [parent.pub] });
     await s.api.refreshClearances([child.pub], [child.pub], []);
-    await sleep(600);
-
-    const before = childPhone(child, []);
-    await feedPhoneFromRelay(before, child.pub);
-    assert.equal(before.isMinor(), true, 'fixture: the child was never marked in the first place');
+    assert.equal(await waitUntil(async () => {
+      const p = childPhone(child, []);
+      await feedPhoneFromRelay(p, child.pub);
+      return p.isMinor();
+    }), true, 'fixture: the child was never marked in the first place');
 
     // They lose their phone. The steward reconnects them onto a new key — exactly as the console does.
     // The console passes its current view of the church, exactly as the modal does — the engine holds no
@@ -235,11 +259,12 @@ test('a reconnected child is still a child on their own phone', async () => {
       name: 'Sara', reseats: [], admitted: [child.pub],
       minors: [child.pub], approved: [], guardians: { [child.pub]: [parent.pub] },
     });
-    await sleep(600);
-
-    const after = childPhone(newKey, []);
-    await feedPhoneFromRelay(after, newKey.pub);
-    assert.equal(after.isMinor(), true,
+    const stillAChild = await waitUntil(async () => {
+      const p = childPhone(newKey, []);
+      await feedPhoneFromRelay(p, newKey.pub);
+      return p.isMinor();
+    });
+    assert.equal(stillAChild, true,
       'the reconnected child\'s own phone reads ADULT. Their safeguarding record is sealed to the key they '
       + 'lost, and the minors list the app falls back to is one the relay refuses to serve ordinary members — '
       + 'so an absence reads as adulthood. The relay opens too: nothing names this key as a minor, so adult '
@@ -261,18 +286,15 @@ test('…and their parent can still reach them', async () => {
     await s.api.setAdmitted([parent.pub, child.pub, newKey.pub]);
     await s.api.setMinors([child.pub]);
     await s.api.setGuardians({ [child.pub]: [parent.pub] });
-    await sleep(400);
-
     // CONTROL: before the reconnect, the parent CAN reach their child — so a refusal afterwards is the
     // guardian link breaking, not membership or anything else.
-    assert.equal(await parentDM(parent, child.pub), true, 'fixture: the parent could not reach their child even before the reconnect');
+    assert.equal(await waitUntil(() => parentDM(parent, child.pub)), true,
+      'fixture: the parent could not reach their child even before the reconnect');
     await s.api.reseatMember(child.pub, newKey.pub, {
       name: 'Sara', reseats: [], admitted: [child.pub],
       minors: [child.pub], approved: [], guardians: { [child.pub]: [parent.pub] },
     });
-    await sleep(600);
-
-    const ok = await parentDM(parent, newKey.pub);
+    const ok = await waitUntil(() => parentDM(parent, newKey.pub));
     assert.equal(ok, true,
       'a linked parent can no longer message their own child after the child was reconnected. The guardian '
       + 'map still points at the key they lost. This is the half no steward can put right by hand — re-ticking '
