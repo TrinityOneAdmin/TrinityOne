@@ -17645,7 +17645,7 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
       const content = JSON.stringify({ pubkeys: list });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }, sk));
+      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }, sk));
     },
     // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
     // minors:<churchpub> = members marked as children; approved:<churchpub> = adults cleared to contact youth

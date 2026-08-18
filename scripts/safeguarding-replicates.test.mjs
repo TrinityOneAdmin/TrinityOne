@@ -36,6 +36,11 @@ const GOVERNING = [
   ['setApproved(pubkeys)', 'who is cleared for youth — without it the relay cannot tell a vetted adult from any other'],
   ['setGuardians(links)', 'the child→parent map — without it a parent is refused their own child'],
   ['publishGroup(group)', 'carries `childsafe` and the leaders list — without it the relay cannot tell an adults-only room from a youth one'],
+  // ADDED 2026-08-18, demonstrated by a red-team insider. A banned member, whose ban reached only ONE of the
+  // three relays their app connects to, AUTHENTICATED on the two that lacked the block and read the whole
+  // adult group (12 messages). The relay refuses to authenticate a blocked key — but only a relay that HAS
+  // the block. Single-accept publishing means most relays never got it.
+  ['setBlocked(pubkeys)', 'who is banned — a relay without it authenticates the banned key and serves it everything'],
 ];
 
 test('every document a relay polices with is published to ALL relays, not the first to answer', () => {

@@ -186,6 +186,10 @@ function blockRig(have) {
       const d = ((evt.tags || []).find((t) => t[0] === 'd') || [])[1] || '';
       return d.startsWith(BLOCKED_D) ? new Promise(() => {}) : Promise.resolve(evt);
     };
+    // setBlocked moved onto the all-must-accept path (safeguarding replication, 2026-08-18); it now calls
+    // _publishToRelays, not publish. Same in-flight semantics for the block doc — this test's whole point is
+    // that the local filter must hold WHILE the publish is unresolved, whichever primitive carries it.
+    const _publishToRelays = publish;
     const api = { ${setBlockedM}, ${ensureM} };
     return { api, published };
   `;

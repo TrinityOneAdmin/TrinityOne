@@ -3318,7 +3318,12 @@ window.Steward = {
     // roster effect re-keyed the person just blocked. Full replacement, so an unblock clears it too.
     _localBlocked = new Set(list.map(p => String(p).toLowerCase()));
     const content = JSON.stringify({ pubkeys: list });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));
+    // ALL RELAYS, NOT THE FIRST TO ANSWER — see setMinors for the full reasoning. A red-team insider proved
+    // this one on 2026-08-18: their ban reached only one of the three relays their app connected to, and on
+    // the two that lacked the block they AUTHENTICATED and read the entire adult group. The relay refuses to
+    // authenticate a blocked key — but only a relay that HOLDS the block. A ban published single-accept is a
+    // ban on one relay.
+    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));
   },
 
   // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
