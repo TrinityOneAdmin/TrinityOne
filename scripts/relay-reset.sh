@@ -104,7 +104,14 @@ rm -rf "$DIR/.bundle-cache" 2>/dev/null || true   # regenerates; stale entries w
 echo "✔ wiped."
 echo
 echo "Next:"
-echo "  1. start the relay again        (sudo systemctl start trinityone-relay)"
+echo "  1. start the relay again        (sudo systemctl start trinityone-relay)
+  1b. AND THE TUNNEL — check it survived. Stopping the relay can take the public tunnel down with it, and
+      systemd logs that as \"Deactivated successfully\", so a Restart=on-failure policy will NOT bring it back.
+      Measured on a8, 2026-08-18: the tunnel died one second before this script's own backup was written and
+      stayed dead for two hours, with both domains serving Cloudflare error 1033, while the relay itself was
+      perfectly healthy. Following the old version of these instructions left the box publicly dark.
+         systemctl is-active trinityone-relay-tunnel || sudo systemctl start trinityone-relay-tunnel
+      (yours may be named differently:  systemctl list-units --all | grep -i tunnel)"
 echo "  2. clear the phones, or they will re-publish the church you just deleted:"
 echo "       adb -s <SERIAL> shell pm clear com.trinityone.app"
 echo "       adb -s <SERIAL> shell pm clear com.trinityone.steward   # DESTROYS the church key on that device"
