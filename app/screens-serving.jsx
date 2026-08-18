@@ -242,7 +242,7 @@ function EventDetail({ event, open, onClose, ctx }) {
             </div>
           </div>
           {e.blurb ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink-2)', margin: '14px 0 4px', textWrap: 'pretty' }}>{e.blurb}</p> : null}
-          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' }}>Will you be there?</div>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' }}>Will you be there?{(e.recurring || e.seriesDate) ? <span style={{ textTransform: 'none', fontWeight: 600, letterSpacing: 0, color: 'var(--ink-3)' }}> · this repeats, so your answer covers every date</span> : null}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {[['going', 'Going', 'var(--sage)'], ['maybe', 'Maybe', 'var(--gold)'], ['no', 'Can’t', 'var(--ink-3)']].map(([v, lbl, c]) => {
               const on = rsvps[e.id] === v;
@@ -257,8 +257,16 @@ function EventDetail({ event, open, onClose, ctx }) {
 window.EventDetail = EventDetail;
 
 function svEventRsvpRow({ e, rsvps, ctx }) {
+  // ONE ANSWER PER SERIES, SHOWN HONESTLY. A weekly meeting is stored as a single event and expanded into a
+  // card per date, but the RSVP doc is keyed on the event id alone (rsvp:<eventId>) — so an answer applies to
+  // the WHOLE series, not one night. Members read the per-date cards as per-date RSVP and were surprised when
+  // one "Going" lit every future card (25 at once, measured 2026-08-18). Per-occurrence RSVP is a real
+  // data-model change (a dated d-tag + the relay's owner check + the read path); until that is built, the
+  // truthful thing is to say the answer covers every date. `recurring`/`seriesDate` are set by expandEvents.
+  const isSeries = !!(e && (e.recurring || e.seriesDate));
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {isSeries ? <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>every time</span> : null}
       <div style={{ flex: 1 }} />
       {[['going', 'Going'], ['maybe', 'Maybe'], ['no', 'Can’t']].map(([v, lbl]) => {
         const on = rsvps[e.id] === v; const c = v === 'going' ? 'var(--sage)' : v === 'maybe' ? 'var(--gold)' : 'var(--ink-3)';

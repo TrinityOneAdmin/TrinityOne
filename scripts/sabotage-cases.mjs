@@ -1049,4 +1049,27 @@ export const CASES = [
   for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }`,
     test: 'scripts/relays-always-canonical.test.mjs',
   },
+  {
+    name: 'care: a withdrawn request deletes on the tap again',
+    file: 'app/screens-today.jsx',
+    find: `onClick={() => setConfirming(true)} disabled={busy} title="Withdraw this request"`,
+    replace: `onClick={async () => { setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} disabled={busy} title="Withdraw this request"`,
+    test: 'scripts/care-withdraw-confirms.test.mjs',
+  },
+  {
+    name: 'care: a filled meal day offers a second signup again',
+    file: 'app/screens-today.jsx',
+    find: `                    : fills.length
+                    ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
+                    : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}`,
+    replace: `                    : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}`,
+    test: 'scripts/care-rota-and-rsvp.test.mjs',
+  },
+  {
+    name: 'events: a recurring RSVP no longer says it covers every date',
+    file: 'app/screens-serving.jsx',
+    find: `  const isSeries = !!(e && (e.recurring || e.seriesDate));`,
+    replace: `  const isSeries = false;`,
+    test: 'scripts/care-rota-and-rsvp.test.mjs',
+  },
 ];

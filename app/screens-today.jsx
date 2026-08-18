@@ -99,8 +99,16 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                       : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
                       : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
                   </div>
+                  {/* ONE HELPER PER DAY. The middle column already names who is bringing what; offering "I'll
+                      help" on a day someone ELSE has taken let two people sign up for the same slot and turn up
+                      with the same meal — the exact thing the help page promises the app prevents ("it shows as
+                      covered so two people don't turn up for the same slot"), and a simulated member did it by
+                      accident. So: my own signup stays cancellable; a day taken by someone else reads as
+                      covered and does not offer a second signup; only a genuinely Open day offers "I'll help". */}
                   {!skipped && !isRecipient && (mineFilled
                     ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
+                    : fills.length
+                    ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
                     : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
                   {(isRecipient || (canManage && fills.length === 0)) && (skipped
                     ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
@@ -177,6 +185,7 @@ const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No r
 
 function MyRequestRow({ r, onCancel, onMessage }) {
   const [busy, setBusy] = React.useState(false);
+  const [confirming, setConfirming] = React.useState(false);   // Withdraw deletes the request AND its care-team thread — ask first
   const label = CARE_TYPE_LABEL[r.type] || 'Help';
   const st = r.status || 'open';
   // "Declined" must not read like help is coming. Someone who worked up the courage to ask, and is told the
@@ -196,8 +205,27 @@ function MyRequestRow({ r, onCancel, onMessage }) {
       </div>
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
         {onMessage ? <button onClick={onMessage} title="Message the care team about this" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="chat" size={13} color="currentColor" /> Message</button> : null}
-        {st === 'open' ? <button onClick={async () => { setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} disabled={busy} title="Withdraw this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button> : null}
+        {st === 'open' ? <button onClick={() => setConfirming(true)} disabled={busy} title="Withdraw this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button> : null}
       </div>
+      {/* WITHDRAW IS DESTRUCTIVE AND SILENT. It deletes the whole request and the care-team conversation
+          attached to it — a simulated 81-year-old lost his appointment details and his thank-you to a one-tap
+          Withdraw with no confirm, no undo and no toast. A real dialog, away from the finger that tapped
+          Withdraw (not a same-spot second tap — that is the trap the Leave-church change had to avoid), naming
+          what goes, with the safe choice first. */}
+      {confirming ? (
+        <div onClick={() => setConfirming(false)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(20,15,10,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 22 }}>
+          <div role="dialog" aria-modal="true" aria-label="Withdraw your request for help" onClick={e => e.stopPropagation()}
+            style={{ width: 380, maxWidth: '100%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, marginBottom: 10 }}>Withdraw this request?</div>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 8px' }}>Your ask for help, and the private conversation with your care team about it, will be removed. This can’t be undone — you’d start a fresh request.</p>
+            <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 18px' }}>If you just don’t need help right now, that’s fine — nobody is troubled by a request you close.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setConfirming(false)} style={{ flex: 1.2, padding: 12, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Keep it</button>
+              <button onClick={async () => { setConfirming(false); setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Withdraw</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
