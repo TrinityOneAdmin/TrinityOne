@@ -1746,9 +1746,17 @@ function App() {
       if (window.Fellowship && window.Fellowship.setEventRsvp) window.Fellowship.setEventRsvp(np, eventId, next || 'none');
       setMyRsvps(m => ({ ...m, [eventId]: next }));
     },
+    // RETURN the promise. This dropped it, so even a handler that awaited could not learn that the church
+    // had refused the write — which is how a pending member's "I'm away" became a success toast over nothing.
     setUnavailableDates: (dates) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-      if (window.Fellowship && window.Fellowship.setUnavailable) window.Fellowship.setUnavailable(np, dates);
+      if (!(window.Fellowship && window.Fellowship.setUnavailable)) return Promise.reject(new Error('not ready'));
+      return window.Fellowship.setUnavailable(np, dates);
+    },
+    getUnavailableDates: () => {
+      const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+      if (!(window.Fellowship && window.Fellowship.getUnavailable)) return [];
+      return window.Fellowship.getUnavailable(np);
     },
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});

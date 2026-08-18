@@ -4575,7 +4575,12 @@ window.Steward = {
   // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
   publishRunsheet(serviceId, items) {
     if (!sk || !serviceId) return Promise.resolve(null);
-    const content = JSON.stringify({ items: Array.isArray(items) ? items : [] });
+    // SEALED, like every other calendar document. This wrote cleartext until 2026-08-18, so the relay held
+    // the order of service — including the minister named against each item — readable by anyone with the
+    // disk. Reads were already default-deny over the wire (a stranger gets zero events, measured), so the
+    // exposure was at rest, which is the half that matters under seizure. Both readers try plaintext first
+    // (_openChurchDoc here, CHURCH_SEALED_PFXS in the member app), so sheets written before this still open.
+    const content = _sealChurchDoc({ items: Array.isArray(items) ? items : [] });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RUNSHEET_D + serviceId], ['t', NET]], content }));
   },
   subscribeRunsheets(onSheets) { return this._subAddr(RUNSHEET_D, (c) => ({ items: Array.isArray(c.items) ? c.items : [] }), onSheets); },

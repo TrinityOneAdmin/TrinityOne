@@ -134,15 +134,20 @@ function SwapSheet({ open, item, onClose, ctx }) {
               return (
                 <button key={p.pub || p.name} onClick={() => setPick(p)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)' }}>
                   <ServAvatar name={p.name} size={40} accent={item.accent || 'var(--clay)'} />
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>On {item.teamName}</div></div>
+                  {/* A teammate with no pubkey is a NAME the steward typed, not an account. The swap reply
+                      carries swapTo:'' for them — byte-identical to "ask my leader" — so they are never
+                      contacted. Saying so here is the difference between a choice and a false promise. */}
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{p.pub ? `On ${item.teamName}` : 'Not on the app — your leader will be asked instead'}</div></div>
                   {on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={15} stroke={2.8} color="var(--on-clay)" /></div>
                     : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)' }} />}
                 </button>
               );
             })}
           </div>
-          <button onClick={() => pick && doAsk(pick.pub, `Asked ${pick.name.split(' ')[0]} to swap`)} disabled={!pick} style={{ ...svPrimary(), background: pick ? 'var(--clay)' : 'var(--line)' }}>
-            <Icon name="swap" size={18} color="#fff" /> {pick ? `Ask ${pick.name.split(' ')[0]} to swap` : 'Choose someone'}</button>
+          {/* Tell the truth in the toast too: an unlinked pick goes to the leader, so claiming we asked the
+              person by name is a promise the app cannot keep. */}
+          <button onClick={() => pick && doAsk(pick.pub, pick.pub ? `Asked ${pick.name.split(' ')[0]} to swap` : `Asked your leader — ${pick.name.split(' ')[0]} isn’t on the app`)} disabled={!pick} style={{ ...svPrimary(), background: pick ? 'var(--clay)' : 'var(--line)' }}>
+            <Icon name="swap" size={18} color="#fff" /> {pick ? (pick.pub ? `Ask ${pick.name.split(' ')[0]} to swap` : 'Ask my leader instead') : 'Choose someone'}</button>
         </React.Fragment>
       ) : (
         <React.Fragment>
@@ -187,7 +192,14 @@ function ManageSheet({ open, item, onClose, onSwap, ctx }) {
 // ── set unavailable Sundays ──
 function UnavailSheet({ open, onClose, ctx }) {
   const [sel, setSel] = useSv([]);
-  useSvE(() => { if (open) setSel([]); }, [open]);
+  const [busy, setBusy] = useSv(false);
+  const [err, setErr] = useSv('');
+  // LOAD WHAT THEY ALREADY SAID. This used to be `setSel([])`, and because the document is addressable —
+  // every save replaces the whole array — opening to a blank slate meant that ticking one new Sunday deleted
+  // every Sunday given before it. Measured on a real member: 13 + 27 Sep saved, then 20 Sep added, and the
+  // stored record became 20 Sep alone. It also made cancelling impossible: you cannot untick what is not shown.
+  const [had, setHad] = useSv(false);
+  useSvE(() => { if (open) { const cur = ctx.getUnavailableDates ? ctx.getUnavailableDates() : []; setSel(cur); setHad(cur.length > 0); setErr(''); setBusy(false); } }, [open]);
   const sundays = svNextSundays(6);
   const toggle = (iso) => setSel(s => s.includes(iso) ? s.filter(x => x !== iso) : [...s, iso]);
   return (
@@ -208,8 +220,26 @@ function UnavailSheet({ open, onClose, ctx }) {
           );
         })}
       </div>
-      <button onClick={() => { ctx.setUnavailableDates(sel); ctx.toast(`Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away`); onClose(); }} disabled={!sel.length} style={{ ...svPrimary(), background: sel.length ? 'var(--clay)' : 'var(--line)' }}>
-        <Icon name="calCheck" size={18} color="#fff" /> {sel.length ? `Mark ${sel.length} away` : 'Choose dates'}</button>
+      {err ? <div style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12.5, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ {err}</div> : null}
+      {/* AWAIT, THEN SAY SO. This used to toast and close synchronously while the publish ran unwatched, so a
+          refused write — a member marking themselves away before their church had approved them — looked
+          exactly like a saved one. The sheet now stays OPEN on failure with their ticks intact, so nothing is
+          lost and they can try again. Saving an EMPTY list is allowed when they had dates before: that is how
+          an unavailability is cancelled, and there was previously no way to do it at all. */}
+      <button onClick={async () => {
+        if (busy) return;
+        setBusy(true); setErr('');
+        try {
+          await ctx.setUnavailableDates(sel);
+          ctx.toast(sel.length ? `Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away` : 'Cleared — you’re available again');
+          onClose();
+        } catch (e) {
+          setErr('That didn’t reach your church, so nothing was saved. ' +
+            (ctx.isPending ? 'You’re still waiting to be approved — try again once you’re in.' : 'Check your connection and try again.'));
+          setBusy(false);
+        }
+      }} disabled={busy || (!sel.length && !had)} style={{ ...svPrimary(), background: (sel.length || had) ? 'var(--clay)' : 'var(--line)', opacity: busy ? 0.6 : 1 }}>
+        <Icon name="calCheck" size={18} color="#fff" /> {busy ? 'Saving…' : sel.length ? `Mark ${sel.length} away` : had ? 'Clear all' : 'Choose dates'}</button>
     </BottomSheet>
   );
 }

@@ -5588,6 +5588,9 @@
       window.addEventListener("trinity-identity", function() {
         kick();
       });
+      window.addEventListener("trinity-admitted", function() {
+        kick();
+      });
     } else {
       api.ready = Promise.resolve(false);
     }

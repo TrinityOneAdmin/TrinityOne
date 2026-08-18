@@ -18918,7 +18918,7 @@ zoo`.split("\n");
     // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
     publishRunsheet(serviceId, items) {
       if (!sk || !serviceId) return Promise.resolve(null);
-      const content = JSON.stringify({ items: Array.isArray(items) ? items : [] });
+      const content = _sealChurchDoc({ items: Array.isArray(items) ? items : [] });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }));
     },
     subscribeRunsheets(onSheets) {

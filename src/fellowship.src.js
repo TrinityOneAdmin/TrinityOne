@@ -711,6 +711,9 @@ function _flushProfiles() {
   });
 }
 const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in localStorage)
+// The Sundays this member has told a church they are away, mirrored per church so the "When are you away?"
+// sheet can show them back. Written only after the church has accepted the document — see setUnavailable.
+const UNAVAIL_MIRROR = 'trinityone.unavail.';
 // the last kind-0 body this session actually published, and for which key — see the idempotence guard in
 // setProfile(). Session-scoped on purpose: a reload is allowed to re-announce, a retry loop is not.
 let _profilePubFor = '', _profilePubBody = '';
@@ -1058,7 +1061,11 @@ function _replaySealedNames(cp, hub) {
 // because the name key arriving late has to re-open ALL of them, not just the one someone remembered.
 // Cross-checked against the publish sites: service / room / booking / rota / event / runsheet / roster.
 const CHURCH_SEALED_PFXS = ['trinityone/event:', 'trinityone/service:', 'trinityone/runsheet:',
-  'trinityone/rota:', 'trinityone/roster:', 'trinityone/room:', 'trinityone/booking:'];
+  'trinityone/rota:', 'trinityone/roster:', 'trinityone/room:', 'trinityone/booking:',
+  // careavail: is member-authored rather than church-authored, but it is sealed under the same church name
+  // key and therefore has the same late-key problem — without this, "Ready to help" stays empty for a newly
+  // admitted member until they restart the app.
+  'trinityone/careavail:'];
 
 // Re-open every sealed CALENDAR document already buffered for a church, once its name key is usable.
 //
@@ -1088,6 +1095,18 @@ function _replayChurchCalendar(cp, hub) {
       try { h.onevent(e2, d2); } catch (err) { _featureFailed('name-key calendar replay', d2, err); }
     }
   }
+}
+
+// Seal a MEMBER-authored document under the church name key, in the shape _openChurchDoc reads back: { e }.
+// The console has its own _sealChurchDoc for church-authored calendar documents; this is the member side,
+// added when careavail: turned out to be sitting on the relay in clear text (2026-08-18) while its sibling
+// carereq: was properly sealed. Falls back to cleartext when no key is held yet — which is exactly the old
+// behaviour, so a member who has not yet received the key is no worse off than before.
+function _sealChurchDocMember(cp, obj) {
+  const body = JSON.stringify(obj);
+  const k = (_nameKeys.get(cp) || [])[0];
+  if (!k) return body;
+  try { return JSON.stringify({ e: nip44e(body, k) }); } catch (e) { return body; }
 }
 
 function _openChurchDoc(cp, content) {
@@ -1202,6 +1221,16 @@ function _noteAdmitted(cp, content) {
     if (hub) { hub.since = 0; hub.fullAt = 0; }
     try { window.Fellowship.announceMembership(cp); } catch (e) {}
     try { refetchChurchDocs(); } catch (e) {}
+    // AND PUSH OUR OWN DATA UP. accept() refuses a member's personal documents — journal, prayers, notes,
+    // highlights, bookmarks — until they are effectively a member, so everything written while waiting for
+    // approval was refused and never retried. MyData only re-publishes on its startup kick, so the gap lasted
+    // until the app was next restarted, which measured at "indefinitely" for anyone who simply kept using it.
+    // Verified live 2026-08-18: entry written while pending, admitted, then three minutes of polling with the
+    // app already showing itself as admitted — still absent from the relay; a reload published all five docs
+    // at once. Nothing was lost (the device copy is authoritative) but until that restart the ONLY copy was on
+    // the phone, with the app implying it was backed up. This is the moment the refusal stops being true, so
+    // it is the moment to retry. MyData listens for this exactly as it listens for an identity change.
+    try { window.dispatchEvent(new CustomEvent('trinity-admitted', { detail: { church: cp } })); } catch (e) {}
     // Mark it done only AFTER the work has been dispatched. The first version set the flag up front, so a
     // failure here (offline, hub gone) consumed the one-shot forever and no restart could heal it.
     try { localStorage.setItem(ADMITTED_OK_LS + key, '1'); } catch (e) {}
@@ -3617,7 +3646,12 @@ window.Fellowship = {
         if (d !== dtag) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byPub.delete(e.pubkey); emit(); return; }
         try {
-          const o = JSON.parse(e.content || '{}');
+          // _openChurchDoc, not JSON.parse: this document is sealed under the church name key now, and
+          // cleartext ones written before that still open (it tries plain JSON first). null means it is
+          // sealed with a key we do not hold yet — LEAVE the person as they are rather than deleting them,
+          // and let the name-key replay re-deliver this event once the key lands.
+          const o = _openChurchDoc(pubk, e.content || '{}');
+          if (o === null) return;
           if (!o.available) { byPub.delete(e.pubkey); emit(); return; }
           byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || '').trim(), ts: e.created_at });
           emit();
@@ -3632,7 +3666,7 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp) return null;
     const clean = Array.isArray(tags) ? tags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 8) : [];
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }) }, sk);
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }) }, sk);
     try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); }
     return evt;
   },
@@ -3783,14 +3817,32 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
   // member sets the Sundays they're unavailable (own addressable doc, p-tagged to church)
+  //
+  // THIS THROWS ON FAILURE, DELIBERATELY. It used to end `catch {}`, so a refusal was indistinguishable from
+  // a save: three members marked themselves away while still pending approval, the relay correctly refused
+  // all three, and the app closed the sheet with a success toast. Two of them lost the dates entirely and
+  // will be rota'd onto days they refused. The caller must now handle the outcome — see UnavailSheet.
+  //
+  // _publishBounded, not _publishAny: this is a UI path and a silent relay must not leave the member holding
+  // an open sheet for ever.
   async setUnavailable(churchNpub, dates) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(churchNpub); if (!cp || !sk) return;
+    const cp = toPub(churchNpub); if (!cp || !sk) throw new Error('not ready');
     const me = window.Fellowship.myPubkey;
-    const content = JSON.stringify({ dates: dates || [] });
+    const list = Array.isArray(dates) ? dates : [];
+    const content = JSON.stringify({ dates: list });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
+    await _publishBounded(window.Fellowship.relays, evt);
+    // Mirror only AFTER the church has it, so the sheet can never show dates the rota does not know about.
+    try { localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(list)); } catch (e) {}
     return evt;
+  },
+  // What this member has already said — so the sheet can SHOW it and let them untick it. The document is
+  // addressable and each save replaces the whole array, so without this a member adding one date silently
+  // deleted every date they gave before, and could never cancel one.
+  getUnavailable(churchNpub) {
+    const cp = toPub(churchNpub); if (!cp) return [];
+    try { const v = JSON.parse(localStorage.getItem(UNAVAIL_MIRROR + cp) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
   },
 
   // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──

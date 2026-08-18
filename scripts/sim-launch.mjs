@@ -26,6 +26,11 @@ const profile = mkdtempSync(join(SCRATCH, 'actor-' + NAME + '-'));
 const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=' + port,
   '--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
   '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage',
+  // MUTE. These are real browsers on the operator's machine, so an actor tapping the audio Bible or
+  // "Listen to this page" plays out of the box's speakers — which happened mid-round on 2026-08-18 and
+  // is startling if you have walked away from the desk. It does NOT disable the audio element, so an
+  // actor can still observe that playback started; it just does not make noise in the room.
+  '--mute-audio',
   // the funnel serves over TLS with a real cert; keep this OFF so a cert problem is VISIBLE rather than
   // silently tolerated in a simulation and then a surprise on a member's phone.
   url], { stdio: 'ignore', detached: true });
