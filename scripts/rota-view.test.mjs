@@ -98,6 +98,26 @@ test('re-anchor: the tab gate is still an expression we can run', () => {
   assert.ok(canSeeExpr, 'could not find canSeeRota in app/screens-serving.jsx');
 });
 
+test('canSeeRota is DECLARED before the effect that depends on it', () => {
+  // These files are classic scripts transpiled by Babel's `env` preset, which lowers `const` to `var` with NO
+  // temporal-dead-zone check. So using `canSeeRota` above its declaration does not throw — it silently reads
+  // `undefined`, the dependency array records `undefined` for ever, and the effect NEVER FIRES. That is
+  // exactly what shipped in the first draft: the "snap back to Serving when the rota is no longer visible"
+  // guard was dead code, proven by transpiling the real file with the vendored Babel and running it.
+  //
+  // The expression test above cannot see this — it extracts the text of the expression and runs it in
+  // isolation, which says nothing about where the binding lives relative to its uses. Hence a position check.
+  const decl = SRC.indexOf('const canSeeRota =');
+  assert.notEqual(decl, -1, 're-anchor: canSeeRota is gone');
+  // Nothing may mention it before its declaration. (Comparing indexOf('canSeeRota') to indexOf('const
+  // canSeeRota =') directly is always off by the width of "const " — the first draft of this test did exactly
+  // that and failed against correct code.)
+  assert.equal(SRC.slice(0, decl).includes('canSeeRota'), false,
+    'canSeeRota is USED before it is declared. Babel lowers const to var, so this does not throw — the ' +
+    'reader silently gets undefined, and any effect depending on it never runs again. Move the declaration ' +
+    'above its first use.');
+});
+
 test('the rota tab FAILS OPEN — unknown or missing settings show the rota', () => {
   // Every church that predates this setting has no document, and a relay that never answers must not be able
   // to hide a rota nobody chose to hide. This has to agree with the relay, which falls back the same way; if

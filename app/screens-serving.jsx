@@ -503,6 +503,22 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // openServing('care') deep link from the "you're being cared for" banner opened with the selected tab
   // off the right edge, which is the exact symptom the scroll was added to fix. block:'nearest' keeps
   // this horizontal; measured, no ancestor and no window scroll moves.
+  // MAY I SEE THE CHURCH'S ROTA? The relay is what enforces this; the tab honours it so a member is never
+  // offered a screen the relay will refuse to fill. An empty screen with no explanation is the failure class
+  // this codebase keeps re-learning — it reads as "the app is broken" or "the church is dead", and it was the
+  // single most common report in the round of 2026-08-18.
+  //
+  // Default open, and open whenever the answer is unknown: every church that predates this setting has no
+  // document, and a relay that simply never answers must not be able to hide a rota nobody chose to hide.
+  // 'team' is resolved against the rosters the member can already read — the same list the relay gates on.
+  const rotaVisibility = ctx.rotaVis || 'church';
+  const onAServingRoster = (ctx.churchRosters || []).some(r => ((r && r.people) || []).some(p => p && p.pub && ctx.myPubkey && p.pub === ctx.myPubkey));
+  // Only the two KNOWN narrow settings narrow anything; every other value — absent, unrecognised, garbled,
+  // or written by a newer console — reads as open, which is exactly how the relay falls back (gateway.mjs,
+  // the ROTA_VIS ingest). Written the other way round, as `=== 'church' || …`, an unknown value hid the tab
+  // while the relay went on serving the document: the rota would vanish for a reason invisible from either
+  // side. That is what the first draft of this line did.
+  const canSeeRota = rotaVisibility === 'stewards' ? false : rotaVisibility === 'team' ? onAServingRoster : true;
   // A tab that stops being available while it is OPEN must not leave the screen on a branch that no longer
   // renders — the steward can narrow the rota mid-session, and the member would be left looking at a tab
   // strip with nothing selected. Snap back to Serving, which is always there.
@@ -535,22 +551,6 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // The Care tab is also the permanent home for a live safety check's "I'm safe / I need help" — which is what
   // lets the Today banner be dismissible. The safety check rides on this same toggle: care off = no check at all.
   const careOn = !!(ctx.care && ctx.care.settings && ctx.care.settings.enabled);
-  // MAY I SEE THE CHURCH'S ROTA? The relay is what enforces this; the tab honours it so a member is never
-  // offered a screen the relay will refuse to fill. An empty screen with no explanation is the failure class
-  // this codebase keeps re-learning — it reads as "the app is broken" or "the church is dead", and it was the
-  // single most common report in the round of 2026-08-18.
-  //
-  // Default open, and open whenever the answer is unknown: every church that predates this setting has no
-  // document, and a relay that simply never answers must not be able to hide a rota nobody chose to hide.
-  // 'team' is resolved against the rosters the member can already read — the same list the relay gates on.
-  const rotaVisibility = ctx.rotaVis || 'church';
-  const onAServingRoster = (ctx.churchRosters || []).some(r => ((r && r.people) || []).some(p => p && p.pub && ctx.myPubkey && p.pub === ctx.myPubkey));
-  // Only the two KNOWN narrow settings narrow anything; every other value — absent, unrecognised, garbled,
-  // or written by a newer console — reads as open, which is exactly how the relay falls back (gateway.mjs,
-  // the ROTA_VIS ingest). Written the other way round, as `=== 'church' || …`, an unknown value hid the tab
-  // while the relay went on serving the document: the rota would vanish for a reason invisible from either
-  // side. That is what the first draft of this line did.
-  const canSeeRota = rotaVisibility === 'stewards' ? false : rotaVisibility === 'team' ? onAServingRoster : true;
   const close = () => setSheet(null);
 
   return (

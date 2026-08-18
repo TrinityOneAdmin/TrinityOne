@@ -649,9 +649,17 @@ function DashRota({ onNewTeam }) {
                 <React.Fragment>
                   <div onClick={() => setVisMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
                   <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 268, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
+                    {/* TWO SETTINGS, NOT THREE. A 'stewards only' option was built and then withdrawn by the
+                        owner, for a reason worth keeping written down: a member's own "you're serving on
+                        Sunday" card is read out of the SAME rota document as the church-wide view (see
+                        myRotaSlots in app/app.jsx), and the relay cannot serve half a document — the
+                        assignments inside it are sealed, so it cannot tell who is on which row. Refusing the
+                        document to ordinary members therefore also stops telling volunteers they are
+                        rostered, silently. 'Serving teams' has no such edge: the only people who lose the
+                        church-wide view are people who had no slots in it anyway. The relay still HONOURS
+                        'stewards' if it ever meets one, so the two surfaces cannot disagree. */}
                     {[['church', 'Everyone in the church', 'Any member can see who is serving'],
-                      ['team', 'People on the serving teams', 'Only members on a team roster'],
-                      ['stewards', 'Stewards only', 'Nobody else can open the rota']].map(([v, t, s]) => (
+                      ['team', 'People on the serving teams', 'Only members on a team roster — they still see their own slots']].map(([v, t, s]) => (
                       <button key={v} onClick={() => { setVisMenu(false); if (v !== rotaVis) window.Steward.publishRotaSettings(v); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}{v === rotaVis ? ' ✓' : ''}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>

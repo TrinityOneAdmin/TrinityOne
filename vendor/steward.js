@@ -18889,6 +18889,14 @@ zoo`.split("\n");
     },
     // ---- team rosters: the roles a team needs + the people who can serve ----
     // roster = { roles:[{id,name}], people:[{id,name,pub?}] }, keyed by team(group) id.
+    //
+    // ⚠ WRITTEN IN CLEARTEXT ON PURPOSE, AND TWO RELAY GRANTS DEPEND ON IT. The relay parses `people[].pub`
+    // into ROSTER_PEOPLE and uses it for careAdmin() (who may open care needs) and onAnyRoster() (who may fetch
+    // the rota when a church narrows it to its serving teams). This document does hold real names bound to
+    // pubkeys, which is exactly the at-rest exposure the 2026-08-18 round sealed runsheet: and careavail: for —
+    // so it SHOULD be sealed, and church-docs-are-sealed.test.mjs tracks that as a deferred todo. Sealing it
+    // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
+    // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
     publishRoster(teamId, roster) {
       if (!sk || !teamId) return Promise.resolve(null);
       const roles = (roster.roles || []).map((r) => ({ id: r.id || "r" + Math.random().toString(36).slice(2, 7), name: r.name || "Role" }));

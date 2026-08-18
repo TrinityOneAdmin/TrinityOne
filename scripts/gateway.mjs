@@ -813,9 +813,23 @@ const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who a
 const FINANCE_SEQ = new Map();        // churchpub -> last accepted finance-journal seq — the relay is the ordering authority; the next write must be seq+1 (single-writer, no gaps/forks/edits)
 const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
 const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
-// churchpub -> who may FETCH this church's rota:/runsheet:. Absent (the default, and every church that
-// existed before this) means 'church' — every member, exactly as before. See the gate in canRead().
+// churchpub -> { v, ts }: who may FETCH this church's rota:/runsheet:, and WHEN that was said. Absent (the
+// default, and every church that existed before this) means 'church' — every member, exactly as before.
+//
+// THE TIMESTAMP IS NOT DECORATION. An addressable document is keyed by (kind, AUTHOR, d-tag), so the church's
+// own rota-settings and each steward's are DIFFERENT documents and all of them persist — while they all
+// resolve to the same church here. Without a newest-wins guard the winner is simply whoever was applied last:
+// a stale doc replayed on a rehydrate, or arriving late from a peer sync, silently reinstates a setting the
+// church already changed. Same shape as the newest-wins guards elsewhere in this file. (MEALS_ADMIN_GROUP has
+// the same defect and is NOT fixed here — flagged, out of scope for this change.)
 const ROTA_VIS = new Map();
+// ⚠ THIS DEPENDS ON `roster:` STAYING CLEARTEXT, and something wants to seal it. ROSTER_PEOPLE is filled by
+// parsing `JSON.parse(e.content).people` in note(); `roster:` is the last calendar-ish document still written
+// in plaintext, and scripts/church-docs-are-sealed.test.mjs carries it as an explicit deferred `todo` because
+// sealing it blinds careAdmin(). Whoever seals it will ALSO make this function return false for everyone,
+// turning 'team' into 'nobody' — a rota that vanishes for the people it was narrowed to. Both grants have to
+// move to the pubkey-only `careteam:`-style document together. Same note sits on publishRoster().
+//
 // Is `pub` on ANY of this church's team rosters? The rota itself is SEALED under the church name key, so the
 // relay cannot read who is assigned to what and cannot gate on the assignment. The roster is the nearest
 // thing it can see, and it is the right unit anyway: "the people who serve" is what a steward means by
@@ -1223,7 +1237,7 @@ let _hydrating = false;
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
-                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP,
+                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
@@ -1236,7 +1250,30 @@ function hydrateMaps() {
   if (!CHURCH_PUBS.size) return;
   clearDerivedMaps();                                  // H1: drop residue from churches that are no longer configured
   _hydrating = true;                                   // suppress per-doc rebuilds (O(n^2)); rebuild once at the end
-  try { store.eachKind([30078], note); }               // uncapped ASC iteration — no 10k truncation of old docs
+  try {
+    // AUTHORITY DOCUMENTS FIRST — otherwise a delegated steward's work is silently discarded on every restart.
+    //
+    // store.eachKind replays in created_at ASC, and several ingests ask, at the moment they replay, "is this
+    // author a steward of that church?" (ROSTER_D, MEALS_SETTINGS_D, ROTA_SETTINGS_D). The steward roster is
+    // itself an ADDRESSABLE doc, so once a church edits it, the only copy left on disk is NEWER than the
+    // documents whose acceptance depended on it. Those then replay into an empty STEWARDS_BY, stewardOf()
+    // returns false, and the ingest drops them — no error, nothing on the wire, just a map that is quietly
+    // missing entries until someone republishes.
+    //
+    // Measured on a throwaway relay across three boots (audit of 2026-08-18): a church that narrowed its rota
+    // to the serving teams via a DELEGATED STEWARD, then edited its steward roster, had the rota served to
+    // every member again after the next restart — with the settings document still on disk and the console
+    // still displaying "Serving teams". The mirror case is worse: the team roster itself is dropped, so
+    // onAnyRoster() goes false and the people who DO serve lose their own rota, their serving slots and their
+    // reminders, with nothing to explain it.
+    //
+    // The relay self-updates and restarts, so "until someone republishes" means "silently, one day, by
+    // itself". Two passes: grant-conferring documents, then everything. note() is idempotent for these, and
+    // the extra ASC pass is boot-time only.
+    const dOf = (e) => ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    store.eachKind([30078], (e) => { const d = dOf(e); if (d.startsWith(STEWARDS_D) || d.startsWith(NETWORK_D)) note(e); });
+    store.eachKind([30078], note);                     // uncapped ASC iteration — no 10k truncation of old docs
+  }
   finally { _hydrating = false; }
   rebuildBlocked(); rebuildMinors(); rebuildApproved(); rebuildGuardians(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
 }
@@ -1377,6 +1414,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardOf(e.pubkey, cp = namedChurch(e)) ? cp : '');
     if (!owner) return;
+    const ts = e.created_at || 0, held = ROTA_VIS.get(owner);
+    if (held && held.ts > ts) return;                  // an older copy must never overwrite a newer decision
     if (removed) { ROTA_VIS.delete(owner); return; }
     // UNKNOWN VALUES FALL BACK TO 'church', THE OPEN SETTING — deliberately. This gate can hide a church's
     // rota from its own congregation, so a typo or a future value this relay has never heard of must not
@@ -1384,8 +1423,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // everything else is the status quo ante.
     try {
       const v = String((JSON.parse(e.content) || {}).visibility || '');
-      if (v === 'team' || v === 'stewards') ROTA_VIS.set(owner, v); else ROTA_VIS.delete(owner);
-    } catch { ROTA_VIS.delete(owner); }
+      if (v === 'team' || v === 'stewards') ROTA_VIS.set(owner, { v, ts }); else ROTA_VIS.set(owner, { v: 'church', ts });
+    } catch { ROTA_VIS.set(owner, { v: 'church', ts }); }
   }
   else if (d.startsWith(NEED_D)) {   // a care need (already passed accept(): church/steward/care-admin/allowed-member) — record its recipient for careskip gating
     const id = d.slice(NEED_D.length);
@@ -1601,7 +1640,14 @@ function accept(e) {
     }
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
     if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
-    if (d === ROTA_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));    // who may fetch the rota: church or rostered steward, same authority that publishes it
+    // Who may fetch the rota: the church, or one of its rostered stewards. SCOPED, unlike its meals-settings
+    // neighbour above: `isLeader` includes the unscoped `CHURCH_PUBS.has(e.pubkey)`, so a co-tenant church key
+    // on a shared relay could write a rota-settings doc tagged ['church', <someone else>] — measured as
+    // ACCEPTED before this line. It had no effect today (note() keys the ingest on the author, and canRead's
+    // revoked-steward check refused to serve it), but it is the same unscoped shape as the two cross-tenant
+    // CRITICALs this repo has already shipped, and the client trusts this write gate rather than checking
+    // authorship itself. Refuse it at the door instead of relying on two downstream accidents.
+    if (d === ROTA_SETTINGS_D) { const nc = namedChurch(e); return (isLeader && (!nc || nc === e.pubkey)) || stewardOf(e.pubkey, nc); }
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
       // AUDIT-2026-07-30 S2: `care:<id>` is a relay-GLOBAL id and the rule below resolves the owning church from
       // the EVENT, so a co-tenant church naming ITSELF satisfied `e.pubkey === cp` and could republish another
@@ -1931,7 +1977,7 @@ function canRead(e, authed) {
     // church corpus runs on; it is NOT a cryptographic wall between members, and no copy anywhere may say it
     // is. (Care's own team/whole-church toggle is weaker still: it is honoured client-side only.)
     if (d.startsWith(ROTA_D) || d.startsWith(RUNSHEET_D)) {
-      const vis = ROTA_VIS.get(cp) || 'church';
+      const vis = (ROTA_VIS.get(cp) || {}).v || 'church';
       if (vis === 'stewards') return false;                        // stewards already returned true above
       if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
     }

@@ -3,7 +3,9 @@
 //
 // The member app now shows the church's whole rota, which is what nine agents went looking for in the round
 // of 2026-08-18. Some churches will not want every member reading who is on the door on Christmas morning, so
-// a steward can narrow it: everyone / the serving teams / stewards only.
+// a steward can narrow it. The console offers two settings — everyone / the serving teams. The relay also
+// honours 'stewards', which the console no longer offers: a member's own serving slots come out of the same
+// document, so refusing it to every member silently stops telling volunteers they are rostered.
 //
 // WHY THE RELAY AND NOT THE CLIENT. The Care module's own team/whole-church toggle is honoured client-side
 // only — the relay never reads `visibility` out of meals-settings, and care needs are served to any admitted
@@ -33,13 +35,16 @@ const NET = 'trinityone';
 const ROTA_D = 'trinityone/rota:';
 const ROSTER_D = 'trinityone/roster:';
 const SETTINGS_D = 'trinityone/rota-settings';
+const RUNSHEET_D = 'trinityone/runsheet:';
 const SERVICE = 'svc-advent';
+const SERVICE_S = 'svc-steward-authored';   // a service whose rota + run sheet a DELEGATED STEWARD wrote
 
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
 
 const church = K();      // the church key itself
+const steward = K();     // a DELEGATED steward — the ordinary console case, and the one the audit broke
 const server = K();      // a member who IS on a serving team roster
 const pewsat = K();      // an ordinary member, on no roster at all
 let relay, dataDir;
@@ -78,13 +83,14 @@ function reqCollect(ws, subId, filter, authSk, window = 700) {
 
 // Can this key fetch the rota right now? One fresh socket per read so nothing is answered from an earlier
 // subscription's state.
-async function canFetchRota(keys) {
+async function canFetch(keys, dtag) {
   const ws = await connect();
   try {
-    const evs = await reqCollect(ws, 'r' + Math.random().toString(36).slice(2), { kinds: [30078], '#d': [ROTA_D + SERVICE] }, keys.sk);
-    return evs.some(e => (e.tags.find(t => t[0] === 'd') || [])[1] === ROTA_D + SERVICE);
+    const evs = await reqCollect(ws, 'r' + Math.random().toString(36).slice(2), { kinds: [30078], '#d': [dtag] }, keys.sk);
+    return evs.some(e => (e.tags.find(t => t[0] === 'd') || [])[1] === dtag);
   } finally { try { ws.close(); } catch {} }
 }
+const canFetchRota = (keys) => canFetch(keys, ROTA_D + SERVICE);
 
 // The church sets the rota's audience. Replaceable docs are newest-wins TO THE SECOND, so two settings
 // publishes inside one second silently drop the later one — which would make a test pass for the wrong
@@ -99,15 +105,39 @@ async function setVisibility(v) {
   await sleep(150);   // the write is accepted, then ingested into ROTA_VIS
 }
 
-before(async () => {
-  await requireFreePort(PORT, 'rota-visibility.test.mjs');
-  dataDir = mkdtempSync(join(tmpdir(), 'trin-rotavis-'));
+function bootRelay() {
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
     env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_MAX_EVENTS: '5000', CHURCH_NPUB: npubEncode(church.pub) },
   });
   const t0 = Date.now();
-  while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${PORT}/status`)).ok) break; } catch {} await sleep(150); }
+  return (async () => {
+    while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${PORT}/status`)).ok) return; } catch {} await sleep(150); }
+    throw new Error('relay did not become ready on :' + PORT);
+  })();
+}
+
+// Restart onto the SAME data directory — i.e. rebuild every in-memory map from the stored corpus, which is
+// what the relay does on every self-update. This is the only way to catch an ingest that depends on replay
+// ORDER, and it is where two settings were being silently thrown away.
+async function restartRelay() {
+  try { relay.kill('SIGKILL'); } catch {}
+  await sleep(400);
+  await bootRelay();
+  await sleep(300);
+}
+
+// publish as any key, on its own socket
+async function publishAs(keys, evt) {
+  const ws = await connect();
+  try { return await publish(ws, evt, keys.sk); } finally { try { ws.close(); } catch {} }
+}
+const rotaDoc = (svc, signer, tags = []) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + svc], ['t', NET], ...tags], content: JSON.stringify({ service: svc, published: true, assign: {} }) }, signer.sk);
+
+before(async () => {
+  await requireFreePort(PORT, 'rota-visibility.test.mjs');
+  dataDir = mkdtempSync(join(tmpdir(), 'trin-rotavis-'));
+  await bootRelay();
 
   // Both people join for real, so a refusal later is about the ROTA SETTING and not about membership.
   for (const who of [server, pewsat]) {
@@ -166,6 +196,76 @@ test('opening it back up restores the rota to everyone', async () => {
   assert.equal(await canFetchRota(pewsat), true,
     'the church set its rota back to "everyone" and the relay is still refusing ordinary members — the ' +
     'setting is a one-way door, and no steward could undo their own change');
+});
+
+// ── the delegated-steward path: what the console actually does ────────────────────────────────────────────
+// Everything above is signed by the church key. A church running a delegated console signs with a STEWARD
+// key and names the church in a ['church', cp] tag — and an audit showed that a gate resolving the audience
+// from the AUTHOR instead of the document's church passed all six tests above while leaking every rota a
+// steward wrote. So the fixtures below are steward-authored on purpose.
+test('a rota written by a DELEGATED STEWARD is gated too, not just the church\'s own', async () => {
+  assert.equal(await publishAs(church, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/stewards:' + church.pub], ['t', NET]], content: JSON.stringify({ pubkeys: [steward.pub] }) }, church.sk)), true, 'fixture: the steward roster was refused');
+  await sleep(200);
+  assert.equal(await publishAs(steward, rotaDoc(SERVICE_S, steward, [['church', church.pub]])), true, 'fixture: the steward could not publish a rota');
+  // Republish the serving-team roster AS THE STEWARD: that is what a delegated console does, and it is the
+  // ingest whose replay ordering broke the people who serve.
+  await sleep(1100);
+  assert.equal(await publishAs(steward, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + 'welcome'], ['t', NET], ['church', church.pub]], content: JSON.stringify({ roles: [{ id: 'door', name: 'Door' }], people: [{ id: 'p1', name: 'On The Team', pub: server.pub }] }) }, steward.sk)), true, 'fixture: the steward could not publish the team roster');
+  await sleep(200);
+  assert.equal(await publishAs(steward, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RUNSHEET_D + SERVICE_S], ['t', NET], ['church', church.pub]], content: JSON.stringify({ items: [{ what: 'Welcome', who: 'The vicar' }] }) }, steward.sk)), true, 'fixture: the steward could not publish a run sheet');
+  await setVisibility('team');
+
+  assert.equal(await canFetch(pewsat, ROTA_D + SERVICE_S), false,
+    'the rota is narrowed to the serving teams, but a rota AUTHORED BY A STEWARD is still served to a member ' +
+    'on no roster. A gate that resolves the audience from the author rather than the document\'s church ' +
+    'leaks every rota a delegated console ever wrote — which is most of them in a real church.');
+  assert.equal(await canFetch(server, ROTA_D + SERVICE_S), true, 'a roster member cannot read the steward-authored rota');
+});
+
+test('the RUN SHEET is gated alongside the rota', async () => {
+  // The order of service names the minister against each item — it was sealed in this same round precisely
+  // because of that. Dropping RUNSHEET_D from the gate changes nothing that any other test can see.
+  assert.equal(await canFetch(pewsat, RUNSHEET_D + SERVICE_S), false,
+    'the run sheet is still served to a member outside the audience while the rota beside it is refused');
+  assert.equal(await canFetch(server, RUNSHEET_D + SERVICE_S), true, 'a roster member cannot read the run sheet');
+});
+
+// ── survives a restart ────────────────────────────────────────────────────────────────────────────────────
+// The relay self-updates and restarts, rebuilding every map by replaying the stored corpus in created_at
+// order. Documents whose acceptance asks "is this author a steward?" replay BEFORE the (newer) steward roster
+// they depend on, so they were dropped — silently, with the document still on disk. Measured: a church that
+// narrowed its rota via a delegated steward, then edited its steward roster, served the rota to everyone
+// again after the next restart, console still showing "Serving teams".
+test('a steward-set restriction SURVIVES a relay restart, even after the steward roster is edited', async () => {
+  // The CHURCH's own setting is left OPEN here, deliberately. An addressable doc is keyed by (kind, author,
+  // d-tag), so a church-authored rota-settings and a steward-authored one are two documents that both live on
+  // disk while resolving to the same church. A church doc that also said 'team' would keep the restriction up
+  // by itself and hide the steward's being dropped — which is exactly how the first version of this test
+  // passed against the very bug it was written for.
+  await setVisibility('church');
+  await sleep(1100);
+  assert.equal(await publishAs(steward, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', SETTINGS_D], ['t', NET], ['church', church.pub]], content: JSON.stringify({ visibility: 'team', updated: now() }) }, steward.sk)), true, 'fixture: a delegated steward could not set rota visibility');
+  await sleep(200);
+  assert.equal(await canFetch(pewsat, ROTA_D + SERVICE_S), false, 'fixture: the steward-set restriction did not take effect even before a restart');
+
+  // the church edits its steward roster — now the ONLY stewards doc on disk is NEWER than the settings doc
+  await sleep(1100);
+  assert.equal(await publishAs(church, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/stewards:' + church.pub], ['t', NET]], content: JSON.stringify({ pubkeys: [steward.pub, K().pub] }) }, church.sk)), true, 'fixture: the steward roster edit was refused');
+  await restartRelay();
+
+  assert.equal(await canFetch(pewsat, ROTA_D + SERVICE_S), false,
+    'after a restart the church\'s rota is served to everyone again, with the visibility document still on ' +
+    'disk and the console still showing "Serving teams". The church did not change its mind — the relay ' +
+    'replayed the settings doc before the steward roster it is authorised by, and dropped it.');
+});
+
+test('…and so does the roster that decides WHO is on a team', async () => {
+  // The mirror failure, and the worse one: if the roster ingest is dropped on replay, onAnyRoster() goes
+  // false and the people who actually serve lose the rota, their own serving slots and their reminders.
+  assert.equal(await canFetch(server, ROTA_D + SERVICE_S), true,
+    'after a restart, a member ON the serving team can no longer fetch the rota. Their own "you\'re serving ' +
+    'on Sunday" card is derived from this same document, so it goes blank too, with nothing to explain it — ' +
+    'for exactly the people the setting exists to keep serving.');
 });
 
 test('an unknown visibility value falls back to OPEN, not to locked-out', async () => {
