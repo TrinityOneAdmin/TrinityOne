@@ -314,3 +314,11 @@ content gating is separate and unaffected.
 the gap between the two caps (how much scanning does a real member's deepest read need?) and a per-IP
 connection rate limit. Both need numbers from a real corpus. A third guess at "who counts as trusted" is the
 one thing that should not be tried.
+
+## Release integrity: apk-latest.json can advertise a version that does not identify the build (2026-08-19)
+`apk-latest.json` said `versionCode: 201` while the file it pointed at (`trinityone.apk`) was the 15 August
+build — and today's build is ALSO 201, because scripts/release.sh owns the version bump and a manual
+`gradlew assembleRelease` does not touch it. A phone on 198 therefore sees "update available", downloads 201,
+and gets whichever file happens to be on disk. Found when the owner asked whether they needed to update.
+Fix candidates: bump in gradle rather than in release.sh, or make the manifest carry a content hash and the
+update check compare that rather than the integer.

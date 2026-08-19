@@ -356,3 +356,27 @@ Rota visibility is enforced per-relay (see the 2026-08-18 rota work): a church t
 protected on relays running the new code. A relay MODE does not fix that, but the same conversation —
 "what is this relay, and what does it promise?" — should settle how a church learns which of its relays
 actually enforce its choices.
+
+---
+
+## 8. A young person is protected silently — tell them, and tell the church
+
+**Owner, 2026-08-19, from round 3. After the sim.**
+
+Measured in the round: a 15-year-old member saw **23 of 26 people marked "Restricted"** and could message only
+the three cleared adults. The safeguarding gate works exactly as designed. What it never does is explain
+itself — no badge on her own profile, no age indicator, no help text, and tapping a restricted person does
+nothing at all. Her own words: *"A young person might think the app is broken, not that it's protecting
+them."* From the other side, an uncleared adult's messages to two teenagers simply never left his phone.
+
+**What to add.** Something on a child account that says, in the app's own voice, that it is a young person's
+account and what that changes — and a reason at the point of refusal ("you can message your leaders; ask
+Marcus if you need someone else") rather than a dead tap.
+
+**The care to take.** This is safeguarding UX under the project's threat model, so the wording has to protect
+rather than expose: a badge visible to OTHER members would broadcast which accounts are children, which is
+the opposite of the goal. The indicator belongs to the young person and their guardians, and the refusal
+message belongs to whoever hit it — not to a list anyone can browse. See [[uk-pilot-threat-model]] and the
+existing rule that `minors:` is never served to ordinary members.
+
+Related, same round: a linked parent sees NOTHING anywhere telling them the link exists.
