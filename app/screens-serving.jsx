@@ -45,6 +45,27 @@ function svServiceRoster(ctx, serviceId) {
     return { name: who.name, pub: who.pub, role: role ? role.name : '', me: !!(me && who.pub === me) };
   }).filter(Boolean);
 }
+// SUCCESS IS SOMETHING THE APP HAS TO BE TOLD, NOT SOMETHING IT ASSUMES.
+//
+// Every one of these controls used to call ctx.respondServing(...) and then toast its own cheerful line on
+// the next statement, unconditionally. respondServing refuses when the member has no matching "can you
+// serve?" request — which is the ordinary case for anyone placed straight onto a published rota — and it
+// says so in a toast. That honest message was then immediately overwritten by the caller's success line.
+//
+// Measured on a device, 2026-08-19: "I'm away — take me off" showed "Taken off — thanks for letting us know"
+// and the relay received ZERO events. The member believes the church knows they cannot come. Nobody knows.
+// The round of 2026-08-18 fixed the WORDING of the swap toast and left this, the control underneath it.
+//
+// So: route every response through here. If nothing was sent, respondServing has already explained why, and
+// we neither claim success nor close the sheet the member may want to try again from.
+function svRespond(ctx, item, verdict, swapTo, okLabel, onSent) {
+  const sent = ctx.respondServing(item, verdict, swapTo);
+  if (sent === false) return false;
+  if (okLabel) ctx.toast(okLabel);
+  if (onSent) onSent();
+  return true;
+}
+
 // ── the CHURCH'S rota: every upcoming service and who is on it ────────────────────────────────────────────
 // svServiceRoster above answers "who is serving WITH ME", and is wired to the member's own next slot only. So
 // a member could see their own Sunday and nothing else: no answer to "who is on next week?", and no way to
@@ -127,10 +148,10 @@ function RespondSheet({ open, req, onClose, onSwap, ctx }) {
         <ServAvatar name={req.from || 'Church'} size={32} accent="var(--gold)" />
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>{req.from || 'Your church'}</b> asked: “{req.note}”</div>
       </div> : null}
-      <button onClick={() => { ctx.respondServing(req, 'accept'); ctx.toast(`You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`); onClose(); }} style={svPrimary()}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I’ll serve</button>
+      <button onClick={() => svRespond(ctx, req, 'accept', '', `You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`, onClose)} style={svPrimary()}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I’ll serve</button>
       <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
         <button onClick={() => onSwap(req)} style={svGhost()}><Icon name="swap" size={17} color="var(--ink)" /> Suggest someone</button>
-        <button onClick={() => { ctx.respondServing(req, 'decline'); ctx.toast('Declined — your leader has been told'); onClose(); }} style={svGhost()}><Icon name="x" size={17} color="var(--ink)" /> Can’t this time</button>
+        <button onClick={() => svRespond(ctx, req, 'decline', '', 'Declined — your leader has been told', onClose)} style={svGhost()}><Icon name="x" size={17} color="var(--ink)" /> Can’t this time</button>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', marginTop: 16, color: 'var(--ink-3)', fontSize: 12 }}><Icon name="shield" size={14} color="var(--ink-3)" /> Only your team leader sees your reply</div>
     </BottomSheet>
@@ -143,7 +164,7 @@ function SwapSheet({ open, item, onClose, ctx }) {
   useSvE(() => { if (open) setPick(null); }, [open]);
   if (!item) return null;
   const mates = svTeamMates(ctx, item.teamId);
-  const doAsk = (pub, label) => { ctx.respondServing(item, 'swap', pub || ''); ctx.toast(label); onClose(); };
+  const doAsk = (pub, label) => svRespond(ctx, item, 'swap', pub || '', label, onClose);
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="82%" z={75}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -191,7 +212,7 @@ function ManageSheet({ open, item, onClose, onSwap, ctx }) {
   const rows = [
     { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { svDownloadICS(item, ctx.church && ctx.church.name); ctx.toast('Downloaded — open the file to add it to your phone’s calendar'); onClose(); } },
     { ic: 'swap', t: 'Ask someone to swap', s: 'Send a friendly ask to a teammate', go: () => onSwap(item) },
-    { ic: 'calendar', t: 'I’m away — take me off', s: 'Let your leader know you can’t make it', go: () => { ctx.respondServing(item, 'decline'); ctx.toast('Taken off — thanks for letting us know'); onClose(); } },
+    { ic: 'calendar', t: 'I’m away — take me off', s: 'Let your leader know you can’t make it', go: () => svRespond(ctx, item, 'decline', '', 'Taken off — thanks for letting us know', onClose) },
   ];
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="68%" z={70}>
@@ -607,7 +628,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 9 }}>
-                  <button onClick={() => { ctx.respondServing(req, 'accept'); ctx.toast(`You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`); }} style={{ ...svPrimary(), flex: 1, padding: 14, fontSize: 15 }}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I can serve</button>
+                  <button onClick={() => svRespond(ctx, req, 'accept', '', `You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`)} style={{ ...svPrimary(), flex: 1, padding: 14, fontSize: 15 }}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I can serve</button>
                   <button onClick={() => setSheet({ kind: 'respond', item: req })} style={{ flexShrink: 0, padding: '0 16px', borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Can’t make it</button>
                 </div>
               </div>
@@ -752,7 +773,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                           </div>
                           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{it.role} · {svParts(it.date).dow} {svParts(it.date).day} {svParts(it.date).mon}</div>
                         </div>
-                        <button onClick={() => { ctx.respondServing(it, 'accept'); ctx.toast('Great — you’re back on'); }} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> {isSwap ? 'I’ll serve' : 'I can serve'}</button>
+                        <button onClick={() => svRespond(ctx, it, 'accept', '', 'Great — you’re back on')} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> {isSwap ? 'I’ll serve' : 'I can serve'}</button>
                       </div>
                     );
                   })}
