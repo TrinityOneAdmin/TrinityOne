@@ -1741,9 +1741,15 @@ function App() {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
       // item may be a request, or a rota-derived slot that carries its matching request in .req
       const reqId = (item.req && item.req.id) || (typeof item.id === 'string' && item.id.indexOf('rota:') !== 0 ? item.id : null);
-      if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return; }
+      // RETURN FALSE WHEN NOTHING WAS SENT. Every caller used to toast its own success line immediately after
+      // calling this, so the honest message below was painted over by "Taken off — thanks for letting us
+      // know" or "Asked your leader" a frame later. Measured on a device 2026-08-19: a member on a published
+      // rota with no matching request tapped "I'm away", saw the thank-you, and the relay received nothing.
+      // The caller cannot know that without an answer, so give it one.
+      if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
       if (window.Fellowship && window.Fellowship.respondToServingRequest) window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
       setServReplies(m => ({ ...m, [reqId]: verdict }));
+      return true;
     },
     setRsvp: (eventId, verdict) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
