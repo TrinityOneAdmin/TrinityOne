@@ -259,3 +259,100 @@ child account publishes a join REQUEST and sits unadmitted. The relay's effectiv
 non-admitted key in an approval-gated church, so the account can read and post nothing until a steward admits
 it. "A 15-year-old joined the church" was "a 15-year-old asked to join". The steward approval gate holds.
 Worth a cosmetic tidy (the wizard could say "this creates a request"), not urgent.
+
+---
+
+## 7. HIGH PRIORITY — a relay needs a MODE, because "no churches" currently means three different things
+
+**Raised by the owner, 2026-08-19, after a purge was refused.** Plan this properly before building; it touches
+the relay's authorization spine.
+
+### What happened
+Trying to remove the last church from a8 returned:
+
+> ✗ that is the only church on this relay — removing it would let anyone on the internet write here. Add
+> another first, or turn the relay off.
+
+The guard is real: `accept()` opens with `if (!CHURCH_PUBS.size) return true;` (`scripts/gateway.mjs:1452`),
+and the media download gate does the same (`:204`). **An empty relay accepts writes from anyone and serves
+blobs to anyone.** So removing the last church silently flips a gated relay into an open one, and the guard
+exists to refuse that rather than to express a policy.
+
+### The actual root cause — one state, three meanings
+`CHURCH_PUBS.size === 0` is currently the answer to three unrelated questions:
+
+| What it can mean | What the relay should do |
+|---|---|
+| a GENERIC relay (the original standalone product — no console, no church scoping) | accept, that is its normal state |
+| a church relay NOT SET UP YET | accept exactly one registration (bootstrap), then close |
+| a church relay DELIBERATELY EMPTIED | accept nothing at all |
+
+The owner's history explains the fossil: **the first relay app was standalone, with no church console
+attached.** "No churches configured" meant "plain relay" and open was correct. Once the console attached and
+churches became the unit of authority, that same line stopped being a mode and became a hole.
+
+### What is and is NOT drift
+Registration policy is INTACT and matches the intended architecture — public vs private governs the second
+and subsequent churches:
+
+* empty + not invite-only → the first fresh key self-registers, **regardless of public/private** (bootstrap)
+* has a church + private (`offerHosting` off) → refused, "already set up for its church"
+* has a church + community (`offerHosting` / `RELAY_OPEN`) → accepted, up to `CHURCH_REPLACE_CAP`
+* `inviteOnly` → refused always, even the first
+
+Defaults: `inviteOnly: false`, `offerHosting: false` (`gateway.mjs:99`). The single-church lock was ADDED by
+RELAY-AUDIT-2026-07-20 H4 precisely because leaving self-registration open forever turned one box into 19
+tenants. See also note 4 — self-registration onto the canonical relays is intended, not a defect.
+
+So the drift is narrower than it first looks: **the empty state**, not the policy.
+
+### Why it matters now
+1. **A wiped relay is open on a public address** until a church registers — and the first key to arrive claims
+   it. That window is real for any reset of a8.
+2. **De-provisioning is impossible by design.** A single-church relay cannot be emptied at all, so a church
+   cannot leave a relay it no longer trusts, and an operator cannot decommission cleanly.
+3. It blocks the **self-service purge** the owner asked about (2026-08-19): a church erasing itself from a
+   single-church relay IS this case.
+
+### Shape to consider (NOT a decision)
+Record the mode explicitly at install rather than inferring it, plus one persisted "provisioned at least
+once" bit:
+
+* **home** — one church, closes after bootstrap; emptied ⇒ fails CLOSED
+* **host** — many churches, capacity-capped; the "run a relay to support the T1 network" role; empty ⇒ ready
+  but still closed to writes
+* **generic** — no church scoping, the original standalone behaviour, chosen deliberately and never inferred
+
+Then: empty + provisioned = closed, de-provisioning becomes ordinary, the last-church guard disappears, and
+the purge question has an answer.
+
+### DECIDED by the owner, 2026-08-19 — build to these
+1. **Host relays self-register, and the operator chooses.** Self-registration is the default way a church
+   lands on a host relay, but *how* is the relay runner's call — a setting, not a fixed policy. So the mode
+   carries a registration style (open / invite / allowlist) rather than hard-coding one. "Anyone can run a
+   relay to support the network" means the operator sets the terms of their own box.
+2. **De-provisioning KEEPS the data.** Removing a church stops the relay serving it; erasing is a separate,
+   explicit act by the relay. `/config removeChurch` already separates `confirm` from `purge` — preserve
+   exactly that distinction and default to keep. (Note the consequence for the self-service purge idea: a
+   church can leave, but only the relay operator can erase.)
+3. **Nothing changes on upgrade.** An existing relay must behave identically the moment it is updated —
+   infer the mode from what is already true (has churches ⇒ home; empty ⇒ generic) and record it, rather than
+   asking an operator mid-flight or changing a live relay's answer to any request.
+4. **The installer ASKS.** Provisional — "unsure, let's go with asking for now". So the question is worth
+   designing to be answerable by a non-technical operator (what is this box for?), and worth revisiting if it
+   proves to be a step people click through blindly.
+
+**Owner also: "we will definitely audit and test this like crazy."** It touches accept()/canRead()/the
+registration routes — the same spine as the two cross-tenant CRITICALs this repo has shipped. Own branch,
+adversarial audit before merge, and a relay-restart test in the suite (replay ordering already bit once here).
+
+### Still open
+* Exactly which registration styles a host relay offers, and what a church sees when refused.
+* Whether "generic" (no church scoping) survives as a supported mode or is retired — it is the fossil the
+  whole item is about, and keeping it means keeping an open-write branch in accept().
+
+### Related, same root
+Rota visibility is enforced per-relay (see the 2026-08-18 rota work): a church that narrows its rota is only
+protected on relays running the new code. A relay MODE does not fix that, but the same conversation —
+"what is this relay, and what does it promise?" — should settle how a church learns which of its relays
+actually enforce its choices.

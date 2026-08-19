@@ -31,7 +31,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=' + port,
   '--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
-  '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', URL_], { stdio: 'ignore', detached: true });
+  '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage',
+  // MUTE. These are real browsers on the operator's machine, so an actor tapping the audio Bible or
+  // "Listen to this page" plays out of the box's speakers — which happened mid-round on 2026-08-18 and
+  // is startling if you have walked away from the desk. It does NOT disable the audio element, so an
+  // actor can still observe that playback started; it just does not make noise in the room.
+  '--mute-audio', URL_], { stdio: 'ignore', detached: true });
 chrome.unref();
 
 let target = null;
@@ -66,9 +71,11 @@ const setup = await ev(`(function(){
     if (!localStorage.getItem('trinityone.nostr.mnemonic')) return 'ERR the app kept no mnemonic to persist';
     localStorage.setItem('trinityone.onboarded', 'true');
     // ACTIVE, not merely followed. Writing only followedChurches leaves activeChurch null, and every church
-    // subscription resolves through `churches.find(c => c.id === activeChurch)` — so the app subscribes to
-    // nothing, publishes no name, and reports the church as empty while chat still works. Seventeen of
-    // twenty-nine members landed in exactly that state on 2026-08-18 and showed as "Anonymous" to everyone.
+    // subscription resolves it via churches.find(...) — so the app subscribes to nothing, publishes no name,
+    // and reports the church as empty while chat still works. Seventeen of twenty-nine members landed in
+    // exactly that state on 2026-08-18 and showed as Anonymous to everyone.
+    // (No backticks in this comment: it lives INSIDE a template literal, and one would end it early — which
+    //  is exactly how this script broke and returned zero of thirty members.)
     localStorage.setItem('trinityone.activeChurch', ${JSON.stringify(CHURCH)});
     localStorage.setItem('trinityone.profile', JSON.stringify({ name: ${JSON.stringify(name)} }));
     localStorage.setItem('trinityone.followedChurches', JSON.stringify([{

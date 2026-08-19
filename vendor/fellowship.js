@@ -5817,6 +5817,7 @@
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
   var MEALS_SETTINGS_D = "trinityone/meals-settings";
+  var ROTA_SETTINGS_D = "trinityone/rota-settings";
   var MSGTAGS_D = "trinityone/msgtags";
   var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
   var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
@@ -6433,6 +6434,7 @@
     });
   }
   var PROFILE_KEY = "trinityone.profile";
+  var UNAVAIL_MIRROR = "trinityone.unavail.";
   var _profilePubFor = "";
   var _profilePubBody = "";
   var PROFILES_KEY = "trinityone.profiles";
@@ -6728,7 +6730,11 @@
     "trinityone/rota:",
     "trinityone/roster:",
     "trinityone/room:",
-    "trinityone/booking:"
+    "trinityone/booking:",
+    // careavail: is member-authored rather than church-authored, but it is sealed under the same church name
+    // key and therefore has the same late-key problem — without this, "Ready to help" stays empty for a newly
+    // admitted member until they restart the app.
+    "trinityone/careavail:"
   ];
   function _replayChurchCalendar(cp, hub) {
     if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
@@ -6743,6 +6749,16 @@
           _featureFailed("name-key calendar replay", d2, err);
         }
       }
+    }
+  }
+  function _sealChurchDocMember(cp, obj) {
+    const body = JSON.stringify(obj);
+    const k = (_nameKeys.get(cp) || [])[0];
+    if (!k) return body;
+    try {
+      return JSON.stringify({ e: encrypt(body, k) });
+    } catch (e) {
+      return body;
     }
   }
   function _openChurchDoc(cp, content) {
@@ -6878,6 +6894,10 @@
       }
       try {
         refetchChurchDocs();
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-admitted", { detail: { church: cp } }));
       } catch (e) {
       }
       try {
@@ -9531,6 +9551,40 @@
         // sticky: only emit on EOSE if we actually received settings — don't flip the card off on a reconnect's empty
       });
     },
+    // ── Rota visibility (member side) ──
+    // The church's choice of who may see the rota. Church-signed, and the RELAY is what enforces it — this
+    // subscription only lets the app avoid offering a screen the relay will refuse to fill, and tell "your
+    // church keeps this to the teams" apart from "nothing is published yet".
+    //
+    // Defaults to 'church' and stays there unless a document says otherwise, which matters twice over: every
+    // church that existed before this setting has no such document and must not lose its rota, and a relay
+    // that simply never serves the settings doc must not be able to blank the screen by silence.
+    subscribeRotaSettings(churchNpub, cb) {
+      const pubk = toPub(churchNpub);
+      const OPEN = { visibility: "church" };
+      if (!pubk) {
+        cb({ ...OPEN });
+        return () => {
+        };
+      }
+      let best = { ts: 0, doc: { ...OPEN } };
+      return _onChurchDocs(pubk, {
+        want: [ROTA_SETTINGS_D],
+        onevent(e, d) {
+          if (d !== ROTA_SETTINGS_D) return;
+          if ((e.created_at || 0) <= best.ts) return;
+          try {
+            const v = String((JSON.parse(e.content || "{}") || {}).visibility || "");
+            best = { ts: e.created_at || 0, doc: { visibility: v === "team" || v === "stewards" ? v : "church" } };
+            cb({ ...best.doc });
+          } catch {
+          }
+        },
+        oneose() {
+          if (best.ts) cb({ ...best.doc });
+        }
+      });
+    },
     // The church's steward-defined chat message tags (Testimony, Praise, …). cb([{ id, label, icon, accent }]).
     // Newest-wins; the relay write-gates the doc to the church/stewards, so trust what it serves. Sanitized on
     // read (allowlisted icon/accent, reserved ids dropped) so a hostile relay/forged doc can't inject anything.
@@ -10201,7 +10255,8 @@
             return;
           }
           try {
-            const o = JSON.parse(e.content || "{}");
+            const o = _openChurchDoc(pubk, e.content || "{}");
+            if (o === null) return;
             if (!o.available) {
               byPub.delete(e.pubkey);
               emit();
@@ -10230,7 +10285,7 @@
       }
       if (!sk || !cp) return null;
       const clean3 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ available: true, tags: clean3, note: String(note || "").trim().slice(0, 240) }) }, sk);
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean3, note: String(note || "").trim().slice(0, 240) }) }, sk);
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
@@ -10513,18 +10568,41 @@
       };
     },
     // member sets the Sundays they're unavailable (own addressable doc, p-tagged to church)
+    //
+    // THIS THROWS ON FAILURE, DELIBERATELY. It used to end `catch {}`, so a refusal was indistinguishable from
+    // a save: three members marked themselves away while still pending approval, the relay correctly refused
+    // all three, and the app closed the sheet with a success toast. Two of them lost the dates entirely and
+    // will be rota'd onto days they refused. The caller must now handle the outcome — see UnavailSheet.
+    //
+    // _publishBounded, not _publishAny: this is a UI path and a silent relay must not leave the member holding
+    // an open sheet for ever.
     async setUnavailable(churchNpub, dates) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
-      if (!cp || !sk) return;
+      if (!cp || !sk) throw new Error("not ready");
       const me = window.Fellowship.myPubkey;
-      const content = JSON.stringify({ dates: dates || [] });
+      const list = Array.isArray(dates) ? dates : [];
+      const content = JSON.stringify({ dates: list });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/unavail:" + me], ["t", NET], ["p", cp]], content }, sk);
+      await _publishBounded(window.Fellowship.relays, evt);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
-      } catch {
+        localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(list));
+      } catch (e) {
       }
       return evt;
+    },
+    // What this member has already said — so the sheet can SHOW it and let them untick it. The document is
+    // addressable and each save replaces the whole array, so without this a member adding one date silently
+    // deleted every date they gave before, and could never cancel one.
+    getUnavailable(churchNpub) {
+      const cp = toPub(churchNpub);
+      if (!cp) return [];
+      try {
+        const v = JSON.parse(localStorage.getItem(UNAVAIL_MIRROR + cp) || "[]");
+        return Array.isArray(v) ? v : [];
+      } catch (e) {
+        return [];
+      }
     },
     // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
     // FEDERATION Phase 2 — read a church's signed NIP-65 relay-list (kind 10002) and ADOPT the relays it

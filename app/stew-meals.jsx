@@ -598,7 +598,13 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const mealsS = window.useMealsSettings ? window.useMealsSettings() : {};
   const careRosters = window.useStewardRosters ? window.useStewardRosters() : [];
   const careTeamPeople = ((careRosters || []).find(r => r && r.team === mealsS.adminGroupId) || {}).people || [];
-  const zeroAudience = mealsS.visibility === 'team' && (!mealsS.adminGroupId || careTeamPeople.length === 0);
+  // COUNT WHO CAN ACTUALLY RECEIVE, NOT WHO IS LISTED. A roster row is { id, name, pub } and `pub` is empty
+  // for anyone the steward typed by hand instead of linking to their app account. A need is sealed per
+  // recipient, so an unlinked row can never be given a key and is inert. Counting rows meant six tidy names
+  // satisfied this guard while the need reached nobody — measured on a real church 2026-08-18, where the
+  // care team showed six and exactly one had an account. The two warnings further down this file already
+  // test `teamLinked`; this one did not, which is why it failed silently in the place it mattered most.
+  const zeroAudience = mealsS.visibility === 'team' && (!mealsS.adminGroupId || careTeamPeople.filter(p => p && p.pub).length === 0);
   const [busy, setBusy]     = React.useState(false);
   const [err, setErr]       = React.useState('');
   const canSave = label.trim().length > 0 && dates.length > 0 && !busy;

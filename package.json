@@ -15,7 +15,7 @@
     "catalog:ebible": "python3 scripts/build-ebible-catalog.py",
     "catalog:videos": "python3 scripts/build-trinity-videos.py",
     "smoke": "bash scripts/smoke.sh",
-    "test": "node --test scripts/*.test.mjs"
+    "test": "node scripts/run-tests.mjs"
   },
   "keywords": [],
   "author": "",

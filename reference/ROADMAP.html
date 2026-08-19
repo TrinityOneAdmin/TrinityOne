@@ -138,6 +138,25 @@
   The first three are the queue: a child who cannot get in, a console that shows nobody’s face, and one PIN
   prompt too many. They are what a congregation meets on day one.</p>
   <ul class="items">
+<li class="item" data-id="relay-mode">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Give a relay an explicit MODE — because “no churches” currently means three different things<span class="tag t-block">Pilot</span></span>
+        <div class="note">An empty relay is <b>open</b>: <code>accept()</code> begins
+        <code>if (!CHURCH_PUBS.size) return true</code>, and the media gate does the same. So removing the last
+        church silently turns a gated relay into one anyone on the internet can write to — which is why the
+        console refuses to do it (“that is the only church on this relay”). A church therefore cannot leave a
+        relay it no longer trusts, and an operator cannot decommission one cleanly.</div>
+        <div class="why"><b>Not policy drift — state drift.</b> Public vs private already governs the second and
+        subsequent churches exactly as intended. What is unhandled is the <i>empty</i> state, which today answers
+        three unrelated questions at once: a generic relay (the original standalone product, before a console was
+        attached), a church relay not set up yet, and a church relay deliberately emptied. The first should
+        accept, the second exactly once, the third never.
+        <br><b>Why now:</b> a wiped relay sits open on a public address until someone registers, and the first key
+        to arrive claims it. It also blocks self-service purge — a church erasing itself from a single-church
+        relay <i>is</i> this case.
+        <br><b>Full write-up, with the measurements and the open questions:</b> <code>reference/ROADMAP-NOTES.md</code> §7.</div>
+      </div></div>
+    </li>
 <li class="item" data-id="delegate-ux">
       <div class="row"><input type="checkbox"><div class="body">
         <span class="title">Design what a delegated steward actually sees — and give the card real permissions<span class="tag t-block">Pilot</span></span>

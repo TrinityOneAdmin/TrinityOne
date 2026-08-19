@@ -168,6 +168,9 @@ window.useStewardCategories = makeSub(S, 'subscribeCategories', () => []);
 window.useStewardPlans = makeSub(S, 'subscribePlans', () => []);
 window.useStewardDevotionals = makeSub(S, 'subscribeDevotionals', () => []);
 window.useStewardRotas = makeSub(S, 'subscribeRotas', () => []);
+// 'church' is the initial value as well as the fallback: a church that never touched this setting has no
+// document, and the toolbar must not flash "stewards only" at a steward while the relay is still answering.
+window.useStewardRotaSettings = makeSub(S, 'subscribeRotaSettings', () => ({ visibility: 'church' }));
 window.useStewardRosters = makeSub(S, 'subscribeRosters', () => []);
 window.useStewardServices = makeSub(S, 'subscribeServices', () => []);
 window.useStewardRunsheets = makeSub(S, 'subscribeRunsheets', () => []);

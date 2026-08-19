@@ -45,6 +45,32 @@ function svServiceRoster(ctx, serviceId) {
     return { name: who.name, pub: who.pub, role: role ? role.name : '', me: !!(me && who.pub === me) };
   }).filter(Boolean);
 }
+// ── the CHURCH'S rota: every upcoming service and who is on it ────────────────────────────────────────────
+// svServiceRoster above answers "who is serving WITH ME", and is wired to the member's own next slot only. So
+// a member could see their own Sunday and nothing else: no answer to "who is on next week?", and no way to
+// see the rota at all unless they were on it. Nine agents in the round of 2026-08-18 went looking for the
+// church's rota and none found one.
+//
+// This needs no new fetch. app.jsx already subscribes to every church rota, roster and service and caches all
+// three in localStorage — the documents are on the phone already, which is also why a visibility setting can
+// only govern who FETCHES them in future, never who can read a copy already held.
+//
+// `published` is checked HERE and deliberately: a rota is a draft until a steward publishes it, and a
+// congregation must never be shown a draft that still has people penciled in. svServiceRoster does not check
+// it (its one caller is the member's own confirmed slot), so this must.
+function svChurchRota(ctx) {
+  const today = svTodayIso();
+  const rotas = ctx.churchRotas || [];
+  return (ctx.churchServices || [])
+    .filter(s => s && s.id && (s.date || '') >= today)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.time || '').localeCompare(b.time || ''))
+    .map(s => {
+      const rota = rotas.find(r => r.service === s.id);
+      return { ...s, people: (rota && rota.published) ? svServiceRoster(ctx, s.id) : [] };
+    })
+    .filter(s => s.people.length);
+}
+
 // teammates I could ask to swap (the team's roster people, minus me)
 function svTeamMates(ctx, teamId) {
   const roster = (ctx.churchRosters || []).find(r => r.team === teamId);
@@ -134,15 +160,20 @@ function SwapSheet({ open, item, onClose, ctx }) {
               return (
                 <button key={p.pub || p.name} onClick={() => setPick(p)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)' }}>
                   <ServAvatar name={p.name} size={40} accent={item.accent || 'var(--clay)'} />
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>On {item.teamName}</div></div>
+                  {/* A teammate with no pubkey is a NAME the steward typed, not an account. The swap reply
+                      carries swapTo:'' for them — byte-identical to "ask my leader" — so they are never
+                      contacted. Saying so here is the difference between a choice and a false promise. */}
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{p.pub ? `On ${item.teamName}` : 'Not on the app — your leader will be asked instead'}</div></div>
                   {on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={15} stroke={2.8} color="var(--on-clay)" /></div>
                     : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)' }} />}
                 </button>
               );
             })}
           </div>
-          <button onClick={() => pick && doAsk(pick.pub, `Asked ${pick.name.split(' ')[0]} to swap`)} disabled={!pick} style={{ ...svPrimary(), background: pick ? 'var(--clay)' : 'var(--line)' }}>
-            <Icon name="swap" size={18} color="#fff" /> {pick ? `Ask ${pick.name.split(' ')[0]} to swap` : 'Choose someone'}</button>
+          {/* Tell the truth in the toast too: an unlinked pick goes to the leader, so claiming we asked the
+              person by name is a promise the app cannot keep. */}
+          <button onClick={() => pick && doAsk(pick.pub, pick.pub ? `Asked ${pick.name.split(' ')[0]} to swap` : `Asked your leader — ${pick.name.split(' ')[0]} isn’t on the app`)} disabled={!pick} style={{ ...svPrimary(), background: pick ? 'var(--clay)' : 'var(--line)' }}>
+            <Icon name="swap" size={18} color="#fff" /> {pick ? (pick.pub ? `Ask ${pick.name.split(' ')[0]} to swap` : 'Ask my leader instead') : 'Choose someone'}</button>
         </React.Fragment>
       ) : (
         <React.Fragment>
@@ -187,7 +218,14 @@ function ManageSheet({ open, item, onClose, onSwap, ctx }) {
 // ── set unavailable Sundays ──
 function UnavailSheet({ open, onClose, ctx }) {
   const [sel, setSel] = useSv([]);
-  useSvE(() => { if (open) setSel([]); }, [open]);
+  const [busy, setBusy] = useSv(false);
+  const [err, setErr] = useSv('');
+  // LOAD WHAT THEY ALREADY SAID. This used to be `setSel([])`, and because the document is addressable —
+  // every save replaces the whole array — opening to a blank slate meant that ticking one new Sunday deleted
+  // every Sunday given before it. Measured on a real member: 13 + 27 Sep saved, then 20 Sep added, and the
+  // stored record became 20 Sep alone. It also made cancelling impossible: you cannot untick what is not shown.
+  const [had, setHad] = useSv(false);
+  useSvE(() => { if (open) { const cur = ctx.getUnavailableDates ? ctx.getUnavailableDates() : []; setSel(cur); setHad(cur.length > 0); setErr(''); setBusy(false); } }, [open]);
   const sundays = svNextSundays(6);
   const toggle = (iso) => setSel(s => s.includes(iso) ? s.filter(x => x !== iso) : [...s, iso]);
   return (
@@ -208,8 +246,29 @@ function UnavailSheet({ open, onClose, ctx }) {
           );
         })}
       </div>
-      <button onClick={() => { ctx.setUnavailableDates(sel); ctx.toast(`Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away`); onClose(); }} disabled={!sel.length} style={{ ...svPrimary(), background: sel.length ? 'var(--clay)' : 'var(--line)' }}>
-        <Icon name="calCheck" size={18} color="#fff" /> {sel.length ? `Mark ${sel.length} away` : 'Choose dates'}</button>
+      {err ? <div style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12.5, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ {err}</div> : null}
+      {/* AWAIT, THEN SAY SO. This used to toast and close synchronously while the publish ran unwatched, so a
+          refused write — a member marking themselves away before their church had approved them — looked
+          exactly like a saved one. The sheet now stays OPEN on failure with their ticks intact, so nothing is
+          lost and they can try again. Saving an EMPTY list is allowed when they had dates before: that is how
+          an unavailability is cancelled, and there was previously no way to do it at all. */}
+      <button onClick={async () => {
+        if (busy) return;
+        setBusy(true); setErr('');
+        try {
+          await ctx.setUnavailableDates(sel);
+          ctx.toast(sel.length ? `Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away` : 'Cleared — you’re available again');
+          onClose();
+        } catch (e) {
+          setErr('That didn’t reach your church, so nothing was saved. ' +
+            // ctx.joinState, NOT ctx.isPending — there is no such field, and reading it gave every member
+            // the connection message even when the real reason was that their church had not admitted them
+            // yet, which is the single most common cause of this failure.
+            ((ctx.joinState && ctx.joinState.isPending) ? 'You’re still waiting to be approved — try again once you’re in.' : 'Check your connection and try again.'));
+          setBusy(false);
+        }
+      }} disabled={busy || (!sel.length && !had)} style={{ ...svPrimary(), background: (sel.length || had) ? 'var(--clay)' : 'var(--line)', opacity: busy ? 0.6 : 1 }}>
+        <Icon name="calCheck" size={18} color="#fff" /> {busy ? 'Saving…' : sel.length ? `Mark ${sel.length} away` : had ? 'Clear all' : 'Choose dates'}</button>
     </BottomSheet>
   );
 }
@@ -384,7 +443,7 @@ function MyMonth({ ctx, onManage, onRunsheet }) {
       {/* selected-day detail */}
       <SectionLabel>{svParts(sel).dow} {svParts(sel).day} {svParts(sel).mon}{sel === todayIso ? ' · Today' : ''}</SectionLabel>
       {(selServ.length === 0 && selEv.length === 0 && selSvc.length === 0) ? (
-        <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '6px 2px 4px', lineHeight: 1.5 }}>Nothing on this day.</div>
+        <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '6px 2px 4px', lineHeight: 1.5 }}>{(ctx.joinState && ctx.joinState.isPending) ? 'Hidden until you’re approved — not necessarily empty.' : 'Nothing on this day.'}</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
           {selSvc.map((s, i) => (
@@ -444,6 +503,26 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // openServing('care') deep link from the "you're being cared for" banner opened with the selected tab
   // off the right edge, which is the exact symptom the scroll was added to fix. block:'nearest' keeps
   // this horizontal; measured, no ancestor and no window scroll moves.
+  // MAY I SEE THE CHURCH'S ROTA? The relay is what enforces this; the tab honours it so a member is never
+  // offered a screen the relay will refuse to fill. An empty screen with no explanation is the failure class
+  // this codebase keeps re-learning — it reads as "the app is broken" or "the church is dead", and it was the
+  // single most common report in the round of 2026-08-18.
+  //
+  // Default open, and open whenever the answer is unknown: every church that predates this setting has no
+  // document, and a relay that simply never answers must not be able to hide a rota nobody chose to hide.
+  // 'team' is resolved against the rosters the member can already read — the same list the relay gates on.
+  const rotaVisibility = ctx.rotaVis || 'church';
+  const onAServingRoster = (ctx.churchRosters || []).some(r => ((r && r.people) || []).some(p => p && p.pub && ctx.myPubkey && p.pub === ctx.myPubkey));
+  // Only the two KNOWN narrow settings narrow anything; every other value — absent, unrecognised, garbled,
+  // or written by a newer console — reads as open, which is exactly how the relay falls back (gateway.mjs,
+  // the ROTA_VIS ingest). Written the other way round, as `=== 'church' || …`, an unknown value hid the tab
+  // while the relay went on serving the document: the rota would vanish for a reason invisible from either
+  // side. That is what the first draft of this line did.
+  const canSeeRota = rotaVisibility === 'stewards' ? false : rotaVisibility === 'team' ? onAServingRoster : true;
+  // A tab that stops being available while it is OPEN must not leave the screen on a branch that no longer
+  // renders — the steward can narrow the rota mid-session, and the member would be left looking at a tab
+  // strip with nothing selected. Snap back to Serving, which is always there.
+  useSvE(() => { if (open && tab === 'rota' && !canSeeRota) setTab('serving'); }, [open, tab, canSeeRota]);
   useSvE(() => {
     if (!open) return;
     const el = tabEls.current[tab];
@@ -502,7 +581,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             side gets. scroll-padding covers the other scroll — scrollIntoView aligns the BUTTON to the
             nearest edge and reads straight past a spacer. */}
         <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '4px 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
-          {[['serving', 'Serving', 'hand'], ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
+          {[['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
             const on = tab === k;
             return (
               <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
@@ -681,6 +760,59 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               </React.Fragment>
             ) : null}
           </React.Fragment>
+        ) : (tab === 'rota' && canSeeRota) ? (
+          <React.Fragment>
+            {/* THE CHURCH'S ROTA, not just mine. Empty here has three different causes and they must not be
+                said in the same sentence: not admitted yet, nothing published yet, or the church has chosen
+                to keep the rota to the serving teams. Stating any of them as "there is no rota" is the
+                mistake the round of 2026-08-18 caught across six screens. */}
+            {(() => {
+              const svcs = svChurchRota(ctx);
+              const pendingNow = !!(ctx.joinState && ctx.joinState.isPending);
+              if (!svcs.length) {
+                return (
+                  <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--ink-3)' }}>
+                    <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="users" size={26} /></div>
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>{pendingNow ? 'Not shared with you yet' : 'No rota published yet'}</div>
+                    <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>{pendingNow
+                      ? 'Your church may already have a full rota — it isn’t shared until a steward approves you.'
+                      : 'When your church publishes who’s serving, every upcoming service will be listed here.'}</p>
+                  </div>
+                );
+              }
+              return (
+                <React.Fragment>
+                  <SectionLabel>Who’s serving</SectionLabel>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+                    {svcs.map(s => {
+                      const mine = s.people.some(p => p.me);
+                      return (
+                        <div key={s.id} style={{ borderRadius: 18, padding: 14, background: 'var(--surface)', border: mine ? '1.5px solid color-mix(in oklab, var(--clay) 45%, var(--line))' : '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 11 }}>
+                            <ServDateBlock iso={s.date} accent="var(--clay)" />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{s.name || 'Service'}</div>
+                              <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 2 }}>{s.time || ''}{s.time ? ' · ' : ''}{s.people.length} serving</div>
+                            </div>
+                            {mine ? <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--on-clay)', background: 'var(--clay)', borderRadius: 999, padding: '4px 10px', flexShrink: 0 }}>You’re on</span> : null}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {s.people.map((p, i) => (
+                              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: i ? '1px solid var(--line)' : 'none' }}>
+                                <ServAvatar name={p.name} size={28} me={p.me} accent="var(--clay)" />
+                                <span style={{ fontSize: 13.5, fontWeight: 700, flex: 1, minWidth: 0 }}>{p.me ? 'You' : p.name}</span>
+                                <span style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'right' }}>{p.role}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </React.Fragment>
+              );
+            })()}
+          </React.Fragment>
         ) : tab === 'events' ? (
           <React.Fragment>
             {/* regular gatherings (services) the church scheduled */}
@@ -713,7 +845,18 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               );
             })()}
             <SectionLabel>What’s on</SectionLabel>
-            {events.length === 0 ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No socials or events yet — your church will post them here.</div> : null}
+            {/* AN EMPTY SCREEN MUST NOT BE STATED AS A FACT ABOUT THE CHURCH. Until a member is admitted the
+                relay serves them none of the church's corpus, so this read "No socials or events yet — your
+                church will post them here" to people looking at a parish with eighteen services on its
+                calendar. Six agents in the round of 2026-08-18 reported the church as empty; only the
+                Community tab ever admitted anyone was waiting. The church gate itself is not the problem and
+                is not changing — a steward has always approved members — but the app must say which of the
+                two it is showing. */}
+            {events.length === 0 ? (
+              (ctx.joinState && ctx.joinState.isPending)
+                ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>You’ll see what’s on once a steward lets you in. Your church may already have plenty here — it just isn’t shared until you’re approved.</div>
+                : <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No socials or events yet — your church will post them here.</div>
+            ) : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {/* AN EVENT WE CANNOT OPEN IS NOT AN EVENT WITH NO DETAILS. Calendar entries are sealed under the
                   church name key; one that will not open carries `_locked` so the transport does not silently

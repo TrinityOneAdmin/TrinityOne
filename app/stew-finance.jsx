@@ -69,7 +69,16 @@ function booksFmt(minor, book) {
   return book.baseCurrency === 'sats' ? (s + ' ' + sym) : (sym + s);
 }
 function booksParse(str, book) {
-  const dec = book.decimals || 2, n = parseFloat(String(str).replace(/[^0-9.]/g, ''));
+  const dec = book.decimals || 2, raw = String(str);
+  // A MINUS IS A REFUSAL, NOT A HINT. Direction comes from the explicit Money In / Money Out toggle, so a
+  // typed sign is ambiguous — an expense? a correction? a typo? — and the sanitiser below cannot ask. It
+  // strips everything that is not a digit or a dot, so `-500` silently became +£500.00: a £1,000 error from
+  // one character, found by a treasurer reconciling against a bank statement (2026-08-18). An embedded minus
+  // is not an amount either — `500-600` used to parse as £500,600.
+  // Refusing returns 0, which is exactly how the field already treats empty input, so the caller needs no
+  // new state: Save stays disabled and nothing is posted.
+  if (/[-−]/.test(raw)) return 0;
+  const n = parseFloat(raw.replace(/[^0-9.]/g, ''));
   return (!isFinite(n) || n <= 0) ? 0 : Math.round(n * Math.pow(10, dec));
 }
 function booksEntryView(book, e) {

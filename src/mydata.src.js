@@ -366,6 +366,13 @@ function MyDataStore(backend) {
     var kick = function () { return backend.startSync(function () { emit(null); }); };
     api.ready = kick();
     window.addEventListener('trinity-identity', function () { kick(); });
+    // A member's own documents are REFUSED by the relay until their church has admitted them (accept()
+    // requires effective membership even for these church-untagged personal docs). Publishing here is
+    // fire-and-forget, so those refusals were invisible, and the only retry was this kick at startup — which
+    // meant anything written while waiting for approval stayed on the device alone until the app was next
+    // restarted. Someone journalling while they wait is exactly someone with something on their mind, so the
+    // window mattered. Admission is the moment the refusal stops being true; retry then, not at next boot.
+    window.addEventListener('trinity-admitted', function () { kick(); });
   } else {
     api.ready = Promise.resolve(false);
   }

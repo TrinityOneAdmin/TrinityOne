@@ -91,7 +91,11 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // Identical shape to joinQueued directly above it, so it benefits from the heal for the same reason.
   // 33 → 32 on 2026-08-17, and the drop is NOT a removed site: the old figure counted one occurrence that
   // lived inside a comment. Now that the scan strips comments, 32 is the real number of code resolutions.
-  assert.equal(sites.length, 32,
+  // 32 → 33 on 2026-08-18: ctx.getUnavailableDates, which reads back the Sundays this member has told the
+  // church they are away so the "When are you away?" sheet can show and untick them. Identical in shape to
+  // ctx.setUnavailableDates immediately above it, and an ordinary active-church read, so it benefits from
+  // the same heal.
+  assert.equal(sites.length, 33,
     `the active-church resolution sites changed (${sites.length} vs 33) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 

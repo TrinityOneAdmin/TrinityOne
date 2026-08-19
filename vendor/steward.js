@@ -14417,6 +14417,7 @@ zoo`.split("\n");
   var SERVICE_D = "trinityone/service:";
   var RUNSHEET_D = "trinityone/runsheet:";
   var ROTA_D = "trinityone/rota:";
+  var ROTA_SETTINGS_D = "trinityone/rota-settings";
   var EVENT_D = "trinityone/event:";
   var ROOM_D = "trinityone/room:";
   var BOOKING_D = "trinityone/booking:";
@@ -18888,6 +18889,14 @@ zoo`.split("\n");
     },
     // ---- team rosters: the roles a team needs + the people who can serve ----
     // roster = { roles:[{id,name}], people:[{id,name,pub?}] }, keyed by team(group) id.
+    //
+    // ⚠ WRITTEN IN CLEARTEXT ON PURPOSE, AND TWO RELAY GRANTS DEPEND ON IT. The relay parses `people[].pub`
+    // into ROSTER_PEOPLE and uses it for careAdmin() (who may open care needs) and onAnyRoster() (who may fetch
+    // the rota when a church narrows it to its serving teams). This document does hold real names bound to
+    // pubkeys, which is exactly the at-rest exposure the 2026-08-18 round sealed runsheet: and careavail: for —
+    // so it SHOULD be sealed, and church-docs-are-sealed.test.mjs tracks that as a deferred todo. Sealing it
+    // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
+    // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
     publishRoster(teamId, roster) {
       if (!sk || !teamId) return Promise.resolve(null);
       const roles = (roster.roles || []).map((r) => ({ id: r.id || "r" + Math.random().toString(36).slice(2, 7), name: r.name || "Role" }));
@@ -18918,7 +18927,7 @@ zoo`.split("\n");
     // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
     publishRunsheet(serviceId, items) {
       if (!sk || !serviceId) return Promise.resolve(null);
-      const content = JSON.stringify({ items: Array.isArray(items) ? items : [] });
+      const content = _sealChurchDoc({ items: Array.isArray(items) ? items : [] });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }));
     },
     subscribeRunsheets(onSheets) {
@@ -18990,6 +18999,30 @@ zoo`.split("\n");
     },
     subscribeRotas(onRotas) {
       return this._subAddr(ROTA_D, (c, id) => ({ service: id, published: !!c.published, assign: c.assign || {} }), onRotas);
+    },
+    // ---- who may SEE the rota: 'church' (default) | 'team' (people on the serving rosters) | 'stewards' ----
+    // NOT sealed, unlike the rota itself: the relay has to read this one to enforce it, and it says nothing
+    // about any person — only which of three settings the church chose.
+    //
+    // What this buys and what it does not: rota:/runsheet: are sealed under the church name key that every
+    // member already holds, so the relay can refuse to SERVE the document but cannot stop a member decrypting
+    // a copy they already fetched — and the member app caches them. Narrowing the setting therefore protects
+    // the rota from here on; it does not reach back onto phones. Anything the console says about this must be
+    // written to that standard.
+    publishRotaSettings(visibility) {
+      if (!sk) return Promise.resolve(null);
+      const v = visibility === "team" || visibility === "stewards" ? visibility : "church";
+      const content = JSON.stringify({ visibility: v, updated: now() });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_SETTINGS_D], ["t", NET]], content })).then(() => ({ visibility: v }));
+    },
+    // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
+    // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
+    // read as 'church' (the open default) and not as "no answer".
+    subscribeRotaSettings(cb) {
+      return this._subAddr(ROTA_SETTINGS_D, (c) => ({ visibility: String(c && c.visibility || "") }), (docs) => {
+        const v = Array.isArray(docs) && docs.length ? docs[0].visibility : "";
+        cb({ visibility: v === "team" || v === "stewards" ? v : "church" });
+      });
     },
     // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
     // event = { id?, date, time, title, where, blurb, accent }
