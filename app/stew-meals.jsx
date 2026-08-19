@@ -347,9 +347,16 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
   const [end, setEnd] = React.useState(today);
   const [notes, setNotes] = React.useState(req.note || '');
   const [busy, setBusy] = React.useState(false);
+  // A NEED WITH NO DAYS CANNOT BE SIGNED UP FOR, so this sheet must not be able to open one. dayRange()
+  // returns [] for a blank or unparseable start date — "".split('-') gives NaN, Date.UTC(NaN…) is NaN, and
+  // `NaN <= end` is false, so the loop never runs and the catch never fires. The button was disabled only
+  // while busy, so the steward published an empty need and the list then reported it as covered.
+  // This is the path that produced the one in the simulation of 2026-08-19 (R3-5): the main need form has
+  // always refused an empty day list, but a steward converting a member's request into a need comes through
+  // HERE, and here there was no guard at all.
+  const dates = dayRange(start, end < start ? start : end);
   const submit = async () => {
     setBusy(true);
-    const dates = dayRange(start, end < start ? start : end);
     let ok = null; try { ok = await window.StewardMeals.approveCareRequest(req, { dates, notes, who }); } catch (x) {}
     setBusy(false); if (ok) onDone();
   };
@@ -359,6 +366,7 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
       <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '92%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', padding: 24 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Set up help</div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', margin: '6px 0 14px', lineHeight: 1.5 }}>Opens a need the church can sign up for. Pick the dates.</p>
+        {!dates.length ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', margin: '0 0 10px', lineHeight: 1.45 }}>Pick the days first — a need with no days is one nobody can sign up to.</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
           <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
@@ -367,7 +375,7 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
         <textarea value={notes} onChange={e => setNotes(e.target.value)} style={{ ...fld, minHeight: 64, resize: 'vertical' }} />
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
-          <button onClick={submit} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11 }}>{busy ? 'Setting up…' : 'Open the need'}</button>
+          <button onClick={submit} disabled={busy || !dates.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: (busy || !dates.length) ? 0.5 : 1 }}>{busy ? 'Setting up…' : 'Open the need'}</button>
         </div>
       </div>
     </div>
@@ -478,12 +486,24 @@ function MealsEmpty() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────────
+// WHAT THE CARD SAYS ABOUT COVER. "Covered" was decided by "nothing is open" alone, and a need with no days
+// has nothing open — so a need nobody could sign up to reported itself, in the done colour, as fully handled,
+// on the same row that said "· 0 days". A steward in the simulation of 2026-08-19 published one and walked
+// away. No days means the need is UNFINISHED, not finished: say so, and never in the done colour.
+function mealsCoverLabel(dayCount, openCount) {
+  if (!(dayCount > 0)) return { text: 'no days yet', tone: 'empty' };
+  if (!(openCount > 0)) return { text: 'covered', tone: 'done' };
+  return { text: openCount + ' open', tone: 'open' };
+}
+
 function MealsNeedCard({ need, slots, skips, onOpen }) {
   const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate);
   const filledDates = new Set(slots.map(s => s.isoDate));
   const skippedDates = new Set(skips.map(s => s.isoDate));
   const open = dates.filter(d => !filledDates.has(d) && !skippedDates.has(d));
   const filledCount = dates.filter(d => filledDates.has(d)).length;
+  const cover = mealsCoverLabel(dates.length, open.length);
+  const coverTone = { done: 'var(--sage)', open: 'var(--ink)', empty: 'var(--clay-deep, #b4462f)' };
   return (
     <button onClick={onOpen} className="sk-card" style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', textAlign: 'left', cursor: 'pointer', width: '100%', border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface)', fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 44, height: 44, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -494,8 +514,8 @@ function MealsNeedCard({ need, slots, skips, onOpen }) {
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
       </div>
       <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: open.length === 0 ? 'var(--sage)' : 'var(--ink)' }}>{filledCount}/{dates.length}</div>
-        <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{open.length === 0 ? 'covered' : open.length + ' open'}</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: coverTone[cover.tone] }}>{filledCount}/{dates.length}</div>
+        <div style={{ fontSize: 11, color: cover.tone === 'empty' ? 'var(--clay-deep, #b4462f)' : 'var(--ink-3)' }}>{cover.text}</div>
       </div>
       <Icon name="chevR" size={16} color="var(--ink-3)" />
     </button>

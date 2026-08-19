@@ -9774,19 +9774,8 @@
         }
       }
       if (!sk || !cp) return null;
-      let pubs = [];
-      try {
-        const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CARETEAM_D + cp] }]);
-        let best = null;
-        for (const e of evs || []) {
-          if (!best || e.created_at > best.created_at) best = e;
-        }
-        if (best) {
-          const o = JSON.parse(best.content);
-          if (Array.isArray(o.pubs)) pubs = o.pubs.filter(Boolean);
-        }
-      } catch (e) {
-      }
+      const team = await _fetchCareTeam(cp);
+      const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
       const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
       const body = {
         v: 1,
@@ -9822,7 +9811,7 @@
         console.warn("[fellowship] care request publish failed", e);
         return null;
       }
-      return { id, ...body };
+      return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team) };
     },
     // Subscribe to care requests. A member receives their OWN (the relay serves the author); the care team gets
     // all. cb(list) with [{ id, from, at, sealed, ...body }] newest-first; entries we can decrypt carry the body.

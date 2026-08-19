@@ -202,7 +202,7 @@ function HelpCenter({ open, onClose, initial, ctx }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 14px 11px' }}>
               {view === 'index'
                 ? <IconBtn name="chevL" onClick={onClose} />
-                : <button onClick={() => setView('index')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 13, padding: '9px 14px 9px 11px', cursor: 'pointer', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}><Icon name="chevL" size={18} /> Help</button>}
+                : <button aria-label="Back" onClick={() => setView('index')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 13, padding: '9px 14px 9px 11px', cursor: 'pointer', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}><Icon name="chevL" size={18} /> Help</button>}
               <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, whiteSpace: 'nowrap' }}>{view === 'index' ? 'Help & Guides' : ''}</span>
               <TextSizeStepper scale={scale} setScale={setScaleP} />
             </div>

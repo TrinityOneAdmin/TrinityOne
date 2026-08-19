@@ -46,6 +46,22 @@ function careName(pub, myPub) {
   return 'A member';
 }
 
+// THE MEMBER'S HALF OF THE SAME LIE (see mealsCoverLabel in app/stew-meals.jsx). Cover was decided by
+// "nothing is open" alone, and a need with NO DAYS has nothing open — so the congregation was shown "all
+// covered" in the done colour for a need nobody could sign up to, because there was nothing to sign up to.
+// The expanded row underneath already said "No dates set yet", so the summary contradicted the detail one
+// tap away. Simulation 2026-08-19, R3-5: a steward published a Meals need with zero days and both screens
+// reported it as handled.
+//
+// This cannot call the console's helper: app/*.jsx are classic scripts and these two files are in DIFFERENT
+// bundles (index.html loads screens-today.js, steward.html loads stew-meals.js). Keep the pair in step by
+// hand — and never share a top-level name between bundles that are loaded together.
+function careCoverLabel(dayCount, openCount) {
+  if (!(dayCount > 0)) return { text: 'no days set yet', done: false };
+  if (!(openCount > 0)) return { text: 'all covered', done: true };
+  return { text: openCount + ' day' + (openCount === 1 ? '' : 's') + ' still open', done: false };
+}
+
 function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }) {
   const myPub = care.myPub || '';
   const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
@@ -53,6 +69,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
   const fillsFor = (iso) => slots.filter(s => s.needId === need.id && s.isoDate === iso);
   const isRecipient = !!need.recipient && need.recipient === myPub.toLowerCase();
   const openDays = dates.filter(d => !skipSet.has(d) && fillsFor(d).length === 0);
+  const cover = careCoverLabel(dates.length, openDays.length);
   const filledDays = dates.filter(d => fillsFor(d).length > 0).length;
   const accent = 'var(--sage)';
   // per-day meals (meals tasks): the day's override, else the need default
@@ -69,9 +86,9 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
         <div style={{ width: 40, height: 40, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: accent }}><Icon name={CARE_TYPE_ICON[need.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{CARE_TYPE_LABEL[need.type] || 'Care'} · {openDays.length > 0 ? openDays.length + ' day' + (openDays.length === 1 ? '' : 's') + ' still open' : 'all covered'}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{CARE_TYPE_LABEL[need.type] || 'Care'} · {cover.text}</div>
         </div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: openDays.length === 0 ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: cover.done ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>
         <Icon name={expanded ? 'chevD' : 'chevR'} size={16} color="var(--ink-3)" />
       </button>
       {expanded && (
@@ -376,6 +393,18 @@ function CareRequests({ ctx }) {
   );
 }
 
+// WHAT WE MAY HONESTLY TELL SOMEONE WHO HAS JUST ASKED FOR HELP.
+// publishCareRequest seals a copy of the request to each recipient it can name, and it names them at send
+// time from the church's published care-team roster. When that roster cannot be established — a relay still
+// connecting, or one that has not answered the auth challenge, both of which answer EMPTY rather than
+// failing — the only key holders are the church leader and the asker. "Sent to your care team" is then a
+// false sentence about the one message where being wrong matters most: the person believes several people
+// know, and nobody comes. Simulation 2026-08-19, R3-7.
+function careSentWording(res) {
+  if (res && res.narrowed) return 'Sent to your church leader \u2014 we couldn\u2019t reach the care team list';
+  if (res && !res.teamCount) return 'Sent to your church leader \u2014 no care team is set up yet';
+  return 'Sent to your care team';
+}
 function AskForHelpForm({ ctx, onClose, onSent }) {
   const [forSelf, setForSelf] = React.useState(true);
   const [forName, setForName] = React.useState('');
@@ -394,7 +423,7 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
     let ok = null;
     try { ok = await window.Fellowship.publishCareRequest({ type, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
     setBusy(false);
-    if (ok) onSent(); else setErr('Couldn’t send — check your connection and try again.');
+    if (ok) onSent(ok); else setErr('Couldn’t send — check your connection and try again.');
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
@@ -466,7 +495,7 @@ function AskForHelp({ ctx }) {
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
-      {open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={() => { setOpen(false); ctx.toast && ctx.toast('Sent to your care team'); }} /> : null}
+      {open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
     </div>
   );
 }

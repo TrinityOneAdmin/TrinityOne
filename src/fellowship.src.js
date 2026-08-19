@@ -3375,12 +3375,26 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp) return null;
-    let pubs = [];
-    try {
-      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CARETEAM_D + cp] }]);
-      let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
-      if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) pubs = o.pubs.filter(Boolean); }
-    } catch (e) {}
+    // WHO THIS REACHES MUST BE ESTABLISHED, NOT ASSUMED. This used to run its own inline roster query and
+    // swallow the failure — `catch (e) {}` left the list empty and the request published anyway, sealed to
+    // the church key and the asker alone, while the sheet above it promised "This goes privately to your
+    // care team" and the toast afterwards said "Sent to your care team".
+    //
+    // querySync RESOLVES EMPTY on a relay that is unreachable, still connecting, or that has not yet
+    // answered the auth challenge, so a cold start is indistinguishable from a church that has named
+    // nobody. _fetchCareTeam is the careful form of the same question and has been in this file since the
+    // safety-check work: null = the audience could not be established, [] = the church genuinely has nobody
+    // on the team, a list = these people. The rule it was written for is stated at _safeReaders and applies
+    // here word for word — sealing narrower and reporting success is the one failure this feature cannot
+    // afford.
+    //
+    // Found by simulation, 2026-08-19 (R3-7): two care-team members watched requests arrive that they could
+    // not open, under a label blaming their own device for not being "on the care team's key list" — the one
+    // list they WERE on. The seal is per-recipient and it is chosen HERE, on the asker's phone, at send
+    // time; nothing later can widen it. In the church's own terms: Anne signed up to drive Edith to hospital
+    // and could not see the address, the time, or the phone number.
+    const team = await _fetchCareTeam(cp);
+    const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
     // always seal to the church key (the owner can always triage) + ourselves; plus the published care team.
     const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
     const body = {
@@ -3397,7 +3411,10 @@ window.Fellowship = {
     const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
     const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp]], content: JSON.stringify({ keys, enc }) }, sk);
     try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request publish failed', e); return null; }
-    return { id, ...body };
+    // The caller must be able to tell the member the truth about who has this. `narrowed` = we could not
+    // establish the team, so only the church leader holds a key to it; teamCount 0 with narrowed false = the
+    // church has genuinely named nobody. Either way "Sent to your care team" is not a true sentence.
+    return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team) };
   },
   // Subscribe to care requests. A member receives their OWN (the relay serves the author); the care team gets
   // all. cb(list) with [{ id, from, at, sealed, ...body }] newest-first; entries we can decrypt carry the body.
