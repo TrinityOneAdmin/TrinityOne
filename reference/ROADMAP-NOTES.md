@@ -326,13 +326,30 @@ once" bit:
 Then: empty + provisioned = closed, de-provisioning becomes ordinary, the last-church guard disappears, and
 the purge question has an answer.
 
-### Open questions for planning
-* Does a **host** relay let churches self-register, or require an invite/allowlist? (Squatting vs friction.)
-* What happens to a church's DATA when it de-provisions — erase, or keep and stop serving? The existing
-  `/config removeChurch` already separates those two intents; keep that distinction.
-* Migration: every relay in the field today has no mode recorded. What does an upgrade infer, and does it
-  fail safe? (Almost certainly: existing + has churches ⇒ home; existing + empty ⇒ generic, unchanged.)
-* Does the relay-app installer ask, or pick a default per install path (church console vs standalone)?
+### DECIDED by the owner, 2026-08-19 — build to these
+1. **Host relays self-register, and the operator chooses.** Self-registration is the default way a church
+   lands on a host relay, but *how* is the relay runner's call — a setting, not a fixed policy. So the mode
+   carries a registration style (open / invite / allowlist) rather than hard-coding one. "Anyone can run a
+   relay to support the network" means the operator sets the terms of their own box.
+2. **De-provisioning KEEPS the data.** Removing a church stops the relay serving it; erasing is a separate,
+   explicit act by the relay. `/config removeChurch` already separates `confirm` from `purge` — preserve
+   exactly that distinction and default to keep. (Note the consequence for the self-service purge idea: a
+   church can leave, but only the relay operator can erase.)
+3. **Nothing changes on upgrade.** An existing relay must behave identically the moment it is updated —
+   infer the mode from what is already true (has churches ⇒ home; empty ⇒ generic) and record it, rather than
+   asking an operator mid-flight or changing a live relay's answer to any request.
+4. **The installer ASKS.** Provisional — "unsure, let's go with asking for now". So the question is worth
+   designing to be answerable by a non-technical operator (what is this box for?), and worth revisiting if it
+   proves to be a step people click through blindly.
+
+**Owner also: "we will definitely audit and test this like crazy."** It touches accept()/canRead()/the
+registration routes — the same spine as the two cross-tenant CRITICALs this repo has shipped. Own branch,
+adversarial audit before merge, and a relay-restart test in the suite (replay ordering already bit once here).
+
+### Still open
+* Exactly which registration styles a host relay offers, and what a church sees when refused.
+* Whether "generic" (no church scoping) survives as a supported mode or is retired — it is the fossil the
+  whole item is about, and keeping it means keeping an open-write branch in accept().
 
 ### Related, same root
 Rota visibility is enforced per-relay (see the 2026-08-18 rota work): a church that narrows its rota is only
