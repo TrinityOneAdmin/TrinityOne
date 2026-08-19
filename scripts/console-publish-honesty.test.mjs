@@ -107,7 +107,12 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   const events = [];                                    // every window event the console fired
 
   // ── lift everything first, THEN build the scope ────────────────────────────────────────────────────────
-  const publishSrc = grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
+  // publish() and _publishToRelays() both wait for the church to exist on a relay (R5-5), so the gate comes
+  // with them — shipped source, not a stub. _regGate starts null here, which is the "already registered"
+  // state, so the wait is a no-op and this file keeps measuring exactly what it always measured.
+  const gateSrc = 'let _regGate = null; const REG_GATE_MS = 45000;\n'
+    + grab('async function _waitForRegistration()');
+  const publishSrc = gateSrc + grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
   const pubClearance = grab('publishClearance(memberPub, status, urls)');
   const refresh = grab('refreshClearances(memberPubs, minors, approved, guardians)');
   // NOT grab('_refreshClearancesNow(...)'): its first occurrence is the CALL inside the refreshClearances

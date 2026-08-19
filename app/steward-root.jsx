@@ -307,7 +307,13 @@ function initChurch() {
 // signed events members can read). Self-register proves key ownership to the pool relays (no token).
 function seedNewChurch() {
   window.Steward.createKey();
-  if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
+  // NOT selfRegister('') — that call cannot succeed and never could. The relay refuses a NEW nameless
+  // self-registration on purpose (gateway H4: a nameless row is unidentifiable in the operator's dashboard
+  // for ever, which is how one box ended up with 37 bare npubs), and this call site is the one its comment
+  // names. So the church stayed unregistered through its whole first minute, and every founding document
+  // was refused with "not a member or not permitted for this group" until the wizard set a name and
+  // stew-dashboard re-registered. Measured on a fresh church, one console: 10 refused writes (R5-5).
+  // Registration now happens where the name exists; publishes wait for it (see publish() in steward.src.js).
   // Positive marker: THIS device just created THIS church, so the first-run wizard is definitely wanted.
   // The wizard used to infer "new church" from `church.name` still being empty 1.8s after mount — a guess that
   // is wrong on a slow relay, and since the wizard now publishes meetings, an established church that tripped
@@ -317,6 +323,13 @@ function seedNewChurch() {
   try { localStorage.setItem('trinityone.steward.newchurch', '1'); localStorage.removeItem('trinityone.steward.wizard.done'); } catch (e) {}
   try {
     if (!localStorage.getItem('trinityone.steward.seeded')) {
+      // SEED WHEN THE CHURCH EXISTS ON A RELAY, not 74 milliseconds after the key is minted. These went out
+      // immediately, before the church was registered, and all five were refused as "not a member or not
+      // permitted for this group" — the relay is right, there was no such church yet. Waiting on a timer only
+      // races how fast the steward types the name the relay is waiting for. So wait for the registration
+      // itself, and if it never comes, leave the marker unset so a later mount can seed instead of leaving a
+      // church that believes it has starter groups it never got. (R5-5, measured 2026-08-19.)
+      const seedNow = () => {
       localStorage.setItem('trinityone.steward.seeded', '1');
       // Seed with honest descriptions — NOT the showcase stats on SK.groups ("312 reached", "18 members"),
       // which would show invented member counts to a brand-new church's first real member.
@@ -337,6 +350,9 @@ function seedNewChurch() {
       // any prefix of 8 or more that matches a church it carries.
       const nsp = String(window.Steward.pubkey || '').slice(0, 16);
       (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: nsp ? (nsp + '-' + g.id) : g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));
+      };
+      if (window.Steward.whenRegistered) window.Steward.whenRegistered(120000).then(ok => { if (ok) seedNow(); });
+      else seedNow();
     }
   } catch (e) {}
 }

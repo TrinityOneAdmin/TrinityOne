@@ -4080,7 +4080,12 @@ wss.on('connection', (ws, req) => {
       if (evt.kind === 5 && putRes !== 'future') applyDeletions(evt);
       // AUDIT-2026-07-24: a discarded write was ACKed as `OK … true`. A client that lost the newest-wins race
       // was told its edit saved; the next read showed the other version and looked like data loss. Say no.
-      if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: a newer version of this is already stored — reload and edit again'])); return; }
+      // LOG IT. Every other refusal lands in rejected.log; this one did not, and it is the one that shows a
+      // steward a red "someone else saved a newer version" banner. When a brand-new church raised that banner
+      // with nobody else editing (R5-5, 2026-08-19), the log held the accept() refusals and said nothing at
+      // all about the conflict — so the only way to see it was a screenshot of the phone. A refusal nobody
+      // records is a refusal nobody can diagnose.
+      if (putRes === 'have-newer') { rejectLog(evt, ws, 'a newer version of this document is already stored'); ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: a newer version of this is already stored — reload and edit again'])); return; }
       if (putRes === 'deleted') { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: this event was deleted by its author'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
       // NOT `invalid:` — the client classifier treats invalid/blocked/restricted as PERMANENT and drops the event

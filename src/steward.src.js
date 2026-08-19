@@ -846,7 +846,10 @@ function feChurch(tmpl, signer) {
   if (actingChurch && !(tmpl.tags || []).some(t => t[0] === 'church')) {
     tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['church', actingChurch]] };
   }
-  return finalizeEvent(tmpl, signer || sk);
+  // Stamp HERE, where every church document is signed. The first attempt at this put it behind
+  // _publishSigned() — which turned out to have exactly one caller, while forty-two paths call
+  // publish(feChurch(...)) directly. Measured: the founding groups were still refused.
+  return finalizeEvent(_monotonic(tmpl), signer || sk);
 }
 // a friendly, deterministic name derived from a pubkey: the SAME key always yields the SAME name, so it's a
 // human cross-check when sharing a steward code (the npub stays the real identifier). e.g. "Quiet Olive 47".
@@ -1431,6 +1434,11 @@ async function deriveAes(pin, salt, iterations) {
 // tests lift it out of the bundle and run it, and a name resolved from the enclosing IIFE would be undefined
 // there — a green suite proving nothing.
 async function publish(evt) {
+  // WAIT FOR THE RELAY TO KNOW THIS CHURCH EXISTS. seedNewChurch() fires selfRegister() without awaiting it
+  // and starts writing immediately, so the founding documents raced an HTTP round-trip and were refused as
+  // "not a member or not permitted for this group". Bounded: a relay that never answers must not stop a
+  // church writing to the relays that did. See _regGate.
+  await _waitForRegistration();
   try {
     await Promise.any(pool.publish(relays(), evt).map(p => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
@@ -1464,6 +1472,7 @@ async function publish(evt) {
 // member into the unconfirmed list and sends them through the verify read — where the truth is established by
 // looking rather than asserted by the writer.
 async function _publishToRelays(evt, urls) {
+  await _waitForRegistration();   // same gate as publish(): a church the relay has never heard of writes nothing
   // CONNECTED, not configured. With the all-must-accept rule below, targeting every CONFIGURED relay means a
   // single unreachable one makes `accepted < targets.length` for every member, always — a full-roster
   // safeguarding alarm while every record is safely stored. That is not hypothetical: CANONICAL_RELAYS ships a
@@ -1506,9 +1515,66 @@ function skFor(asPub) {
 // reach `pool`, `relays()`, `feChurch()`, or `publish()` directly. Expose them as thin helpers so
 // the abstraction stays at "I want to publish a church-signed event" / "subscribe my filters" —
 // modules never need to poke at the lower-level pool.
+// TWO THINGS A BRAND-NEW CHURCH USED TO TRIP OVER IN ITS FIRST NINETY SECONDS. Both were measured on a
+// fresh church, one console, no second editor (R5-5, 2026-08-19).
+//
+// 1. WE PUBLISHED BEFORE THE RELAY KNEW THE CHURCH EXISTED. seedNewChurch() fires selfRegister() without
+//    awaiting it and then starts writing, so every founding document raced an HTTP round-trip. Measured:
+//    namekey, carekey (twice) and joinpolicy (twice) all refused with "not a member or not permitted for
+//    this group" between 13:40:27 and 13:40:33; the church registered at 13:40:50. The writes retried
+//    through eventually, which is why nobody noticed, and the steward was left with a red banner.
+//
+// 2. TWO WRITES OF ONE DOCUMENT IN THE SAME SECOND ARE A COIN FLIP. A replaceable event is ordered by
+//    created_at, and NIP-01 breaks a tie by event id — so the SECOND write of a doc within the same second
+//    loses roughly half the time and comes back "a newer version of this is already stored". The console
+//    then told the steward "Someone else saved a newer version of this while you were editing. Reload the
+//    page…" on a church ninety seconds old that nobody else had ever opened. The relay was right; the
+//    sentence was not. Stamping our own writes monotonically per document removes the tie entirely.
+//
+// The gate is bounded: a relay that never answers registration must not stop a church publishing (it may
+// have other relays, and refusing to write is worse than writing early).
+// Long enough for a person to type their church's name into the wizard's first field, because that is what
+// the relay is waiting for. Paid at most ONCE: publish() latches the gate open afterwards whichever way it
+// went, so a church whose relay will never accept it is delayed once and never again.
+const REG_GATE_MS = 45000;
+let _regGate = null, _openGate = null, _regNeedsName = false;
+// ARMED THE MOMENT A CHURCH KEY EXISTS, not when registration starts. The first cut armed it inside
+// selfRegister() — but the fix had just removed the selfRegister call at creation (it passed an empty name
+// and could only ever 400), so at the moment the founding documents went out there was no gate at all and
+// all ten writes were refused exactly as before. Arm it where the church begins.
+function _armRegGate() { if (!_regGate) _regGate = new Promise((r) => { _openGate = r; }); }
+// SUCCESS, not "we stopped waiting". The bounded gate below is right for ordinary writes — a church whose
+// relay will never accept it must still be able to work — but it is wrong for the founding documents, whose
+// whole purpose depends on the church existing on the relay first. Releasing those on a timer just races how
+// fast somebody types their church's name into the wizard: measured, the five starter groups were held the
+// full 45 seconds and then refused anyway, because registration landed at second 50.
+let _regOk = false;
+const _regOkWaiters = [];
+function _markRegOk() { _regOk = true; _regOkWaiters.splice(0).forEach((f) => { try { f(true); } catch (e) {} }); }
+function _openRegGate() { const f = _openGate; _openGate = null; if (f) { try { f(); } catch (e) {} } }
+// EVERY publisher must wait, not just the one you happened to fix. publish() was guarded first and the
+// seeded groups went out anyway, because they travel by _publishToRelays() — the all-relays variant. Two
+// publishers, one gate.
+async function _waitForRegistration() {
+  if (!_regGate) return;
+  const g = _regGate;
+  try { await Promise.race([g, new Promise((r) => setTimeout(r, REG_GATE_MS))]); } catch (e) {}
+  _regGate = null;   // latched: whichever way that went, nothing waits on registration again this session
+}
+const _lastStamp = new Map();   // d-tag -> the created_at we last published for it
+function _monotonic(tmpl) {
+  const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
+  const nowS = Math.floor(Date.now() / 1000);
+  const want = tmpl.created_at || nowS;
+  const last = _lastStamp.get(d) || 0;
+  let at = want > last ? want : last + 1;
+  if (at > nowS + 600) at = want;   // never stamp into the relay's future-clamp; take the rare tie instead
+  _lastStamp.set(d, at);
+  return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
+}
 function _publishSigned(tmpl) {
   if (!sk) return Promise.resolve(null);
-  return publish(feChurch(tmpl));
+  return publish(feChurch(tmpl));   // both guards live in publish() and feChurch() now
 }
 function _subscribeMany(filters, handlers) {
   return pool.subscribeMany(relays(), filters, handlers);
@@ -2054,6 +2120,7 @@ window.Steward = {
     // console behind a forced PIN-setup modal — there is NO state in which a freshly-created
     // church key sits as plaintext on disk.
     const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
+    _armRegGate();   // this church does not exist on any relay yet — hold its founding writes (R5-5)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
     return { npub: window.Steward.npub };
   },
@@ -5131,7 +5198,21 @@ window.Steward = {
   // nameless because these call sites pass name:''. Registration is a SETUP step, not a heartbeat: remember
   // per (church key, relay) that it succeeded and don't repeat it. `force` re-runs it for the explicit
   // "connect this church to this relay" action, where the operator really is asking.
+  // Resolves TRUE when this church has been accepted by a relay, FALSE if that has not happened within `ms`.
+  // For setup work that is meaningless until the church exists — seeding its starter groups, for one.
+  whenRegistered(ms) {
+    if (_regOk) return Promise.resolve(true);
+    return new Promise((res) => {
+      const t = setTimeout(() => res(false), Math.max(0, ms || 120000));
+      _regOkWaiters.push((v) => { clearTimeout(t); res(v); });
+    });
+  },
   async selfRegister(name, opts) {
+    // Hold the publish gate for as long as this takes, so the founding documents queue behind it rather than
+    // racing it (see _publishSigned). Resolved in the finally below, on every exit path.
+    _regNeedsName = false;
+    _armRegGate();
+    try {
     if (!churchSk || !churchPub) return;
     const np = npubEncode(churchPub);
     const force = !!(opts && opts.force);
@@ -5149,8 +5230,12 @@ window.Steward = {
         const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }) });
         // Only remember a real acceptance. A 400 ("name your church first") or 403 (invite-only / already set
         // up) must stay un-marked so a later, correct attempt is still made.
-        if (r && r.ok) { done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; }
-        else if (r) { let why = ''; try { why = ((await r.json()) || {}).error || ''; } catch (e) {} refused.push({ base, status: r.status, why }); }
+        if (r && r.ok) { done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; _markRegOk(); }
+        else if (r) { let why = ''; try { why = ((await r.json()) || {}).error || ''; } catch (e) {} refused.push({ base, status: r.status, why });
+          // "set your church's name … before connecting it to a relay" is not a verdict, it is a not-yet: the
+          // wizard's first field is the name, and naming it re-registers. Keep the publish gate SHUT for that
+          // one reason so the founding documents wait for a church the relay will actually accept.
+          if (/name/i.test(why)) _regNeedsName = true; }
       } catch (e) { unreachable.push(base); }
     }
     // SAY IT WHEN NOBODY ACCEPTED. This used to return nothing at all, so a church whose registration was
@@ -5180,6 +5265,11 @@ window.Steward = {
       } catch (e) {}
     }
     return { ok: accepted, refused, unreachable };
+    } finally {
+      // Open it as soon as we know where we stand — accepted, or refused for a reason naming the church will
+      // not cure. Only the missing-name refusal leaves it shut, and publish() bounds that wait anyway.
+      try { if (!_regNeedsName) _openRegGate(); } catch (e) {}
+    }
   },
   // register this church with ONE specific relay by PROVING key ownership (NIP-98 signed by the church key,
   // bound to that relay's /config) — no admin token. Used by "connect by name": after adding a relay, the

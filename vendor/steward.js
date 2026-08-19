@@ -15142,7 +15142,7 @@ zoo`.split("\n");
     if (actingChurch && !(tmpl.tags || []).some((t) => t[0] === "church")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["church", actingChurch]] };
     }
-    return finalizeEvent2(tmpl, signer || sk);
+    return finalizeEvent2(_monotonic(tmpl), signer || sk);
   }
   var _PET_ADJ = ["Quiet", "Bright", "Gentle", "Steady", "Faithful", "Humble", "Joyful", "Kind", "Patient", "Bold", "Gracious", "Calm", "Glad", "Warm", "True", "Sure"];
   var _PET_NOUN = ["Olive", "Cedar", "Dove", "Anchor", "Lamp", "Vine", "Shepherd", "Harbor", "Beacon", "Reed", "Sparrow", "Willow", "Spring", "Haven", "Ember", "Brook"];
@@ -15576,6 +15576,7 @@ zoo`.split("\n");
     return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
   async function publish(evt) {
+    await _waitForRegistration();
     try {
       await Promise.any(pool.publish(relays(), evt).map((p) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
@@ -15602,6 +15603,7 @@ zoo`.split("\n");
     return evt;
   }
   async function _publishToRelays(evt, urls) {
+    await _waitForRegistration();
     const live = _connectedRelays();
     const targets = urls && urls.length ? urls : live.length ? live : relays();
     if (!targets.length) return false;
@@ -15645,6 +15647,56 @@ zoo`.split("\n");
       }
     }
     return null;
+  }
+  var REG_GATE_MS = 45e3;
+  var _regGate = null;
+  var _openGate = null;
+  var _regNeedsName = false;
+  function _armRegGate() {
+    if (!_regGate) _regGate = new Promise((r) => {
+      _openGate = r;
+    });
+  }
+  var _regOk = false;
+  var _regOkWaiters = [];
+  function _markRegOk() {
+    _regOk = true;
+    _regOkWaiters.splice(0).forEach((f) => {
+      try {
+        f(true);
+      } catch (e) {
+      }
+    });
+  }
+  function _openRegGate() {
+    const f = _openGate;
+    _openGate = null;
+    if (f) {
+      try {
+        f();
+      } catch (e) {
+      }
+    }
+  }
+  async function _waitForRegistration() {
+    if (!_regGate) return;
+    const g = _regGate;
+    try {
+      await Promise.race([g, new Promise((r) => setTimeout(r, REG_GATE_MS))]);
+    } catch (e) {
+    }
+    _regGate = null;
+  }
+  var _lastStamp = /* @__PURE__ */ new Map();
+  function _monotonic(tmpl) {
+    const d = ((tmpl.tags || []).find((t) => t[0] === "d") || [])[1] || "kind:" + tmpl.kind;
+    const nowS = Math.floor(Date.now() / 1e3);
+    const want = tmpl.created_at || nowS;
+    const last = _lastStamp.get(d) || 0;
+    let at = want > last ? want : last + 1;
+    if (at > nowS + 600) at = want;
+    _lastStamp.set(d, at);
+    return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
   }
   function _publishSigned(tmpl) {
     if (!sk) return Promise.resolve(null);
@@ -16015,6 +16067,7 @@ zoo`.split("\n");
       const m = generateSeedWords();
       setKey(m);
       _setNeedsPin(true);
+      _armRegGate();
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
     },
@@ -19787,58 +19840,81 @@ zoo`.split("\n");
     // nameless because these call sites pass name:''. Registration is a SETUP step, not a heartbeat: remember
     // per (church key, relay) that it succeeded and don't repeat it. `force` re-runs it for the explicit
     // "connect this church to this relay" action, where the operator really is asking.
+    // Resolves TRUE when this church has been accepted by a relay, FALSE if that has not happened within `ms`.
+    // For setup work that is meaningless until the church exists — seeding its starter groups, for one.
+    whenRegistered(ms) {
+      if (_regOk) return Promise.resolve(true);
+      return new Promise((res) => {
+        const t = setTimeout(() => res(false), Math.max(0, ms || 12e4));
+        _regOkWaiters.push((v) => {
+          clearTimeout(t);
+          res(v);
+        });
+      });
+    },
     async selfRegister(name, opts) {
-      if (!churchSk || !churchPub) return;
-      const np = npubEncode(churchPub);
-      const force = !!(opts && opts.force);
-      const bases = /* @__PURE__ */ new Set([window.Steward.configBase()]);
-      for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, ""));
-      let done = {};
+      _regNeedsName = false;
+      _armRegGate();
       try {
-        done = JSON.parse(localStorage.getItem(SELFREG_KEY) || "{}") || {};
-      } catch (e) {
-      }
-      let accepted = false;
-      const refused = [], unreachable = [];
-      for (const base of bases) {
-        const mark = churchPub + "@" + base;
-        if (!force && done[mark]) continue;
-        const url = base + "/config";
+        if (!churchSk || !churchPub) return;
+        const np = npubEncode(churchPub);
+        const force = !!(opts && opts.force);
+        const bases = /* @__PURE__ */ new Set([window.Steward.configBase()]);
+        for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, ""));
+        let done = {};
         try {
-          const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
-          const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }) });
-          if (r && r.ok) {
-            done[mark] = 1;
-            try {
-              localStorage.setItem(SELFREG_KEY, JSON.stringify(done));
-            } catch (e) {
+          done = JSON.parse(localStorage.getItem(SELFREG_KEY) || "{}") || {};
+        } catch (e) {
+        }
+        let accepted = false;
+        const refused = [], unreachable = [];
+        for (const base of bases) {
+          const mark = churchPub + "@" + base;
+          if (!force && done[mark]) continue;
+          const url = base + "/config";
+          try {
+            const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
+            const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }) });
+            if (r && r.ok) {
+              done[mark] = 1;
+              try {
+                localStorage.setItem(SELFREG_KEY, JSON.stringify(done));
+              } catch (e) {
+              }
+              accepted = true;
+              _markRegOk();
+            } else if (r) {
+              let why = "";
+              try {
+                why = (await r.json() || {}).error || "";
+              } catch (e) {
+              }
+              refused.push({ base, status: r.status, why });
+              if (/name/i.test(why)) _regNeedsName = true;
             }
-            accepted = true;
-          } else if (r) {
-            let why = "";
-            try {
-              why = (await r.json() || {}).error || "";
-            } catch (e) {
-            }
-            refused.push({ base, status: r.status, why });
+          } catch (e) {
+            unreachable.push(base);
           }
-        } catch (e) {
-          unreachable.push(base);
         }
-      }
-      const ownBase = window.Steward.configBase();
-      const ownRefused = refused.find((x) => x.base === ownBase) || unreachable.includes(ownBase);
-      if (ownRefused) {
-        const why = (refused.find((x) => x.base === ownBase) || {}).why;
+        const ownBase = window.Steward.configBase();
+        const ownRefused = refused.find((x) => x.base === ownBase) || unreachable.includes(ownBase);
+        if (ownRefused) {
+          const why = (refused.find((x) => x.base === ownBase) || {}).why;
+          try {
+            window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+              what: "church registration",
+              message: why ? "This relay has not accepted your church, so nothing you set up will save: \u201C" + why + "\u201D" : "This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings \u2014 your church key is safe on this device."
+            } }));
+          } catch (e) {
+          }
+        }
+        return { ok: accepted, refused, unreachable };
+      } finally {
         try {
-          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
-            what: "church registration",
-            message: why ? "This relay has not accepted your church, so nothing you set up will save: \u201C" + why + "\u201D" : "This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings \u2014 your church key is safe on this device."
-          } }));
+          if (!_regNeedsName) _openRegGate();
         } catch (e) {
         }
       }
-      return { ok: accepted, refused, unreachable };
     },
     // register this church with ONE specific relay by PROVING key ownership (NIP-98 signed by the church key,
     // bound to that relay's /config) — no admin token. Used by "connect by name": after adding a relay, the

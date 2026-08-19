@@ -220,7 +220,11 @@ function consoleSide() {
   const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket, maxWaitForConnection: 1500 });
   // Top-level DECLARATIONS concatenate; object-literal METHODS have to be wrapped back into an object, or
   // `setMinors(pubkeys) { … }` is a syntax error at statement position.
-  const decls = grab(STEWARD, 'async function publish(evt)')
+  // publish() waits for the church to exist on a relay (R5-5); lift its gate too. _regGate starts null,
+  // the already-registered state, so nothing here waits.
+  const decls = 'let _regGate = null; const REG_GATE_MS = 45000;\n'
+    + grab(STEWARD, 'async function _waitForRegistration()')
+    + grab(STEWARD, 'async function publish(evt)')
     + grab(STEWARD, 'var _beatsDoc = ') + ';\n'
     + grab(STEWARD, 'function _memberHonours(') + grab(STEWARD, 'function _topWeMustAnswer(')
     + grab(STEWARD, 'function _newestByD(') + grab(STEWARD, 'function _connectedRelays(')
