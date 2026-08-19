@@ -195,7 +195,7 @@ function _blobUploader(req, action) {
   if (tag('t') !== (action || 'upload')) return null;
   const exp = parseInt(tag('expiration') || '0', 10); if (!exp || exp < Math.floor(Date.now() / 1000)) return null;   // must expire (anti-replay)
   const cp = tag('church');
-  if (cp && stewardOf(ev.pubkey, cp)) return { church: cp, want: (tag('x') || '').toLowerCase() };
+  if (cp && stewardCan(ev.pubkey, cp, 'any')) return { church: cp, want: (tag('x') || '').toLowerCase() };
   if (CHURCH_PUBS.has(ev.pubkey)) return { church: ev.pubkey, want: (tag('x') || '').toLowerCase() };
   return null;
 }
@@ -216,7 +216,7 @@ function _blobMember(req, ownerCp, host, path) {
   const md = MEMBER_DOCS.get(ownerCp);
   const gated = REQUIRE_APPROVAL.has(ownerCp), admitted = ADMITTED_BY.get(ownerCp);
   const effectiveMember = !!(md && md.has(p)) && !BLOCKED.has(p) && (!gated || !!(admitted && admitted.has(p)));
-  return p === ownerCp || stewardOf(p, ownerCp) || effectiveMember;   // church / steward / effective member of the OWNING church
+  return p === ownerCp || stewardCan(p, ownerCp, 'any') || effectiveMember;   // church / steward / effective member of the OWNING church
 }
 
 // backup export gate: a fresh NIP-98 (kind 27235) proof bound to THIS url, signed by the church key OR one of
@@ -229,7 +229,7 @@ function _exportAuth(req, host, path) {
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || (CHURCH_PUBS.has(ev.pubkey) ? ev.pubkey : '');
-  return cp && (ev.pubkey === cp || stewardOf(ev.pubkey, cp)) ? cp : null;   // the church key, or a steward of that church
+  return cp && (ev.pubkey === cp || stewardCan(ev.pubkey, cp, 'any')) ? cp : null;   // the church key, or a steward of that church
 }
 // resync gate: a fresh NIP-98 proof bound to /sync, signed by a relay the church TRUSTS (its pubkey is in the
 // church-signed trusted-relays doc) — or by the church key / a steward. Only they receive the FULL corpus (incl.
@@ -245,7 +245,7 @@ function _syncAuth(req, host, path) {
   if (!cp) return null;
   const trusted = TRUSTED_RELAYS.get(cp);
   if (trusted && trusted.has(ev.pubkey)) return cp;              // a relay the church authorised -> full corpus
-  if (ev.pubkey === cp || stewardOf(ev.pubkey, cp)) return cp;   // the church key / a steward
+  if (ev.pubkey === cp || stewardCan(ev.pubkey, cp, 'any')) return cp;   // the church key / a steward
   return null;
 }
 
@@ -861,14 +861,38 @@ const CARE_RECIPIENT = new Map();    // careId -> recipient pubkey — LEGACY (v
 // and a skip are scoped against; it mirrors GROUP_CHURCH.
 const CARE_CHURCH = new Map();       // careId -> owning church pubkey
 // is `pub` a current steward of church `cp`? (empty/no roster => false => behaviour identical to pre-roster)
-const stewardOf = (pub, cp) => { const s = STEWARDS_BY.get(cp); return !!(cp && s && s.has(pub)); };
+// WHAT A DELEGATED STEWARD MAY DO, not merely whether they are one.
+//
+// The roster has always been a flat list and this check has always been binary: you are a steward of this
+// church or you are not, and a steward could do everything a steward can do. A church with four elders who
+// want the treasurer on Finance and nobody else — the ordinary ask — had no way to express it, and hiding
+// the buttons would have been theatre, because the delegate could do the hidden thing from any other client.
+//
+// So the roster may now carry `caps: { "<pubkey>": ["finance", …] }` alongside `pubkeys`, and every place
+// that used to ask stewardOf() now names the capability it needs. `any` means "acts for this church at all"
+// — used by the structural checks that only resolve WHICH church an author belongs to, where the real
+// authority test happens further down.
+//
+// COMPATIBILITY IS THE LOAD-BEARING PART. A roster with no `caps` at all, or a steward absent from it, keeps
+// every power they have today. Anything else would silently strip working churches of their delegates the
+// moment their relay updated — an availability failure dressed as a security improvement. An EXPLICIT empty
+// list is the way to say "nothing": `caps: {"<pub>": []}`.
+const STEWARD_CAPS = new Map();   // cp -> Map(steward pubkey -> Set(capability)); absent = every capability
+const stewardCan = (pub, cp, cap) => {
+  const s = STEWARDS_BY.get(cp);
+  if (!(cp && s && s.has(pub))) return false;
+  const byPub = STEWARD_CAPS.get(cp);
+  const caps = byPub && byPub.get(pub);
+  if (!caps) return true;                       // no capabilities recorded for them → full steward (compat)
+  return cap === 'any' ? caps.size > 0 : caps.has(cap);
+};
 // M2: a delegated leader/care-admin grant is only honoured while the steward who authored it is STILL a
 // steward (or the church/network key). So revoking a steward immediately drops the group-leader and
 // care-team grants they created — no re-derivation pass, the check just runs at use-time.
 // REVIEW-2026-07-20 B3: `CHURCH_PUBS.has(src.by)` / `NETWORKS.has(src.by)` were unscoped, so a grant authored
 // by ANY church or ANY network key counted as a valid grantor for ANY church — which feeds careAdmin() below
 // and thus cross-tenant care-PII reads. Scoped to the church the grant is actually for.
-const grantorOk = (src) => !!(src && (src.by === src.cp || networkOf(src.by, src.cp) || stewardOf(src.by, src.cp)));
+const grantorOk = (src) => !!(src && (src.by === src.cp || networkOf(src.by, src.cp) || stewardCan(src.by, src.cp, 'any')));
 // is `pub` on the care-team of church `cp`? (a member of the roster of cp's configured care-team group)
 // AUDIT-2026-07-24 CRITICAL-2: team ids are a relay-GLOBAL namespace, and this never checked that the roster
 // it resolved actually BELONGS to cp. A co-tenant church published roster:<cp's team id> listing itself,
@@ -912,9 +936,9 @@ function idOwnerOk(owner, e, id) {
     const named = idNamesOwner(id);
     if (!named) return true;                     // unknown id, no embedded owner → first writer takes it
     // the id says whose it is; only that church, its network or its stewards may claim it
-    return cp === named || networkOf(e.pubkey, named) || stewardOf(e.pubkey, named);
+    return cp === named || networkOf(e.pubkey, named) || stewardCan(e.pubkey, named, 'any');
   }
-  return cp === owner || networkOf(e.pubkey, owner) || stewardOf(e.pubkey, owner);
+  return cp === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'any');
 }
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
@@ -1010,7 +1034,7 @@ function safeguardAllows(minorPub, other) {
   if (!cps.length) return true;
   for (const cp of cps) {
     if (approvedIn(other, cp) || guardianLinkedIn(minorPub, other, cp)) continue;
-    if (other === cp || stewardOf(other, cp) || networkOf(other, cp)) continue;   // the child's OWN church may always reach them
+    if (other === cp || stewardCan(other, cp, 'any') || networkOf(other, cp)) continue;   // the child's OWN church may always reach them
     return false;
   }
   return true;
@@ -1143,7 +1167,7 @@ function maybePushSermon(evt) {
     if (!d.startsWith(PINSERMON_D)) return;
     const cp = d.slice(PINSERMON_D.length);
     if (!CHURCH_PUBS.has(cp)) return;
-    if (evt.pubkey !== cp && !stewardOf(evt.pubkey, cp)) return;                 // only the church/steward features
+    if (evt.pubkey !== cp && !stewardCan(evt.pubkey, cp, 'content')) return;                 // only the church/steward features
     if ((evt.tags || []).some(t => t[0] === 'deleted') || !evt.content) return;  // an unpin, not a feature
     let s; try { s = JSON.parse(evt.content); } catch { return; }
     if (!s || !s.sha256) return;
@@ -1166,7 +1190,7 @@ function maybePushSafety(evt) {
     const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
     if (d.startsWith(SAFETY_D)) {
       const cp = d.slice(SAFETY_D.length);
-      if (!CHURCH_PUBS.has(cp) || (evt.pubkey !== cp && !stewardOf(evt.pubkey, cp) && !careAdmin(evt.pubkey, cp))) return;
+      if (!CHURCH_PUBS.has(cp) || (evt.pubkey !== cp && !stewardCan(evt.pubkey, cp, 'care') && !careAdmin(evt.pubkey, cp))) return;
       let open = true; try { open = !!(JSON.parse(evt.content) || {}).open; } catch {}
       if (!open) return;                                                     // a check being CLOSED → no alert
       SAFETY_PUSHED.add(evt.id);
@@ -1178,7 +1202,7 @@ function maybePushSafety(evt) {
       const p = (evt.tags.find(t => t[0] === 'p') || [])[1]; const creator = p ? (toHexPub(p) || p) : '';
       if (!creator || creator === evt.pubkey) return;
       // only notify an actual check-creator (church / steward / care-team) — a member can't p-tag an arbitrary victim into a push
-      if (creator !== cp && !stewardOf(creator, cp) && !careAdmin(creator, cp)) return;
+      if (creator !== cp && !stewardCan(creator, cp, 'care') && !careAdmin(creator, cp)) return;
       SAFETY_PUSHED.add(evt.id);
       pushTo(creator, { title: 'Safety check', body: 'Someone responded — open the roll call.', url: '/?safety=rollcall', tag: 'safety-resp-' + cp }, 'announce');
     }
@@ -1219,7 +1243,7 @@ function resolveChurch(e) {
   if (cp) {
     const md = MEMBER_DOCS.get(cp), gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     const effMember = !!(md && md.has(e.pubkey)) && !BLOCKED.has(e.pubkey) && (!gated || !!(admitted && admitted.has(e.pubkey)));
-    if (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || effMember) return cp;   // B3: scoped
+    if (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'any') || effMember) return cp;   // B3: scoped
   }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
@@ -1236,7 +1260,7 @@ let _hydrating = false;
 // read from disk rather than derived.
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
-                   GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
+                   GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
@@ -1344,7 +1368,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, urls);
   }
   // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
-  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {
+  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'content'))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
     if (!idOwnerOk(GROUP_CHURCH.get(id), e, id)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
     if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); return; }
@@ -1365,12 +1389,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     BLOCKED_BY.set(e.pubkey, set); if (!_hydrating) rebuildBlocked();   // rebuildBlocked() rebuilds MEMBERS (drops the blocked)
   }
-  else if (d.startsWith(JOINPOLICY_D) && CHURCH_PUBS.has(cp = d.slice(JOINPOLICY_D.length)) && (e.pubkey === cp || stewardOf(e.pubkey, cp))) {   // a church's join policy
+  else if (d.startsWith(JOINPOLICY_D) && CHURCH_PUBS.has(cp = d.slice(JOINPOLICY_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members'))) {   // a church's join policy
     let approval = false; if (!removed) { try { approval = !!JSON.parse(e.content).approval; } catch {} }
     if (approval) REQUIRE_APPROVAL.add(cp); else REQUIRE_APPROVAL.delete(cp);
     if (!_hydrating) rebuildMembers();
   }
-  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardOf(e.pubkey, cp))) {   // a church's approved-members allowlist
+  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members'))) {   // a church's approved-members allowlist
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     ADMITTED_BY.set(cp, set); if (!_hydrating) rebuildMembers();
   }
@@ -1388,10 +1412,23 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     GUARDIANS_BY.set(cp, map); rebuildGuardians();
   }
   else if (d.startsWith(STEWARDS_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey) {   // OWNER-ONLY: a church's steward roster (delegated, revocable authority)
-    const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
-    STEWARDS_BY.set(e.pubkey, set);
+    const set = new Set(); const caps = new Map();
+    if (!removed) {
+      try {
+        const doc = JSON.parse(e.content) || {};
+        (doc.pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); });
+        // Only pubkeys the owner has actually written capabilities for appear here. Everyone else keeps the
+        // full set, which is what every roster written before this change means.
+        const c = doc.caps && typeof doc.caps === 'object' ? doc.caps : null;
+        if (c) for (const [k, v] of Object.entries(c)) {
+          const h = toHexPub(k); if (!h || !Array.isArray(v)) continue;
+          caps.set(h, new Set(v.filter(x => typeof x === 'string' && x).map(x => x.toLowerCase())));
+        }
+      } catch {}
+    }
+    STEWARDS_BY.set(e.pubkey, set); STEWARD_CAPS.set(e.pubkey, caps);
   }
-  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {   // a team roster — track its LINKED people so care-team admins can be resolved
+  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'content'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
     { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e, id)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
@@ -1400,19 +1437,19 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
     const fcp = finCp(e);
-    if (fcp && (e.pubkey === fcp || stewardOf(e.pubkey, fcp))) {
+    if (fcp && (e.pubkey === fcp || stewardCan(e.pubkey, fcp, 'finance'))) {
       const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
       if (Number.isInteger(seq)) FINANCE_SEQ.set(fcp, Math.max(FINANCE_SEQ.get(fcp) || 0, seq));   // accepted entries are contiguous, so max == last-contiguous (rebuild-safe)
     }
   }
   else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
-    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardOf(e.pubkey, cp = namedChurch(e)) ? cp : '');
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'finance') ? cp : '');
     if (!owner) return;
     if (removed) { MEALS_ADMIN_GROUP.delete(owner); MEALS_OPEN_MEMBER.delete(owner); return; }
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
   }
   else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
-    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardOf(e.pubkey, cp = namedChurch(e)) ? cp : '');
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'content') ? cp : '');
     if (!owner) return;
     const ts = e.created_at || 0, held = ROTA_VIS.get(owner);
     if (held && held.ts > ts) return;                  // an older copy must never overwrite a newer decision
@@ -1486,7 +1523,7 @@ function accept(e) {
       // pin/hide content in church B's group by naming A. GROUP_CHURCH is the group's true owner.
       const g = eventGroup(e); const owner = g && GROUP_CHURCH.get(g);
       if (owner) {
-        if (e.pubkey === owner || isNetwork || stewardOf(e.pubkey, owner)) return true;   // owner church, its network, or a steward OF THE OWNER
+        if (e.pubkey === owner || isNetwork || stewardCan(e.pubkey, owner, 'content')) return true;   // owner church, its network, or a steward OF THE OWNER
 
         // ── SAFEGUARDING. Everything past this line is a MEMBER acting under delegated authority, and until
         // now this path asked only "do you have authority over the group?" — never "are you a child?" or "is
@@ -1525,11 +1562,11 @@ function accept(e) {
         if (GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(e.pubkey)); }
         return churchWriter(e.pubkey, owner);
       }
-      return isLeader || stewardOf(e.pubkey, namedChurch(e));   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
+      return isLeader || stewardCan(e.pubkey, namedChurch(e), 'content');   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
     }
     // <cp>-keyed membership admin: the church is named in the d-tag → delegate to a steward of THAT church
     for (const pfx of [JOINPOLICY_D, ADMITTED_D]) {
-      if (d.startsWith(pfx)) return isLeader || stewardOf(e.pubkey, d.slice(pfx.length));
+      if (d.startsWith(pfx)) return isLeader || stewardCan(e.pubkey, d.slice(pfx.length), 'members');
     }
     // SAFEGUARDING lists (who's a child / cleared adult / guardian link) — OWNER-ONLY (church key), never a delegated steward
     for (const pfx of [MINORS_D, APPROVED_D, GUARDIANS_D]) {
@@ -1562,9 +1599,9 @@ function accept(e) {
     // The care-need sealing that consumes this is deferred (see care/seal-needs-wip: the key lifecycle needs
     // rework before it is safe to ship). The namespace is reserved and gated NOW so no member can squat the
     // d-tag in the meantime, and CP_SUFFIXED_D already read-gates it to effective members.
-    if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
     // the per-church NAME key envelope — same authority as the care key.
-    if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members')); }
     // a member's OWN sealed name for one church. Only that member may write it — nobody else gets to decide
     // what a person is called, and a forged one would be indistinguishable from theirs once decrypted.
     if (d.startsWith(NAME_D)) {
@@ -1575,33 +1612,33 @@ function accept(e) {
     }
     // the care-team recipient roster (d=careteam:<churchpub>) — church key or a current steward. Just pubkeys
     // (no secrets), so a member can read it to seal an ask-for-help request to exactly the care team.
-    if (d.startsWith(CARETEAM_D)) { const cp = toHexPub(d.slice(CARETEAM_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    if (d.startsWith(CARETEAM_D)) { const cp = toHexPub(d.slice(CARETEAM_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
     // A member's own safeguarding CLEARANCE (d=clearance:<memberpub>), sealed to them. Church key or a CURRENT
     // steward of the church NAMED IN THE TAG — deliberately not "any church key on the box", which is the shape
     // that let one tenant write guardnotice: docs at another tenant's members. A member must never be able to
     // write their own: that would be self-clearance to contact children. AUDIT-2026-07-27.
     if (d.startsWith(CLEARANCE_D)) {
       const ncp = toHexPub((e.tags.find(t => t[0] === 'church') || [])[1] || '') || '';
-      return !!ncp && CHURCH_PUBS.has(ncp) && (e.pubkey === ncp || stewardOf(e.pubkey, ncp));
+      return !!ncp && CHURCH_PUBS.has(ncp) && (e.pubkey === ncp || stewardCan(e.pubkey, ncp, 'safeguarding'));
     }
     // RE-SEAT map (d=reseat:<churchpub>) — church key or a CURRENT steward of that church. This doc says
     // "the person who was <old> is now <new>", so whoever can write it can hand any member's seat to any key.
     // It must never fall through to the generic member rule (see the nophoto: note below for what that costs).
-    if (d.startsWith(RESEAT_D)) { const cp = toHexPub(d.slice(RESEAT_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    if (d.startsWith(RESEAT_D)) { const cp = toHexPub(d.slice(RESEAT_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members')); }
     // moderation: photo-suppression list — d=nophoto:<churchpub>, owner or a CURRENT steward of that church.
     // (Previously unlisted, so it fell to the generic member rule: any member could rewrite it.)
-    if (d.startsWith(NOPHOTO_D)) { const cp = d.slice(NOPHOTO_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    if (d.startsWith(NOPHOTO_D)) { const cp = d.slice(NOPHOTO_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')); }
     // FINANCE journal — single-writer, relay-ordered, APPEND-ONLY. The seq lives in the (unencrypted) d-tag so
     // the relay can order it without reading the (encrypted) entry; the church is named in a ["church",<cp>] tag.
     if (d.startsWith(FIN_JOURNAL_D)) {
       const cp = finCp(e);
-      if (!cp || !(e.pubkey === cp || stewardOf(e.pubkey, cp))) return false;   // church key, or a steward of cp (treasurer)
+      if (!cp || !(e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance'))) return false;   // church key, or a steward of cp (treasurer)
       const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
       return Number.isInteger(seq) && seq === (FINANCE_SEQ.get(cp) || 0) + 1;   // exactly the next seq → rejects gaps, forks AND edits
     }
     if (d.startsWith('finance/')) {   // other finance docs (settings / accounts / funds) — role-gated, no seq
       const cp = finCp(e);
-      return !!cp && (e.pubkey === cp || stewardOf(e.pubkey, cp));
+      return !!cp && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance'));
     }
     // SECURITY-AUDIT-2026-07-06 M4: a giving fund carries the church's PAYMENT DESTINATION (lnaddr) — where
     // donations go. That is OWNER-ONLY: a delegated steward must not be able to create/replace a fund with
@@ -1617,7 +1654,7 @@ function accept(e) {
       // yourself care-admin over their private corpus). Refuse at the door once an id has an owner.
       if (d.startsWith(GROUP_D) && !idOwnerOk(GROUP_CHURCH.get(d.slice(GROUP_D.length)), e, d.slice(GROUP_D.length))) return false;
       if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e, d.slice(ROSTER_D.length))) return false; }
-      return isLeader || stewardOf(e.pubkey, namedChurch(e));   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
+      return isLeader || stewardCan(e.pubkey, namedChurch(e), 'content');   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     }
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
@@ -1639,7 +1676,7 @@ function accept(e) {
       return pend < STEWARDREQ_CAP;
     }
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
-    if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
+    if (d === MEALS_SETTINGS_D) return isLeader || stewardCan(e.pubkey, namedChurch(e), 'care');   // enable/configure the module: church or rostered steward
     // Who may fetch the rota: the church, or one of its rostered stewards. SCOPED, unlike its meals-settings
     // neighbour above: `isLeader` includes the unscoped `CHURCH_PUBS.has(e.pubkey)`, so a co-tenant church key
     // on a shared relay could write a rota-settings doc tagged ['church', <someone else>] — measured as
@@ -1647,7 +1684,7 @@ function accept(e) {
     // revoked-steward check refused to serve it), but it is the same unscoped shape as the two cross-tenant
     // CRITICALs this repo has already shipped, and the client trusts this write gate rather than checking
     // authorship itself. Refuse it at the door instead of relying on two downstream accidents.
-    if (d === ROTA_SETTINGS_D) { const nc = namedChurch(e); return (isLeader && (!nc || nc === e.pubkey)) || stewardOf(e.pubkey, nc); }
+    if (d === ROTA_SETTINGS_D) { const nc = namedChurch(e); return (isLeader && (!nc || nc === e.pubkey)) || stewardCan(e.pubkey, nc, 'content'); }
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
       // AUDIT-2026-07-30 S2: `care:<id>` is a relay-GLOBAL id and the rule below resolves the owning church from
       // the EVENT, so a co-tenant church naming ITSELF satisfied `e.pubkey === cp` and could republish another
@@ -1663,7 +1700,7 @@ function accept(e) {
       // of any co-tenant church could open a need in this congregation, and any co-tenant church's child marking
       // stopped a named adult ASKING THEIR OWN CHURCH FOR HELP. The church/network/steward/care-admin clauses
       // beside it were already scoped to `cp`; these two were not.
-      return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && effMemberOf(e.pubkey, cp) && !minorOf(e.pubkey, cp)));
+      return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'care') || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && effMemberOf(e.pubkey, cp) && !minorOf(e.pubkey, cp)));
     }
     // fill a slot: any member OF THE NEED'S OWN CHURCH offers help (keyed by their own pubkey, so they cannot
     // forge another member's).
@@ -1688,7 +1725,7 @@ function accept(e) {
       // key — or any key any church ever declared a network — could forge "the recipient doesn't need help
       // that day" against ANY need on the box, defeating the per-day skiphash directly above. Same B-2 fix
       // already applied to NEED_D: resolve the owning church and scope to it.
-      return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || (!!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp))));
+      return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || (!!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'care') || careAdmin(e.pubkey, cp))));
     }
     // "I'm here to help": any non-minor member of THAT church (keyed by own pubkey; minors excluded — being
     // listed would invite contact from anyone in need).
@@ -1697,7 +1734,7 @@ function accept(e) {
     // remove a named adult from their OWN church's register — a targeted, silent denial of service with nothing
     // on screen to explain it. The church is right there in the d-tag; ask about that one.
     if (d.startsWith(AVAIL_D)) { const cp = d.slice(AVAIL_D.length); return CHURCH_PUBS.has(cp) && churchWriter(e.pubkey, cp) && !minorOf(e.pubkey, cp); }
-    if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin
+    if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care') || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin
     // mark yourself safe / needing help: any member OF THAT CHURCH (minors included — safety matters most).
     // AUDIT-2026-07-30 S4: this was `CHURCH_PUBS.has(cp) && isMember`, relay-wide, and it is the worst place on
     // the box for it. The safety check is the post-emergency roll-call. subscribeSafetyResponses keys results by
@@ -1707,7 +1744,7 @@ function accept(e) {
     if (d.startsWith(SAFE_D)) { const cp = d.slice(SAFE_D.length); return CHURCH_PUBS.has(cp) && churchWriter(e.pubkey, cp); }
     // the care team's RESOLUTION of a request (approved / declined / handled) — d=carereqstatus:<id>. Only the
     // church / a steward / a care-team admin may resolve a request; never the requester (they withdraw instead).
-    if (d.startsWith(CAREREQSTATUS_D)) { const cp = namedChurch(e); return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }
+    if (d.startsWith(CAREREQSTATUS_D)) { const cp = namedChurch(e); return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'care') || careAdmin(e.pubkey, cp)); }
     // a private "ask for help" request (d=carereq:<id>, content sealed to the care team). Any member — MINORS
     // INCLUDED, since a child in trouble must be able to reach the care team, and it's sealed + care-team-only —
     // may open one. Must name a configured church; then falls through to the member rule so the per-member doc
@@ -1742,13 +1779,13 @@ function accept(e) {
     // congregation, under an attacker-controlled display name. Scope to the group's actual owner.
     if (g && BROADCAST.has(g)) {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e);
-      return !!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardOf(e.pubkey, gcp));
+      return !!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'));
     }
     // invite-only group. AUDIT-2026-07-24: `isLeader` was unscoped here too (sibling of the BROADCAST fix
     // just above) — any co-tenant church key could post into another congregation's private group.
     if (g && GROUP_VIS.get(g) === 'invite') {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const mem = GROUP_MEMBERS.get(g);
-      return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardOf(e.pubkey, gcp))) || !!(mem && mem.has(e.pubkey));
+      return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'))) || !!(mem && mem.has(e.pubkey));
     }
     // SAFEGUARDING (relay-enforced): a child may only post in a group their church marked child-safe. Was a
     // client-side list filter only, so a modified/old build could post into adult-only rooms.
@@ -1813,7 +1850,7 @@ function effMemberOf(who, cp) {
 // May `authed` read content belonging to church cp at all? The church itself, a network it belongs to, one of
 // its current stewards, or an effective member.
 function churchReader(authed, cp) {
-  return !!authed && !!cp && (authed === cp || networkOf(authed, cp) || stewardOf(authed, cp) || effMemberOf(authed, cp));
+  return !!authed && !!cp && (authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any') || effMemberOf(authed, cp));
 }
 // AUDIT-2026-07-30 S3: is `pub` a child ACCORDING TO CHURCH cp? Whether someone is a child is a judgement only
 // their own church makes — the relay-wide MINORS union is every church's list merged, so consulting it lets any
@@ -1860,16 +1897,16 @@ function canRead(e, authed) {
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
       // C3: `CHURCH_PUBS.has(authed)` was unscoped — ANY configured church key read every OTHER church's
       // safety responses. Scope it to the church this response belongs to.
-      return !!authed && (authed === e.pubkey || authed === pHex || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp));
+      return !!authed && (authed === e.pubkey || authed === pHex || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp));
     }
     if (d.startsWith(CAREREQ_D)) {   // a member's private ask-for-help — CARE-TEAM ONLY (mirror SAFE_D), never served to the whole church
       const cp = owningChurch(e, d);
-      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp));
+      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp));
     }
     if (d.startsWith(CAREREQSTATUS_D)) {   // a request's resolution — the care team AND the p-tagged requester (so the asker sees "approved"/"handled")
       const cp = owningChurch(e, d);
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
-      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp) || (!!pHex && authed === pHex));
+      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp) || (!!pHex && authed === pHex));
     }
     if (d.startsWith(CARECHAT_D)) {   // a request thread message — the care team + the p-tagged asker + the author
       const cp = owningChurch(e, d);
@@ -1878,7 +1915,7 @@ function canRead(e, authed) {
       // SAFEGUARDING: if the asker is a minor, only the child + adults CLEARED to contact them (or the child's
       // own church/steward/guardian) may read the thread — a care-team roster seat alone is not clearance.
       if (pHex && MINORS.has(pHex) && authed !== pHex && !safeguardAllows(pHex, authed)) return false;
-      return (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp) || (!!pHex && authed === pHex));
+      return (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp) || (!!pHex && authed === pHex));
     }
     // ── kind-30078 read policy: DEFAULT-DENY ──────────────────────────────────────────────────────
     // SECURITY-AUDIT-2026-07-20 C1. This gate used to be a DENY-list of private d-prefixes ending in a
@@ -1939,12 +1976,12 @@ function canRead(e, authed) {
     // Each member instead receives `clearance:<their pubkey>`, sealed to them, telling them only about THEMSELVES.
     {
       const cpS = d.startsWith(MINORS_D) ? d.slice(MINORS_D.length) : d.startsWith(GUARDIANS_D) ? d.slice(GUARDIANS_D.length) : '';
-      if (cpS) return !!authed && (authed === cpS || stewardOf(authed, cpS) || careAdmin(authed, cpS) || networkOf(authed, cpS));
+      if (cpS) return !!authed && (authed === cpS || stewardCan(authed, cpS, 'safeguarding') || careAdmin(authed, cpS) || networkOf(authed, cpS));
       if (d.startsWith(CLEARANCE_D)) {
         const subj = d.slice(CLEARANCE_D.length);
         const ncp = (e.tags.find(t => t[0] === 'church') || [])[1] || '';
         if (authed && authed === subj) return true;                       // it is about you, and sealed to you
-        return !!authed && !!ncp && (authed === ncp || stewardOf(authed, ncp) || careAdmin(authed, ncp));
+        return !!authed && !!ncp && (authed === ncp || stewardCan(authed, ncp, 'safeguarding') || careAdmin(authed, ncp));
       }
     }
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
@@ -1957,13 +1994,17 @@ function canRead(e, authed) {
     // exempted the sign-ups but missed the need itself. The need's PII is sealed and the authed branch below
     // still restricts readers to effective members of cp, so serving the clear half here is the design.
     const retractionExempt = memberWritable || d.startsWith(NEED_D);
-    if (ch && !retractionExempt) { const r = STEWARDS_BY.get(ch); if (!(e.pubkey === ch || (r && r.has(e.pubkey)))) return false; }
+    // 'any', deliberately, and NOT this document's own capability. This asks whether the author still acts
+    // for the church at all, so that narrowing a delegate to Finance does not make every group they ever
+    // created stop being served to the congregation. An owner who writes them an EMPTY capability list is
+    // saying "nothing", and that reads the same as removing them — which is today's behaviour for removal.
+    if (ch && !retractionExempt) { if (!(e.pubkey === ch || stewardCan(e.pubkey, ch, 'any'))) return false; }
     if (!authed) return false;
     // C3: `CHURCH_PUBS.has(authed)` / `NETWORKS.has(authed)` were UNSCOPED — any configured church key, and
     // any key any church had ever declared a network, read every OTHER church's roster, safeguarding lists
     // and care PII. On the shared community relay (where /config self-registration is open by default) that
     // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
-    if (authed === cp || networkOf(authed, cp) || stewardOf(authed, cp) || careAdmin(authed, cp)) return true;
+    if (authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)) return true;
     // WHO MAY FETCH THE ROTA. Default — and every church that existed before this setting — is unchanged:
     // any member of the church. A steward may narrow it to the people who actually serve, or to stewards.
     // The church key, its network, its stewards and care admins have already returned true above, so this
@@ -2087,7 +2128,7 @@ function canRead(e, authed) {
   // invite-only group messages, which is the most sensitive content in the product. Scope both to the church
   // that actually owns this group (GROUP_CHURCH is set from the group def's ['church'] tag or its author).
   const gcp = GROUP_CHURCH.get(g);
-  if (gcp && (authed === gcp || networkOf(authed, gcp) || stewardOf(authed, gcp))) return true;
+  if (gcp && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'))) return true;
   const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(authed));
 }
 

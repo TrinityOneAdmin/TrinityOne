@@ -266,6 +266,10 @@ async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', 
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
 const RESEAT_D = 'trinityone/reseat:';       // church-vouched "the member who was <old> is now <new>", d=reseat:<churchpub>
+// The capability map from the live roster: { "<steward pubkey>": ["finance", …] }. A steward who does not
+// appear here holds every capability, which is what every roster written before capabilities existed means.
+let _stewardCaps = {};
+const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content'];
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
@@ -4357,8 +4361,17 @@ window.Steward = {
         if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY (this IS the roster; only the church key edits it)
         // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
         if (e.created_at < latest) return; latest = e.created_at;
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) cur = [];
-        else { try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; } }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; }
+        else {
+          try {
+            const doc = JSON.parse(e.content) || {};
+            cur = doc.pubkeys || [];
+            // Remember what the church granted each steward. setStewards() carries this forward on every
+            // edit — otherwise adding or removing ONE steward would republish a roster with no capabilities
+            // at all and silently restore full authority to everyone the church had scoped.
+            _stewardCaps = (doc.caps && typeof doc.caps === 'object') ? doc.caps : {};
+          } catch { cur = []; _stewardCaps = {}; }
+        }
         // Adopt it HERE, not only via the UI's setCareRoster round-trip. The safeguarding back-fill needs to
         // know who the member honours, and it does not wait for React: the roster hook starts at [] and only
         // fills on the first emit, so a console that reached Members first judged every steward-authored copy
@@ -4383,11 +4396,32 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  setStewards(pubkeys) {   // OWNER-ONLY: replace the whole steward roster (pass hex pubkeys)
+  setStewards(pubkeys, caps) {   // OWNER-ONLY: replace the whole steward roster (pass hex pubkeys)
     _requireTrustedView('steward roster');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    // CARRY THE CAPABILITIES FORWARD. Every existing caller passes pubkeys alone — "add this steward",
+    // "remove that one" — and without this each of those would publish a roster with no `caps` key, which
+    // the relay reads as "no church has scoped anyone" and hands every remaining steward full authority.
+    // Silent re-escalation, from a button that says Remove.
+    const next = {};
+    const src = (caps && typeof caps === 'object') ? caps : _stewardCaps;
+    for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter(c => typeof c === 'string');
+    const doc = Object.keys(next).length ? { pubkeys: list, caps: next } : { pubkeys: list };
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
+  },
+  // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
+  // steward, which is every steward that existed before this feature).
+  stewardCaps() { return { ..._stewardCaps }; },
+  stewardCapNames() { return STEWARD_CAPS.slice(); },
+  // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
+  // not on the roster, so they are unrestricted by construction.
+  myStewardCaps() {
+    if (!actingChurch) return null;                       // owner: no restriction
+    // In delegated mode `pub` is the CHURCH's key and `churchPub` is this console's own — the naming is
+    // historical (see setActiveIdentity). Our own key is what the roster grants capabilities to.
+    const c = _stewardCaps[churchPub];
+    return Array.isArray(c) ? c.slice() : null;           // null = unscoped = everything
   },
 
   // ---- encrypted church docs: NIP-44 self-encryption to the CHURCH key. Used by the optional Finance

@@ -60,7 +60,7 @@ const WHOLE_LIST_WRITERS = [
   ['setApproved', 'every youth-cleared adult loses clearance', 'setApproved(pubkeys)'],
   ['setGuardians', 'every parent↔child link is dropped', 'setGuardians(links)'],
   ['setAdmitted', 'the whole congregation returns to "waiting for approval"', 'setAdmitted(pubkeys)'],
-  ['setStewards', 'every delegated steward is revoked', 'setStewards(pubkeys)'],
+  ['setStewards', 'every delegated steward is revoked', 'setStewards(pubkeys, caps)'],   // caps: what each steward may do
 ];
 
 for (const [name, consequence, decl] of WHOLE_LIST_WRITERS) {

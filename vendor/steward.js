@@ -14522,6 +14522,8 @@ zoo`.split("\n");
   var JOINPOLICY_D = "trinityone/joinpolicy:";
   var ADMITTED_D = "trinityone/admitted:";
   var RESEAT_D = "trinityone/reseat:";
+  var _stewardCaps = {};
+  var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
   var PIN_D = "trinityone/pin:";
@@ -18521,12 +18523,17 @@ zoo`.split("\n");
           if (_authFuture(e) || !_byChurch(e)) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
-          if (e.tags.some((t) => t[0] === "deleted") || !e.content) cur = [];
-          else {
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            cur = [];
+            _stewardCaps = {};
+          } else {
             try {
-              cur = JSON.parse(e.content).pubkeys || [];
+              const doc = JSON.parse(e.content) || {};
+              cur = doc.pubkeys || [];
+              _stewardCaps = doc.caps && typeof doc.caps === "object" ? doc.caps : {};
             } catch {
               cur = [];
+              _stewardCaps = {};
             }
           }
           _careRoster = new Set(cur.filter(Boolean));
@@ -18548,11 +18555,30 @@ zoo`.split("\n");
         }
       };
     },
-    setStewards(pubkeys) {
+    setStewards(pubkeys, caps) {
       _requireTrustedView("steward roster");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      const next = {};
+      const src = caps && typeof caps === "object" ? caps : _stewardCaps;
+      for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter((c) => typeof c === "string");
+      const doc = Object.keys(next).length ? { pubkeys: list, caps: next } : { pubkeys: list };
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
+    },
+    // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
+    // steward, which is every steward that existed before this feature).
+    stewardCaps() {
+      return { ..._stewardCaps };
+    },
+    stewardCapNames() {
+      return STEWARD_CAPS.slice();
+    },
+    // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
+    // not on the roster, so they are unrestricted by construction.
+    myStewardCaps() {
+      if (!actingChurch) return null;
+      const c = _stewardCaps[churchPub];
+      return Array.isArray(c) ? c.slice() : null;
     },
     // ---- encrypted church docs: NIP-44 self-encryption to the CHURCH key. Used by the optional Finance
     // module so sensitive donor PII + ledger never hit the relay in plaintext — only the church key (held

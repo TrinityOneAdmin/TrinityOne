@@ -29,10 +29,42 @@ A replaceable event, signed by the **church key only**:
 ```
 kind: 30078
 d:    trinityone/stewards:<churchpub>           # one roster per church, owner-signed
-content: { "pubkeys": ["<hex32>", "<hex32>", …] }   # the current stewards (latest event wins)
+content: {
+  "pubkeys": ["<hex32>", "<hex32>", …],            # the current stewards (latest event wins)
+  "caps":    { "<hex32>": ["finance", "care"] }    # OPTIONAL — what each may do (2026-08-19)
+}
 ```
 
 Mirrors the existing church-signed admin docs (`blocked:`, `admitted:`, `minors:` …).
+
+## 3a. Capabilities (added 2026-08-19)
+
+`caps` scopes a delegate to part of the church's work. Five, chosen because the pastoral and financial jobs
+are what a church actually asks to separate:
+
+| Capability | Covers |
+|---|---|
+| `finance` | The church books, funds, statements |
+| `care` | Care needs, the care team, care settings, safety checks |
+| `safeguarding` | Per-member clearances and photo decisions — **not** the minors / cleared-adult / guardian lists, which stay owner-only |
+| `members` | Admit members, join policy, re-seat, the name key |
+| `content` | Groups, rotas, services, events, posts, plans |
+
+**Compatibility is load-bearing.** No `caps` key, or a steward absent from it, means *every* capability —
+which is what every roster written before this change means. An **explicit empty list** is how a church says
+"nothing". Anything else would strip working churches of their delegates the moment their relay updated:
+an availability failure dressed as a security improvement.
+
+**Enforcement is the relay's**, on reads as well as writes — a Finance restriction that still serves the
+ledger is decoration. `stewardOf(pub, cp)` no longer exists; `stewardCan(pub, cp, cap)` takes a required
+capability, so a call site left un-swept is a startup error rather than a silent full grant. `'any'` is for
+the structural checks that only resolve *which* church an author acts for.
+
+**What a delegate still cannot do**, unchanged: edit the roster, edit the blocklist, change the relay's
+write policy. So capabilities narrow a steward; they never widen one.
+
+**The honest limit:** a relay running an older build ignores `caps` entirely and keeps giving that steward
+everything. The console's capability editor says so.
 
 ## 4. The owner-only boundary (master control)
 
@@ -82,5 +114,7 @@ rogue steward is fully recoverable by the owner re-signing the roster.
 | Phase | Deliverable | Where |
 |---|---|---|
 | **1** | Relay: load roster, additive steward authority, owner-only boundary, instant revoke | `gateway.mjs` ✅ |
-| **2** | Steward app: manage-stewards screen + author-as-steward + roster-aware attribution | `src/steward.src.js`, steward UI |
+| **2** | Steward app: manage-stewards screen + author-as-steward + roster-aware attribution | `src/steward.src.js`, steward UI ✅ |
+| **2b** | Per-steward capabilities: relay enforcement + owner-side editor | `gateway.mjs`, `stew-dashboard.jsx` ✅ 2026-08-19 |
+| **2c** | Delegate-side honesty: un-granted controls unavailable *with a reason*, orientation on arrival | steward UI — **todo** |
 | **3** | Owner handover with lock-out (key rotation / Keykeeper) | ties into `KEYKEEPER-DESIGN.md` |

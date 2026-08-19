@@ -3877,6 +3877,40 @@ function DashMembers() {
       </div>
     );
   };
+  // THE CAPABILITY EDITOR. The pilot church has four elders and they all need access; copying the church key
+  // four times would be the worst possible answer. What a church actually wants to scope is the pastoral and
+  // financial work, so that is what these are. The relay enforces every one of them — on reads as well as
+  // writes — which is the only reason showing them here is honest rather than theatre.
+  const scopeEditor = (pk) => {
+    const cur = Array.isArray(caps[pk]) ? caps[pk] : null;   // null = unscoped = everything
+    const has = (c) => (cur === null ? true : cur.includes(c));
+    const toggle = (c) => {
+      const base = cur === null ? capNames.slice() : cur.slice();
+      const next = base.includes(c) ? base.filter(x => x !== c) : [...base, c];
+      setCaps(pk, next.length === capNames.length ? null : next);
+    };
+    return (
+      <div key={pk + ':scope'} style={{ margin: '0 0 10px', padding: '12px 13px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>
+          What {(byPub.get(pk) || {}).name || niceName(pk)} may do. Turning everything on is the same as leaving them unscoped.
+        </div>
+        {capNames.map(c => (
+          <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 2px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={has(c)} onChange={() => toggle(c)} style={{ marginTop: 3 }} />
+            <span>
+              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{CAP_LABEL[c] || c}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{CAP_SUB[c] || ''}</span>
+            </span>
+          </label>
+        ))}
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 10 }}>
+          Your relay enforces this. A relay running an older version does not know about it yet and will keep
+          giving this steward everything — so check your relay is up to date before relying on it.
+        </div>
+        <button onClick={() => setScoping(null)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, marginTop: 10 }}>Done</button>
+      </div>
+    );
+  };
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* A rotation that did not land. Rendered at the top of the panel and NOT tied to the confirm dialog,
@@ -4343,6 +4377,24 @@ function DashStewardsPanel({ church }) {
   const [inviteQR, setInviteQR] = React.useState(false);
   const [copiedInvite, setCopiedInvite] = React.useState(false);
   const [approving, setApproving] = React.useState(null);   // pubkey awaiting PIN confirm
+  const [scoping, setScoping] = React.useState(null);      // pubkey whose capabilities are being edited
+  // WHAT EACH STEWARD MAY DO. Absent from the map = unscoped = everything, which is what every roster
+  // written before this feature means and what a church that never opens this panel keeps.
+  const caps = (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {};
+  const capNames = (window.Steward.stewardCapNames && window.Steward.stewardCapNames()) || [];
+  const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+  const CAP_SUB = {
+    finance: 'The church books, funds and statements',
+    care: 'Care needs, the care team, safety checks',
+    safeguarding: 'Clearances and photo decisions (the child and cleared-adult LISTS stay owner-only)',
+    members: 'Admit people, join policy, re-seat someone who lost their words',
+    content: 'Groups, rotas, services, events, posts',
+  };
+  const setCaps = (pk, list) => {
+    const next = { ...caps };
+    if (list === null) delete next[pk]; else next[pk] = list;
+    window.Steward.setStewards(stewards, next);
+  };
   const [approvePin, setApprovePin] = React.useState('');
   const [approveErr, setApproveErr] = React.useState('');
   const hasPin = !!(window.Steward.hasPinLock && window.Steward.hasPinLock());
@@ -4379,6 +4431,7 @@ function DashStewardsPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.npub || ''}>{m.npub ? shortNpub(m.npub) : (pk.slice(0, 10) + '…' + pk.slice(-4))}</div>
         </div>
+        {confirmRemove === pk ? null : <button onClick={() => setScoping(scoping === pk ? null : pk)} title="What this steward may do" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginRight: 6, whiteSpace: 'nowrap' }}>{Array.isArray(caps[pk]) ? (caps[pk].length ? caps[pk].length + ' of ' + capNames.length : 'nothing') : 'everything'}</button>}
         {confirmRemove === pk
           ? <React.Fragment>
               <button onClick={() => remove(pk)} title="Confirm — revoke this steward immediately" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
@@ -4421,7 +4474,7 @@ function DashStewardsPanel({ church }) {
       </div> : null}
       {stewards.length === 0
         ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No delegated stewards yet.</div>
-        : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{stewards.map(row)}</div>}
+        : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{stewards.map(pk => <React.Fragment key={pk}>{row(pk)}{scoping === pk ? scopeEditor(pk) : null}</React.Fragment>)}</div>}
       {!adding
         ? <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add a steward</button>
         : scanning
