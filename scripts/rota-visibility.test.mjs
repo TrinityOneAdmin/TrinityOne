@@ -13,15 +13,19 @@
 // a label on a screen, undone by any modified client. So this one is a real read gate, and these tests drive
 // a REAL gateway to prove it: what is asserted is what the relay does or does not put on the wire.
 //
-// WHAT IT HONESTLY BUYS. rota:/runsheet: are sealed under the church name key and EVERY member holds that
-// key, so the gate decides who may FETCH, never who could decrypt a copy they already hold — and the member
-// app caches every rota it fetched. Narrowing protects from that moment on. The console copy says exactly
-// that ("Applies from now on. Anyone whose phone already downloaded the rota keeps that copy.") and must
-// keep saying it.
+// WHAT IT HONESTLY BUYS, AND WHAT IT DOES NOT. rota:/runsheet: are sealed under the church name key and
+// EVERY member holds that key, so the gate decides who may FETCH, never who could decrypt a copy they already
+// hold — and the member app caches every rota it fetched.
+//
+// The bigger limit, measured on a device 2026-08-18: enforcement is PER RELAY. The member app fans out to
+// several relays, and a relay running an older build has no gate at all — it served the rota to a member this
+// relay had just refused, in the same second. So a church is protected only on the relays that support this,
+// and the console copy has to say so. The test below pins that wording; if the promise changes, this fails.
+const CONSOLE_COPY_MUST_MENTION = ['only on relays that support it', 'older version', 'already'];
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
@@ -157,6 +161,18 @@ before(async () => {
 });
 
 after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
+
+// The console promise and the relay behaviour are two halves of one claim. A steward reading "the rota is now
+// restricted" while an un-updated relay serves it to the whole church is exactly the overclaim this project's
+// threat model forbids — see the uk-pilot-threat-model note: never state a protection you do not have.
+test('the console tells the steward the truth about WHERE this is enforced', () => {
+  const menu = readFileSync(new URL('../app/stew-schedule.jsx', import.meta.url), 'utf8');
+  for (const phrase of CONSOLE_COPY_MUST_MENTION) {
+    assert.ok(menu.includes(phrase),
+      `the visibility menu no longer says "${phrase}". Enforcement is per-relay and cached copies survive; a `
+      + 'steward who is not told both believes they have a protection they may not have.');
+  }
+});
 
 test('by default every member can fetch the rota — nothing changes for churches that never touch this', async () => {
   assert.equal(await canFetchRota(pewsat), true,

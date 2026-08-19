@@ -666,7 +666,9 @@ function DashRota({ onNewTeam }) {
                       </button>
                     ))}
                     <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.45, padding: '7px 11px 4px', borderTop: '1px solid var(--line)', marginTop: 4 }}>
-                      Applies from now on. Anyone whose phone already downloaded the rota keeps that copy.
+                      Applies from now on, and only on relays that support it. Anyone whose phone already
+                      downloaded the rota keeps that copy, and a relay running an older version will go on
+                      serving it to everyone.
                     </div>
                   </div>
                 </React.Fragment>
