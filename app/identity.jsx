@@ -1678,8 +1678,15 @@ function FamilySheet({ open, onClose, ctx }) {
                 /join is not the fix — that path deliberately refuses an invite, because an invite REPLACES the
                 device identity. A child with the app installed should use the 12 words instead, which is why
                 they are offered here as an equal route rather than a footnote. */}
-            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 2px 14px' }}>On your child’s phone, open its <b>normal camera app</b> and point it at this code — it signs them in as <b>{made && made.name}</b> and joins them to {(ctx.church && ctx.church.name) || 'your church'}. That opens TrinityOne in the browser.</p>
-            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 2px 14px' }}>If they already have the TrinityOne app installed, open it there instead and choose <b>“I’ve used it before” → “I have my 12 words”</b>, then type the phrase above.</p>
+            {/* THE APP COULD ALWAYS READ THIS CODE. The restore screen's "Someone set this up for me" hands
+                whatever it scans to seedFromScan(), which parses exactly the link this QR carries — and the
+                parent was told instead to transcribe twelve words onto a second phone, in a hall, with a
+                child waiting. The easy route existed and nobody was pointed at it. So: the installed-app
+                route leads, because a church onboarding a family has just had them install the app.
+                Order matters here; see scripts/child-handoff-route.test.mjs, which proves the recommended
+                route works by driving inviteUrlFor() and seedFromScan() against each other. */}
+            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 2px 14px' }}>If your child already has TrinityOne on their phone, open it there and choose <b>“I’ve used it before” → “Someone set this up for me”</b>, then point their camera at this code. It signs them in as <b>{made && made.name}</b> and joins them to {(ctx.church && ctx.church.name) || 'your church'} — nothing to type.</p>
+            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 2px 14px' }}>If the app isn’t on their phone yet, open its <b>normal camera app</b> and point it at this code instead. That opens TrinityOne in the browser — it works, but if you install the app later you’ll sign in again with the 12 words above, so keep them.</p>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
               <div style={{ width: 220, height: 220, background: '#fff', borderRadius: 18, padding: 12, boxShadow: 'var(--shadow)', boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: qrSvg }} />
             </div>

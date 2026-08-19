@@ -286,7 +286,7 @@ window.HelpData = {
         { type: 'steps', label: 'Set up your child’s account', items: [
           'Tap your circle at the top → “Children’s accounts” → “Add a child”.',
           'Enter their name. The app makes a new account and shows you its 12 recovery words — write them down and keep them safe.',
-          'On your child’s phone, scan the login code to sign them in and join them to the church.',
+          'On your child’s phone, sign them in with the code you are shown: in the app, “I’ve used it before” → “Someone set this up for me”, then point their camera at it. If the app is not installed yet, their phone’s normal camera opens it in the browser instead.',
           'A steward confirms the link — then your child is protected by the rules above.',
         ] },
         { type: 'callout', tone: 'sage', text: 'You hold your child’s 12 recovery words, so the account is yours to look after. A steward confirms every parent–child link, so no one can attach themselves to a child who isn’t theirs.' },
