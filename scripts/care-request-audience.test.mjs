@@ -156,3 +156,22 @@ test('it asks _fetchCareTeam rather than running its own swallowed query', () =>
     'publishCareRequest runs its own roster query again. querySync resolves EMPTY on an unreachable or ' +
     'unauthenticated relay, which is indistinguishable from a church that has named nobody.');
 });
+
+// ── AND WHAT THE ASKER IS TOLD AFTERWARDS. The toast was fixed first; the row that stays on screen was not,
+// and it is the one a member re-reads while they wait. Found on a phone: a church with no care team sealed a
+// request to two keys — the leader and the asker — and the row still said "your care team will be in touch".
+test('the asker\'s own row counts who can actually open it', () => {
+  const sub = fnBody(VENDOR, '_openCareRequests(cb, forChurch) {', '_openCareRequests');
+  assert.match(sub, /Object\.keys\(o\.keys/,
+    'the request list never counts the envelope key list, so the audience size it reports is not measured');
+  assert.match(sub, /recipients,/, 'the count is computed but never attached to the request');
+});
+
+test('a request only the leader holds is not described as reaching the care team', () => {
+  const TODAY = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
+  const row = fnBody(stripComments(TODAY), 'function MyRequestRow(', 'MyRequestRow');
+  assert.match(row, /recipients/,
+    'MyRequestRow promises "your care team will be in touch" without ever checking whether anyone on that ' +
+    'team holds a key to the request. In a church with no care team that sentence is false, and the member ' +
+    'waits for people who cannot see it.');
+});

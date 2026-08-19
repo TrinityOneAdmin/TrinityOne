@@ -9874,9 +9874,10 @@
           if ((tomb.get(id) || 0) >= e.created_at) return;
           const prev = byId.get(id);
           if (prev && prev._ts >= e.created_at) return;
-          let body = null;
+          let body = null, recipients = 0;
           try {
             const o = JSON.parse(e.content);
+            recipients = Object.keys(o.keys || {}).length;
             const mine = o.keys && o.keys[pub];
             if (mine) {
               const kh = decrypt(mine, getConversationKey(sk, e.pubkey));
@@ -9884,7 +9885,7 @@
             }
           } catch (e2) {
           }
-          byId.set(id, { id, from: e.pubkey, at: body && body.at || e.created_at, _ts: e.created_at, sealed: !body, ...body || {} });
+          byId.set(id, { id, from: e.pubkey, at: body && body.at || e.created_at, _ts: e.created_at, sealed: !body, recipients, ...body || {} });
           emit();
         },
         oneose() {

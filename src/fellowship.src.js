@@ -3453,9 +3453,12 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted')) { tomb.set(id, Math.max(tomb.get(id) || 0, e.created_at)); byId.delete(id); emit(); return; }
         if ((tomb.get(id) || 0) >= e.created_at) return;   // withdrawn — never resurrect a copy at/older than the withdrawal
         const prev = byId.get(id); if (prev && prev._ts >= e.created_at) return;
-        let body = null;
-        try { const o = JSON.parse(e.content); const mine = o.keys && o.keys[pub]; if (mine) { const kh = nip44d(mine, nip44ck(sk, e.pubkey)); body = JSON.parse(nip44d(o.enc, _unhex(kh))); } } catch (e2) {}
-        byId.set(id, { id, from: e.pubkey, at: (body && body.at) || e.created_at, _ts: e.created_at, sealed: !body, ...(body || {}) });
+        let body = null, recipients = 0;
+        // HOW MANY PEOPLE CAN ACTUALLY OPEN THIS. The envelope names them, so the asker's own app can tell
+        // them the truth rather than the intention: a request sealed only to the church key and themselves
+        // reached one person, however the screen that sent it was worded. Counted, not assumed.
+        try { const o = JSON.parse(e.content); recipients = Object.keys(o.keys || {}).length; const mine = o.keys && o.keys[pub]; if (mine) { const kh = nip44d(mine, nip44ck(sk, e.pubkey)); body = JSON.parse(nip44d(o.enc, _unhex(kh))); } } catch (e2) {}
+        byId.set(id, { id, from: e.pubkey, at: (body && body.at) || e.created_at, _ts: e.created_at, sealed: !body, recipients, ...(body || {}) });
         emit();
       },
       oneose() { emit(); },

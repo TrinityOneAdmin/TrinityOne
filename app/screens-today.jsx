@@ -211,6 +211,12 @@ function MyRequestRow({ r, onCancel, onMessage }) {
   const sub = st === 'approved' ? 'Your care team set it up — see Open needs below.'
     : st === 'declined' ? 'Your care team has closed this one. If you still need help, message them or ask again.'
     : st === 'handled' ? 'Your care team is on it.'
+    // A REQUEST IS READ BY WHOEVER HOLDS A KEY TO IT, AND NOBODY ELSE. Measured on a phone, 2026-08-19: a
+    // church with no care team roster sealed this to two people — the church key and the asker — and the row
+    // still read "your care team will be in touch". The toast beside it had already been fixed to say who it
+    // reached; this line, which stays on screen afterwards, had not. r.recipients counts the envelope's own
+    // key list, so two means the leader and you.
+    : (r.recipients && r.recipients <= 2) ? 'Sent privately — only your church leader can open this.'
     : 'Sent privately — your care team will be in touch.';
   const tint = st === 'open' ? 'var(--sage)' : st === 'declined' ? 'var(--ink-3)' : 'var(--sage)';
   return (
