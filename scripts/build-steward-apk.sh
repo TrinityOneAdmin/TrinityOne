@@ -43,13 +43,32 @@ fi
 echo "building steward webDir…"
 rm -rf "$WWW"; mkdir -p "$WWW/vendor"
 cp steward.html "$WWW/index.html"
-cp brand.css "$WWW/"
-mkdir -p "$WWW/app"
-cp app/icons.jsx app/stew-modal.jsx app/recur.jsx app/stew-data.jsx app/stew-console.jsx app/stew-schedule.jsx app/stew-templates.jsx \
-   app/stew-dashboard.jsx app/stew-finance.jsx app/stew-manna.jsx app/stew-meals.jsx app/stew-relay.jsx app/stew-extension.jsx app/stew-phone.jsx app/stew-custody.jsx \
-   app/backup.jsx app/steward-root.jsx "$WWW/app/"
 cp -r vendor/fonts "$WWW/vendor/"
-cp vendor/react.production.min.js vendor/react-dom.production.min.js vendor/steward.js vendor/finance-ledger.js vendor/steward-manna.js vendor/steward-meals.js vendor/jsqr.js vendor/jspdf.umd.min.js "$WWW/vendor/"
+
+# DERIVED FROM steward.html, NOT HAND-LISTED — because the hand list drifted, and shipped a dead app.
+#
+# This used to be an explicit `cp app/icons.jsx app/stew-modal.jsx …` naming every file. On 2026-08-17
+# `app/error-boundary.jsx` was added to steward.html and not to that list, so the APK shipped without it,
+# steward-root.js threw `ReferenceError: TrinityErrorBoundary is not defined` at mount, React never rendered,
+# and the console sat on "Opening your console… Getting your church ready" for ever. Two days and 31 commits
+# went by unnoticed: every console test runs HEADLESS against the repo root, where every file exists, so only
+# the packaged app was broken and only a phone could show it. (The commit that caused it was called "a render
+# crash stops being a silent white screen".) vendor/recovery.js, sw-register.js and the icons were missing
+# too — the restore path and the launcher art.
+#
+# So the page is now the source of truth: copy every local file steward.html references, and FAIL if one is
+# missing rather than shipping an app that dies at mount.
+echo "collecting the files steward.html references…"
+REFS=$(grep -oE '(href|src)="[^"]+"' steward.html | sed 's/.*="//;s/"//' | grep -vE '^https?:|^#|^data:' | sort -u)
+for f in $REFS; do
+  # babel is deliberately dropped: the JSX below is pre-transpiled, and runtime Babel is unreliable in the
+  # Capacitor webview (it is also what the strict, eval-free CSP exists to allow us to turn off).
+  [ "$f" = "vendor/babel.min.js" ] && continue
+  [ "$f" = "vendor/fonts/fonts.css" ] && continue   # came with vendor/fonts above
+  if [ ! -f "$f" ]; then echo "✖ steward.html references $f, which does not exist — fix the page or add the file" >&2; exit 1; fi
+  mkdir -p "$WWW/$(dirname "$f")"
+  cp "$f" "$WWW/$f"
+done
 
 # pre-transpile JSX -> JS (runtime Babel is unreliable in the Capacitor webview)
 echo "transpiling steward JSX -> JS…"
