@@ -36,6 +36,11 @@ const patch = `
   window.WebSocket = Rec;
 })();
 `;
+// Enabling Page makes this client answerable for the page's dialogs; a client that never answers one
+// parks the renderer for ever. See the note in scripts/sim-actor.mjs.
+ws.on('message', (d) => { let x; try { x = JSON.parse(d); } catch { return; }
+  if (x.method === 'Page.javascriptDialogOpening')
+    ws.send(JSON.stringify({ id: ++id, method: 'Page.handleJavaScriptDialog', params: { accept: true, promptText: '' } })); });
 await send('Page.enable', {});
 await send('Page.addScriptToEvaluateOnNewDocument', { source: patch });
 await send('Page.reload', { ignoreCache: false });

@@ -151,6 +151,22 @@ without a reason.
 
 ---
 
+## C2. NEVER ONCE EXERCISED — the confirm-guarded actions
+
+Until 2026-08-19 the actor CLI killed its own browser on any control guarded by `window.confirm()`, so no
+round has ever completed one of these. They are the console's most destructive and most labour-saving
+controls, which makes this the largest coverage hole on the page. Give them to a round deliberately.
+
+- [ ] Auto-fill: "Create weekly services for the next ~4 weeks and auto-fill them"
+- [ ] Auto-fill ahead: "…next ~3 months (around 13)"
+- [ ] "Rotate…" a serving assignment
+- [ ] "Remove series" — and check what happens to rotas already published against it
+- [ ] Close a care need ("Members will no longer see it")
+- [ ] Publish draft plans / publish drafts in bulk
+- [ ] New fund — a `prompt()`, so it needs typed words: `tap "New fund" "Missions"`
+- [ ] Leave a network
+- [ ] Restore a church onto this device (both warnings: "replaces the church key", "back it up first")
+
 ## D. Cross-cutting checks to run in EVERY round
 
 - [ ] Every "saved / sent / published" claim verified from a second screen or the relay

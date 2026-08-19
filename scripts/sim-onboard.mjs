@@ -54,6 +54,19 @@ const send = (m, p) => new Promise((res, rej) => {
   ws.on('message', on); ws.send(JSON.stringify({ id: n, method: m, params: p }));
 });
 await new Promise(r => ws.on('open', r));
+
+// Enabling the Page domain makes THIS client responsible for the page's own dialogs — Chrome stops
+// auto-dismissing them and waits. A one-shot script that never answers parks the renderer for ever inside the
+// dialog's nested loop, and the instance is dead for the rest of the round. See the long note in
+// scripts/sim-actor.mjs; this is the same trap, and it destroyed three steward consoles on 2026-08-19.
+ws.on('message', (d) => {
+  let x; try { x = JSON.parse(d); } catch { return; }
+  if (x.method !== 'Page.javascriptDialogOpening') return;
+  const msg = String(x.params?.message || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  console.error('onboard dialog accepted: ' + (x.params?.type || '?') + ' "' + msg + '"');
+  ws.send(JSON.stringify({ id: ++id, method: 'Page.handleJavaScriptDialog', params: { accept: true, promptText: '' } }));
+});
+
 await send('Runtime.enable', {}); await send('Page.enable', {});
 await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
 await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });

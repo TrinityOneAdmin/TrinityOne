@@ -36,9 +36,64 @@ const send = (m, p) => new Promise((res, rej) => {
 });
 const ev = async (e) => (await send('Runtime.evaluate', { expression: e, awaitPromise: true, returnByValue: true })).result.value;
 await new Promise(r => ws.on('open', r));
-await send('Runtime.enable', {}); await send('Page.enable', {});
 
 const out = (x) => { console.log(typeof x === 'string' ? x : JSON.stringify(x)); };
+
+// AN UNANSWERED confirm() KILLS THE INSTANCE FOR EVER, and it killed three steward consoles on 2026-08-19.
+//
+// The chain, measured rather than reasoned: this CLI enables the Page domain, and once a DevTools client has
+// done that, Chrome stops auto-dismissing the page's own dialogs and waits for that client to answer them.
+// This process is one-shot — it taps, then exits at the bottom of the file — so a tap on any control guarded
+// by window.confirm() opens a dialog and then abandons it. The renderer parks inside the dialog's nested run
+// loop: alive, 0% CPU, no longer answering Runtime.evaluate, and — the detail that cost hours — Chrome has by
+// then forgotten the dialog, so Page.handleJavaScriptDialog answers "No dialog is showing". The instance is
+// unrecoverable except by navigating it, which the browser process can still do.
+//
+// The console guards its biggest actions this way: auto-fill ("Create weekly services for the next ~4
+// weeks…"), "Remove series", "Rotate…", closing a care need, publishing drafts, restoring a church, leaving
+// a network. So the harness reliably destroyed the console at exactly the moments a steward does real work,
+// and the round then read as "the console freezes" — a product defect that does not exist. Worse, every one
+// of those controls has therefore never once been exercised by a simulation.
+//
+// A person confronted with "Create weekly services…? OK / Cancel" who wanted that action presses OK, so we
+// accept, and we PRINT what was agreed to — an actor must never silently consent to something it did not
+// read. A prompt() needs words: pass them as the extra argument (`tap "New fund" "Missions"`), and when none
+// were given, say so rather than creating something nameless.
+const dialogs = [];
+ws.on('message', (d) => {
+  let x; try { x = JSON.parse(d); } catch { return; }
+  if (x.method !== 'Page.javascriptDialogOpening') return;
+  const p = x.params || {};
+  const msg = String(p.message || '').replace(/\s+/g, ' ').trim();
+  const wantsText = p.type === 'prompt';
+  const answer = wantsText ? (a2 === undefined ? null : String(a2)) : null;
+  const accept = !(wantsText && answer === null);
+  dialogs.push(p.type + ': "' + msg.slice(0, 140) + '" -> ' +
+    (!accept ? 'CANCELLED (a prompt needs an answer: pass it as the last argument)'
+             : wantsText ? 'answered "' + answer + '"' : 'accepted (OK)'));
+  ws.send(JSON.stringify({ id: ++id, method: 'Page.handleJavaScriptDialog',
+    params: accept && wantsText ? { accept: true, promptText: answer } : { accept } }));
+});
+
+// A WEDGED INSTANCE MUST SAY SO INSTEAD OF HANGING. Enabling the domains is itself a renderer round-trip, so
+// on an instance wedged by an older run this used to hang for ever with no output at all.
+const withTimeout = (p, ms, label) => Promise.race([p, sleep(ms).then(() => { throw new Error('TIMEOUT ' + label); })]);
+let wedged = false;
+try {
+  await withTimeout(Promise.all([send('Runtime.enable', {}), send('Page.enable', {})]), 8000, 'enable');
+  await withTimeout(send('Runtime.evaluate', { expression: '1', returnByValue: true }), 8000, 'ping');
+} catch { wedged = true; }
+if (wedged) {
+  // The browser process still answers even when the page's main thread does not, so it can navigate the tab
+  // out of the stuck dialog loop. The app's own state lives in storage, so the church survives; whatever was
+  // half-typed on screen does not.
+  await send('Page.navigate', { url: t.url }).catch(() => {});
+  await sleep(4000);
+  try { await withTimeout(Promise.all([send('Runtime.enable', {}), send('Page.enable', {})]), 8000, 're-enable'); } catch {}
+  out('NOTE: this instance was frozen by a dialog nobody answered, and has been reloaded. You are back at ' +
+      'the app\'s opening screen; anything half-filled on the old screen is gone. Carry on, and say so in ' +
+      'your report if you were mid-way through something.');
+}
 
 // TYPOGRAPHIC PUNCTUATION COST A WHOLE ROUND. The app's copy is written properly — "I’ll help", "what’s on",
 // "don’t" — with U+2019, while anyone typing a target types an ASCII apostrophe. So `tap "I'll help"` found
@@ -193,5 +248,8 @@ try {
     out(await ev(a1));
   } else out('unknown command: ' + cmd);
 } catch (e) { out('ERROR: ' + e.message); }
+// Report anything the app asked and this actor answered on their behalf, so consent is visible in the log.
+await sleep(150);
+for (const d of dialogs) out('the app asked, and I answered — ' + d);
 ws.close();
 process.exit(0);
