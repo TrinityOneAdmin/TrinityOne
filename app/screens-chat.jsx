@@ -1235,7 +1235,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           ctx.toast(why);
           return;
         }
-        if (evt && evt._delivered === false) ctx.toast('No signal — we’ll send it as soon as you’re back online.');
+        if (evt && evt._delivered === false) ctx.toast(dmFailWording(evt));
       }).catch(() => { ctx.toast('No signal — we’ll send it as soon as you’re back online.'); });
       if (replyTo) setReplyTo(null);
       return;
@@ -1723,6 +1723,22 @@ function DMSwipe({ mine, onReply, children }) {
   );
 }
 
+// WHAT TO SAY WHEN A PRIVATE MESSAGE DOES NOT GO.
+// "No signal — we'll send it as soon as you're back online" was said for BOTH cases, and one of them is not
+// coming back online. The relay refuses a message between a young person and an adult who is not cleared to
+// work with youth — permanently, by policy — so the promise to send it later is false, and the person waits
+// for a reply to a message nobody will ever receive. Round 3 of the 2026-08-19 simulation: an adult reported
+// messaging four teenagers "all sent successfully"; the relay had none of them.
+//
+// The wording must not say WHY the other person is restricted. Telling an uncleared adult "that account
+// belongs to a child" would use a safeguarding refusal to disclose exactly what safeguarding protects — and
+// this app never serves the minors list to ordinary members for the same reason.
+function dmFailWording(evt) {
+  const refused = evt && evt._refused;
+  if (!refused) return 'No signal — we’ll send it as soon as you’re back online.';
+  return 'Not delivered. Private messages with this person are limited for safeguarding — a steward can help if you need to reach them.';
+}
+
 function DMThread({ peer, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
@@ -1878,6 +1894,7 @@ function DMInbox({ open, onClose, ctx, docked }) {
 function PeopleScreen({ open, onClose, ctx, docked }) {
   const FS = window.Fellowship;
   const [q, setQ] = React.useState('');
+  const [whyRestricted, setWhyRestricted] = React.useState(false);
   // the roster is prefetched at app load (ctx.churchPeople), so it's already warm when this opens
   const members = ctx.churchPeople || [];
   const loading = !!ctx.churchPeopleLoading;
@@ -1963,12 +1980,62 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
               </div>
               {allowDM
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="chat" size={14} color="currentColor" /> Message</span>
-                : <span title="Private messages are limited for safeguarding" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="lock" size={13} color="currentColor" /> Restricted</span>}
+                : <button onClick={(e) => { e.stopPropagation(); setWhyRestricted(true); }} aria-label="Why is this restricted?" title="Why is this restricted?" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--ink-3)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="lock" size={13} color="currentColor" /> Restricted</button>}
             </div>
           );
         })}
       </div>
+      {whyRestricted ? <RestrictedExplainer ctx={ctx} onClose={() => setWhyRestricted(false)} /> : null}
     </Overlay>
+  );
+}
+
+// A LOCK NOBODY EXPLAINS READS AS A BROKEN APP. In round 3 of the 2026-08-19 simulation a 15-year-old saw
+// 23 of 26 people marked "Restricted", could message only three, and tapping any of them did nothing at all.
+// Her words: "A young person might think the app is broken, not that it's protecting them." The chip did
+// carry a `title`, which is a tooltip — a thing that does not exist on a phone.
+//
+// Two people meet this lock from opposite sides and they are NOT told the same thing. A young person is told
+// plainly that their account is set up as a young person's account and who they can still reach. An adult is
+// told only that messages with this person are limited, and never that the person is a child: a safeguarding
+// refusal must not become a way to enumerate the children in a congregation. That is why this app does not
+// serve the minors list to ordinary members, and the wording here keeps that promise.
+function RestrictedExplainer({ ctx, onClose }) {
+  const minor = !!(ctx && ctx.safeguard && ctx.safeguard.isMinor);
+  const cleared = ((ctx && ctx.safeguard && ctx.safeguard.approved) || []).length;
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Why is this restricted?" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px 26px', fontFamily: 'var(--font-ui)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <Icon name="lock" size={20} color="var(--clay)" />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>{minor ? 'Your account is set up for a young person' : 'Messages here are limited'}</div>
+        </div>
+        {minor ? (
+          <React.Fragment>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+              Nothing is broken. Your church has set this account up as a young person’s account, so private
+              messages are limited to the adults your church has checked{cleared ? ' — ' + cleared + (cleared === 1 ? ' person' : ' people') + ' so far' : ''}, and to your parent or guardian.
+            </p>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 4px' }}>
+              You can still read, join your groups, and message anyone marked as a leader. If you need to
+              reach someone else, ask one of them and they can help.
+            </p>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+              Your church limits private messages with some people for safeguarding. Anything you send here
+              will not be delivered, so please don’t rely on it.
+            </p>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 4px' }}>
+              A steward can tell you the right way to get in touch — and if you work with young people, they
+              can check whether your clearance is recorded.
+            </p>
+          </React.Fragment>
+        )}
+        <button onClick={onClose} style={{ marginTop: 18, width: '100%', padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>Got it</button>
+      </div>
+    </div>
   );
 }
 

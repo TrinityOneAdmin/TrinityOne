@@ -2620,7 +2620,18 @@ window.Fellowship = {
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, body); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
     try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; }   // bounded so offline sets _delivered=false within 12s, not never
-    catch (e) { console.warn('[fellowship] DM publish failed', e); evt._delivered = false; }   // E1: same as publishMessage — the caller must be able to tell
+    catch (e) {
+      console.warn('[fellowship] DM publish failed', e);
+      evt._delivered = false;   // E1: same as publishMessage — the caller must be able to tell
+      // A REFUSAL IS NOT AN OUTAGE, and the difference is the whole message. The relay refuses a DM between a
+      // child and an adult who is not cleared to work with youth — permanently, by policy — and the caller
+      // showed "No signal — we'll send it as soon as you're back online." It will never be sent. An adult
+      // messaging a teenager was told their words were queued, and a young person's message to an uncleared
+      // adult vanished the same way. Simulation round 3, 2026-08-19: "all sent successfully", zero on the wire.
+      // The machinery to tell these apart has been here all along (isPermanentRefusal / isConnectionFailure);
+      // this path simply threw the reason away.
+      if (isPermanentRefusal(e)) evt._refused = String((e && e.message) || e || '').trim();
+    }
     return evt;
   },
   // a 1:1 thread with one peer; onMsg({ id, mine, content, ts, pubkey, reactions, myReaction }).

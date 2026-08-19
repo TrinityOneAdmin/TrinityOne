@@ -380,3 +380,20 @@ message belongs to whoever hit it — not to a list anyone can browse. See [[uk-
 existing rule that `minors:` is never served to ordinary members.
 
 Related, same round: a linked parent sees NOTHING anywhere telling them the link exists.
+
+**BUILT 2026-08-19.** Three parts, all sabotage-verified in `scripts/safeguarding-explains-itself.test.mjs`:
+
+1. The young person's own profile says what the account is, in the app's voice, and says who else can see
+   that ("Only you and your church's stewards"). Gated on `safeguard.isMinor`, so it is theirs alone — a
+   badge other members could see would broadcast which accounts belong to children.
+2. The "Restricted" chip in the people directory is a control now, not a `title` tooltip (a thing that does
+   not exist on a phone). Tapping it explains the restriction — and explains it DIFFERENTLY to each side. A
+   young person is told plainly what their account is and who they can still reach. An adult is told only
+   that messages here are limited and to ask a steward, and is never told the other person is a child.
+3. A refused DM stops claiming it will be sent later. `sendDM` now keeps the reason (`isPermanentRefusal`
+   already existed) and the toast says "Not delivered…" instead of "No signal — we'll send it as soon as
+   you're back online", which was untrue: the relay refuses child↔uncleared-adult DMs permanently. That is
+   the mechanism behind round 3's "I messaged four teenagers, all sent successfully" with nothing on the wire.
+
+**Still open from this note:** the refusal reason at the point of a dead tap inside a thread (the composer's
+blocked state), and the linked parent who is told nothing anywhere.

@@ -8604,6 +8604,7 @@
       } catch (e) {
         console.warn("[fellowship] DM publish failed", e);
         evt._delivered = false;
+        if (isPermanentRefusal(e)) evt._refused = String(e && e.message || e || "").trim();
       }
       return evt;
     },

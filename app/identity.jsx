@@ -1429,6 +1429,23 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
             padding: '5px 13px', borderRadius: 999, fontSize: 12.5, fontWeight: 700 }}>
             <Icon name="shield" size={13} /> {named ? 'TrinityOne member' : 'Anonymous member'}</div>
+          {/* THE YOUNG PERSON'S OWN SCREEN, AND ONLY THEIRS. A 15-year-old in the 2026-08-19 simulation saw
+              most of her church marked "Restricted" with nothing anywhere explaining it, and concluded the
+              app might simply be broken. This says what her account is, in her own app, on her own device.
+              It is deliberately NOT part of anyone else's view of her: `minors:` is never served to ordinary
+              members, and a badge others could see would broadcast which accounts belong to children. */}
+          {ctx && ctx.safeguard && ctx.safeguard.isMinor ? (
+            <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'flex-start', gap: 8, textAlign: 'left', maxWidth: 320,
+              background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid var(--line)',
+              borderRadius: 14, padding: '10px 13px' }}>
+              <Icon name="shield" size={15} color="var(--sage)" />
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                Your church has set this up as a <b>young person’s account</b>. Private messages are limited to
+                the adults your church has checked, and to your parent or guardian — everything else works
+                normally. Only you and your church’s stewards see this.
+              </div>
+            </div>
+          ) : null}
           {!named ? (
             <div style={{ marginTop: 16 }}>
               <button onClick={() => setEdit(true)} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 22px',
