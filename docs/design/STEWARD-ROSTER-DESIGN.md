@@ -116,5 +116,5 @@ rogue steward is fully recoverable by the owner re-signing the roster.
 | **1** | Relay: load roster, additive steward authority, owner-only boundary, instant revoke | `gateway.mjs` ✅ |
 | **2** | Steward app: manage-stewards screen + author-as-steward + roster-aware attribution | `src/steward.src.js`, steward UI ✅ |
 | **2b** | Per-steward capabilities: relay enforcement + owner-side editor | `gateway.mjs`, `stew-dashboard.jsx` ✅ 2026-08-19 |
-| **2c** | Delegate-side honesty: un-granted controls unavailable *with a reason*, orientation on arrival | steward UI — **todo** |
+| **2c** | Delegate-side honesty: un-granted controls unavailable *with a reason*, orientation on arrival | steward UI ✅ 2026-08-19 |
 | **3** | Owner handover with lock-out (key rotation / Keykeeper) | ties into `KEYKEEPER-DESIGN.md` |

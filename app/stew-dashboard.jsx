@@ -1,5 +1,85 @@
 // stew-dashboard.jsx — desktop Steward Console running state. Exports StewDashboard.
 
+// The one-time orientation a delegated steward gets. Deliberately short, and deliberately includes the part
+// nobody enjoys writing: you can be removed at any time, and you will not be asked first. A steward who
+// learns that from a screen going blank mid-task learns something worse.
+function DelegateBrief({ onClose, churchName }) {
+  const caps = (window.Steward && window.Steward.myStewardCaps && window.Steward.myStewardCaps()) || null;
+  const named = Array.isArray(caps) ? caps.map(c => STEW_CAP_LABEL[c] || c) : null;
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '94%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', padding: '22px 22px 20px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, marginBottom: 8 }}>You’re helping run {churchName}</div>
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 12px' }}>
+          You’re signed in with <b>your own key</b>, not the church’s. Everything you do here is signed as you,
+          on behalf of the church.
+        </p>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 3 }}>What you can do</div>
+          {named === null
+            ? <div>Everything a steward can do in this console — your church hasn’t narrowed it.</div>
+            : named.length
+              ? <div>{named.join(', ')}. Anything else is marked with a padlock.</div>
+              : <div>Your church hasn’t given you any area yet — ask them, and they can change it in a moment.</div>}
+        </div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 3 }}>What only the church key can do</div>
+          Choosing who the stewards are, the block list, and the relay’s settings. That boundary is what makes
+          it safe to hand this out — no steward can add themselves or remove the owner.
+        </div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.6, marginBottom: 16 }}>
+          <div style={{ fontWeight: 800, marginBottom: 3 }}>And it can change</div>
+          Whoever holds the church key can widen this, narrow it, or remove you — at any time, without asking.
+        </div>
+        <button onClick={onClose} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 12, fontSize: 14.5 }}>Got it</button>
+      </div>
+    </div>
+  );
+}
+
+// ── WHAT A DELEGATED STEWARD MAY DO, SAID BEFORE THEY PRESS IT ─────────────────────────────────────────
+// A delegate used to see a near-identical console to the owner's: same tabs, same buttons, a small STEWARD
+// badge — and nothing anywhere saying what they may do. Zero owner-only controls were disabled, so every one
+// looked live and failed when pressed, and until 2026-07-28 most failed SILENTLY. The roadmap's own words:
+// "a delegate learns the boundaries by hitting them." Capabilities (2026-08-19) added a second class of the
+// same thing — whatever their church did not grant them — so saying it up front is now the whole point.
+//
+// TWO DIFFERENT REASONS, DELIBERATELY WORDED DIFFERENTLY. "Only the church key can do this" is true for
+// everyone for ever; "your church hasn't given you this" is true for you and your owner can change it. A
+// delegate who cannot tell them apart does not know whether to ask.
+//
+// AND IT FAILS OPEN. myStewardCaps() returns null when we hold no roster yet — a console that has not
+// reached the relay, or an unscoped steward — and null means "everything". Hiding real controls because a
+// connection is slow would be worse than showing one that the relay then honestly refuses.
+const STEW_CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+function stewCapState(cap) {
+  const S = window.Steward || {};
+  if (!S.actingChurch) return { allowed: true, owner: true, why: '' };          // the owner console: unrestricted
+  const caps = S.myStewardCaps ? S.myStewardCaps() : null;
+  if (caps === null || !Array.isArray(caps)) return { allowed: true, owner: false, why: '' };   // unscoped, or not known yet
+  if (caps.indexOf(cap) >= 0) return { allowed: true, owner: false, why: '' };
+  return { allowed: false, owner: false, why: 'Your church hasn’t given you ' + (STEW_CAP_LABEL[cap] || cap) + '.' };
+}
+// The panel a delegate meets instead of a screen they were not granted. It names who can change it, because
+// the useful next step is asking them — not staring at a locked page.
+function StewCapBlocked({ cap, note }) {
+  return (
+    <div style={{ padding: '28px 22px', maxWidth: 520 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <Icon name="lock" size={20} color="var(--clay-deep, #b4462f)" />
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>{STEW_CAP_LABEL[cap] || cap} isn’t yours to run</div>
+      </div>
+      <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+        You’re helping run this church as a steward, and this part hasn’t been given to you. Nothing is
+        broken and you haven’t done anything wrong.
+      </p>
+      <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
+        Whoever holds the church key can change that from <b>Settings → Delegated stewards</b>. {note || ''}
+      </p>
+    </div>
+  );
+}
+
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
@@ -853,13 +933,30 @@ function StewDashboard({ initial = 'overview' }) {
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
   const nav = React.useMemo(() => {
     const copy = NAV.slice();
+    // Mark rather than hide. A missing tab reads as a broken console ("where is Members?"); a locked one
+    // that explains itself reads as a church that has scoped you, which is the truth.
+    const capOf = { groups: 'content', rota: 'content', calendar: 'content', rooms: 'content',
+                    resources: 'content', members: 'members', meals: 'care', checkin: 'safeguarding' };
+    const mark = (n) => { const c = capOf[n.key]; if (!c) return n; const st = stewCapState(c); return st.allowed ? n : { ...n, locked: true, cap: c }; };
     const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
     if (checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
     if (finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
     if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
     if (mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
-    return copy;
+    return copy.map(mark);
   }, [finOn, mannaOn, mealsOn, checkinOn]);
+  // WHAT A DELEGATE IS TOLD WHEN THEY ARRIVE. Once per church, not a tour. Before this, the only way to
+  // learn the shape of the job was to press things: two of the most serious bugs found on 2026-07-28 were in
+  // delegated paths precisely because nobody goes there, and an agent in a simulation would report each
+  // refusal as a defect. Three facts, in the order they matter: what you can do, what you cannot, and that
+  // it can change without warning.
+  const _delegate = !!(window.Steward && window.Steward.actingChurch);
+  const _briefKey = 'trinityone.steward.delegatebrief.' + ((window.Steward && window.Steward.pubkey) || '');
+  const [brief, setBrief] = React.useState(() => {
+    if (!_delegate) return false;
+    try { return !localStorage.getItem(_briefKey); } catch (e) { return false; }
+  });
+  const closeBrief = () => { try { localStorage.setItem(_briefKey, '1'); } catch (e) {} setBrief(false); };
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
@@ -915,18 +1012,19 @@ function StewDashboard({ initial = 'overview' }) {
   // tab content + topbar actions, shared by both layouts
   const content = (
     <React.Fragment>
+      {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
       {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
-      {tab === 'groups' && <DashGroups />}
-      {tab === 'rota' && <DashRota onNewTeam={() => setAddingTeam(true)} />}
-      {tab === 'calendar' && <DashCalendar />}
-      {tab === 'rooms' && <DashRooms />}
-      {tab === 'resources' && <DashResources />}
-      {tab === 'members' && <DashMembers />}
-      {tab === 'checkin' && <DashCheckin />}
+      {tab === 'groups' && (stewCapState('content').allowed ? <DashGroups /> : <StewCapBlocked cap='content' />)}
+      {tab === 'rota' && (stewCapState('content').allowed ? <DashRota onNewTeam={() => setAddingTeam(true)} /> : <StewCapBlocked cap='content' />)}
+      {tab === 'calendar' && (stewCapState('content').allowed ? <DashCalendar /> : <StewCapBlocked cap='content' />)}
+      {tab === 'rooms' && (stewCapState('content').allowed ? <DashRooms /> : <StewCapBlocked cap='content' />)}
+      {tab === 'resources' && (stewCapState('content').allowed ? <DashResources /> : <StewCapBlocked cap='content' />)}
+      {tab === 'members' && (stewCapState('members').allowed ? <DashMembers /> : <StewCapBlocked cap='members' />)}
+      {tab === 'checkin' && (stewCapState('safeguarding').allowed ? <DashCheckin /> : <StewCapBlocked cap='safeguarding' />)}
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
-      {tab === 'meals' && <DashMeals />}
+      {tab === 'meals' && (stewCapState('care').allowed ? <DashMeals /> : <StewCapBlocked cap='care' />)}
       {tab === 'settings' && <DashSettings onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
@@ -966,6 +1064,7 @@ function StewDashboard({ initial = 'overview' }) {
                 return (
                   <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', whiteSpace: 'nowrap', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}>
                     <Icon name={n.ic} size={14} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
+                    {n.locked ? <Icon name="lock" size={11} color="var(--ink-3)" /> : null}
                   </button>
                 );
               })}
@@ -1004,6 +1103,7 @@ function StewDashboard({ initial = 'overview' }) {
               return (
                 <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
                   <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
+                  {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
                 </button>
               );
             })}
@@ -4361,6 +4461,29 @@ function DashNetworksPanel() {
 // those keys day-to-day church powers (NOT roster/blocklist/relay-policy) and revocation is instant. The
 // roster is owner-signed via Steward.setStewards; see STEWARD-ROSTER-DESIGN.md. Phase 2a: owner-side control.
 function DashStewardsPanel({ church }) {
+  // OWNER-ONLY, AND SAID SO RATHER THAN DISCOVERED. Only the church key may edit this roster — the relay
+  // enforces it (STEWARDS_D is signed by the church and nothing else is accepted), which is precisely what
+  // stops a rogue steward adding themselves or removing the owner. A delegate pressing these controls got a
+  // failed publish and no explanation. This is a permanent boundary, not a capability their church can grant,
+  // and the wording has to make that difference obvious or they will go and ask for the wrong thing.
+  if (window.Steward && window.Steward.actingChurch) {
+    return (
+      <div style={{ padding: '22px 20px', maxWidth: 520 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <Icon name="lock" size={20} color="var(--ink-3)" />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Only the church key can change who the stewards are</div>
+        </div>
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+          This is not something a church can grant to a steward — it is the boundary that makes delegating
+          safe. It means no steward can add themselves, promote themselves, or remove the person whose key
+          the church belongs to.
+        </p>
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
+          Ask whoever holds the church key. They can also change what you may do, and remove you, at any time.
+        </p>
+      </div>
+    );
+  }
   const stewards = window.useStewardStewards ? window.useStewardStewards() : [];   // hex pubkeys, owner-signed
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const stewardSet = new Set(stewards);
@@ -4384,7 +4507,10 @@ function DashStewardsPanel({ church }) {
   const capNames = (window.Steward.stewardCapNames && window.Steward.stewardCapNames()) || [];
   const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
   const CAP_SUB = {
-    finance: 'The church books, funds and statements',
+    // Honest about a real limit: the books are encrypted to the CHURCH key, which a delegated steward does
+    // not hold, so granting this today gives them permission at the relay and still no screen to open. Say
+    // it here rather than letting an owner grant it and both of them wonder why nothing appeared.
+    finance: 'The church books, funds and statements. Note: the books are encrypted to the church key, so a delegated steward cannot open them yet — this grants relay permission for when that path exists.',
     care: 'Care needs, the care team, safety checks',
     safeguarding: 'Clearances and photo decisions (the child and cleared-adult LISTS stay owner-only)',
     members: 'Admit people, join policy, re-seat someone who lost their words',
