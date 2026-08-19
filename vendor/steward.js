@@ -14524,6 +14524,19 @@ zoo`.split("\n");
   var RESEAT_D = "trinityone/reseat:";
   var _stewardCaps = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
+  var FINKEY_D = "trinityone/financekey:";
+  var _finRing = [];
+  var _finDocKeys = null;
+  var _finRev = 1;
+  var _finAt = 0;
+  var churchSkHeld = () => !actingChurch && !!churchSk && !!churchPub;
+  var _legacyBookKeyHex = () => {
+    try {
+      return churchSkHeld() ? _hex(getConversationKey(churchSk, churchPub)) : "";
+    } catch (e) {
+      return "";
+    }
+  };
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
   var PIN_D = "trinityone/pin:";
@@ -18584,47 +18597,154 @@ zoo`.split("\n");
     // module so sensitive donor PII + ledger never hit the relay in plaintext — only the church key (held
     // in Keykeeper on the steward's device) can read them. The finance module talks only to these
     // primitives, never to the raw key. ----
-    encSelf(obj) {
-      if (!churchSk || !churchPub) return null;
-      try {
-        return encrypt3(JSON.stringify(obj), getConversationKey(churchSk, churchPub));
-      } catch (e) {
-        return null;
+    // ── THE CHURCH BOOKS' KEY ────────────────────────────────────────────────────────────────────────────
+    // The books were sealed with nip44(churchSk, churchPub) — the church key talking to itself — so only a
+    // console holding the church key could read them. That is why Finance was hidden from delegated stewards
+    // altogether: under a delegate's key the writes are refused and the reads return nothing, and the module
+    // silently re-seeded an EMPTY book on reload. An owner could grant the finance capability and the treasurer
+    // would still see no Finance tab, with nothing anywhere explaining why.
+    //
+    // So the books get a key of their own, wrapped to each person who may read them — the same envelope this
+    // codebase already uses for care, names, media and groups. Owner-only to mint: a treasurer who could
+    // re-key the books could lock the church out of its own ledger.
+    //
+    // THE RING IS WHAT MAKES THIS MIGRATE WITHOUT A MIGRATION. The envelope carries [newKey, legacySelfKey],
+    // and the legacy key is exactly nip44(churchSk, churchPub) — which only the owner can derive, and which
+    // every existing entry is already sealed with. So a delegate handed the ring can read the whole history
+    // from before they existed, and nothing has to be re-encrypted or re-published. The journal is
+    // append-only and relay-sequenced; rewriting it to migrate would be the worst possible answer.
+    //
+    // Sharing that derived key shares the books and nothing else: encSelf/decSelf are used by Finance (and the
+    // pilot-locked Manna module) and by nothing else in the product.
+    financeKeyRing() {
+      return _finRing.slice();
+    },
+    subscribeFinanceKey(cb) {
+      const cp = actingChurch || pub;
+      if (!cp) {
+        cb && cb([]);
+        return () => {
+        };
       }
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [FINKEY_D + cp] }], {
+        onevent(e) {
+          if (e.pubkey !== cp) return;
+          if (_authFuture(e)) return;
+          if ((e.created_at || 0) < _finAt) return;
+          _finAt = e.created_at || 0;
+          try {
+            const env = JSON.parse(e.content || "{}");
+            _finDocKeys = env.keys || null;
+            _finRev = env.rev || 1;
+            const mine = env.keys && env.keys[churchPub];
+            if (mine) {
+              const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
+              let ring = null;
+              try {
+                const pj = JSON.parse(plain);
+                if (Array.isArray(pj)) ring = pj.filter((x) => typeof x === "string" && x);
+              } catch (x) {
+              }
+              _finRing = ring && ring.length ? ring : [plain];
+            } else if (!churchSkHeld()) {
+              _finRing = [];
+            }
+          } catch (x) {
+          }
+          cb && cb(_finRing.slice());
+        },
+        oneose() {
+          cb && cb(_finRing.slice());
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // OWNER-ONLY. Wrap the books' key to the church and to every steward the roster gives `finance` to —
+    // which, for an unscoped steward, is all of them, exactly as it is everywhere else.
+    async ensureFinanceKeyFor(stewardPubs, caps) {
+      if (!churchSkHeld() || actingChurch) return false;
+      if (!_isRelayAuthed()) return false;
+      const cp = pub;
+      const legacy = _legacyBookKeyHex();
+      if (!legacy) return false;
+      if (!_finRing.length) _finRing = [_hex(crypto.getRandomValues(new Uint8Array(32))), legacy];
+      else if (_finRing.indexOf(legacy) < 0) _finRing = [..._finRing, legacy];
+      const allowed = (p) => {
+        const c = caps && caps[p];
+        return !Array.isArray(c) || c.indexOf("finance") >= 0;
+      };
+      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+      const have = _finDocKeys || {};
+      if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) return false;
+      const ring = JSON.stringify(_finRing);
+      const keys = await _sealEach(ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FINKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
+      if (ok !== false) _finDocKeys = keys;
+      return ok;
+    },
+    encSelf(obj) {
+      try {
+        if (_finRing.length) return encrypt3(JSON.stringify(obj), _unhex(_finRing[0]));
+        if (churchSkHeld()) return encrypt3(JSON.stringify(obj), getConversationKey(churchSk, churchPub));
+      } catch (e) {
+      }
+      return null;
     },
     decSelf(str) {
-      if (!churchSk || !churchPub || !str) return null;
-      try {
-        return JSON.parse(decrypt3(str, getConversationKey(churchSk, churchPub)));
-      } catch (e) {
-        return null;
+      if (!str) return null;
+      for (const k of _finRing) {
+        try {
+          return JSON.parse(decrypt3(str, _unhex(k)));
+        } catch (e) {
+        }
       }
+      if (churchSkHeld()) {
+        try {
+          return JSON.parse(decrypt3(str, getConversationKey(churchSk, churchPub)));
+        } catch (e) {
+        }
+      }
+      return null;
     },
-    // publish an encrypted addressable church doc (kind-30078, signed by the church key)
+    // Publish an encrypted addressable church doc (kind-30078). Signed by WHOEVER IS ACTING — the church key
+    // for an owner, the steward's own key for a delegate — and feChurch() stamps the ['church',<cp>] tag that
+    // lets the relay resolve which church a steward is writing for. It used to sign with churchSk
+    // unconditionally, which in delegated mode is the steward's own key with no church tag: every write
+    // refused, and the module then re-seeded an empty book from the empty read. (audit 2026-07-06 #3)
     encPublish(dtag, obj) {
-      if (!churchSk) return Promise.resolve(null);
+      if (!sk) return Promise.resolve(null);
       const content = window.Steward.encSelf(obj);
       if (content == null) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", "1"]], content }, churchSk));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", "1"]], content }));
     },
     encRemove(dtag) {
-      if (!churchSk) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["deleted", "1"]], content: "" }, churchSk));
+      if (!sk) return Promise.resolve(null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     // subscribe to all encrypted church docs whose d-tag starts with `prefix`; decrypts each and emits a
     // live array of { id (the d-tag suffix after prefix), ...decrypted, ts }. Returns an unsubscribe fn.
     encSubscribe(prefix, cb) {
-      if (!churchPub) {
+      const cp = actingChurch || pub;
+      if (!cp) {
         cb([]);
         return () => {
         };
       }
       const byId = /* @__PURE__ */ new Map();
       const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [churchPub], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [
+        { kinds: [30078], authors: [cp], "#t": [NET] },
+        { kinds: [30078], "#church": [cp], "#t": [NET] }
+      ], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(prefix)) return;
+          if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byId.delete(id);

@@ -918,6 +918,7 @@ function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings sub-tab (e.g. relay → network)
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action within that sub-tab (e.g. open the Set-PIN dialog)
+  const [, setTick] = React.useState(0);   // the books' key arriving is not React state — nudge a re-render
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
@@ -927,7 +928,10 @@ function StewDashboard({ initial = 'overview' }) {
   // signs/encrypts with the wrong key and carries no ['church'] tag, so the relay rejects every write and
   // encSubscribe returns nothing → the book silently re-seeds empty on reload (data loss). Hide it until
   // the delegated-steward finance path exists. (audit 2026-07-06 #3)
-  const finOn = !!window.DashFinance && !(window.Steward && window.Steward.actingChurch);
+  // Finance is no longer owner-only. The books have a key of their own now, wrapped to the church and to
+  // every steward granted `finance` (src/steward.src.js), so a treasurer can read the whole history and
+  // write to it. A delegate who was NOT granted it still sees the padlock rather than a missing tab.
+  const finOn = !!window.DashFinance && stewCapState('finance').allowed;
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
@@ -959,6 +963,23 @@ function StewDashboard({ initial = 'overview' }) {
   const closeBrief = () => { try { localStorage.setItem(_briefKey, '1'); } catch (e) {} setBrief(false); };
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
+  // KEEP THE BOOKS' KEY IN STEP WITH THE ROSTER. Only the owner can mint or rotate it, and it must be
+  // rewrapped whenever the finance-capable set changes — add a treasurer and they need the ring; take the
+  // capability away and the next rotation should stop including them.
+  const _stewardsForKey = window.useStewardStewards ? window.useStewardStewards() : [];
+  React.useEffect(() => {
+    const S = window.Steward;
+    if (!S || S.actingChurch || !S.ensureFinanceKeyFor) return;      // owner console only
+    const caps = (S.stewardCaps && S.stewardCaps()) || {};
+    const t = setTimeout(() => { try { S.ensureFinanceKeyFor(_stewardsForKey, caps); } catch (e) {} }, 1200);
+    return () => clearTimeout(t);
+  }, [_stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})]);
+  // every console watches the envelope: the owner to notice its own, a delegate to receive the ring
+  React.useEffect(() => {
+    const S = window.Steward;
+    if (!S || !S.subscribeFinanceKey) return;
+    return S.subscribeFinanceKey(() => setTick(t => t + 1));
+  }, []);
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
   React.useEffect(() => { if (church.name && window.Steward.selfRegister) window.Steward.selfRegister(church.name).catch(() => {}); }, [church.name]);
   const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)

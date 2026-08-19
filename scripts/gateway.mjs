@@ -387,6 +387,7 @@ const UNAVAIL_D = D.UNAVAIL;     // a member's unavailable dates for the rota �
 const NAMEKEY_D = D.NAMEKEY;     // per-church name key envelope, wrapped per member — church/steward-signed
 const NAME_D = D.NAME;           // a MEMBER's own display name for one church, sealed under that key
 const CAREKEY_D = D.CAREKEY;     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
+const FINANCEKEY_D = D.FINANCEKEY;   // the church books' key, wrapped to the church + every finance-capable steward
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
 const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
@@ -950,7 +951,7 @@ const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church
 //   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
 // Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
 const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
-  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
+  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, FINANCEKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
 // not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
@@ -1599,6 +1600,10 @@ function accept(e) {
     // The care-need sealing that consumes this is deferred (see care/seal-needs-wip: the key lifecycle needs
     // rework before it is safe to ship). The namespace is reserved and gated NOW so no member can squat the
     // d-tag in the meantime, and CP_SUFFIXED_D already read-gates it to effective members.
+    // THE CHURCH BOOKS' KEY — owner-only, deliberately. A steward with the finance capability may read and
+    // write the books, but only the church key mints or rotates the envelope that hands that access out:
+    // otherwise a treasurer could re-key the books to themselves and lock the church out of its own ledger.
+    if (d.startsWith(FINANCEKEY_D)) { const cp = toHexPub(d.slice(FINANCEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && e.pubkey === cp; }
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
     // the per-church NAME key envelope — same authority as the care key.
     if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members')); }
