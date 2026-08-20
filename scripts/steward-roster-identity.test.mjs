@@ -44,7 +44,7 @@ function loadSetStewards(existingCaps, existingNames) {
   const published = [];
   const fn = lift('setStewards(pubkeys, caps, names) {', 'setStewards', {
     _requireTrustedView: () => {}, sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
-    _stewardCaps: existingCaps, _stewardNames: existingNames,
+    _stewardCaps: existingCaps, _stewardNames: existingNames, _stewardSince: {},
     now: () => 1787150000, STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
     finalizeEvent: (t) => t, publish: (e) => { published.push(e); return Promise.resolve(e); },
   });
@@ -71,7 +71,10 @@ test('and it survives an unrelated edit, like removing somebody else', async () 
 test('a church that has named nobody still writes the plain old shape', async () => {
   const { fn, published } = loadSetStewards({}, {});
   await fn([TOM]);
-  assert.deepEqual(docOf(published[0]), { pubkeys: [TOM] }, 'an empty names object is being written for no reason');
+  // `at` rides on every roster now (the record of when access was granted); `names` must not.
+  const doc = docOf(published[0]);
+  assert.deepEqual(doc.pubkeys, [TOM]);
+  assert.equal(doc.names, undefined, 'an empty names object is being written for no reason');
 });
 
 test('the console asks for the name, and refuses to add without one', () => {

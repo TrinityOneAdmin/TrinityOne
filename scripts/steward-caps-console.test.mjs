@@ -40,7 +40,7 @@ function loadSetStewards(existingCaps) {
   const fn = lift('setStewards(pubkeys, caps, names) {', 'setStewards', {
     _requireTrustedView: () => {},
     sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
-    _stewardCaps: existingCaps, _stewardNames: {},
+    _stewardCaps: existingCaps, _stewardNames: {}, _stewardSince: {},
     now: () => 1787150000,
     STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
     finalizeEvent: (t) => t, finalizeEvent2: (t) => t,   // the bundler renames it; accept both
@@ -70,7 +70,11 @@ test('a steward who is removed takes their capabilities with them', async () => 
 test('an unscoped church still publishes the old, plain shape', async () => {
   const { fn, published } = loadSetStewards({});
   await fn([PLAIN]);
-  assert.deepEqual(docOf(published[0]), { pubkeys: [PLAIN] },
+  // `at` is always present now — it is the record of WHEN each steward was given access, which the owner
+  // asked for after finding that nothing anywhere said. caps stays absent for a church that scoped nobody.
+  const doc = docOf(published[0]);
+  assert.deepEqual(doc.pubkeys, [PLAIN]);
+  assert.equal(doc.caps, undefined,
     'a church that has never scoped anyone now writes an empty caps object, which is noise in every roster ' +
     'in the field and a needless difference for older relays to parse');
 });

@@ -275,6 +275,10 @@ let _stewardCaps = {};
 // own words, 2026-08-19: "a mis-pasted code is a stranger with everything and I'd never spot it." So the
 // roster carries the owner's own label for each key, and the row leads with it.
 let _stewardNames = {};
+// WHEN each steward was given access. "Nothing records what I did" was the owner's complaint after handing
+// three people the run of a church, and they were right: the roster said who, never when. Same terms as the
+// rest — carried forward through unrelated edits, pruned with the steward it belongs to.
+let _stewardSince = {};
 const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content'];
 const FINKEY_D = 'trinityone/financekey:';   // the church books' key, wrapped per reader (owner-signed)
 let _finRing = [];        // hex keys for the books, newest first; the last entry is the legacy self-key
@@ -4388,7 +4392,7 @@ window.Steward = {
         if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY (this IS the roster; only the church key edits it)
         // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
         if (e.created_at < latest) return; latest = e.created_at;
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; _stewardNames = {}; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardSince = {}; }
         else {
           try {
             const doc = JSON.parse(e.content) || {};
@@ -4398,7 +4402,8 @@ window.Steward = {
             // at all and silently restore full authority to everyone the church had scoped.
             _stewardCaps = (doc.caps && typeof doc.caps === 'object') ? doc.caps : {};
             _stewardNames = (doc.names && typeof doc.names === 'object') ? doc.names : {};
-          } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; }
+            _stewardSince = (doc.at && typeof doc.at === 'object') ? doc.at : {};
+          } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardSince = {}; }
         }
         // Adopt it HERE, not only via the UI's setCareRoster round-trip. The safeguarding back-fill needs to
         // know who the member honours, and it does not wait for React: the roster hook starts at [] and only
@@ -4440,15 +4445,21 @@ window.Steward = {
     const nextNames = {};
     const nsrc = (names && typeof names === 'object') ? names : _stewardNames;
     for (const p of list) { const v = nsrc[p]; if (typeof v === 'string' && v.trim()) nextNames[p] = v.trim().slice(0, 60); }
+    // Stamp anyone who is new to the roster, and keep the stamp everyone else already has.
+    const nowS = now();
+    const nextAt = {};
+    for (const p of list) nextAt[p] = _stewardSince[p] || nowS;
     const doc = { pubkeys: list };
     if (Object.keys(next).length) doc.caps = next;
     if (Object.keys(nextNames).length) doc.names = nextNames;
+    if (Object.keys(nextAt).length) doc.at = nextAt;
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).
   stewardCaps() { return { ..._stewardCaps }; },
   stewardLabels() { return { ..._stewardNames }; },
+  stewardSince() { return { ..._stewardSince }; },
   stewardCapNames() { return STEWARD_CAPS.slice(); },
   // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
   // not on the roster, so they are unrestricted by construction.
@@ -5575,6 +5586,13 @@ window.Steward = {
     const nm = ownIsLoopback() ? selfRelayName() : '';
     return base + '/?follow=' + np + '&relay=' + encodeURIComponent(relay) + (nm ? '&relayname=' + encodeURIComponent(nm) : '');
   },
+  // IS THE LINK ACTUALLY REACHABLE BY ANYONE ELSE? joinUrl() carries the church's relay, and when the relay
+  // is this machine's own loopback address and "go public" has not been turned on, the only address it can
+  // carry is ws://127.0.0.1 — which resolves, on a member's phone, to that member's phone. The link looks
+  // perfectly ordinary and works when the steward tests it themselves. Measured in the round of 2026-08-19:
+  // a steward handed out exactly that link from the invite poster. The console must say so rather than let
+  // a church print it on a card.
+  joinLinkIsPrivate() { return ownIsLoopback() && !selfPublicRelay() && !selfRelayName(); },
   // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
   joinCode() { return window.Steward.npub || ''; },
   // a real QR encoding the join URL; scan with a phone camera to open the app already following.

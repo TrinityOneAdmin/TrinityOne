@@ -601,7 +601,28 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     next();
   };
   const saveGroups = async () => { const chosen = STARTERS.filter(s => picks.has(s.id)); if (chosen.length) { setBusy(true); for (const g of chosen) await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); setBusy(false); } next(); };
-  const saveTeam = async () => { const t = teamName.trim(); if (t) { setBusy(true); await Promise.resolve(window.Steward.publishGroup({ name: t, kind: 'team', sub: 'Serving team' })); setBusy(false); } next(); };
+  // A TEAM WITH NO ROLES CANNOT HOLD A ROTA. This step took a name and published a group, and nothing else:
+  // the steward reached the Rota tab, found their own Welcome Team sitting there empty, and could not put
+  // anybody on a Sunday until they had typed the roles in by hand. Measured in the round of 2026-08-19 —
+  // "the wizard's own Welcome Team arrived with zero roles, so the rota was unusable". The presets that the
+  // full New Team dialog offers have existed all along; match the name against them and seed the same roles,
+  // falling back to a plain set so no team is ever born empty.
+  const seedRolesFor = (name) => {
+    const n = String(name || '').toLowerCase();
+    const hit = (window.TEAM_PRESETS || []).find(p2 => n.indexOf(String(p2.name || '').toLowerCase()) >= 0);
+    const roles = hit ? String(hit.roles || '').split('\n') : ['Lead', 'Helper', 'Helper'];
+    return roles.map(r => r.trim()).filter(Boolean);
+  };
+  const saveTeam = async () => {
+    const t = teamName.trim();
+    if (t) {
+      setBusy(true);
+      const g = await Promise.resolve(window.Steward.publishGroup({ name: t, kind: 'team', sub: 'Serving team' }));
+      try { if (g && g.id && window.Steward.publishRoster) await Promise.resolve(window.Steward.publishRoster(g.id, { roles: seedRolesFor(t), people: [] })); } catch (e) {}
+      setBusy(false);
+    }
+    next();
+  };
   // Step 4 — the church's weekly rhythm. This step did not exist: the ONLY wizard that pre-filled Sunday
   // Service / Midweek was StewWizard, which renders solely with ?setup=1 and no key, so a real new church
   // finished setup with an EMPTY calendar and no hint that meetings were a thing. Reported by the owner
@@ -1550,6 +1571,12 @@ function JoinCard({ qrSize = 92, center = false }) {
   const [copied, setCopied] = React.useState('');
   const [poster, setPoster] = React.useState(false);
   const doCopy = (what, text) => { copyText(text); setCopied(what); setTimeout(() => setCopied(''), 1400); };
+  // A LINK THAT ONLY WORKS ON THIS MACHINE MUST SAY SO. When the church's relay is this box's own loopback
+  // address and "go public" is off, the link carries ws://127.0.0.1 — which on a member's phone means that
+  // member's phone. It looks ordinary, and it works perfectly when the steward tests it themselves. A
+  // steward handed exactly that out from the invite poster in the round of 2026-08-19. The short code still
+  // works, because a member types it into their own app and their app already knows where to look.
+  const linkPrivate = !!(window.Steward.joinLinkIsPrivate && window.Steward.joinLinkIsPrivate());
   const shareLink = async () => {
     if (navigator.share) { try { await navigator.share({ title: 'Join on TrinityOne', text: 'Join ' + (church.name || 'our church') + ' on TrinityOne', url }); return; } catch (e) {} }
     doCopy('link', url);
@@ -1571,6 +1598,12 @@ function JoinCard({ qrSize = 92, center = false }) {
   if (gate.blocking) return <GoPublicPanel gate={gate} />;
   return (
     <React.Fragment>
+      {linkPrivate ? <div role="alert" style={{ padding: '10px 12px', borderRadius: 11, marginBottom: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+        <b>This link only works on this computer.</b> Your church’s relay is running here and hasn’t been
+        made reachable from outside yet, so the address inside the link points at whoever opens it. Hand out
+        the short code below instead — or turn on “go public” for your relay in Settings → Network &amp; relays,
+        and this link will work everywhere.
+      </div> : null}
       <GoPublicNote gate={gate} />
     <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 16, alignItems: 'center', textAlign: center ? 'center' : 'left' }}>
       <div style={{ width: qrSize + 18, height: qrSize + 18, borderRadius: 14, background: '#fff', boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 9, boxSizing: 'border-box' }}>
@@ -4000,6 +4033,31 @@ function DashMembers() {
   };
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* EVERYONE WHO HOLDS THIS CHURCH, ON THE SCREEN CALLED MEMBERS. An owner who had just given three
+          people the run of the church read "No members yet" here — because a delegated steward is not a
+          member, and nothing anywhere listed them together. Their words: there is no single screen showing
+          everyone with access. This is that screen; the roster's own panel stays the place to change it. */}
+      {stewardRoster.length ? (
+        <div style={{ padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: 'color-mix(in oklab, var(--gold, #b58a2b) 9%, var(--surface))', border: '1px solid var(--line)' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 7 }}>PEOPLE WHO HELP RUN THIS CHURCH · {stewardRoster.length}</div>
+          {stewardRoster.map(pk => {
+            const S = window.Steward;
+            const nm = ((S.stewardLabels && S.stewardLabels()) || {})[pk] || (S.stewardName ? S.stewardName(pk) : '') || 'Steward';
+            const cp = ((S.stewardCaps && S.stewardCaps()) || {})[pk];
+            const what = !Array.isArray(cp) ? 'everything' : (cp.length ? cp.join(', ') : 'nothing yet');
+            return (
+              <div key={pk} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13, color: 'var(--ink-2)', padding: '2px 0' }}>
+                <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{nm}</span>
+                <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{what}</span>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
+            They sign in with their own keys, not yours. Change what they may do, or remove them, under
+            Settings → Security → Delegated stewards.
+          </div>
+        </div>
+      ) : null}
       {/* A rotation that did not land. Rendered at the top of the panel and NOT tied to the confirm dialog,
           which has already closed by the time the publish resolves — the same mistake that made the safety
           check's warning unreachable three times. It stays until dismissed: the steward believes the person
@@ -4489,9 +4547,16 @@ function DashStewardsPanel({ church }) {
   const [approving, setApproving] = React.useState(null);   // pubkey awaiting PIN confirm
   const [scoping, setScoping] = React.useState(null);      // pubkey whose capabilities are being edited
   const [newLabel, setNewLabel] = React.useState('');      // what the owner calls the person they are adding
+  // WHAT THEY WILL BE ABLE TO DO, chosen BEFORE they are added. "Everything" used to be the implicit default
+  // with no confirmation of any kind: one click and a person held Care and Finance — the safeguarding notes
+  // and the money. The owner's verdict was that they would rather have no help at all. So nothing is granted
+  // unless it is ticked here, and the button says what it is about to do.
+  const [newCaps, setNewCaps] = React.useState([]);
   // The owner's own labels for each steward. Without these the rows read "Gentle Cedar 36" — a name the app
   // invented — and an owner who has just pasted three codes cannot tell which row is which person.
   const labels = (window.Steward.stewardLabels && window.Steward.stewardLabels()) || {};
+  const since = (window.Steward.stewardSince && window.Steward.stewardSince()) || {};
+  const sinceText = (pk) => { const t = since[pk]; if (!t) return ''; try { return new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); } catch (e) { return ''; } };
   // WHAT EACH STEWARD MAY DO. Absent from the map = unscoped = everything, which is what every roster
   // written before this feature means and what a church that never opens this panel keeps.
   const caps = (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {};
@@ -4515,10 +4580,13 @@ function DashStewardsPanel({ church }) {
   const [approvePin, setApprovePin] = React.useState('');
   const [approveErr, setApproveErr] = React.useState('');
   const hasPin = !!(window.Steward.hasPinLock && window.Steward.hasPinLock());
-  const add = (pk, label) => { setAdding(false); setScanning(false); setQ(''); setCode(''); setAddErr(''); setApproving(null);
+  const add = (pk, label, grants) => { setAdding(false); setScanning(false); setQ(''); setCode(''); setAddErr(''); setApproving(null);
     const nextNames = { ...labels }; if (label && label.trim()) nextNames[pk] = label.trim();
-    setNewLabel('');
-    window.Steward.setStewards([...stewards, pk], undefined, nextNames); };
+    // An explicit grant, always — including the explicit empty one. Leaving them out of `caps` would mean
+    // "unscoped", which is the everything-by-accident this exists to remove.
+    const nextCaps = { ...caps, [pk]: Array.isArray(grants) ? grants.slice() : [] };
+    setNewLabel(''); setNewCaps([]);
+    window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); };
   // approving a steward request is a sensitive action → step up with the console PIN when one is set
   const startApprove = (pk) => { if (hasPin) { setApproving(pk); setApprovePin(''); setApproveErr(''); } else { add(pk); } };
   const confirmApprove = async () => {
@@ -4539,7 +4607,7 @@ function DashStewardsPanel({ church }) {
     // and the owner cannot tell one steward from another — which is how a mis-pasted code becomes a stranger
     // holding the church, unnoticed. Asking for it here also gives them a moment to look at the code again.
     if (!newLabel.trim()) { setAddErr('Give them a name first — you’ll need it to tell your stewards apart.'); return; }
-    add(pk, newLabel);
+    add(pk, newLabel, newCaps);
   };
   const candidates = members.filter(m => m.pubkey && m.pubkey !== ownerPub && !stewardSet.has(m.pubkey)
     && (!q || (m.name || '').toLowerCase().includes(q.toLowerCase()) || (m.npub || '').includes(q)));
@@ -4590,6 +4658,7 @@ function DashStewardsPanel({ church }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.npub || ''}>{m.npub ? shortNpub(m.npub) : (pk.slice(0, 10) + '…' + pk.slice(-4))}</div>
+          {sinceText(pk) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>helping since {sinceText(pk)}</div> : null}
         </div>
         {confirmRemove === pk ? null : <button onClick={() => setScoping(scoping === pk ? null : pk)} title="What this steward may do" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginRight: 6, whiteSpace: 'nowrap' }}>{Array.isArray(caps[pk]) ? (caps[pk].length ? caps[pk].length + ' of ' + capNames.length : 'nothing') : 'everything'}</button>}
         {confirmRemove === pk
@@ -4657,8 +4726,23 @@ function DashStewardsPanel({ church }) {
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Or ask them to open the <b>Steward app</b> → <b>Become a steward</b> and read you their code (or show its QR).</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
               <input value={newLabel} onChange={e => { setNewLabel(e.target.value); setAddErr(''); }} placeholder="Their name, as you know them…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 8 }} />
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink-3)', letterSpacing: '.4px', margin: '4px 0 6px' }}>WHAT MAY THEY DO?</div>
+              <div style={{ marginBottom: 8 }}>
+                {capNames.map(c => (
+                  <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '5px 2px', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={newCaps.indexOf(c) >= 0} onChange={() => { setAddErr(''); setNewCaps(v => v.indexOf(c) >= 0 ? v.filter(x => x !== c) : [...v, c]); }} style={{ marginTop: 3 }} />
+                    <span>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{CAP_LABEL[c] || c}</span>
+                      <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.4 }}>{CAP_SUB[c] || ''}</span>
+                    </span>
+                  </label>
+                ))}
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 4 }}>
+                  You can change this at any time, and remove them entirely.
+                </div>
+              </div>
               <input value={code} onChange={e => { setCode(e.target.value); setAddErr(''); }} autoFocus placeholder="Paste their steward code / npub…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
-              <button onClick={() => addByCode(code)} disabled={!code.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13, opacity: code.trim() ? 1 : 0.5, flexShrink: 0 }}>Add</button>
+              <button onClick={() => addByCode(code)} disabled={!code.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13, opacity: code.trim() ? 1 : 0.5, flexShrink: 0 }}>{'Add' + (newCaps.length === capNames.length ? ' with everything' : newCaps.length ? ' with ' + newCaps.map(c => CAP_LABEL[c] || c).join(', ') : ' with no access yet')}</button>
             </div>
             {(() => { const pv = code.trim() && window.Steward.stewardCodeToPub ? window.Steward.stewardCodeToPub(code) : null; return pv ? <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 700, margin: '2px 0 8px' }}>Adds: {niceName(pv)} — check this matches what they told you.</div> : null; })()}
             {(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ? <button onClick={() => { setAddErr(''); setScanning(true); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 12.5 }}><Icon name="qr" size={14} color="currentColor" /> Scan their QR</button> : null}
@@ -4670,7 +4754,7 @@ function DashStewardsPanel({ church }) {
               <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search members…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '9px 12px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 8 }} />
               <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {candidates.slice(0, 40).map(m => (
-                  <button key={m.pubkey} onClick={() => add(m.pubkey)} title="Add this member as a steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                  <button key={m.pubkey} onClick={() => { if (!newLabel.trim()) { setAddErr('Give them a name first.'); return; } add(m.pubkey, newLabel, newCaps); }} title="Add this member as a steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                     <SkBadge initials={(m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} pubkey={m.pubkey} size={30} radius={9} accent={SK_TINT[m.name ? 'gold' : 'sage'].fg} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || 'Anonymous'}</div>

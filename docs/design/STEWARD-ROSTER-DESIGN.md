@@ -31,7 +31,9 @@ kind: 30078
 d:    trinityone/stewards:<churchpub>           # one roster per church, owner-signed
 content: {
   "pubkeys": ["<hex32>", "<hex32>", …],            # the current stewards (latest event wins)
-  "caps":    { "<hex32>": ["finance", "care"] }    # OPTIONAL — what each may do (2026-08-19)
+  "caps":    { "<hex32>": ["finance", "care"] },   # OPTIONAL — what each may do (2026-08-19)
+  "names":   { "<hex32>": "Tom Ferris" },          # OPTIONAL — what the OWNER calls them (2026-08-20)
+  "at":      { "<hex32>": 1787200000 }             # when access was granted (2026-08-20)
 }
 ```
 
@@ -117,4 +119,20 @@ rogue steward is fully recoverable by the owner re-signing the roster.
 | **2** | Steward app: manage-stewards screen + author-as-steward + roster-aware attribution | `src/steward.src.js`, steward UI ✅ |
 | **2b** | Per-steward capabilities: relay enforcement + owner-side editor | `gateway.mjs`, `stew-dashboard.jsx` ✅ 2026-08-19 |
 | **2c** | Delegate-side honesty: un-granted controls unavailable *with a reason*, orientation on arrival | steward UI ✅ 2026-08-19 |
+| **2d** | Owner-side legibility: the owner's own names, a grant date, capabilities chosen AT ADD TIME (never "everything" by omission), and everyone-with-access listed on Members | steward UI ✅ 2026-08-20 |
+
+### Why `names` exists (2026-08-20)
+
+The console derives a friendly name from each key — "Gentle Cedar 36" — which is stable, unguessable, and not
+the name the owner typed. An owner who had just added three people by pasting codes could only tell the rows
+apart by the order they added them: *"a mis-pasted code is a stranger with everything and I'd never spot it."*
+These are the people who can read the safeguarding notes and the money. The invented name is now a fallback,
+never the identity, and a steward cannot be added without the owner naming them.
+
+### Why capabilities are chosen at ADD time
+
+"Everything" used to be the implicit default, granted by one click with no confirmation. The owner's verdict:
+*"On a real Sunday my choice is three over-powered stewards or no help at all; I'd pick no help."* Adding now
+asks what they may do and grants an explicit list — including the explicit empty one, because leaving someone
+out of `caps` means unscoped, which is the everything-by-accident this removes.
 | **3** | Owner handover with lock-out (key rotation / Keykeeper) | ties into `KEYKEEPER-DESIGN.md` |

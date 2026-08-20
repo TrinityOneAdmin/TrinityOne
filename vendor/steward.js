@@ -14524,6 +14524,7 @@ zoo`.split("\n");
   var RESEAT_D = "trinityone/reseat:";
   var _stewardCaps = {};
   var _stewardNames = {};
+  var _stewardSince = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
   var FINKEY_D = "trinityone/financekey:";
   var _finRing = [];
@@ -18552,16 +18553,19 @@ zoo`.split("\n");
             cur = [];
             _stewardCaps = {};
             _stewardNames = {};
+            _stewardSince = {};
           } else {
             try {
               const doc = JSON.parse(e.content) || {};
               cur = doc.pubkeys || [];
               _stewardCaps = doc.caps && typeof doc.caps === "object" ? doc.caps : {};
               _stewardNames = doc.names && typeof doc.names === "object" ? doc.names : {};
+              _stewardSince = doc.at && typeof doc.at === "object" ? doc.at : {};
             } catch {
               cur = [];
               _stewardCaps = {};
               _stewardNames = {};
+              _stewardSince = {};
             }
           }
           _careRoster = new Set(cur.filter(Boolean));
@@ -18596,9 +18600,13 @@ zoo`.split("\n");
         const v = nsrc[p];
         if (typeof v === "string" && v.trim()) nextNames[p] = v.trim().slice(0, 60);
       }
+      const nowS = now();
+      const nextAt = {};
+      for (const p of list) nextAt[p] = _stewardSince[p] || nowS;
       const doc = { pubkeys: list };
       if (Object.keys(next).length) doc.caps = next;
       if (Object.keys(nextNames).length) doc.names = nextNames;
+      if (Object.keys(nextAt).length) doc.at = nextAt;
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
@@ -18608,6 +18616,9 @@ zoo`.split("\n");
     },
     stewardLabels() {
       return { ..._stewardNames };
+    },
+    stewardSince() {
+      return { ..._stewardSince };
     },
     stewardCapNames() {
       return STEWARD_CAPS.slice();
@@ -20288,6 +20299,15 @@ zoo`.split("\n");
       const relay = ownIsLoopback() && selfPublicRelay() ? selfPublicRelay() : ownRelay();
       const nm = ownIsLoopback() ? selfRelayName() : "";
       return base + "/?follow=" + np + "&relay=" + encodeURIComponent(relay) + (nm ? "&relayname=" + encodeURIComponent(nm) : "");
+    },
+    // IS THE LINK ACTUALLY REACHABLE BY ANYONE ELSE? joinUrl() carries the church's relay, and when the relay
+    // is this machine's own loopback address and "go public" has not been turned on, the only address it can
+    // carry is ws://127.0.0.1 — which resolves, on a member's phone, to that member's phone. The link looks
+    // perfectly ordinary and works when the steward tests it themselves. Measured in the round of 2026-08-19:
+    // a steward handed out exactly that link from the invite poster. The console must say so rather than let
+    // a church print it on a card.
+    joinLinkIsPrivate() {
+      return ownIsLoopback() && !selfPublicRelay() && !selfRelayName();
     },
     // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
     joinCode() {
