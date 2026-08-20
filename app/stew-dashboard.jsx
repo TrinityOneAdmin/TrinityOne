@@ -4724,24 +4724,26 @@ function DashStewardsPanel({ church }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 8px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>or add by their code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
             {/* alternative: add by the steward's OWN code (from their Steward app) */}
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Or ask them to open the <b>Steward app</b> → <b>Become a steward</b> and read you their code (or show its QR).</div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-              <input value={newLabel} onChange={e => { setNewLabel(e.target.value); setAddErr(''); }} placeholder="Their name, as you know them…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 8 }} />
-              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink-3)', letterSpacing: '.4px', margin: '4px 0 6px' }}>WHAT MAY THEY DO?</div>
-              <div style={{ marginBottom: 8 }}>
-                {capNames.map(c => (
-                  <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '5px 2px', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={newCaps.indexOf(c) >= 0} onChange={() => { setAddErr(''); setNewCaps(v => v.indexOf(c) >= 0 ? v.filter(x => x !== c) : [...v, c]); }} style={{ marginTop: 3 }} />
-                    <span>
-                      <span style={{ fontWeight: 700, fontSize: 13 }}>{CAP_LABEL[c] || c}</span>
-                      <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.4 }}>{CAP_SUB[c] || ''}</span>
-                    </span>
-                  </label>
-                ))}
-                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 4 }}>
-                  You can change this at any time, and remove them entirely.
-                </div>
+            <input value={newLabel} onChange={e => { setNewLabel(e.target.value); setAddErr(''); }} placeholder="Their name, as you know them…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 8 }} />
+            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink-3)', letterSpacing: '.4px', margin: '4px 0 6px' }}>WHAT MAY THEY DO?</div>
+            <div style={{ marginBottom: 8 }}>
+              {capNames.map(c => (
+                <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '5px 2px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={newCaps.indexOf(c) >= 0} onChange={() => { setAddErr(''); setNewCaps(v => v.indexOf(c) >= 0 ? v.filter(x => x !== c) : [...v, c]); }} style={{ marginTop: 3 }} />
+                  <span>
+                    <span style={{ fontWeight: 700, fontSize: 13 }}>{CAP_LABEL[c] || c}</span>
+                    <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.4 }}>{CAP_SUB[c] || ''}</span>
+                  </span>
+                </label>
+              ))}
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 4 }}>
+                You can change this at any time, and remove them entirely.
               </div>
-              <input value={code} onChange={e => { setCode(e.target.value); setAddErr(''); }} autoFocus placeholder="Paste their steward code / npub…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
+            </div>
+            {/* wrap, and give the code box a floor: the button's label grows with the powers chosen
+                ("Add with Care, Groups & rotas"), and a fixed row squeezed the code box to a sliver. */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+              <input value={code} onChange={e => { setCode(e.target.value); setAddErr(''); }} autoFocus placeholder="Paste their steward code / npub…" style={{ flex: 1, minWidth: 240, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
               <button onClick={() => addByCode(code)} disabled={!code.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13, opacity: code.trim() ? 1 : 0.5, flexShrink: 0 }}>{'Add' + (newCaps.length === capNames.length ? ' with everything' : newCaps.length ? ' with ' + newCaps.map(c => CAP_LABEL[c] || c).join(', ') : ' with no access yet')}</button>
             </div>
             {(() => { const pv = code.trim() && window.Steward.stewardCodeToPub ? window.Steward.stewardCodeToPub(code) : null; return pv ? <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 700, margin: '2px 0 8px' }}>Adds: {niceName(pv)} — check this matches what they told you.</div> : null; })()}

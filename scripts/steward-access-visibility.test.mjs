@@ -111,3 +111,26 @@ test('the wizard never creates a team with no roles', () => {
   assert.match(seed, /TEAM_PRESETS/, 'the roles are invented here rather than taken from the presets the full dialog offers');
   assert.match(seed, /\['Lead', 'Helper', 'Helper'\]/, 'an unrecognised team name still produces an empty team');
 });
+
+test('the add form is not crammed into the row with the code box', () => {
+  // MEASURED BY AN OWNER, NOT BY A TEST: "the Add form renders squeezed into a sliver at the right edge
+  // (name box 24px wide, the Add button clipped off-screen); I could only fill it in by reaching the fields
+  // directly." The name field and the capability chooser had been inserted INSIDE the flex row that holds
+  // the code box and its button, so four controls shared one horizontal line. A structural test cannot see
+  // a layout, but it can see the containment that caused it.
+  // Anchored on the CODE BOX and its enclosing row, not on the row's style string — the first version of
+  // this test matched `gap: 8, marginBottom: 6` and broke the moment the row gained flexWrap, which is the
+  // brittleness this file warns about elsewhere.
+  const src = stripComments(DASH);
+  const codeAt = src.indexOf('Paste their steward code');
+  assert.ok(codeAt > 0, 're-anchor: the steward code box has moved');
+  const rowStart = src.lastIndexOf("<div style={{ display: 'flex'", codeAt);
+  assert.ok(rowStart > 0 && rowStart < codeAt, 're-anchor: the code box is no longer inside a flex row');
+  const insideRow = src.slice(rowStart, codeAt);
+  assert.doesNotMatch(insideRow, /Their name, as you know them/,
+    'the name field is back inside the row that holds the code box and the Add button — which is what ' +
+    'squeezed both into a sliver an owner could not use');
+  assert.doesNotMatch(insideRow, /WHAT MAY THEY DO\?/, 'the capability chooser is inside that same row');
+  const nameAt = src.indexOf('Their name, as you know them');
+  assert.ok(nameAt > 0 && nameAt < rowStart, 'the name is asked for AFTER the code box, which reads backwards');
+});
