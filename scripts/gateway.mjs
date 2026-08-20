@@ -2865,12 +2865,16 @@ function serveStatic(req, res) {
         // and the loop blocked the event loop for ~7.5 s on a 7.8 MB archive, AFTER the client had been told
         // the import succeeded, on a relay serving other churches.
         //
-        // The finding it was meant to close is still open and still real: /import is the one path into this
-        // relay that bypasses the write policy, so an archive can carry a kind-4 from an uncleared adult to a
-        // child and this relay will serve it. Closing it needs a NARROW safeguarding-only check that has no
-        // retention semantics, real tombstones so a sync cannot undo it, and chunked work that yields. That is
-        // its own piece of work, not a line in an import handler. /import is owner-only (_exportAuth), which
-        // is what makes leaving it open survivable in the meantime.
+        // AND THE FINDING IT WAS BUILT FOR WAS OVERSTATED. Yes, /import is the one path in that skips the
+        // write policy — but canRead() applies safeguardAllows() to every kind-4 on the way OUT, in both
+        // directions, so an imported minor↔uncleared-adult DM is stored and served to nobody at all: not the
+        // sender, not the child, not the church. Measured, not argued; see
+        // scripts/import-applies-policy.test.mjs, which pins it and fails if that read gate is removed.
+        //
+        // Which is where the rule belongs. A write gate is bypassed by anything that writes to the store;
+        // a read gate is bypassed by nothing, because every delivery goes through it, and it consults
+        // TODAY's clearance rather than what was true when the message was sent. If you are tempted to add a
+        // policy pass here again, check first whether the read gate already covers the harm.
         setImmediate(() => { try { hydrateMaps(); } catch {} try { store.cull(); } catch {} });   // membership/groups/care live once this settles
       } catch (err) { try { res.writeHead(500, H); res.end(JSON.stringify({ error: 'import failed: ' + ((err && err.message) || 'error') })); } catch {} }
     });

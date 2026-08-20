@@ -14,11 +14,16 @@
 // This file now pins the RESTORE side: whatever hardening is attempted here later must not lose data. The two
 // journal/departed-member tests below are the ones that caught it, and they are the reason this file exists.
 //
-// STILL OPEN, deliberately: an archive can carry a kind-4 from an uncleared adult to a child, and this relay
-// will serve it thereafter. Closing that needs a narrow safeguarding-only check with real tombstones (store.del
-// records none, so a peer sync undid the deletions anyway) and chunked work that yields (the pass blocked the
-// event loop for ~7.5 s on a 7.8 MB archive, after the client had been told it succeeded). /import is
-// owner-only, which is what makes leaving it open survivable meanwhile.
+// AND THE FINDING THE PASS WAS BUILT FOR WAS OVERSTATED. Two audits and I all reasoned that because /import
+// skips accept(), and accept() holds the minor↔adult DM gate, an archive could walk a grooming attempt in.
+// Measured instead of reasoned, the event is stored and served to NOBODY: canRead() applies the same
+// safeguardAllows() predicate on the way out, in both directions. Nobody had checked the read gate.
+//
+// That is the better place for the rule anyway. A write gate is bypassed by any path that writes to the
+// store — import, sync, a future restore — while a read gate is bypassed by none of them, because every
+// delivery goes through it, and it consults TODAY's clearance rather than whatever was true when the message
+// was sent. The tests below pin that invariant, and one of them is the pairing that stops "served to nobody"
+// being vacuously true of a relay that serves nothing.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -27,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { WebSocket } from 'ws';
 import { DatabaseSync } from 'node:sqlite';
 import { requireFreePort } from './test-ports.mjs';
 
@@ -70,6 +76,23 @@ const doImport = async (events) => {
 //
 // The policy pass DELETES from the event store, so the store is the thing to ask. This is the same file the
 // relay serves from, opened read-only.
+// Does the RELAY hand this event over, to this person, over the wire it really serves from? Distinct from
+// `stored` on purpose: the two answers differ, and the difference is the whole point of this file.
+const served = (id, who) => new Promise((resolve) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/relay`);
+  let got = false;
+  ws.on('open', () => ws.send(JSON.stringify(['REQ', 'q', { ids: [id] }])));
+  ws.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m[0] === 'EVENT' && m[2] && m[2].id === id) got = true;
+    if (m[0] === 'AUTH') {
+      ws.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', `ws://127.0.0.1:${PORT}/relay`], ['challenge', m[1]]], content: '' }, who.sk)]));
+      ws.send(JSON.stringify(['REQ', 'q2', { ids: [id] }]));
+    }
+  });
+  setTimeout(() => { try { ws.close(); } catch {} resolve(got); }, 900);
+});
+
 const stored = (id) => {
   const db = new DatabaseSync(join(dataDir, 'relay.sqlite'), { readOnly: true });
   try { return !!db.prepare('SELECT 1 FROM events WHERE id = ?').get(id); }
@@ -143,15 +166,40 @@ test('and it keeps a departed member\'s history', async () => {
     'backup loses every message from everyone who has ever moved away, been blocked, or died.');
 });
 
-test('KNOWN GAP: an archive still carries in a DM the front door would refuse', { todo: 'needs a narrow safeguarding-only check with real tombstones and chunked work — see the header' }, async () => {
-  // Recorded as a failing expectation rather than deleted, so the gap stays visible in the suite instead of
-  // living only in a commit message. When someone closes it properly, drop the todo and this passes.
+test('an imported DM between an uncleared adult and a child is SERVED TO NOBODY', async () => {
+  // THE FINDING THAT STARTED ALL THIS WAS OVERSTATED, and it took a measurement to notice. Two adversarial
+  // audits and I all reasoned the same way: /import never calls accept(), accept() holds the minor↔adult DM
+  // gate, therefore an archive can walk a grooming attempt straight in. The first half is true. The
+  // conclusion is not — because canRead() applies the SAME safeguardAllows() predicate on the way OUT.
+  //
+  // Measured: the event is in the store and is served to nobody at all — not the sender, not the child, not
+  // the church. Which is the property that actually protects a child. A write gate can be bypassed by any
+  // path that writes to the store; a read gate cannot be bypassed by anything, because every delivery goes
+  // through it, and it consults TODAY's clearance rather than whatever was true when the message was sent.
+  //
+  // This is the invariant worth pinning. Storage of an event nobody can fetch is a disk-space question.
   const bad = dm(adult, child);
   const r = await doImport([bad]);
   assert.equal(r.status, 200, 'the import failed for an unrelated reason: ' + JSON.stringify(r.body));
-  assert.equal(stored(bad.id), false,
-    'a kind-4 from an uncleared adult to a child survives the import. The relay refuses this message when it ' +
-    'is sent, and serves it when it arrives in a backup file.');
+  assert.equal(stored(bad.id), true,
+    're-anchor: the import no longer stores it, so the read-gate assertions below prove nothing');
+  for (const [who, label] of [[adult, 'the uncleared adult who sent it'], [child, 'the child'], [church, 'the church itself']]) {
+    assert.equal(await served(bad.id, who), false,
+      `the relay served a DM between an uncleared adult and a child to ${label}. It arrived in a backup ` +
+      'file rather than through the front door, and the read gate is the only thing standing between that ' +
+      'event and the child.');
+  }
+});
+
+test('...while an ordinary adult-to-adult DM imported the same way IS served', () => {
+  // The pairing that makes the `false` above mean something. Without it, "served to nobody" is equally
+  // consistent with a read gate that serves nothing at all.
+  return (async () => {
+    const ok = dm(adult, stranger);
+    await doImport([memberDoc(stranger), ok]);
+    assert.equal(await served(ok.id, adult), true,
+      're-anchor: an ordinary DM is not served either, so the safeguarding assertions above are vacuous');
+  })();
 });
 
 test('and an ordinary DM between two adults is untouched', async () => {
