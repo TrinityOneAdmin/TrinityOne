@@ -269,6 +269,12 @@ const RESEAT_D = 'trinityone/reseat:';       // church-vouched "the member who w
 // The capability map from the live roster: { "<steward pubkey>": ["finance", …] }. A steward who does not
 // appear here holds every capability, which is what every roster written before capabilities existed means.
 let _stewardCaps = {};
+// WHAT THE OWNER CALLS EACH STEWARD. The console derives a friendly name from the key ("Gentle Cedar 36"),
+// which is stable and unguessable — and is NOT the name the owner typed. An owner who has just added Tom,
+// Grace and Rhys sees three invented names and can only tell them apart by the order they were added. Their
+// own words, 2026-08-19: "a mis-pasted code is a stranger with everything and I'd never spot it." So the
+// roster carries the owner's own label for each key, and the row leads with it.
+let _stewardNames = {};
 const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content'];
 const FINKEY_D = 'trinityone/financekey:';   // the church books' key, wrapped per reader (owner-signed)
 let _finRing = [];        // hex keys for the books, newest first; the last entry is the legacy self-key
@@ -1463,10 +1469,21 @@ async function publish(evt) {
     // every relay rejected — surface it so the steward isn't left wondering why nothing saved
     let reason = '';
     try { const errs = (e && e.errors) || []; reason = (errs[0] && (errs[0].message || String(errs[0]))) || ''; } catch (x) {}
+    // OUR OWN SUPERSEDED COPY IS NOT A FAILURE. Two code paths can publish the same document a moment apart;
+    // the newer one lands and the older is refused with "a newer version of this is already stored". The
+    // steward was then shown a red, sticky "your change could not be saved" for a change that IS saved —
+    // measured on a fresh church, 2026-08-19: the banner claimed the approval setting had failed while the
+    // relay held approval:true. If we know a NEWER copy of this very document was accepted, the refusal is
+    // telling us something we already know, and there is nothing for the steward to do about it.
+    try {
+      const d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1];
+      if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
+    } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
   // a write landed → the relays are accepting our posts, so any "a relay is refusing us" alarm can clear
+  try { const d0 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1]; if (d0) _lastOk.set(d0, evt.created_at || 0); } catch (x) {}
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
   return evt;
 }
@@ -1575,6 +1592,7 @@ async function _waitForRegistration() {
   _regGate = null;   // latched: whichever way that went, nothing waits on registration again this session
 }
 const _lastStamp = new Map();   // d-tag -> the created_at we last published for it
+const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
 function _monotonic(tmpl) {
   const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
   const nowS = Math.floor(Date.now() / 1000);
@@ -4370,7 +4388,7 @@ window.Steward = {
         if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY (this IS the roster; only the church key edits it)
         // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
         if (e.created_at < latest) return; latest = e.created_at;
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; _stewardNames = {}; }
         else {
           try {
             const doc = JSON.parse(e.content) || {};
@@ -4379,7 +4397,8 @@ window.Steward = {
             // edit — otherwise adding or removing ONE steward would republish a roster with no capabilities
             // at all and silently restore full authority to everyone the church had scoped.
             _stewardCaps = (doc.caps && typeof doc.caps === 'object') ? doc.caps : {};
-          } catch { cur = []; _stewardCaps = {}; }
+            _stewardNames = (doc.names && typeof doc.names === 'object') ? doc.names : {};
+          } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; }
         }
         // Adopt it HERE, not only via the UI's setCareRoster round-trip. The safeguarding back-fill needs to
         // know who the member honours, and it does not wait for React: the roster hook starts at [] and only
@@ -4405,7 +4424,7 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  setStewards(pubkeys, caps) {   // OWNER-ONLY: replace the whole steward roster (pass hex pubkeys)
+  setStewards(pubkeys, caps, names) {   // OWNER-ONLY: replace the whole steward roster (pass hex pubkeys)
     _requireTrustedView('steward roster');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
@@ -4416,12 +4435,20 @@ window.Steward = {
     const next = {};
     const src = (caps && typeof caps === 'object') ? caps : _stewardCaps;
     for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter(c => typeof c === 'string');
-    const doc = Object.keys(next).length ? { pubkeys: list, caps: next } : { pubkeys: list };
+    // The owner's labels ride along on the same terms: carried forward unless replaced, pruned with the
+    // steward they belong to. Losing them on an unrelated edit would put the invented names back.
+    const nextNames = {};
+    const nsrc = (names && typeof names === 'object') ? names : _stewardNames;
+    for (const p of list) { const v = nsrc[p]; if (typeof v === 'string' && v.trim()) nextNames[p] = v.trim().slice(0, 60); }
+    const doc = { pubkeys: list };
+    if (Object.keys(next).length) doc.caps = next;
+    if (Object.keys(nextNames).length) doc.names = nextNames;
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).
   stewardCaps() { return { ..._stewardCaps }; },
+  stewardLabels() { return { ..._stewardNames }; },
   stewardCapNames() { return STEWARD_CAPS.slice(); },
   // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
   // not on the roster, so they are unrestricted by construction.

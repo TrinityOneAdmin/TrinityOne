@@ -82,9 +82,22 @@ test('the locked areas are marked in the nav, not hidden from it', () => {
   assert.match(src, /n\.locked \? /, 'nothing renders the padlock, so the mark never reaches the screen');
 });
 
-test('granting Finance says plainly that it opens no screen yet', () => {
+test('the capability editor lives in the panel that renders it', () => {
+  // THE ONE MY OTHER TESTS COULD NOT SEE. scopeEditor was defined inside DashMembers and called from
+  // DashStewardsPanel, so every structural assertion passed — the text was all present, in the same file —
+  // and the shipped console threw "ReferenceError: scopeEditor is not defined" and showed the crash screen
+  // the instant an owner opened it. Three attempts, three crashes, and the round could not scope anybody.
+  // A helper and its caller must be in the same function body.
+  const panel = fnBody(stripComments(DASH), 'function DashStewardsPanel(', 'DashStewardsPanel');
+  assert.match(panel, /const scopeEditor = /,
+    'scopeEditor is called from DashStewardsPanel but defined somewhere else, which is a ReferenceError the ' +
+    'moment an owner opens it — and no amount of matching source text elsewhere in the file will notice');
+  assert.match(panel, /scopeEditor\(pk\)/, 're-anchor: the panel no longer calls it');
+});
+
+test('the Finance capability does not describe a limit that was removed', () => {
   const src = stripComments(DASH);
-  assert.match(src, /encrypted to the church key, so a delegated steward cannot open them yet/,
-    'an owner can grant Finance and neither of them will understand why the delegate still sees nothing — ' +
-    'the books are sealed to the church key, which a delegate does not hold');
+  assert.doesNotMatch(src, /cannot open them yet/,
+    'the editor still tells owners a delegate cannot open the books. That stopped being true when the books ' +
+    'got a key of their own, and stale copy about a limit is its own kind of untruth.');
 });

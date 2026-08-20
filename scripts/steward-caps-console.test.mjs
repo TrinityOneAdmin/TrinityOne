@@ -37,10 +37,10 @@ const TREASURER = 'a'.repeat(64), PASTORAL = 'b'.repeat(64), PLAIN = 'c'.repeat(
 
 function loadSetStewards(existingCaps) {
   const published = [];
-  const fn = lift('setStewards(pubkeys, caps) {', 'setStewards', {
+  const fn = lift('setStewards(pubkeys, caps, names) {', 'setStewards', {
     _requireTrustedView: () => {},
     sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
-    _stewardCaps: existingCaps,
+    _stewardCaps: existingCaps, _stewardNames: {},
     now: () => 1787150000,
     STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
     finalizeEvent: (t) => t, finalizeEvent2: (t) => t,   // the bundler renames it; accept both

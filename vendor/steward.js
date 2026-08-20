@@ -14523,6 +14523,7 @@ zoo`.split("\n");
   var ADMITTED_D = "trinityone/admitted:";
   var RESEAT_D = "trinityone/reseat:";
   var _stewardCaps = {};
+  var _stewardNames = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
   var FINKEY_D = "trinityone/financekey:";
   var _finRing = [];
@@ -15606,10 +15607,20 @@ zoo`.split("\n");
       } catch (x) {
       }
       try {
+        const d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
+        if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
+      } catch (x) {
+      }
+      try {
         window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
       } catch (x) {
       }
       return false;
+    }
+    try {
+      const d0 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
+      if (d0) _lastOk.set(d0, evt.created_at || 0);
+    } catch (x) {
     }
     try {
       window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
@@ -15703,6 +15714,7 @@ zoo`.split("\n");
     _regGate = null;
   }
   var _lastStamp = /* @__PURE__ */ new Map();
+  var _lastOk = /* @__PURE__ */ new Map();
   function _monotonic(tmpl) {
     const d = ((tmpl.tags || []).find((t) => t[0] === "d") || [])[1] || "kind:" + tmpl.kind;
     const nowS = Math.floor(Date.now() / 1e3);
@@ -18539,14 +18551,17 @@ zoo`.split("\n");
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             cur = [];
             _stewardCaps = {};
+            _stewardNames = {};
           } else {
             try {
               const doc = JSON.parse(e.content) || {};
               cur = doc.pubkeys || [];
               _stewardCaps = doc.caps && typeof doc.caps === "object" ? doc.caps : {};
+              _stewardNames = doc.names && typeof doc.names === "object" ? doc.names : {};
             } catch {
               cur = [];
               _stewardCaps = {};
+              _stewardNames = {};
             }
           }
           _careRoster = new Set(cur.filter(Boolean));
@@ -18568,20 +18583,31 @@ zoo`.split("\n");
         }
       };
     },
-    setStewards(pubkeys, caps) {
+    setStewards(pubkeys, caps, names) {
       _requireTrustedView("steward roster");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       const next = {};
       const src = caps && typeof caps === "object" ? caps : _stewardCaps;
       for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter((c) => typeof c === "string");
-      const doc = Object.keys(next).length ? { pubkeys: list, caps: next } : { pubkeys: list };
+      const nextNames = {};
+      const nsrc = names && typeof names === "object" ? names : _stewardNames;
+      for (const p of list) {
+        const v = nsrc[p];
+        if (typeof v === "string" && v.trim()) nextNames[p] = v.trim().slice(0, 60);
+      }
+      const doc = { pubkeys: list };
+      if (Object.keys(next).length) doc.caps = next;
+      if (Object.keys(nextNames).length) doc.names = nextNames;
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
     // steward, which is every steward that existed before this feature).
     stewardCaps() {
       return { ..._stewardCaps };
+    },
+    stewardLabels() {
+      return { ..._stewardNames };
     },
     stewardCapNames() {
       return STEWARD_CAPS.slice();

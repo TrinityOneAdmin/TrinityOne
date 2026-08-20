@@ -3998,40 +3998,6 @@ function DashMembers() {
       </div>
     );
   };
-  // THE CAPABILITY EDITOR. The pilot church has four elders and they all need access; copying the church key
-  // four times would be the worst possible answer. What a church actually wants to scope is the pastoral and
-  // financial work, so that is what these are. The relay enforces every one of them — on reads as well as
-  // writes — which is the only reason showing them here is honest rather than theatre.
-  const scopeEditor = (pk) => {
-    const cur = Array.isArray(caps[pk]) ? caps[pk] : null;   // null = unscoped = everything
-    const has = (c) => (cur === null ? true : cur.includes(c));
-    const toggle = (c) => {
-      const base = cur === null ? capNames.slice() : cur.slice();
-      const next = base.includes(c) ? base.filter(x => x !== c) : [...base, c];
-      setCaps(pk, next.length === capNames.length ? null : next);
-    };
-    return (
-      <div key={pk + ':scope'} style={{ margin: '0 0 10px', padding: '12px 13px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>
-          What {(byPub.get(pk) || {}).name || niceName(pk)} may do. Turning everything on is the same as leaving them unscoped.
-        </div>
-        {capNames.map(c => (
-          <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 2px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={has(c)} onChange={() => toggle(c)} style={{ marginTop: 3 }} />
-            <span>
-              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{CAP_LABEL[c] || c}</span>
-              <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{CAP_SUB[c] || ''}</span>
-            </span>
-          </label>
-        ))}
-        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 10 }}>
-          Your relay enforces this. A relay running an older version does not know about it yet and will keep
-          giving this steward everything — so check your relay is up to date before relying on it.
-        </div>
-        <button onClick={() => setScoping(null)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, marginTop: 10 }}>Done</button>
-      </div>
-    );
-  };
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* A rotation that did not land. Rendered at the top of the panel and NOT tied to the confirm dialog,
@@ -4522,16 +4488,20 @@ function DashStewardsPanel({ church }) {
   const [copiedInvite, setCopiedInvite] = React.useState(false);
   const [approving, setApproving] = React.useState(null);   // pubkey awaiting PIN confirm
   const [scoping, setScoping] = React.useState(null);      // pubkey whose capabilities are being edited
+  const [newLabel, setNewLabel] = React.useState('');      // what the owner calls the person they are adding
+  // The owner's own labels for each steward. Without these the rows read "Gentle Cedar 36" — a name the app
+  // invented — and an owner who has just pasted three codes cannot tell which row is which person.
+  const labels = (window.Steward.stewardLabels && window.Steward.stewardLabels()) || {};
   // WHAT EACH STEWARD MAY DO. Absent from the map = unscoped = everything, which is what every roster
   // written before this feature means and what a church that never opens this panel keeps.
   const caps = (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {};
   const capNames = (window.Steward.stewardCapNames && window.Steward.stewardCapNames()) || [];
   const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
   const CAP_SUB = {
-    // Honest about a real limit: the books are encrypted to the CHURCH key, which a delegated steward does
-    // not hold, so granting this today gives them permission at the relay and still no screen to open. Say
-    // it here rather than letting an owner grant it and both of them wonder why nothing appeared.
-    finance: 'The church books, funds and statements. Note: the books are encrypted to the church key, so a delegated steward cannot open them yet — this grants relay permission for when that path exists.',
+    // This used to warn that the books were sealed to the church key and a delegate could not open them.
+    // That limit was removed the same afternoon (the books now have a key of their own, wrapped to whoever
+    // holds this capability), and copy describing a limit that no longer exists is its own kind of lie.
+    finance: 'The church books, funds and statements — they can read the whole history and add entries.',
     care: 'Care needs, the care team, safety checks',
     safeguarding: 'Clearances and photo decisions (the child and cleared-adult LISTS stay owner-only)',
     members: 'Admit people, join policy, re-seat someone who lost their words',
@@ -4545,7 +4515,10 @@ function DashStewardsPanel({ church }) {
   const [approvePin, setApprovePin] = React.useState('');
   const [approveErr, setApproveErr] = React.useState('');
   const hasPin = !!(window.Steward.hasPinLock && window.Steward.hasPinLock());
-  const add = (pk) => { setAdding(false); setScanning(false); setQ(''); setCode(''); setAddErr(''); setApproving(null); window.Steward.setStewards([...stewards, pk]); };
+  const add = (pk, label) => { setAdding(false); setScanning(false); setQ(''); setCode(''); setAddErr(''); setApproving(null);
+    const nextNames = { ...labels }; if (label && label.trim()) nextNames[pk] = label.trim();
+    setNewLabel('');
+    window.Steward.setStewards([...stewards, pk], undefined, nextNames); };
   // approving a steward request is a sensitive action → step up with the console PIN when one is set
   const startApprove = (pk) => { if (hasPin) { setApproving(pk); setApprovePin(''); setApproveErr(''); } else { add(pk); } };
   const confirmApprove = async () => {
@@ -4562,15 +4535,55 @@ function DashStewardsPanel({ church }) {
     if (!pk) { setAddErr('That doesn’t look like a steward code or npub.'); return; }
     if (pk === ownerPub) { setAddErr('That’s your own key.'); return; }
     if (stewardSet.has(pk)) { setAddErr('They’re already a steward.'); return; }
-    add(pk);
+    // A NAME IS REQUIRED, and it is the owner's own. Without it the row falls back to a name the app invented
+    // and the owner cannot tell one steward from another — which is how a mis-pasted code becomes a stranger
+    // holding the church, unnoticed. Asking for it here also gives them a moment to look at the code again.
+    if (!newLabel.trim()) { setAddErr('Give them a name first — you’ll need it to tell your stewards apart.'); return; }
+    add(pk, newLabel);
   };
   const candidates = members.filter(m => m.pubkey && m.pubkey !== ownerPub && !stewardSet.has(m.pubkey)
     && (!q || (m.name || '').toLowerCase().includes(q.toLowerCase()) || (m.npub || '').includes(q)));
   const initialsOf = (m) => (m && m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'ST').toUpperCase();
   const niceName = (pk) => (window.Steward.stewardName ? window.Steward.stewardName(pk) : '') || 'Steward';
+  // THE CAPABILITY EDITOR. The pilot church has four elders and they all need access; copying the church key
+  // four times would be the worst possible answer. What a church actually wants to scope is the pastoral and
+  // financial work, so that is what these are. The relay enforces every one of them — on reads as well as
+  // writes — which is the only reason showing them here is honest rather than theatre.
+  const scopeEditor = (pk) => {
+    const cur = Array.isArray(caps[pk]) ? caps[pk] : null;   // null = unscoped = everything
+    const has = (c) => (cur === null ? true : cur.includes(c));
+    const toggle = (c) => {
+      const base = cur === null ? capNames.slice() : cur.slice();
+      const next = base.includes(c) ? base.filter(x => x !== c) : [...base, c];
+      setCaps(pk, next.length === capNames.length ? null : next);
+    };
+    return (
+      <div key={pk + ':scope'} style={{ margin: '0 0 10px', padding: '12px 13px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>
+          What {labels[pk] || (byPub.get(pk) || {}).name || niceName(pk)} may do. Turning everything on is the same as leaving them unscoped.
+        </div>
+        {capNames.map(c => (
+          <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 2px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={has(c)} onChange={() => toggle(c)} style={{ marginTop: 3 }} />
+            <span>
+              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{CAP_LABEL[c] || c}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{CAP_SUB[c] || ''}</span>
+            </span>
+          </label>
+        ))}
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 10 }}>
+          Your relay enforces this. A relay running an older version does not know about it yet and will keep
+          giving this steward everything — so check your relay is up to date before relying on it.
+        </div>
+        <button onClick={() => setScoping(null)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, marginTop: 10 }}>Done</button>
+      </div>
+    );
+  };
   const row = (pk) => {
     const m = byPub.get(pk) || {};
-    const label = m.name || niceName(pk);   // member's real name if known, else the deterministic friendly name
+    // The owner's own label first — then a member name if this key is also a member, and only then the
+    // invented one. The invented name is a fallback, never the identity.
+    const label = labels[pk] || m.name || niceName(pk);
     return (
       <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
         <SkBadge initials={label.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={34} radius={11} accent={SK_TINT.gold.fg} />
@@ -4643,6 +4656,7 @@ function DashStewardsPanel({ church }) {
             {/* alternative: add by the steward's OWN code (from their Steward app) */}
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Or ask them to open the <b>Steward app</b> → <b>Become a steward</b> and read you their code (or show its QR).</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+              <input value={newLabel} onChange={e => { setNewLabel(e.target.value); setAddErr(''); }} placeholder="Their name, as you know them…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 8 }} />
               <input value={code} onChange={e => { setCode(e.target.value); setAddErr(''); }} autoFocus placeholder="Paste their steward code / npub…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
               <button onClick={() => addByCode(code)} disabled={!code.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13, opacity: code.trim() ? 1 : 0.5, flexShrink: 0 }}>Add</button>
             </div>
