@@ -229,6 +229,7 @@ function runRotate({ ring, allowed, caps }) {
       feChurch: (t) => t, publish: async (e) => { published.push(e); return e; },
       now: () => 1787280000, NET: 'trinityone',
       _capRingChanged: () => {},   // the retry notifier — nothing is subscribed in this harness
+      _warnUnsealed: () => {}, _sealEachFailed: [],
       window: { Steward: {} },
     };
     const scope = new Proxy(stubs, {
@@ -245,9 +246,11 @@ function runRotate({ ring, allowed, caps }) {
 
 // Drive ensureCapKeyFor for real. Everything above tests what happens once an envelope EXISTS; this asks the
 // question nobody asked — whether one is ever created.
-function runEnsure({ ring, docKeys, checked = true, publishOk = true }) {
-  const published = [];
+function runEnsure({ ring, docKeys, checked = true, publishOk = true, unsealable = [] }) {
+  const published = [], warned = [];
   const stubs = {
+    _warnUnsealed: (cap, failed) => { if (failed && failed.length) warned.push({ cap, failed: failed.slice() }); },
+    _sealEachFailed: [],
     churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true,
     _capState: { finance: { ring: ring.slice(), docKeys, rev: 1, at: 0, checked } },
     CAP_KEYS: JSON.parse(JSON.stringify(SHIPPED_CAP_KEYS)),
@@ -256,7 +259,9 @@ function runEnsure({ ring, docKeys, checked = true, publishOk = true }) {
     encrypt: (p2, k) => nip44.encrypt(p2, k), getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     nip44e: (p2, k) => nip44.encrypt(p2, k), nip44ck: (a, b) => nip44.utils.getConversationKey(a, b),
     _legacyBookKeyHex: () => legacyKey,
-    _sealEach: async (payload, want, seal) => { const o = {}; for (const w of want) o[w] = seal(payload, w); return o; },
+    // mirrors the shipped _sealEach: a recipient it cannot seal to is skipped and RECORDED, not thrown
+    _sealEach: async (payload, want, seal) => { const o = {}; stubs._sealEachFailed = [];
+      for (const w of want) { if (unsealable.indexOf(w) >= 0) { stubs._sealEachFailed.push(w); continue; } o[w] = seal(payload, w); } return o; },
     feChurch: (t) => t, publish: async (e) => { if (!publishOk) return false; published.push(e); return e; },
     now: () => 1787280000, NET: 'trinityone', _capRingChanged: () => {},
     window: { Steward: {} },
@@ -270,8 +275,30 @@ function runEnsure({ ring, docKeys, checked = true, publishOk = true }) {
   });
   const body = fnBody(VENDOR, 'async ensureCapKeyFor(kind, stewardPubs, caps) {', 'ensureCapKeyFor');
   const fn = new Function('scope', `with (scope) { return ({ ${body} }).ensureCapKeyFor; }`)(scope);
-  return { fn, published, stubs };
+  return { fn, published, stubs, warned };
 }
+
+test('a steward the envelope could NOT be sealed to is reported, not silently dropped', () => {
+  // Found live, 2026-08-20: a roster entry whose pubkey is not a valid curve point was skipped inside
+  // _sealEach's per-recipient try/catch, the envelope went out one recipient short, and ensureCapKeyFor
+  // answered "published". The owner sees a capability ticked beside a name; that person sees an empty
+  // screen. Publishing the short envelope is still right — one bad entry must not deny the capability to
+  // everyone else — but reporting it as a clean success is not.
+  return (async () => {
+    const good = getPublicKey(generateSecretKey());
+    const bad = '11'.repeat(32);            // not a point on the curve
+    const { fn, published, warned } = runEnsure({ ring: [], docKeys: null, unsealable: [bad] });
+    await fn('finance', [good, bad], { [good]: ['finance'], [bad]: ['finance'] });
+    assert.equal(published.length, 1, 'the envelope was not published at all — one bad entry must not deny everyone else');
+    const env = JSON.parse(published[0].content);
+    assert.ok(env.keys[good], 're-anchor: the good steward was left out too');
+    assert.ok(!env.keys[bad], 're-anchor: the unsealable steward somehow got a key');
+    assert.equal(warned.length, 1,
+      'nobody was told that a steward was left out of the envelope. They hold the capability in the console ' +
+      'and no key on the relay, and there is nothing anywhere connecting the two.');
+    assert.deepEqual(warned[0].failed, [bad], 'the wrong steward was named in the warning');
+  })();
+});
 
 test('a church with NO envelope gets its FIRST one minted', async () => {
   // MEASURED against the shipped bundle of 2026-08-19: for a church with no envelope this returned false and

@@ -220,12 +220,23 @@ const CAREKEY_D = 'trinityone/carekey:';
 // so the console keeps painting and an `onProgress` can say how far it has got. The five call sites shared
 // one loop shape and now share one implementation — a per-member seal that forgot to yield is exactly the
 // kind of thing that gets copied a sixth time.
+// Seal one payload separately to each recipient. Returns the map of pubkey -> ciphertext, and records any
+// recipient it COULD NOT seal to on `_sealEachFailed` — read it immediately after the call.
+//
+// It used to swallow those failures and return a short map, and every caller published it as a complete
+// envelope and reported success. Demonstrated live on 2026-08-20: a roster entry whose pubkey is not a valid
+// curve point was dropped here, `ensureCapKeyFor` answered "published", and the steward held no key at all.
+// What an owner sees is a capability ticked next to a name; what that person sees is an empty screen. Nothing
+// anywhere connects the two. Nine call sites depend on this function — care, media, names, finance, check-in —
+// so the failure is silent in every one of them.
+let _sealEachFailed = [];
 async function _sealEach(payload, targets, sealTo, onProgress) {
   const keys = {};
   const list = [...targets];
+  _sealEachFailed = [];
   for (let i = 0; i < list.length; i++) {
     const mp = list[i];
-    try { keys[mp] = sealTo(payload, mp); } catch (e) {}
+    try { keys[mp] = sealTo(payload, mp); } catch (e) { _sealEachFailed.push(mp); }
     // every 25, hand the thread back — small enough that the longest blocking stretch stays around 125 ms
     if ((i % 25) === 24) {
       if (onProgress) { try { onProgress(i + 1, list.length); } catch (e) {} }
@@ -308,6 +319,15 @@ let _checkinMigrated = '';   // which church we have already moved off the legac
 const _capWaiters = {};   // kind -> Set of fn, called whenever that capability's ring changes
 for (const k of Object.keys(CAP_KEYS)) _capWaiters[k] = new Set();
 const _capRingChanged = (kind) => { for (const fn of (_capWaiters[kind] || [])) { try { fn(); } catch (e) {} } };
+// Say so when a capability's envelope goes out WITHOUT someone it was meant for. Publishing the short
+// envelope is still the right move — one bad roster entry must not deny the capability to everyone else —
+// but it must not be reported as a clean success, because the person left out has no way to find out.
+const _warnUnsealed = (cap, failed) => {
+  if (!failed || !failed.length) return;
+  const who = failed.map(p2 => (_stewardNames && _stewardNames[p2]) || (p2 || '').slice(0, 10) + '…').join(', ');
+  try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'steward permissions',
+    message: 'Could not give ' + cap + ' access to ' + who + ' — their steward code looks damaged. Everyone else was updated. Remove and re-add them from the roster.' } })); } catch (e) {}
+};
 const FINKEY_D = CAP_KEYS.finance.d;
 // "Have we actually LOOKED for an envelope?" — the same gate as _careKeyChecked, and for the same reason: a
 // mint decided on an incomplete read of the corpus republishes a stale ring as new and orphans everything the
@@ -4604,6 +4624,7 @@ window.Steward = {
       if (lost.length) { st.ring = prevRing; return window.Steward.rotateCapKey(kind, stewardPubs, caps); }
     }
     const keys = await _sealEach(JSON.stringify(st.ring), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    _warnUnsealed(spec.cap, _sealEachFailed);
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', spec.d + cp], ['t', NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
     // ADOPT ONLY WHAT WAS PUBLISHED — the rule rotateCapKey already keeps, and for the same reason. The ring
     // is assigned above so it can be sealed, but a failed publish would leave this console holding a key that
@@ -4637,6 +4658,7 @@ window.Steward = {
     const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf(spec.cap) >= 0; };
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
     const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    _warnUnsealed(spec.cap, _sealEachFailed);
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', spec.d + cp], ['t', NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
     if (ok === false) return false;                          // nothing adopted — the old ring is still the truth
     st.ring = nextRing; st.rev = nextRev; st.docKeys = keys;

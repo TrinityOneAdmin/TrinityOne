@@ -4227,7 +4227,7 @@ function DashMembers() {
 }
 window.DashMembers = DashMembers;
 
-// ── Kids check-in (opt-in; encrypted to the church key) ──────────────────────────────────────────
+// ── Kids check-in (opt-in; encrypted under the SAFEGUARDING key, not the church key) ────────────
 function CkModal({ title, children, onClose }) {
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
@@ -4323,7 +4323,7 @@ function DashCheckin() {
     <Panel title="Kids check-in" action={
       <button onClick={() => setPicking(true)} disabled={!minors.length || !sgKey} title={!sgKey ? 'The register’s key hasn’t reached this console yet — a check-in written now would not be saved.' : ''} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (minors.length && sgKey) ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your church key</b> — only this console sees who’s present.</DismissibleNote>
+      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext, and the only people who can open them are you and anyone you have given <b>Safeguarding</b> to.</DismissibleNote>
       {!minors.length ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>
       ) : (

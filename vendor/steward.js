@@ -14475,14 +14475,17 @@ zoo`.split("\n");
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   };
   var CAREKEY_D = "trinityone/carekey:";
+  var _sealEachFailed = [];
   async function _sealEach(payload, targets, sealTo, onProgress) {
     const keys = {};
     const list = [...targets];
+    _sealEachFailed = [];
     for (let i3 = 0; i3 < list.length; i3++) {
       const mp = list[i3];
       try {
         keys[mp] = sealTo(payload, mp);
       } catch (e) {
+        _sealEachFailed.push(mp);
       }
       if (i3 % 25 === 24) {
         if (onProgress) {
@@ -14543,6 +14546,17 @@ zoo`.split("\n");
         fn();
       } catch (e) {
       }
+    }
+  };
+  var _warnUnsealed = (cap, failed) => {
+    if (!failed || !failed.length) return;
+    const who = failed.map((p2) => _stewardNames && _stewardNames[p2] || (p2 || "").slice(0, 10) + "\u2026").join(", ");
+    try {
+      window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+        what: "steward permissions",
+        message: "Could not give " + cap + " access to " + who + " \u2014 their steward code looks damaged. Everyone else was updated. Remove and re-add them from the roster."
+      } }));
+    } catch (e) {
     }
   };
   var FINKEY_D = CAP_KEYS.finance.d;
@@ -18766,6 +18780,7 @@ zoo`.split("\n");
         }
       }
       const keys = await _sealEach(JSON.stringify(st.ring), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      _warnUnsealed(spec.cap, _sealEachFailed);
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
       if (ok === false || ok == null) {
         st.ring = prevRing;
@@ -18798,6 +18813,7 @@ zoo`.split("\n");
       };
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
       const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      _warnUnsealed(spec.cap, _sealEachFailed);
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
       if (ok === false) return false;
       st.ring = nextRing;
