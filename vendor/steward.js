@@ -14531,6 +14531,7 @@ zoo`.split("\n");
   var _finDocKeys = null;
   var _finRev = 1;
   var _finAt = 0;
+  var _finChecked = false;
   var churchSkHeld = () => !actingChurch && !!churchSk && !!churchPub;
   var _legacyBookKeyHex = () => {
     try {
@@ -15215,6 +15216,11 @@ zoo`.split("\n");
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
     _mediaKeyChecked = false;
+    _finRing = [];
+    _finDocKeys = null;
+    _finRev = 1;
+    _finAt = 0;
+    _finChecked = false;
     _authedRelays.clear();
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
@@ -18671,6 +18677,7 @@ zoo`.split("\n");
           _finAt = e.created_at || 0;
           try {
             const env = JSON.parse(e.content || "{}");
+            if ((env.rev || 1) < _finRev) return;
             _finDocKeys = env.keys || null;
             _finRev = env.rev || 1;
             const mine = env.keys && env.keys[churchPub];
@@ -18691,6 +18698,7 @@ zoo`.split("\n");
           cb && cb(_finRing.slice());
         },
         oneose() {
+          if (_isRelayAuthed()) _finChecked = true;
           cb && cb(_finRing.slice());
         }
       });
@@ -18712,28 +18720,31 @@ zoo`.split("\n");
     // new to them.
     async rotateFinanceKey(stewardPubs, caps) {
       if (!churchSkHeld() || actingChurch) return false;
-      if (!_isRelayAuthed()) return false;
+      if (!_finChecked || !_isRelayAuthed()) return false;
       if (!_finRing.length) return false;
       const cp = pub;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-      _finRing = [fresh, ..._finRing].slice(0, 12);
-      _finRev = (_finRev || 1) + 1;
+      const nextRing = [fresh, ..._finRing].slice(0, 12);
+      const nextRev = (_finRev || 1) + 1;
       const allowed = (p2) => {
         const c = caps && caps[p2];
         return !Array.isArray(c) || c.indexOf("finance") >= 0;
       };
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
-      const ring = JSON.stringify(_finRing);
+      const ring = JSON.stringify(nextRing);
       const keys = await _sealEach(ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FINKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
-      if (ok !== false) _finDocKeys = keys;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FINKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
+      if (ok === false) return false;
+      _finRing = nextRing;
+      _finRev = nextRev;
+      _finDocKeys = keys;
       return ok;
     },
     // OWNER-ONLY. Wrap the books' key to the church and to every steward the roster gives `finance` to —
     // which, for an unscoped steward, is all of them, exactly as it is everywhere else.
     async ensureFinanceKeyFor(stewardPubs, caps) {
       if (!churchSkHeld() || actingChurch) return false;
-      if (!_isRelayAuthed()) return false;
+      if (!_finChecked || !_isRelayAuthed()) return false;
       const cp = pub;
       const legacy = _legacyBookKeyHex();
       if (!legacy) return false;
@@ -18746,6 +18757,7 @@ zoo`.split("\n");
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
       const have = _finDocKeys || {};
       if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) return false;
+      if (!_finDocKeys) return false;
       const lost = Object.keys(have).filter((p2) => want.indexOf(p2) < 0);
       if (lost.length) return window.Steward.rotateFinanceKey(stewardPubs, caps);
       const ring = JSON.stringify(_finRing);

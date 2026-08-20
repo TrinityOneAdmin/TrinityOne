@@ -284,6 +284,10 @@ const FINKEY_D = 'trinityone/financekey:';   // the church books' key, wrapped p
 let _finRing = [];        // hex keys for the books, newest first; the last entry is the legacy self-key
 let _finDocKeys = null;   // the envelope's key map as last seen (null = we have never seen one)
 let _finRev = 1, _finAt = 0;
+// "Have we actually LOOKED for an envelope?" — the same gate as _careKeyChecked, and for the same reason: a
+// mint decided on an incomplete read of the corpus republishes a stale ring as new and orphans everything the
+// real key sealed. _isRelayAuthed() alone is one round trip; the church's documents are not.
+let _finChecked = false;
 // Only a console holding the CHURCH key can derive the key the existing books are sealed with. `sk` is the
 // signing key of whoever is acting; in delegated mode that is the steward's own, so this is also the honest
 // test for "am I the owner".
@@ -924,6 +928,9 @@ function _resetChurchScopedState() {
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
   _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false;
+  // The books' key belongs here too. The comment above is not decorative: carrying _finChecked across a
+  // church switch would answer "already looked" for a church nobody has looked at.
+  _finRing = []; _finDocKeys = null; _finRev = 1; _finAt = 0; _finChecked = false;
   // NIP-42 is bound to the key that signed the challenge. These sockets authed as the PREVIOUS church and will
   // not be re-challenged while they stay open, so _isRelayAuthed() would answer true for a church that has
   // never proved itself — the exact false-true the comment above it warns "silently destroys a church's keys".
@@ -4505,6 +4512,7 @@ window.Steward = {
         if ((e.created_at || 0) < _finAt) return; _finAt = e.created_at || 0;
         try {
           const env = JSON.parse(e.content || '{}');
+          if ((env.rev || 1) < _finRev) return;    // a lagging relay must not resurrect an older envelope
           _finDocKeys = env.keys || null;
           _finRev = env.rev || 1;
           const mine = env.keys && env.keys[churchPub];
@@ -4518,7 +4526,12 @@ window.Steward = {
         } catch (x) {}
         cb && cb(_finRing.slice());
       },
-      oneose() { cb && cb(_finRing.slice()); },
+      oneose() {
+        // EOSE only counts when the relay actually knows who we are: an unauthenticated read answers "no
+        // envelope" for a church that has one, and minting on that answer is how key material gets orphaned.
+        if (_isRelayAuthed()) _finChecked = true;
+        cb && cb(_finRing.slice());
+      },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -4533,27 +4546,33 @@ window.Steward = {
   // new to them.
   async rotateFinanceKey(stewardPubs, caps) {
     if (!churchSkHeld() || actingChurch) return false;      // only the owner rotates
-    if (!_isRelayAuthed()) return false;                    // never act on an unauthenticated read of the envelope
+    if (!_finChecked || !_isRelayAuthed()) return false;     // both: we have looked, AND the relay knows who we are
     if (!_finRing.length) return false;                     // nothing to rotate yet — ensureFinanceKeyFor mints the first
     const cp = pub;
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     // Newest first, superseded behind it, and the legacy self-key last so the history opens for whoever is
     // still allowed to read it. Capped like the care ring so one envelope cannot outgrow what a relay accepts.
-    _finRing = [fresh, ..._finRing].slice(0, 12);
-    _finRev = (_finRev || 1) + 1;
+    //
+    // COMPUTED, NOT ASSIGNED. rotateCareKey and rotateMediaKey both adopt the new ring only after the publish
+    // succeeds, and this did not: an offline minute left the console sealing ledger entries with a key that
+    // existed nowhere but that tab's memory, and the next reload overwrote it. In an append-only journal
+    // those entries cannot be recovered.
+    const nextRing = [fresh, ..._finRing].slice(0, 12);
+    const nextRev = (_finRev || 1) + 1;
     const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf('finance') >= 0; };
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
-    const ring = JSON.stringify(_finRing);
+    const ring = JSON.stringify(nextRing);
     const keys = await _sealEach(ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', FINKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
-    if (ok !== false) _finDocKeys = keys;
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', FINKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
+    if (ok === false) return false;                          // nothing adopted — the old ring is still the truth
+    _finRing = nextRing; _finRev = nextRev; _finDocKeys = keys;
     return ok;
   },
   // OWNER-ONLY. Wrap the books' key to the church and to every steward the roster gives `finance` to —
   // which, for an unscoped steward, is all of them, exactly as it is everywhere else.
   async ensureFinanceKeyFor(stewardPubs, caps) {
     if (!churchSkHeld() || actingChurch) return false;      // only the owner mints
-    if (!_isRelayAuthed()) return false;                    // never conclude "no envelope" from an unauthed read
+    if (!_finChecked || !_isRelayAuthed()) return false;    // never conclude "no envelope" from an unauthed or unfinished read
     const cp = pub;
     const legacy = _legacyBookKeyHex();
     if (!legacy) return false;
@@ -4568,6 +4587,9 @@ window.Steward = {
     if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) return false;   // nothing changed
     // SOMEBODY LOST ACCESS. Rewrapping the same key without them changes nothing they can read — they hold
     // it already. A shrink is the one case that must mint a new key rather than re-address the old one.
+    // `have` is null until the envelope has actually arrived, and null is not "nobody lost access" — on a
+    // cold console that silently re-sealed the SAME key and the removed treasurer carried on reading.
+    if (!_finDocKeys) return false;
     const lost = Object.keys(have).filter(p2 => want.indexOf(p2) < 0);
     if (lost.length) return window.Steward.rotateFinanceKey(stewardPubs, caps);
     const ring = JSON.stringify(_finRing);

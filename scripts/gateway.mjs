@@ -229,7 +229,11 @@ function _exportAuth(req, host, path) {
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || (CHURCH_PUBS.has(ev.pubkey) ? ev.pubkey : '');
-  return cp && (ev.pubkey === cp || stewardCan(ev.pubkey, cp, 'any')) ? cp : null;   // the church key, or a steward of that church
+  // OWNER-ONLY. /export streams the church's ENTIRE corpus — every message, every member document, and the
+  // safeguarding lists in cleartext. It was reachable by any steward holding any one capability, so a
+  // content-scoped rota helper could take the lot, including minors: and guardians:. Whatever else a
+  // capability grants, it does not grant the whole church.
+  return cp && ev.pubkey === cp ? cp : null;
 }
 // resync gate: a fresh NIP-98 proof bound to /sync, signed by a relay the church TRUSTS (its pubkey is in the
 // church-signed trusted-relays doc) — or by the church key / a steward. Only they receive the FULL corpus (incl.
@@ -1444,7 +1448,10 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     }
   }
   else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
-    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'finance') ? cp : '');
+    // The CARE module's settings, so the care capability — this asked for 'finance' because yesterday's
+    // sweep classified the line by its neighbour rather than by the document it governs. accept() has always
+    // asked for 'care' here, so a care steward's write was taken and then ignored.
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'care') ? cp : '');
     if (!owner) return;
     if (removed) { MEALS_ADMIN_GROUP.delete(owner); MEALS_OPEN_MEMBER.delete(owner); return; }
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
@@ -1550,7 +1557,12 @@ function accept(e) {
       // pin/hide content in church B's group by naming A. GROUP_CHURCH is the group's true owner.
       const g = eventGroup(e); const owner = g && GROUP_CHURCH.get(g);
       if (owner) {
-        if (e.pubkey === owner || isNetwork || stewardCan(e.pubkey, owner, 'content')) return true;   // owner church, its network, or a steward OF THE OWNER
+        // `isNetwork` was the relay-wide union — for an event carrying no church tag it asked "is this key a
+        // network of ANY church here?", never "of THIS group's church". So a key that self-registered on a
+        // community relay held event, pin and hide authority over every group on the box, and this line
+        // returns BEFORE the safeguarding checks below it. Sibling of the leader check fixed on 2026-08-20;
+        // the same mistake, one clause along. networkOf() is already scoped — use it.
+        if (e.pubkey === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'content')) return true;   // owner church, ITS network, or a steward of the owner
 
         // ── SAFEGUARDING. Everything past this line is a MEMBER acting under delegated authority, and until
         // now this path asked only "do you have authority over the group?" — never "are you a child?" or "is
@@ -1589,7 +1601,7 @@ function accept(e) {
         if (GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(e.pubkey)); }
         return churchWriter(e.pubkey, owner);
       }
-      return leaderOf(_netCp) || stewardCan(e.pubkey, namedChurch(e), 'content');   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
+      return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
     }
     // <cp>-keyed membership admin: the church is named in the d-tag → delegate to a steward of THAT church
     for (const pfx of [JOINPOLICY_D, ADMITTED_D]) {

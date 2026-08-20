@@ -151,35 +151,6 @@ test('Finance is offered to a capable delegate, and padlocked for the rest', () 
 //
 // The honest half, which the code comments carry too: rotation protects the FUTURE. Anyone who held the old
 // key can still open everything written before it. What changes is that nothing they see afterwards is new.
-test('after a rotation, the removed treasurer cannot read NEW entries', () => {
-  const oldKey = freshKey;
-  const newKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
-
-  // the church, after rotating: newest key first, superseded behind it, legacy last
-  const church2 = books({ ring: [newKey, oldKey, legacyKey], ownerKey: true });
-  const afterEntry = church2.encSelf({ memo: 'Gas bill', amount: -140 });
-
-  // the removed treasurer still holds only what they had
-  const removed = books({ ring: [oldKey, legacyKey], ownerKey: false });
-  assert.equal(removed.decSelf(afterEntry), null,
-    'a treasurer whose Finance access was taken away can still read entries written afterwards, because the ' +
-    'envelope was rewritten without them but the key never changed');
-
-  // and the treasurer who remains does
-  const kept = books({ ring: [newKey, oldKey, legacyKey], ownerKey: false });
-  assert.deepEqual(kept.decSelf(afterEntry), { memo: 'Gas bill', amount: -140 },
-    'the remaining treasurer lost access at the rotation');
-});
-
-test('and the history still opens for everyone who had it', () => {
-  const oldKey = freshKey;
-  const newKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
-  const before = books({ ring: [oldKey, legacyKey], ownerKey: false }).encSelf({ memo: 'Harvest offering', amount: 310 });
-  const kept = books({ ring: [newKey, oldKey, legacyKey], ownerKey: false });
-  assert.deepEqual(kept.decSelf(before), { memo: 'Harvest offering', amount: 310 },
-    'rotation orphaned the ledger written before it — the superseded keys must stay in the ring');
-});
-
 test('only the owner rotates, and only when somebody has actually lost access', () => {
   const body = stripComments(fnBody(VENDOR, 'async rotateFinanceKey(stewardPubs, caps) {', 'rotateFinanceKey'));
   assert.match(body, /if \(!churchSkHeld\(\) \|\| actingChurch\) return false/,
@@ -200,7 +171,7 @@ test('only the owner rotates, and only when somebody has actually lost access', 
 function runRotate({ ring, allowed, caps }) {
     const published = [];
     const stubs = {
-      churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true,
+      churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true, _finChecked: true,
       _finRing: ring.slice(), _finRev: 1, _finDocKeys: null,
       pub: church.pub, sk: church.sk, churchPub: church.pub,
       crypto: webcrypto, _hex: hex, _unhex: unhex,
@@ -241,4 +212,51 @@ test('the SHIPPED rotation mints a new key and keeps the old ones', async () => 
   assert.ok(ring.includes(legacyKey), 'the legacy key was dropped, orphaning the books written before sharing existed');
   assert.equal(env.rev, 2, 'the revision did not advance, so a lagging relay cannot tell which envelope is newer');
   void stubs;
+});
+
+test('the removed treasurer cannot read what is written after the rotation', async () => {
+  // Drives rotateFinanceKey itself and then uses the ring it really published. The first version of this
+  // test built both rings by hand: deleting the whole function left it green, which is no test at all.
+  const keptSk = generateSecretKey(), keptPub = getPublicKey(keptSk);
+  const goneSk = generateSecretKey(), gonePub = getPublicKey(goneSk);
+  const oldRing = [freshKey, legacyKey];
+
+  const { fn, published } = runRotate({ ring: oldRing });
+  await fn([keptPub, gonePub], { [keptPub]: ['finance'], [gonePub]: ['care'] });   // gone lost finance
+  const env = JSON.parse(published[0].content);
+  assert.ok(!env.keys[gonePub], 'the removed treasurer was handed the new ring anyway');
+
+  const keptRing = JSON.parse(nip44.decrypt(env.keys[keptPub], nip44.utils.getConversationKey(church.sk, keptPub)));
+  const after = books({ ring: keptRing, ownerKey: false }).encSelf({ memo: 'Gas bill', amount: -140 });
+
+  assert.equal(books({ ring: oldRing, ownerKey: false }).decSelf(after), null,
+    'a treasurer whose Finance was taken away can still read entries written afterwards — the envelope was ' +
+    'rewritten without them but the key never changed');
+  assert.deepEqual(books({ ring: keptRing, ownerKey: false }).decSelf(after), { memo: 'Gas bill', amount: -140 },
+    'the remaining treasurer lost access at the rotation');
+  const before = books({ ring: oldRing, ownerKey: false }).encSelf({ memo: 'Harvest', amount: 310 });
+  assert.deepEqual(books({ ring: keptRing, ownerKey: false }).decSelf(before), { memo: 'Harvest', amount: 310 },
+    'rotation orphaned the ledger written before it — the superseded keys must stay in the ring');
+});
+
+test('a failed publish adopts nothing', async () => {
+  // An offline minute used to leave the console sealing entries with a key that existed nowhere but that
+  // tab's memory, and the next reload overwrote it. In an append-only journal that is unrecoverable.
+  const treasurerPub = getPublicKey(generateSecretKey());
+  const { fn, stubs } = runRotate({ ring: [freshKey, legacyKey] });
+  stubs.publish = async () => false;                       // every relay refused
+  const r = await fn([treasurerPub], { [treasurerPub]: ['finance'] });
+  assert.equal(r, false, 'a refused rotation reported success');
+  assert.deepEqual(stubs._finRing, [freshKey, legacyKey],
+    'the console adopted a ring it never managed to publish, so everything it seals next is unreadable to ' +
+    'everyone including itself after a reload');
+});
+
+test('rotation refuses until the envelope has actually been looked for', async () => {
+  const treasurerPub = getPublicKey(generateSecretKey());
+  const { fn, published, stubs } = runRotate({ ring: [freshKey, legacyKey] });
+  stubs._finChecked = false;                               // subscription has not reached EOSE
+  const r = await fn([treasurerPub], { [treasurerPub]: ['finance'] });
+  assert.equal(r, false, 'rotated on an unfinished read of the corpus');
+  assert.equal(published.length, 0, 'published an envelope before knowing what was already there');
 });
