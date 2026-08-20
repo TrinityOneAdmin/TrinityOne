@@ -16065,6 +16065,15 @@ zoo`.split("\n");
         const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
         setKey(seed);
         window.Steward.locked = false;
+        if (actingChurch) {
+          const target = actingChurch;
+          actingChurch = "";
+          window.Steward.actingChurch = "";
+          try {
+            window.Steward.setActiveIdentity(target);
+          } catch (e) {
+          }
+        }
         window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
         return true;
       } catch {

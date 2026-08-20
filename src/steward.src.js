@@ -2173,6 +2173,29 @@ window.Steward = {
       const o = JSON.parse(raw);
       const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
       setKey(seed); window.Steward.locked = false;
+      // RESTORE THE ACTING IDENTITY, or stop claiming one.
+      //
+      // setKey() rebuilds `pub` from THIS DEVICE'S OWN seed. For an owner that is the church and everything is
+      // consistent. For a delegated steward it is their personal key — while `actingChurch` survives the lock
+      // untouched, because lock() only forgets key material. So without this the console comes back saying
+      // "Acting as steward for <church>" in the header while every subscription reads the DELEGATE'S OWN
+      // empty documents.
+      //
+      // Measured on a live console, 2026-08-20 (round 7, R7-25): lock then unlock, and subscribeSafeguard goes
+      // from {minors: 1, guardians: 1, loaded: true} to {minors: 0, guardians: 0, loaded: false}. The kids
+      // check-in panel then renders "No children marked yet" — which hides the whole register INCLUDING a
+      // child currently checked in, so there is no "Check out" control left to press. A safeguarding lead
+      // whose console idle-locked could not check a child out, and nothing anywhere said why. Every symptom
+      // is silence; the header goes on lying throughout.
+      //
+      // Clear first, then re-enter through setActiveIdentity() — the one function that sets `pub` and
+      // `actingChurch` together — so a failure to get back leaves the console honestly in its own identity
+      // rather than half in someone else's.
+      if (actingChurch) {
+        const target = actingChurch;
+        actingChurch = ''; window.Steward.actingChurch = '';
+        try { window.Steward.setActiveIdentity(target); } catch (e) {}
+      }
       window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
       return true;
     } catch { return false; }

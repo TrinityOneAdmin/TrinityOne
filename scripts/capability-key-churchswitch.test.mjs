@@ -210,3 +210,41 @@ test('a subscription left over from the previous church cannot POISON the new on
   assert.deepEqual(t.state.checkin.ring, [t.keyB],
     'church B\'s own envelope was refused after the stale delivery — the console holds no register key at all');
 });
+
+// ── unlocking must not strand a delegate ─────────────────────────────────────────────────────────────────
+// Found by round 7 (R7-25) and reproduced on a live console. lock() forgets key material and leaves
+// `actingChurch` alone. unlock() calls setKey(), which rebuilds `pub` from THIS DEVICE'S seed — the church
+// for an owner, the steward's personal key for a delegate. So a delegated console came back from a PIN
+// unlock still saying "Acting as steward for <church>" in its header while every subscription read the
+// delegate's own empty documents.
+//
+// Measured before the fix: subscribeSafeguard went {minors: 1, guardians: 1, loaded: true} -> {minors: 0,
+// guardians: 0, loaded: false} across a lock/unlock. The kids check-in panel then rendered "No children
+// marked yet", which hides the WHOLE register including a child currently checked in — so there was no
+// "Check out" control left to press. That is the entire explanation for R7-1, which had been filed as a
+// check-out bug. Every symptom was silence.
+test('unlocking restores the acting identity, or claims none', () => {
+  const body = stripComments(fnBody(SRC, 'async unlock(pin) {', 'unlock'));
+  const setKeyAt = body.indexOf('setKey(seed)');
+  const restoreAt = body.indexOf('setActiveIdentity(target)');
+  assert.ok(setKeyAt > 0, 're-anchor: unlock no longer calls setKey');
+  assert.ok(restoreAt > 0,
+    'unlock() does not restore the acting identity. setKey() has just reset `pub` to this device\'s own key ' +
+    'while `actingChurch` survived the lock, so a delegated console comes back claiming to act for a church ' +
+    'whose documents it can no longer read — and says nothing.');
+  assert.ok(restoreAt > setKeyAt,
+    'the restore runs BEFORE setKey, so setKey overwrites it again — the same broken state, one line later');
+  assert.match(body, /actingChurch = ''; window\.Steward\.actingChurch = '';/,
+    'the acting church is not cleared before re-entering, so a failed restore leaves the console half in a ' +
+    'church it cannot read rather than honestly in its own identity');
+});
+
+test('lock() still does not clear the acting church — the restore depends on it', () => {
+  // If lock() ever starts clearing actingChurch, the restore above silently becomes a no-op and delegates go
+  // back to being dropped into their own church on every unlock. Anchored so that change cannot pass quietly.
+  const body = stripComments(fnBody(SRC, 'lock() {', 'lock'));
+  assert.doesNotMatch(body, /actingChurch = ''/,
+    'lock() now clears actingChurch, so unlock() has nothing to restore and every delegate is dropped back ' +
+    'into their own empty church whenever the console idles');
+  assert.match(body, /sk = null; pub = null;/, 're-anchor: lock no longer forgets the key material');
+});
