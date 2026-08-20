@@ -384,11 +384,18 @@ test('the mint does not fire for a church that does not exist', () => {
   // Anchored on ORDER, not a character window — a lazy quantifier matched only the first line and passed
   // against the sabotage, which is the third time today a regex window has quietly proved nothing.
   const ownerOnly = dash.indexOf('if (!S || S.actingChurch || !S.ensureCapKeyFor) return;');
-  const nameGuard = dash.indexOf('if (!church.name) return;');
+  const nameGuard = dash.indexOf('if (!church.name) return;', ownerOnly);   // the one AFTER the owner check, not the first in the file
   assert.ok(ownerOnly > 0, 're-anchor: the mint guard changed shape');
   assert.ok(nameGuard > ownerOnly && nameGuard - ownerOnly < 200,
     'the mint still fires on a console whose own church has never been created — so a delegated steward ' +
     'generates refused writes for a church nobody hosts, and meets a permanent "changes weren\'t saved" banner');
+
+  // BOTH effects that publish key envelopes need it, not just the capability one. The media/care/name key
+  // effect had the same shape and produced most of the noise: measured 28 refusals per session for one
+  // seated steward, down to 1 (a NIP-65 relay list from setKey) once both were guarded, and the banner gone.
+  assert.equal((dash.match(/if \(!church\.name\) return;/g) || []).length, 2,
+    'only one of the two key-publishing effects is guarded, so a delegated steward still generates refused ' +
+    'writes for a church that exists nowhere — and still meets the banner telling them their work was lost');
 });
 
 test('the PADLOCK layer and the KEY layer read one rule, not two copies of it', () => {

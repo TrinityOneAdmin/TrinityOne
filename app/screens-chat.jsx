@@ -133,7 +133,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const Header = ({ title, back }) => (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-        {back ? <button onClick={() => setPane('main')} style={{ width: 34, height: 34, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={19} /></button>
+        {back ? <button aria-label="Back" onClick={() => setPane('main')} style={{ width: 34, height: 34, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={19} /></button>
           : <div style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--clay-soft)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={21} /></div>}
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>{title}</div>
       </div>
@@ -1064,7 +1064,7 @@ function GroupEventComposer({ group, ctx, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
           <div style={{ width: 38, height: 38, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="calPlus" size={20} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>New event</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>for {group.name}</div></div>
-          <button onClick={onClose} style={{ border: 'none', background: 'var(--surface-2)', borderRadius: 999, width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="x" size={17} /></button>
+          <button aria-label="Close" onClick={onClose} style={{ border: 'none', background: 'var(--surface-2)', borderRadius: 999, width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="x" size={17} /></button>
         </div>
         <div style={lbl}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer breakfast" style={fld} />
@@ -1359,7 +1359,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       <div style={{ paddingTop: docked ? 12 : 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)',
         backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
-          {!docked ? <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button> : null}
+          {!docked ? <button aria-label="Back" onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button> : null}
           <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent), flexShrink: 0 }}>
             <Icon name={group.prayer ? 'pray' : 'chat'} size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1768,7 +1768,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
     <Overlay open={open} onClose={onClose} docked={docked}>
       <div style={{ paddingTop: docked ? 12 : 50, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
-          <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+          <button aria-label="Back" onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
           <UserAvatar av={avOf(d)} name={d.handle} size={38} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{d.handle}</div>

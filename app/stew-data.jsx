@@ -196,14 +196,38 @@ function SkQR({ size = 120, seed = 'GRACE-7K2', halo = true, fg = '#1a1410' }) {
 }
 
 // ── truncated mono key chip with copy ──
+// SHOWABLE IN FULL, not only copyable.
+//
+// Round 7 (R7-22) put two people through the handoff that makes someone a steward: the helper reads their
+// code to the vicar, he types it in. It could not be done. The value was elided EVERYWHERE it appeared —
+// sidebar, code card, even the Show-QR screen — and measured in the DOM, not merely visually: no occurrence
+// was ever the full string. So the code could travel by CLIPBOARD (same device) or QR (same room, with a
+// camera) and by no other route. A vicar at the church computer and a volunteer at home on the phone — the
+// ordinary case — simply could not finish. The agent playing it gave up there.
+//
+// The short form stays the default because these are long and appear in tight rows. Tapping reveals the whole
+// thing, wrapped and selectable, so it can be read aloud, written on paper, or put in an email.
 function SkKey({ value, label = 'npub', tint = 'clay', style = {} }) {
   const [copied, setCopied] = React.useState(false);
-  const short = value.length > 26 ? value.slice(0, 14) + '…' + value.slice(-7) : value;
+  const [full, setFull] = React.useState(false);
+  const long = value.length > 26;
+  const short = long ? value.slice(0, 14) + '…' + value.slice(-7) : value;
   const t = SK_TINT[tint] || SK_TINT.clay;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', ...style }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', flexWrap: full ? 'wrap' : 'nowrap', ...style }}>
       <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: t.fg, background: t.bg, padding: '3px 7px', borderRadius: 6 }}>{label}</span>
-      <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
+      {long ? (
+        <button onClick={() => setFull(f => !f)} aria-label={full ? ('Hide the full ' + label) : ('Show the full ' + label + ' so you can read it out')}
+          title={full ? 'Tap to shorten' : 'Tap to show it in full — so you can read it out or write it down'}
+          style={{ flex: full ? '1 1 100%' : 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+            fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5,
+            ...(full ? { whiteSpace: 'normal', wordBreak: 'break-all', userSelect: 'text', order: 3, marginTop: 2 }
+                     : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }}>
+          {full ? value : short}
+        </button>
+      ) : (
+        <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
+      )}
       <button onClick={() => { copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1400); }} title={'Copy ' + label} style={{ border: 'none', background: 'none', cursor: 'pointer', color: copied ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', padding: 4 }}>
         <Icon name={copied ? 'check' : 'copy'} size={16} stroke={2} color="currentColor" />
       </button>

@@ -380,6 +380,7 @@ function JoinNotifier() {
 // allowlist). reuse-only — it never mints a new key in the background (that would orphan history); removals
 // are rotated explicitly from the edit-members modal. Renders nothing.
 function KeyDistributor() {
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const last = React.useRef({});
@@ -433,6 +434,14 @@ function KeyDistributor() {
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
+    // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
+    // OWN identity has no acting church, so this effect ran on a console whose church exists nowhere and
+    // published media/care/name key envelopes the relay could only refuse. round 7 measured one seated
+    // steward at 28 refusals in a session — carekey x13, namekey, joinpolicy among them — and each refusal
+    // raises the sticky banner "Changes weren't saved: this relay is set up for a different church. Restore
+    // this church's key in Settings…". That banner then sat on every screen telling a treasurer her work was
+    // not saving WHILE THE RELAY ACCEPTED EVERY ENTRY, and its remedy destroys a church key if followed.
+    if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
