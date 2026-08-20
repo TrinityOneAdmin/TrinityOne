@@ -373,6 +373,61 @@ test('an UNSCOPED steward gets the books, but NOT the children\'s register', () 
   })();
 });
 
+test('the mint does not fire for a church that does not exist', () => {
+  // Round 7, R7-2. "Owner console only" was written as `!S.actingChurch` — but a DELEGATE viewing their own
+  // identity also has no acting church, so the console minted capability envelopes for a church that exists
+  // nowhere. Measured in relay/rejected.log: one properly seated steward refused 28 times, every d-tag keyed
+  // to his own pubkey (financekey x6, checkinkey x6, carekey x13). Those refusals raise a sticky banner
+  // telling the user their work was not saved — while the relay was accepting everything they actually did —
+  // and its suggested remedy destroys a church key if followed.
+  const dash = stripComments(DASH);
+  // Anchored on ORDER, not a character window — a lazy quantifier matched only the first line and passed
+  // against the sabotage, which is the third time today a regex window has quietly proved nothing.
+  const ownerOnly = dash.indexOf('if (!S || S.actingChurch || !S.ensureCapKeyFor) return;');
+  const nameGuard = dash.indexOf('if (!church.name) return;');
+  assert.ok(ownerOnly > 0, 're-anchor: the mint guard changed shape');
+  assert.ok(nameGuard > ownerOnly && nameGuard - ownerOnly < 200,
+    'the mint still fires on a console whose own church has never been created — so a delegated steward ' +
+    'generates refused writes for a church nobody hosts, and meets a permanent "changes weren\'t saved" banner');
+});
+
+test('the PADLOCK layer and the KEY layer read one rule, not two copies of it', () => {
+  // Round 7, R7-17. The `explicit` decision was made in the key layer only. stewCapState() went on treating
+  // "no capability list" as "everything", so an unscoped steward got an UNLOCKED Check-in tab, the screen
+  // rendered for her, and the register key was then withheld — correctly, and silently. Five taps, no form,
+  // no error. Her words: "I found the edges of what I could do by things quietly not happening."
+  //
+  // The fix is not a second copy of the rule in the console. It is one question, asked of the module that
+  // owns CAP_KEYS. A copy is exactly how the two layers drifted apart.
+  const vendorHas = /capNeedsExplicitGrant\(cap\)\s*\{[^}]*CAP_KEYS\[k\]\.explicit/.test(VENDOR);
+  assert.ok(vendorHas,
+    'the module does not expose capNeedsExplicitGrant reading CAP_KEYS.explicit, so the console has nothing ' +
+    'to ask and must be keeping its own copy of which capabilities need an explicit grant');
+
+  const dash = stripComments(DASH);
+  const body = dash.slice(dash.indexOf('function stewCapState'), dash.indexOf('function stewCapState') + 1400);
+  assert.match(body, /capNeedsExplicitGrant\(cap\)/,
+    'stewCapState still says "unscoped means everything" without asking whether this capability has to be ' +
+    'given on purpose — so the padlock says yes while the key says no, and the user meets a dead button');
+  assert.match(body, /unscoped: true/,
+    're-anchor: the unscoped refusal is no longer distinguishable, so the panel cannot explain itself to ' +
+    'someone who believes they already have everything');
+});
+
+test('and the refusal an UNSCOPED steward reads is not the one a scoped steward reads', () => {
+  // "Your church hasn't given you Safeguarding" is the plain truth for someone who was given three areas and
+  // not this one. To someone who has everything it reads as a mistake or a demotion — so it has to say that
+  // this area is never part of "everything", and why.
+  const dash = stripComments(DASH);
+  const panel = dash.slice(dash.indexOf('function StewCapBlocked'), dash.indexOf('function StewCapBlocked') + 2600);
+  assert.match(panel, /st\.unscoped/, 'StewCapBlocked does not distinguish the two readers');
+  assert.match(panel, /never\s+included automatically/,
+    'the unscoped refusal does not tell them this area is never part of "everything"');
+  assert.match(panel, /haven.t lost anything/,
+    'the unscoped refusal does not say they have lost nothing — which is the fact that stops it reading as a demotion');
+  assert.match(panel, /one click/, 'the unscoped refusal does not tell them how small the fix is');
+});
+
 test('an EXPLICIT safeguarding grant does get the register', () => {
   // The other half — the exception must not make the capability unusable.
   return (async () => {

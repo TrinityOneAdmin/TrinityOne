@@ -18701,6 +18701,17 @@ zoo`.split("\n");
     capKeyRing(kind) {
       return (_capState[kind] ? _capState[kind].ring : []).slice();
     },
+    // DOES THIS CAPABILITY HAVE TO BE GIVEN ON PURPOSE? Asked by the console so the padlocks and the KEYS can
+    // never disagree — and they did. `explicit` lives in CAP_KEYS, so the console must read it from here rather
+    // than keep a copy: a second copy is how the two layers drifted apart in the first place.
+    //
+    // Round 7 measured what the drift costs. An unscoped steward's console said she could run safeguarding
+    // (`stewCapState` treats "no caps list" as "everything"), rendered the Check-in screen for her, and then
+    // withheld the register key — which is correct, and which nobody told her. Her words: "I never got told no
+    // in plain words… I found the edges of what I could do by things quietly not happening."
+    capNeedsExplicitGrant(cap) {
+      return Object.keys(CAP_KEYS).some((k) => CAP_KEYS[k].cap === cap && CAP_KEYS[k].explicit);
+    },
     financeKeyRing() {
       return window.Steward.capKeyRing("finance");
     },

@@ -56,26 +56,63 @@ function stewCapState(cap) {
   const S = window.Steward || {};
   if (!S.actingChurch) return { allowed: true, owner: true, why: '' };          // the owner console: unrestricted
   const caps = S.myStewardCaps ? S.myStewardCaps() : null;
-  if (caps === null || !Array.isArray(caps)) return { allowed: true, owner: false, why: '' };   // unscoped, or not known yet
+  if (caps === null || !Array.isArray(caps)) {
+    // UNSCOPED — "no capability list" means a steward appointed before capabilities existed, and everywhere
+    // else it means "as powerful as before", so that upgrading cannot strip a working delegate.
+    //
+    // Except where the capability carries a key that must be given on purpose. The children's register is the
+    // only one today: before 2026-08-20 NO delegate could open a check-in record at all, so inheriting it on
+    // upgrade would hand every steward a church ever appointed the name, room and pickup code of every child,
+    // with nobody asked. The KEY layer already refuses; this is the padlock agreeing with it out loud, instead
+    // of opening a screen that then does nothing.
+    if (S.capNeedsExplicitGrant && S.capNeedsExplicitGrant(cap)) {
+      return { allowed: false, owner: false, unscoped: true,
+        why: (STEW_CAP_LABEL[cap] || cap) + ' has to be given on purpose — it isn’t included in “everything”.' };
+    }
+    return { allowed: true, owner: false, why: '' };
+  }
   if (caps.indexOf(cap) >= 0) return { allowed: true, owner: false, why: '' };
   return { allowed: false, owner: false, why: 'Your church hasn’t given you ' + (STEW_CAP_LABEL[cap] || cap) + '.' };
 }
 // The panel a delegate meets instead of a screen they were not granted. It names who can change it, because
 // the useful next step is asking them — not staring at a locked page.
 function StewCapBlocked({ cap, note }) {
+  // TWO REFUSALS, because two different people are reading. A scoped steward was given some areas and not
+  // this one; telling them "this hasn't been given to you" is the plain truth. An UNSCOPED steward believes
+  // they have everything — and everywhere else they do — so the same sentence reads as a mistake or a
+  // demotion. They need to know this one area is not part of "everything", and why.
+  const st = stewCapState(cap);
+  const unscoped = !!st.unscoped;
   return (
     <div style={{ padding: '28px 22px', maxWidth: 520 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <Icon name="lock" size={20} color="var(--clay-deep, #b4462f)" />
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>{STEW_CAP_LABEL[cap] || cap} isn’t yours to run</div>
       </div>
-      <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
-        You’re helping run this church as a steward, and this part hasn’t been given to you. Nothing is
-        broken and you haven’t done anything wrong.
-      </p>
-      <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
-        Whoever holds the church key can change that from <b>Settings → Delegated stewards</b>. {note || ''}
-      </p>
+      {unscoped ? (
+        <React.Fragment>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+            You can run everything else in this church — but <b>{STEW_CAP_LABEL[cap] || cap}</b> is never
+            included automatically. It opens children’s records: their names, the room they’re in, and the
+            code that says who may collect them. Nothing is broken and you haven’t lost anything — this part
+            has always been kept to whoever holds the church key.
+          </p>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
+            If it’s your job now, ask them to tick <b>{STEW_CAP_LABEL[cap] || cap}</b> beside your name under
+            <b> Settings → Delegated stewards</b>. It takes them one click. {note || ''}
+          </p>
+        </React.Fragment>
+      ) : (
+        <React.Fragment>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+            You’re helping run this church as a steward, and this part hasn’t been given to you. Nothing is
+            broken and you haven’t done anything wrong.
+          </p>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
+            Whoever holds the church key can change that from <b>Settings → Delegated stewards</b>. {note || ''}
+          </p>
+        </React.Fragment>
+      )}
     </div>
   );
 }
@@ -1021,7 +1058,24 @@ function StewDashboard({ initial = 'overview' }) {
   // nothing — so re-running it costs one comparison.
   React.useEffect(() => {
     const S = window.Steward;
-    if (!S || S.actingChurch || !S.ensureCapKeyFor) return;          // owner console only
+    // OWNER CONSOLE ONLY — and "owner" is not the same as "not currently acting for someone else".
+    //
+    // A delegated steward viewing THEIR OWN identity has `actingChurch` empty, so this guard passed and the
+    // console cheerfully minted capability envelopes for the delegate's own church — one that exists nowhere,
+    // least of all on this relay. Measured in round 7 (`relay/rejected.log`): Con, a properly seated steward,
+    // was refused 28 times, all for d-tags keyed to his OWN pubkey — financekey x6, checkinkey x6, carekey
+    // x13. Those refusals raise the sticky banner "Changes weren't saved: this relay is set up for a
+    // different church. Restore this church's key in Settings…", which then sat on every screen for the whole
+    // session — telling a treasurer her work was not saving WHILE THE RELAY WAS ACCEPTING EVERY ENTRY, and
+    // offering a remedy that destroys a church key if followed.
+    //
+    // Pre-existing for the care and name keys; this branch made it worse by adding two more capabilities to
+    // the loop. `church.name` is the proxy for "this console's church actually exists": a shell created by
+    // "Help run a church" has never named or published one. It is a proxy, not a proof — the honest signal
+    // would be asking the relay which churches it hosts, which it does not expose unauthenticated — but it
+    // costs nothing when wrong, because the effect re-runs the moment a name arrives.
+    if (!S || S.actingChurch || !S.ensureCapKeyFor) return;
+    if (!church.name) return;   // no church of our own to mint for — see above
     const caps = (S.stewardCaps && S.stewardCaps()) || {};
     let cancelled = false;
     const t = setTimeout(() => {
