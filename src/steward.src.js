@@ -4601,7 +4601,15 @@ window.Steward = {
           if (mine) {
             const plain = nip44d(mine, nip44ck(sk, e.pubkey));
             let ring = null; try { const pj = JSON.parse(plain); if (Array.isArray(pj)) ring = pj.filter(x => typeof x === 'string' && x); } catch (x) {}
-            st.ring = ring && ring.length ? ring : [plain];
+            const incoming = ring && ring.length ? ring : [plain];
+            // MERGE, DO NOT REPLACE — the rule subscribeMediaKey already keeps, and for the same reason: if
+            // this console minted a key before the envelope arrived, discarding it here orphans everything
+            // sealed in that window. That window is real and reachable: nostr-tools counts a relay that fails
+            // to CONNECT as an end-of-stored-events, so `checked` can go true on an answer no relay gave, the
+            // mint then concludes "this church has no envelope" and publishes a fresh key over the real one.
+            // Merging means the worst case is a redundant key in the ring rather than unreadable records —
+            // and for the register there is no legacy fallback to catch them.
+            st.ring = [...incoming, ...st.ring.filter(k => incoming.indexOf(k) === -1)].slice(0, 12);
           } else if (!churchSkHeld()) {
             st.ring = [];                                  // we are not (or no longer) keyed for this
           }
@@ -4626,21 +4634,26 @@ window.Steward = {
     if (!churchSkHeld() || actingChurch) return false;      // only the owner mints
     if (!st.checked || !_isRelayAuthed()) return false;     // never conclude "no envelope" from an unfinished read
     const cp = pub;
-    const prevRing = st.ring.slice();          // to put back if the publish fails — see the rollback below
-    if (!st.ring.length) {
+    // COMPUTED, NEVER ASSIGNED UNTIL IT IS PUBLISHED — the rule rotateCapKey already keeps. The earlier
+    // version wrote the candidate into st.ring so _sealEach could read it, and rolled back afterwards if the
+    // publish failed. That leaves a window: across the await of _sealEach and publish, st.ring[0] IS the
+    // un-published key, and any record encSeal writes during it is sealed with a key that ends up existing
+    // nowhere. Measured — an entry written in that window could not be opened by the rolled-back console.
+    let nextRing = st.ring.slice();
+    if (!nextRing.length) {
       const first = _hex(crypto.getRandomValues(new Uint8Array(32)));
       // The legacy self-key rides ONLY in the ring of the thing that cannot be re-keyed. See CAP_KEYS.
       const legacy = spec.legacy ? _legacyBookKeyHex() : '';
       if (spec.legacy && !legacy) return false;
-      st.ring = legacy ? [first, legacy] : [first];
+      nextRing = legacy ? [first, legacy] : [first];
     } else if (spec.legacy) {
       const legacy = _legacyBookKeyHex();
-      if (legacy && st.ring.indexOf(legacy) < 0) st.ring = [...st.ring, legacy];
+      if (legacy && nextRing.indexOf(legacy) < 0) nextRing = [...nextRing, legacy];
     }
     const allowed = _capAllows(spec, caps);
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
     const have = st.docKeys || {};
-    if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) { st.ring = prevRing; return false; }   // nothing changed
+    if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) return false;   // nothing changed
     // THE FIRST MINT HAS TO BE ABLE TO HAPPEN. This used to read `if (!docKeys) return false` — guarding a
     // real hazard (re-sealing the same key when we cannot see who was removed) but placed so that it also
     // blocked the case where there is nothing to re-seal. Measured on the shipped bundle: for a church with
@@ -4655,17 +4668,17 @@ window.Steward = {
     // does its original job.
     if (st.docKeys) {
       const lost = Object.keys(have).filter(p2 => want.indexOf(p2) < 0);
-      if (lost.length) { st.ring = prevRing; return window.Steward.rotateCapKey(kind, stewardPubs, caps); }
+      if (lost.length) return window.Steward.rotateCapKey(kind, stewardPubs, caps);
     }
-    const keys = await _sealEach(JSON.stringify(st.ring), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     _warnUnsealed(spec.cap, _sealEachFailed);
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', spec.d + cp], ['t', NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
     // ADOPT ONLY WHAT WAS PUBLISHED — the rule rotateCapKey already keeps, and for the same reason. The ring
     // is assigned above so it can be sealed, but a failed publish would leave this console holding a key that
     // exists nowhere else. It would then seal the church's records with it, and the next reload — which
     // rebuilds the ring from the envelope that was never written — could not open any of them.
-    if (ok === false || ok == null) { st.ring = prevRing; return false; }
-    st.docKeys = keys;
+    if (ok === false || ok == null) return false;   // nothing adopted — st.ring was never touched
+    st.ring = nextRing; st.docKeys = keys;
     return ok;
   },
 
@@ -4758,10 +4771,27 @@ window.Steward = {
     // again each time the ring changes.
     const kk = kind || 'finance';
     const held = new Map();   // id -> { content, ts }
+    // A CAP, because this pen fills with whatever the relay sends. A console that holds no key at all — a
+    // delegate before their envelope arrives, or one who was never granted the capability — keeps every
+    // ciphertext it is offered. 20,000 journal-shaped documents measured at +48 MB of heap that nothing ever
+    // evicted. Oldest-first: the pen exists for documents that arrived a moment too early, and the newest
+    // arrivals are the ones a key is most likely still coming for.
+    const HELD_CAP = 2000;
     const take = (id, content, ts) => {
       const obj = window.Steward.encOpen(kk, content);
-      if (obj == null) { held.set(id, { content, ts }); return false; }
-      held.delete(id); byId.set(id, { id, ...obj, ts });
+      if (obj == null) {
+        if (!held.has(id) && held.size >= HELD_CAP) { const oldest = held.keys().next().value; held.delete(oldest); }
+        held.set(id, { content, ts });
+        return false;
+      }
+      held.delete(id);
+      // NEWEST WINS. take() is called from two places — a live delivery, and a retry once the key lands — so
+      // a document can be opened out of order. Without this, an OLDER version held from before the key
+      // arrived overwrote the newer one already on screen, and the newer one was gone for good: nothing
+      // re-delivers it, because the subscription had already handed it over once.
+      const prev = byId.get(id);
+      if (prev && (prev.ts || 0) > (ts || 0)) return true;
+      byId.set(id, { id, ...obj, ts });
       return true;
     };
     const retry = () => {
@@ -4791,9 +4821,18 @@ window.Steward = {
         // tampered with — dropping them would delete the months they served from the church's accounts. The
         // children's register is evidence, and does not stop being true because the volunteer who wrote it
         // stood down; a church watching present children vanish mid-session has no way to tell why.
-        if (e.pubkey !== cp && !_careRoster.has(e.pubkey) && !d.startsWith('finance/journal:') && !d.startsWith('trinityone/checkin:')) return;
+        const authored = e.pubkey === cp || _careRoster.has(e.pubkey);
         const id = d.slice(prefix.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); held.delete(id); emit(); return; }
+        const tomb = e.tags.some(t => t[0] === 'deleted') || !e.content;
+        // A DELETION ALWAYS NEEDS LIVE AUTHORITY. The exemption below is about keeping history that a
+        // departed steward wrote; it is not a licence for anyone at all to erase it. The tombstone branch runs
+        // BEFORE any decryption, so without this an author who holds no key — a stranger on a non-enforcing
+        // relay, or a forged event already on disk from before /import checked anything — could publish
+        // `d=finance/journal:1` with ['deleted','1'] and wipe that entry off the treasurer's screen.
+        if (tomb && !authored) return;
+        // Kept even when the author has left the roster: the append-only ledger, and the children's register.
+        if (!authored && !d.startsWith('finance/') && !d.startsWith('trinityone/checkin:')) return;
+        if (tomb) { byId.delete(id); held.delete(id); emit(); return; }
         if (!take(id, e.content, e.created_at)) return;   // held for a key that has not arrived yet
         emit();
       },

@@ -354,5 +354,7 @@ test('the register survives the volunteer standing down', () => {
   assert.match(line[0], /CHECKIN_D/,
     'the children\'s register is not exempt from retraction, so a crèche volunteer standing down erases ' +
     'every check-in they ever recorded — including children currently in the room');
-  assert.match(line[0], /FIN_JOURNAL_D/, 're-anchor: the ledger exemption went with it');
+  assert.match(line[0], /startsWith\(['"]finance\/['"]\)/,
+    're-anchor: the finance exemption went with it (it covers the whole module, not just the journal — see ' +
+    'delegated-finance.test.mjs for why the journal alone was not enough)');
 });

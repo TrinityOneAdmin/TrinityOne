@@ -2066,7 +2066,13 @@ function canRead(e, authed) {
     // A safeguarding record is evidence. It does not stop being true because the person who wrote it left,
     // and a register that quietly drops entries when a rota changes is worse than no register, because
     // nobody can tell it has happened.
-    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith(FIN_JOURNAL_D) || d.startsWith(CHECKIN_D);
+    // 'finance/' — the WHOLE module, not just the journal. Exempting the journal alone leaves the entries
+    // served and useless: the chart of accounts, the funds and the settings are steward-writable too, so a
+    // departed treasurer takes those with them and the ledger then replays against accounts that no longer
+    // exist ("unknown account a1", "sequence gap: expected 1, got 2"). The church still opens its books to
+    // find the months missing, by a different route. Every finance/ document is church-or-finance-steward
+    // writable at the door, so retaining them is the same judgement in every case.
+    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith('finance/') || d.startsWith(CHECKIN_D);
     // 'any', deliberately, and NOT this document's own capability. This asks whether the author still acts
     // for the church at all, so that narrowing a delegate to Finance does not make every group they ever
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is
@@ -2831,7 +2837,6 @@ function serveStatic(req, res) {
         if (fresh && CHURCH_PUBS.size >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
         if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
         let imported = 0, duplicates = 0, invalid = 0;
-        const checkIds = [];   // everything we stored, re-checked against accept() once the maps are built
         for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
           const s = line.trim(); if (!s) continue;
           let e; try { e = JSON.parse(s); } catch { invalid++; continue; }
@@ -2840,41 +2845,33 @@ function serveStatic(req, res) {
           if (!ok) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
-            if (r === 'stored') { imported++; checkIds.push(e.id); }
+            if (r === 'stored') imported++;
             if (e.kind === 5) applyDeletions(e);   // ALWAYS — a kind-5 we already hold ('duplicate') still has to be applied, or a restore silently resurrects everything it deleted
             else duplicates++;
           } catch { invalid++; }
         }
         // respond BEFORE the heavy re-scan so a slow hydrate can't time the request out at the proxy (→ 502)
         res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
-        setImmediate(() => {
-          try { hydrateMaps(); } catch {}
-          // NOW APPLY THE WRITE POLICY. Every event above went in through store.put() without accept() ever
-          // being asked — the one path into this relay that skipped it. Signatures were checked, and note()
-          // re-checks authorship for the rosters and safeguarding lists, so the forged-list attack was never
-          // available; but accept() enforces things authorship alone does not. Most seriously the minor↔adult
-          // DM gate: an archive could carry kind-4 messages from an uncleared adult to a child, and this
-          // relay would then serve them. Restoring a backup is not a reason to hold a message the relay would
-          // have refused at the door.
-          //
-          // TWO PASSES, deliberately, and this is why accept() could not simply be called inline: accept()
-          // reads the membership, roster and group maps, and during an import those are built FROM the events
-          // being imported. Checking each one as it arrived would refuse every member-authored document that
-          // happened to land before the member: doc it depends on — which is most of a real archive, in an
-          // order nobody controls. So: store it all, hydrate, then ask the question with the maps complete.
-          let refused = 0;
-          try {
-            for (const id of checkIds) {
-              const ev = store.query({ ids: [id], limit: 1 })[0];
-              if (!ev) continue;
-              let ok = false; try { ok = accept(ev); } catch { ok = false; }
-              if (!ok) { store.del(id); refused++; }
-            }
-            if (refused) { try { hydrateMaps(); } catch {} }   // a refused event may have fed a map on the first pass
-          } catch {}
-          if (refused) console.log(`[import] ${refused} event(s) refused by the write policy and dropped`);
-          try { store.cull(); } catch {}
-        });   // membership/groups/care live once this settles
+        // WHY THERE IS NO accept() PASS HERE. One was added on 2026-08-20 and reverted the same day: it
+        // deleted a church's entire finance journal on a legitimate restore, and every message ever written
+        // by anyone who has since left. accept() is a WRITE-TIME ADMISSION GATE — "may this author add this,
+        // right now, given who is a member and what sequence number we are on" — and an archive cannot answer
+        // that question. Its journal entries are compared against a sequence counter the archive itself has
+        // just set, so every one of them is "not the next entry"; its historical messages are compared
+        // against today's membership, so everyone who has left fails.
+        //
+        // Two further reasons the shape was wrong, both measured: store.del() is a bare DELETE that records no
+        // tombstone (see event-store.mjs), so anything it removed came straight back on the next peer sync;
+        // and the loop blocked the event loop for ~7.5 s on a 7.8 MB archive, AFTER the client had been told
+        // the import succeeded, on a relay serving other churches.
+        //
+        // The finding it was meant to close is still open and still real: /import is the one path into this
+        // relay that bypasses the write policy, so an archive can carry a kind-4 from an uncleared adult to a
+        // child and this relay will serve it. Closing it needs a NARROW safeguarding-only check that has no
+        // retention semantics, real tombstones so a sync cannot undo it, and chunked work that yields. That is
+        // its own piece of work, not a line in an import handler. /import is owner-only (_exportAuth), which
+        // is what makes leaving it open survivable in the meantime.
+        setImmediate(() => { try { hydrateMaps(); } catch {} try { store.cull(); } catch {} });   // membership/groups/care live once this settles
       } catch (err) { try { res.writeHead(500, H); res.end(JSON.stringify({ error: 'import failed: ' + ((err && err.message) || 'error') })); } catch {} }
     });
     return;

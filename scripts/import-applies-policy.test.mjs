@@ -1,20 +1,24 @@
-// AN ARCHIVE MAY NOT CARRY IN WHAT THE FRONT DOOR REFUSES.
+// A RESTORE MUST NOT LOSE ANYTHING — and what /import does NOT check, and why.
 // Run: node --test scripts/import-applies-policy.test.mjs
 //
-// /import was the one path into this relay that never called accept(). Signatures were verified, and note()
-// re-checks authorship before it trusts a roster or a safeguarding list — so the obvious attack (forge the
-// church's own minors: list) was never available. What WAS available is everything accept() enforces beyond
-// authorship, and the sharpest of those is the minor↔adult DM gate: an archive could carry kind-4 messages
-// from an uncleared adult to a child, and this relay would serve them from then on.
+// /import is the one path into this relay that never calls accept(). On 2026-08-20 a two-pass policy check
+// was added to close that, and reverted the same afternoon when an adversarial audit measured what it did to
+// an ordinary restore: it deleted the church's ENTIRE finance journal, and every message ever written by
+// anyone who had since left.
 //
-// /import is owner-only (_exportAuth), so this needs the church key holder to restore a hostile file — which
-// is exactly the shape of a migration someone offers to "help" with.
+// The mistake was a category error, not a bug. accept() is a WRITE-TIME ADMISSION GATE — "may this author add
+// this, right now, given who is a member and what sequence number we are on". An archive cannot answer that.
+// Its journal entries get compared against a sequence counter the archive itself has just set, so every one is
+// "not the next entry". Its history gets compared against today's membership, so everyone who has left fails.
 //
-// THE OTHER HALF OF THIS FILE MATTERS MORE. Refusing too much here is far worse than refusing too little: a
-// restore that silently drops events is a church losing its history at the moment it is trying to recover it.
-// accept() reads maps built FROM the events being imported, so a naive inline check refuses most of a real
-// archive on arrival order alone. The tests below hold both ends: nothing legitimate is dropped, and the
-// safeguarding gate still applies.
+// This file now pins the RESTORE side: whatever hardening is attempted here later must not lose data. The two
+// journal/departed-member tests below are the ones that caught it, and they are the reason this file exists.
+//
+// STILL OPEN, deliberately: an archive can carry a kind-4 from an uncleared adult to a child, and this relay
+// will serve it thereafter. Closing that needs a narrow safeguarding-only check with real tombstones (store.del
+// records none, so a peer sync undid the deletions anyway) and chunked work that yields (the pass blocked the
+// event loop for ~7.5 s on a 7.8 MB archive, after the client had been told it succeeded). /import is
+// owner-only, which is what makes leaving it open survivable meanwhile.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -107,19 +111,47 @@ test('a legitimate archive restores COMPLETELY, whatever order it is in', async 
   }
 });
 
-test('an archive may NOT carry a DM from an uncleared adult to a child', async () => {
-  // The `false` below only means something because the adult-to-adult test returns `true` through the very
-  // same probe: that pairing is what proves this reads "the relay dropped it" rather than "the relay would
-  // not show it to me".
-  // The child is now marked (minors: imported above) and the adult is on no cleared list. accept() refuses
-  // this at the front door; before the policy pass, an archive walked it straight in and the relay served it.
+test('a restored archive keeps the church\'s ENTIRE finance journal', async () => {
+  // The case the first version of this file did not cover, and the one that matters most. accept()'s finance
+  // branch demands `seq === FINANCE_SEQ + 1`, and hydrateMaps() has already set FINANCE_SEQ to the archive's
+  // HIGH-WATER mark before the policy pass runs. So every entry in the archive is "not the next one" and gets
+  // deleted — a church restoring a backup loses its accounts entirely, with HTTP 200 and a cheerful
+  // `imported: N` in the response.
+  const entries = [1, 2, 3, 4].map(n => finalizeEvent({
+    kind: 30078, created_at: now(), tags: [['d', 'finance/journal:' + n], ['t', NET], ['church', cp]],
+    content: 'sealed:entry' + n,
+  }, church.sk));
+  const r = await doImport(entries);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const kept = entries.filter(e => stored(e.id)).length;
+  assert.equal(kept, 4,
+    `only ${kept} of 4 journal entries survived the restore. accept() is a WRITE-TIME admission gate — ` +
+    '"may this author add this entry next?" — and replaying it over an archive asks a question the archive ' +
+    'cannot satisfy: every entry is compared against a sequence counter the archive itself just set. A ' +
+    'church restoring its backup opens its accounts to find them empty.');
+});
+
+test('and it keeps a departed member\'s history', async () => {
+  // Same category. accept() evaluates TODAY's membership against a HISTORICAL archive, so everyone who has
+  // ever left the church loses everything they ever wrote.
+  const gone = K();
+  const msg = finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', cp.slice(0, 16) + '-g1']], content: 'from someone who has since left' }, gone.sk);
+  const r = await doImport([msg]);          // note: NO member doc for `gone` — they left
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(stored(msg.id), true,
+    'the chat history of a member who has since left was deleted on restore. A congregation restoring a ' +
+    'backup loses every message from everyone who has ever moved away, been blocked, or died.');
+});
+
+test('KNOWN GAP: an archive still carries in a DM the front door would refuse', { todo: 'needs a narrow safeguarding-only check with real tombstones and chunked work — see the header' }, async () => {
+  // Recorded as a failing expectation rather than deleted, so the gap stays visible in the suite instead of
+  // living only in a commit message. When someone closes it properly, drop the todo and this passes.
   const bad = dm(adult, child);
   const r = await doImport([bad]);
   assert.equal(r.status, 200, 'the import failed for an unrelated reason: ' + JSON.stringify(r.body));
   assert.equal(stored(bad.id), false,
-    'a kind-4 from an uncleared adult to a child survived the import. The relay refuses this message when it ' +
-    'is sent, and now serves it because it arrived in a backup file — the safeguarding gate is bypassable by ' +
-    'anyone who can get the church key holder to restore an archive.');
+    'a kind-4 from an uncleared adult to a child survives the import. The relay refuses this message when it ' +
+    'is sent, and serves it when it arrives in a backup file.');
 });
 
 test('and an ordinary DM between two adults is untouched', async () => {

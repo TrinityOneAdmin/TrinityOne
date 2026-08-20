@@ -18730,7 +18730,8 @@ zoo`.split("\n");
                 if (Array.isArray(pj)) ring = pj.filter((x) => typeof x === "string" && x);
               } catch (x) {
               }
-              st.ring = ring && ring.length ? ring : [plain];
+              const incoming = ring && ring.length ? ring : [plain];
+              st.ring = [...incoming, ...st.ring.filter((k) => incoming.indexOf(k) === -1)].slice(0, 12);
             } else if (!churchSkHeld()) {
               st.ring = [];
             }
@@ -18762,37 +18763,29 @@ zoo`.split("\n");
       if (!churchSkHeld() || actingChurch) return false;
       if (!st.checked || !_isRelayAuthed()) return false;
       const cp = pub;
-      const prevRing = st.ring.slice();
-      if (!st.ring.length) {
+      let nextRing = st.ring.slice();
+      if (!nextRing.length) {
         const first = _hex(crypto.getRandomValues(new Uint8Array(32)));
         const legacy = spec.legacy ? _legacyBookKeyHex() : "";
         if (spec.legacy && !legacy) return false;
-        st.ring = legacy ? [first, legacy] : [first];
+        nextRing = legacy ? [first, legacy] : [first];
       } else if (spec.legacy) {
         const legacy = _legacyBookKeyHex();
-        if (legacy && st.ring.indexOf(legacy) < 0) st.ring = [...st.ring, legacy];
+        if (legacy && nextRing.indexOf(legacy) < 0) nextRing = [...nextRing, legacy];
       }
       const allowed = _capAllows(spec, caps);
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
       const have = st.docKeys || {};
-      if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) {
-        st.ring = prevRing;
-        return false;
-      }
+      if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) return false;
       if (st.docKeys) {
         const lost = Object.keys(have).filter((p2) => want.indexOf(p2) < 0);
-        if (lost.length) {
-          st.ring = prevRing;
-          return window.Steward.rotateCapKey(kind, stewardPubs, caps);
-        }
+        if (lost.length) return window.Steward.rotateCapKey(kind, stewardPubs, caps);
       }
-      const keys = await _sealEach(JSON.stringify(st.ring), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
-      if (ok === false || ok == null) {
-        st.ring = prevRing;
-        return false;
-      }
+      if (ok === false || ok == null) return false;
+      st.ring = nextRing;
       st.docKeys = keys;
       return ok;
     },
@@ -18902,13 +18895,20 @@ zoo`.split("\n");
       const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       const kk = kind || "finance";
       const held = /* @__PURE__ */ new Map();
+      const HELD_CAP = 2e3;
       const take = (id, content, ts) => {
         const obj = window.Steward.encOpen(kk, content);
         if (obj == null) {
+          if (!held.has(id) && held.size >= HELD_CAP) {
+            const oldest = held.keys().next().value;
+            held.delete(oldest);
+          }
           held.set(id, { content, ts });
           return false;
         }
         held.delete(id);
+        const prev = byId.get(id);
+        if (prev && (prev.ts || 0) > (ts || 0)) return true;
         byId.set(id, { id, ...obj, ts });
         return true;
       };
@@ -18928,9 +18928,12 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(prefix)) return;
-          if (e.pubkey !== cp && !_careRoster.has(e.pubkey) && !d.startsWith("finance/journal:") && !d.startsWith("trinityone/checkin:")) return;
+          const authored = e.pubkey === cp || _careRoster.has(e.pubkey);
           const id = d.slice(prefix.length);
-          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+          const tomb = e.tags.some((t) => t[0] === "deleted") || !e.content;
+          if (tomb && !authored) return;
+          if (!authored && !d.startsWith("finance/") && !d.startsWith("trinityone/checkin:")) return;
+          if (tomb) {
             byId.delete(id);
             held.delete(id);
             emit();

@@ -39,7 +39,8 @@ const NET = 'trinityone';
 const now = () => Math.floor(Date.now() / 1000);
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
 
-const church = K(), treasurer = K(), member = K();
+const church = K(), treasurer = K(), member = K(), stranger2 = K();
+const STRANGER = stranger2.pub;
 const cp = church.pub;
 let relay, dataDir;
 
@@ -124,16 +125,26 @@ test('but a removed treasurer may write NOTHING more', async () => {
   ws.close();
 });
 
-test('the retraction exemption is the JOURNAL only, not everything a departed steward touched', async () => {
-  // Narrowness matters: a group or rota written by a revoked steward SHOULD stop being served, which is what
-  // the retraction rule is for. Widening the exemption to all finance/ docs, or to all church-tagged docs,
-  // would quietly undo it.
+test('the retraction exemption covers the whole finance module, and stops there', () => {
+  // THE FIRST VERSION OF THIS TEST WAS WRONG, and an adversarial audit measured why. It asserted the
+  // exemption was the journal ALONE — which sounds like admirable narrowness and is in fact useless. The
+  // chart of accounts, the funds and the settings are steward-writable too, so a departed treasurer took
+  // those with them, and the retained journal then replayed against accounts that no longer existed:
+  // "unknown account a1", "sequence gap: expected 1, got 2". The church still opened its books to find the
+  // months missing, by a different route.
+  //
+  // Narrowness still matters at the other edge: a group or a rota written by a revoked steward SHOULD stop
+  // being served. That is what the retraction rule is for.
   const gw = stripComments(readFileSync(new URL('./gateway.mjs', import.meta.url), 'utf8'));
   const line = gw.match(/const retractionExempt = [^\n]*/);
   assert.ok(line, 're-anchor: retractionExempt is gone');
-  assert.match(line[0], /FIN_JOURNAL_D/, 'the books are not exempt from retraction');
-  assert.doesNotMatch(line[0], /startsWith\(GROUP_D\)|startsWith\(ROTA_D\)/,
-    'the exemption has been widened past the journal, so a revoked steward\'s groups and rotas are served again');
+  assert.match(line[0], /startsWith\(['"]finance\/['"]\)/,
+    'only part of the finance module is exempt from retraction, so a departed treasurer takes the chart of ' +
+    'accounts with them and the entries that do survive cannot be replayed against it');
+  assert.match(line[0], /CHECKIN_D/, "re-anchor: the children's register lost its exemption");
+  assert.doesNotMatch(line[0], /startsWith\(GROUP_D\)|startsWith\(ROTA_D\)|startsWith\(EVENT_D\)/,
+    "the exemption has been widened past finance and safeguarding, so a revoked steward's groups, rotas and " +
+    'events are served again — which is the thing retraction exists to prevent');
 });
 
 // ── 2. THE RACE ───────────────────────────────────────────────────────────────────────────────────────────
@@ -167,10 +178,12 @@ function ledgerReader({ ringArrivesFirst }) {
   const api = new Function('scope', `with (scope) { return { ${[['encSubscribe(prefix, cb, kind)', 'encSubscribe'], ['encOpen(kind', 'encOpen']].map(([s, n]) => fnBody(VENDOR, s, n)).join(',\n')} }; }`)(scope);
   Object.assign(stubs.window.Steward, api);
   const off = api.encSubscribe('finance/journal:', (items) => emitted.push(items), 'finance');
-  const sealed = (seq, memo) => ({ pubkey: cp, created_at: 1787280000 + seq, content: nip44.encrypt(JSON.stringify({ seq, memo }), unhex(KEY)), tags: [['d', 'finance/journal:' + seq]] });
+  const sealed = (seq, memo, at) => ({ pubkey: cp, created_at: at || (1787280000 + seq), content: nip44.encrypt(JSON.stringify({ seq, memo }), unhex(KEY)), tags: [['d', 'finance/journal:' + seq]] });
   return {
     off, emitted,
-    deliver: (seq, memo) => onevent(sealed(seq, memo)),
+    deliver: (seq, memo, at) => onevent(sealed(seq, memo, at)),
+    // a deletion, from whichever author we choose — the whole question is whether authorship is checked
+    tombstone: (seq, who) => onevent({ pubkey: who, created_at: 1787290000, content: '', tags: [['d', 'finance/journal:' + seq], ['deleted', '1']] }),
     eose: () => oneose(),
     ringArrives: () => { state.finance.ring = [KEY]; stubs._capRingChanged('finance'); },
     last: () => emitted[emitted.length - 1] || [],
@@ -201,6 +214,63 @@ test('the ordinary order still works, and nothing is emitted twice', () => {
   r.ringArrives();
   assert.equal(r.last().filter(x => x.memo === 'Harvest offering').length, 1, 'the entry is now listed twice');
   r.off();
+});
+
+test('a stranger cannot ERASE a ledger entry from the treasurer\'s screen', () => {
+  // The hole the retraction exemption opened, found by adversarial audit. The exemption lets any author's
+  // finance/ document past the roster check so a DEPARTED treasurer's entries keep being served — but the
+  // tombstone branch runs BEFORE any decryption, so it also let anyone at all publish
+  // `d=finance/journal:1` with ['deleted','1'] and wipe that entry off the screen. No key needed; the
+  // attacker never has to read anything.
+  //
+  // Reachable two ways without a hostile relay: forged events already on disk from before /import checked
+  // anything, and any non-enforcing relay in the church's extra-relays list.
+  const r = ledgerReader({ ringArrivesFirst: true });
+  r.deliver(1, 'Harvest offering');
+  r.deliver(2, 'Hall hire');
+  r.eose();
+  assert.equal(r.last().length, 2, 're-anchor: the entries never arrived');
+  r.tombstone(1, STRANGER);
+  assert.equal(r.last().length, 2,
+    'a stranger erased a journal entry from the books. Deleting is not reading — the tombstone branch runs ' +
+    'before decryption, so the exemption that keeps a departed treasurer\'s history also handed everyone a ' +
+    'delete button.');
+  r.off();
+});
+
+test('...but the church itself still can', () => {
+  const r = ledgerReader({ ringArrivesFirst: true });
+  r.deliver(1, 'Harvest offering');
+  r.eose();
+  r.tombstone(1, cp);
+  assert.equal(r.last().length, 0, 'the church can no longer retract its own entry, so the fix went too far');
+  r.off();
+});
+
+test('an OLDER version held for a late key cannot overwrite a NEWER one already shown', () => {
+  // take() is called from two places — a live delivery, and a retry once the ring lands — so a document can
+  // be opened out of order. Without a newest-wins guard the older copy won and the newer was gone for good:
+  // nothing re-delivers it, because the subscription already handed it over once.
+  const r = ledgerReader({ ringArrivesFirst: false });
+  r.deliver(1, 'OLD — building fund', 1000);          // arrives first, held (no key yet)
+  r.ringArrives();                                    // ...and opens
+  assert.deepEqual(r.last().map(x => x.memo), ['OLD — building fund'], 're-anchor: the held entry never opened');
+  r.deliver(1, 'NEW — building fund, corrected', 2000);
+  assert.deepEqual(r.last().map(x => x.memo), ['NEW — building fund, corrected'], 're-anchor: the newer version never arrived');
+  r.deliver(1, 'OLD — building fund', 1000);          // a lagging relay replays the old one
+  assert.deepEqual(r.last().map(x => x.memo), ['NEW — building fund, corrected'],
+    'an older version of an entry overwrote the corrected one on screen, and nothing will re-deliver the ' +
+    'newer one — the correction is lost for good');
+  r.off();
+});
+
+test('the holding pen is bounded', () => {
+  // It fills with whatever the relay sends. A console holding no key at all keeps every ciphertext offered:
+  // 20,000 journal-shaped documents measured at +48 MB of heap that nothing ever evicted.
+  const body = stripComments(fnBody(VENDOR, 'encSubscribe(prefix, cb, kind) {', 'encSubscribe'));
+  assert.match(body, /HELD_CAP/, 'the holding pen has no cap, so an unkeyed console grows without limit');
+  assert.match(body, /held\.size >= HELD_CAP/, 're-anchor: the cap is not enforced on insert');
+  assert.match(body, /held\.delete\(oldest\)/, 'the cap is not enforced by evicting anything');
 });
 
 test('unsubscribing stops the retry, so a closed screen cannot fire into a dead callback', () => {
