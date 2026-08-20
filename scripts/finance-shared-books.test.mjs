@@ -30,11 +30,52 @@ const unhex = (h) => new Uint8Array(h.match(/.{1,2}/g).map(b => parseInt(b, 16))
 
 const church = (() => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; })();
 
-// Lift encSelf/decSelf together with the ring they read, and run them for real — the question is whether a
-// delegate holding the ring can open what the owner sealed, and only the actual ciphertext answers it.
-function books({ ring, ownerKey }) {
+// THE SHIPPED CAPABILITY TABLE, read out of the bundle rather than restated. Which capability seals what, and
+// which one carries the legacy self-key, is the whole security question here — a copy in this file would go
+// on agreeing with itself after someone changed the real one.
+const SHIPPED_CAP_KEYS = (() => {
+  const m = VENDOR.match(/CAP_KEYS\s*=\s*\{([\s\S]*?)\n\s*\};/);
+  assert.ok(m, 're-anchor: CAP_KEYS is not in the bundle under that name');
+  const out = {};
+  for (const line of m[1].split('\n')) {
+    const e = line.match(/(\w+):\s*\{\s*d:\s*"([^"]+)",\s*cap:\s*"([^"]+)",\s*legacy:\s*(true|false)/);
+    if (e) out[e[1]] = { d: e[2], cap: e[3], legacy: e[4] === 'true' };
+  }
+  assert.ok(out.finance && out.checkin, 're-anchor: could not parse finance/checkin out of CAP_KEYS');
+  return out;
+})();
+
+test('the books carry the legacy key and the children\'s register does NOT', () => {
+  // The one line of this design that decides whether a treasurer can read a child's pickup code. The legacy
+  // self-key sealed everything encSelf ever wrote, so any capability whose ring contains it inherits every
+  // other capability's history. Finance has to carry it — the ledger is append-only and the relay pins each
+  // entry to an exact next sequence number, so its past cannot be re-keyed. Nothing else may.
+  assert.equal(SHIPPED_CAP_KEYS.finance.legacy, true,
+    'the books no longer carry the legacy key, so every entry written before the envelope existed is now ' +
+    'unreadable — a church opening its accounts to an empty ledger');
+  assert.equal(SHIPPED_CAP_KEYS.checkin.legacy, false,
+    'the children\'s register carries the legacy self-key, which is the key the BOOKS ring also contains. ' +
+    'Granting a treasurer Finance would hand them every child\'s name, room and pickup code.');
+  assert.equal(SHIPPED_CAP_KEYS.checkin.cap, 'safeguarding',
+    'the check-in key is handed out with the wrong capability');
+});
+
+// Lift encSeal/encOpen together with the rings they read, and run them for real — the question is whether a
+// delegate holding a ring can open what the owner sealed, and only the actual ciphertext answers it.
+//
+// `rings` is per capability: { finance: [...], checkin: [...] }. It used to be a single `ring`, because a
+// single key sealed everything — which is precisely the defect the check-in tests at the foot of this file
+// now guard against.
+function books({ ring, rings, ownerKey }) {
+  const st = rings || { finance: ring || [], checkin: [] };
   const stubs = {
-    _finRing: ring,
+    _capState: {
+      finance: { ring: st.finance || [], docKeys: null, rev: 1, at: 0, checked: false },
+      checkin: { ring: st.checkin || [], docKeys: null, rev: 1, at: 0, checked: false },
+    },
+    // The legacy-fallback flag, read straight from the shipped table rather than restated here — if someone
+    // marks check-in `legacy: true` this harness must start failing, not quietly agree with them.
+    CAP_KEYS: JSON.parse(JSON.stringify(SHIPPED_CAP_KEYS)),
     churchSk: ownerKey ? church.sk : null,
     churchPub: church.pub,
     actingChurch: ownerKey ? '' : church.pub,
@@ -62,8 +103,11 @@ function books({ ring, ownerKey }) {
       throw new ReferenceError('needs a stub for ' + String(k));
     },
   });
-  const mk = (name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, name + '(', name)} }).${name}; }`)(scope);
-  return { encSelf: mk('encSelf'), decSelf: mk('decSelf') };
+  const mk = (name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, name + '(kind', name)} }).${name}; }`)(scope);
+  const seal = mk('encSeal'), open = mk('encOpen');
+  // encSelf/decSelf are the books' names for these. Bound here the same way the shipped wrappers bind them,
+  // and asserted to BE that binding in 'the books are the finance capability, by name' below.
+  return { seal, open, encSelf: (o) => seal('finance', o), decSelf: (c) => open('finance', c) };
 }
 
 const legacyKey = hex(nip44.utils.getConversationKey(church.sk, church.pub));
@@ -109,7 +153,7 @@ test('the owner keeps writing with the CURRENT key once an envelope exists', () 
 });
 
 test('minting stays with the owner', () => {
-  const body = stripComments(fnBody(VENDOR, 'async ensureFinanceKeyFor(stewardPubs, caps) {', 'ensureFinanceKeyFor'));
+  const body = stripComments(fnBody(VENDOR, 'async ensureCapKeyFor(kind, stewardPubs, caps) {', 'ensureCapKeyFor'));
   assert.match(body, /if \(!churchSkHeld\(\) \|\| actingChurch\) return false/,
     'a delegated steward can mint or rotate the books key — so a treasurer could re-key the ledger and lock ' +
     'the church out of its own accounts');
@@ -117,11 +161,13 @@ test('minting stays with the owner', () => {
     'the mint gate does not check that the relay actually answered us. Concluding "no envelope exists" from ' +
     'an unauthenticated read is how key envelopes get minted twice and orphan what the first one sealed.');
   // quote-agnostic: the bundler rewrites single quotes to double on the way in
-  assert.match(body, /indexOf\(["']finance["']\)/, 'the envelope is wrapped to stewards the church never gave finance to');
+  assert.match(body, /indexOf\(spec\.cap\)/,
+    'the envelope is wrapped to stewards the church never gave this capability to — the grant is a UI ' +
+    'preference rather than a key');
 });
 
 test('a delegate writes as themselves, with the church named', () => {
-  const body = stripComments(fnBody(VENDOR, 'encPublish(dtag, obj) {', 'encPublish'));
+  const body = stripComments(fnBody(VENDOR, 'encPublish(dtag, obj, kind) {', 'encPublish'));
   assert.match(body, /feChurch\(/,
     'encPublish signs with the church key, which a delegate does not hold — every write refused, and the ' +
     'module then re-seeds an empty book from the empty read');
@@ -129,7 +175,7 @@ test('a delegate writes as themselves, with the church named', () => {
 });
 
 test('the reader watches for steward-authored entries too', () => {
-  const body = stripComments(fnBody(VENDOR, 'encSubscribe(prefix, cb) {', 'encSubscribe'));
+  const body = stripComments(fnBody(VENDOR, 'encSubscribe(prefix, cb, kind) {', 'encSubscribe'));
   assert.match(body, /["']#church["']: \[cp\]/,   // the bundler normalises quotes
     'only church-authored documents are read, so a treasurer\'s own entries are invisible to everyone ' +
     'including themselves');
@@ -152,7 +198,7 @@ test('Finance is offered to a capable delegate, and padlocked for the rest', () 
 // The honest half, which the code comments carry too: rotation protects the FUTURE. Anyone who held the old
 // key can still open everything written before it. What changes is that nothing they see afterwards is new.
 test('only the owner rotates, and only when somebody has actually lost access', () => {
-  const body = stripComments(fnBody(VENDOR, 'async rotateFinanceKey(stewardPubs, caps) {', 'rotateFinanceKey'));
+  const body = stripComments(fnBody(VENDOR, 'async rotateCapKey(kind, stewardPubs, caps) {', 'rotateCapKey'));
   assert.match(body, /if \(!churchSkHeld\(\) \|\| actingChurch\) return false/,
     'a delegated steward can rotate the books key, which would let a treasurer re-key the ledger away from ' +
     'the church that owns it');
@@ -160,8 +206,8 @@ test('only the owner rotates, and only when somebody has actually lost access', 
     'rotation can run on an unauthenticated read of the envelope — the same mistake that orphans key material');
   assert.match(body, /slice\(0, 12\)/, 'the ring is unbounded, so an envelope can grow past what a relay accepts');
 
-  const ensure = stripComments(fnBody(VENDOR, 'async ensureFinanceKeyFor(stewardPubs, caps) {', 'ensureFinanceKeyFor'));
-  assert.match(ensure, /rotateFinanceKey/,
+  const ensure = stripComments(fnBody(VENDOR, 'async ensureCapKeyFor(kind, stewardPubs, caps) {', 'ensureCapKeyFor'));
+  assert.match(ensure, /rotateCapKey/,
     'losing a treasurer still only rewrites the envelope, which changes nothing they can read');
 });
 
@@ -171,8 +217,9 @@ test('only the owner rotates, and only when somebody has actually lost access', 
 function runRotate({ ring, allowed, caps }) {
     const published = [];
     const stubs = {
-      churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true, _finChecked: true,
-      _finRing: ring.slice(), _finRev: 1, _finDocKeys: null,
+      churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true,
+      _capState: { finance: { ring: ring.slice(), docKeys: null, rev: 1, at: 0, checked: true } },
+      CAP_KEYS: JSON.parse(JSON.stringify(SHIPPED_CAP_KEYS)),
       pub: church.pub, sk: church.sk, churchPub: church.pub,
       crypto: webcrypto, _hex: hex, _unhex: unhex,
       encrypt: (p2, k) => nip44.encrypt(p2, k), decrypt: (c, k) => nip44.decrypt(c, k),
@@ -180,7 +227,8 @@ function runRotate({ ring, allowed, caps }) {
       nip44e: (p2, k) => nip44.encrypt(p2, k), nip44ck: (a, b) => nip44.utils.getConversationKey(a, b),
       _sealEach: async (payload, want, seal) => { const out = {}; for (const w of want) out[w] = seal(payload, w); return out; },
       feChurch: (t) => t, publish: async (e) => { published.push(e); return e; },
-      now: () => 1787280000, FINKEY_D: 'trinityone/financekey:', NET: 'trinityone',
+      now: () => 1787280000, NET: 'trinityone',
+      _capRingChanged: () => {},   // the retry notifier — nothing is subscribed in this harness
       window: { Steward: {} },
     };
     const scope = new Proxy(stubs, {
@@ -190,16 +238,91 @@ function runRotate({ ring, allowed, caps }) {
         throw new ReferenceError('needs a stub for ' + String(k)); },
       set: (t, k, v) => { t[k] = v; return true; },
     });
-    const body = fnBody(VENDOR, 'async rotateFinanceKey(stewardPubs, caps) {', 'rotateFinanceKey');
-    const fn = new Function('scope', `with (scope) { return ({ ${body} }).rotateFinanceKey; }`)(scope);
+    const body = fnBody(VENDOR, 'async rotateCapKey(kind, stewardPubs, caps) {', 'rotateCapKey');
+    const fn = new Function('scope', `with (scope) { return ({ ${body} }).rotateCapKey; }`)(scope);
     return { fn, published, stubs };
 }
+
+// Drive ensureCapKeyFor for real. Everything above tests what happens once an envelope EXISTS; this asks the
+// question nobody asked — whether one is ever created.
+function runEnsure({ ring, docKeys, checked = true, publishOk = true }) {
+  const published = [];
+  const stubs = {
+    churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true,
+    _capState: { finance: { ring: ring.slice(), docKeys, rev: 1, at: 0, checked } },
+    CAP_KEYS: JSON.parse(JSON.stringify(SHIPPED_CAP_KEYS)),
+    pub: church.pub, sk: church.sk, churchPub: church.pub, churchSk: church.sk,
+    crypto: webcrypto, _hex: hex, _unhex: unhex,
+    encrypt: (p2, k) => nip44.encrypt(p2, k), getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
+    nip44e: (p2, k) => nip44.encrypt(p2, k), nip44ck: (a, b) => nip44.utils.getConversationKey(a, b),
+    _legacyBookKeyHex: () => legacyKey,
+    _sealEach: async (payload, want, seal) => { const o = {}; for (const w of want) o[w] = seal(payload, w); return o; },
+    feChurch: (t) => t, publish: async (e) => { if (!publishOk) return false; published.push(e); return e; },
+    now: () => 1787280000, NET: 'trinityone', _capRingChanged: () => {},
+    window: { Steward: {} },
+  };
+  const scope = new Proxy(stubs, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      const b = String(k).replace(/[0-9]+$/, ''); if (b in t) return t[b];
+      throw new ReferenceError('needs a stub for ' + String(k)); },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  const body = fnBody(VENDOR, 'async ensureCapKeyFor(kind, stewardPubs, caps) {', 'ensureCapKeyFor');
+  const fn = new Function('scope', `with (scope) { return ({ ${body} }).ensureCapKeyFor; }`)(scope);
+  return { fn, published, stubs };
+}
+
+test('a church with NO envelope gets its FIRST one minted', async () => {
+  // MEASURED against the shipped bundle of 2026-08-19: for a church with no envelope this returned false and
+  // published nothing, every single time — the guard meant to stop a blind re-seal also blocked the case
+  // where there is nothing to re-seal. So no church ever received a finance key, no treasurer could ever be
+  // wrapped into one, and the whole shared-books feature was inert. The Finance screen's "not available for
+  // delegated stewards" wall was hiding a path that could not have worked if it had been removed.
+  const { fn, published, stubs } = runEnsure({ ring: [], docKeys: null });
+  const treasurerPub = getPublicKey(generateSecretKey());
+  const r = await fn('finance', [treasurerPub], { [treasurerPub]: ['finance'] });
+  assert.notEqual(r, false, 'ensureCapKeyFor refused to mint the first envelope');
+  assert.equal(published.length, 1, 'no envelope was published, so this church can never share its books');
+  const env = JSON.parse(published[0].content);
+  assert.ok(env.keys[church.pub], 'the church did not wrap the key to itself — it cannot read its own books');
+  assert.ok(env.keys[treasurerPub], 'the treasurer was not wrapped in, so the grant hands over nothing');
+  assert.equal(stubs._capState.finance.ring.length, 2, 'the minted ring should be [fresh, legacy]');
+  assert.equal(stubs._capState.finance.ring[1], legacyKey, 'the legacy key is not in the ring, so the existing books are lost');
+});
+
+test('a church that ALREADY has an envelope is not re-minted over', async () => {
+  // The other half of the same guard: once an envelope exists, an unchanged audience must publish nothing.
+  const treasurerPub = getPublicKey(generateSecretKey());
+  const { fn, published } = runEnsure({ ring: [freshKey, legacyKey], docKeys: { [church.pub]: 'x', [treasurerPub]: 'y' } });
+  const r = await fn('finance', [treasurerPub], { [treasurerPub]: ['finance'] });
+  assert.equal(r, false, 'an unchanged audience still republished the envelope');
+  assert.equal(published.length, 0, 'the envelope was rewritten for no reason, bumping created_at on every render');
+});
+
+test('a mint whose publish FAILS adopts nothing', async () => {
+  // Otherwise this console holds a key that exists nowhere else, seals the church's records with it, and the
+  // next reload — which rebuilds the ring from the envelope that was never written — cannot open any of them.
+  const { fn, stubs } = runEnsure({ ring: [], docKeys: null, publishOk: false });
+  const r = await fn('finance', [], {});
+  assert.equal(r, false, 'a failed publish was reported as success');
+  assert.deepEqual(stubs._capState.finance.ring, [],
+    'the console kept a key the relay never accepted. Every entry it seals from here is unrecoverable.');
+});
+
+test('minting waits until the envelope has actually been looked for', async () => {
+  const { fn, published } = runEnsure({ ring: [], docKeys: null, checked: false });
+  assert.equal(await fn('finance', [], {}), false, 'minted on an unfinished read');
+  assert.equal(published.length, 0,
+    'a mint decided before an authenticated EOSE republishes a stale ring as new and orphans everything the ' +
+    'real key sealed');
+});
 
 test('the SHIPPED rotation mints a new key and keeps the old ones', async () => {
   const treasurerSk = generateSecretKey(), treasurerPub = getPublicKey(treasurerSk);
   const oldKey = freshKey;
   const { fn, published, stubs } = runRotate({ ring: [oldKey, legacyKey] });
-  await fn([treasurerPub], { [treasurerPub]: ['finance'] });
+  await fn('finance', [treasurerPub], { [treasurerPub]: ['finance'] });
   assert.equal(published.length, 1, 'rotation published no new envelope');
 
   const env = JSON.parse(published[0].content);
@@ -222,7 +345,7 @@ test('the removed treasurer cannot read what is written after the rotation', asy
   const oldRing = [freshKey, legacyKey];
 
   const { fn, published } = runRotate({ ring: oldRing });
-  await fn([keptPub, gonePub], { [keptPub]: ['finance'], [gonePub]: ['care'] });   // gone lost finance
+  await fn('finance', [keptPub, gonePub], { [keptPub]: ['finance'], [gonePub]: ['care'] });   // gone lost finance
   const env = JSON.parse(published[0].content);
   assert.ok(!env.keys[gonePub], 'the removed treasurer was handed the new ring anyway');
 
@@ -245,9 +368,9 @@ test('a failed publish adopts nothing', async () => {
   const treasurerPub = getPublicKey(generateSecretKey());
   const { fn, stubs } = runRotate({ ring: [freshKey, legacyKey] });
   stubs.publish = async () => false;                       // every relay refused
-  const r = await fn([treasurerPub], { [treasurerPub]: ['finance'] });
+  const r = await fn('finance', [treasurerPub], { [treasurerPub]: ['finance'] });
   assert.equal(r, false, 'a refused rotation reported success');
-  assert.deepEqual(stubs._finRing, [freshKey, legacyKey],
+  assert.deepEqual(stubs._capState.finance.ring, [freshKey, legacyKey],
     'the console adopted a ring it never managed to publish, so everything it seals next is unreadable to ' +
     'everyone including itself after a reload');
 });
@@ -255,8 +378,8 @@ test('a failed publish adopts nothing', async () => {
 test('rotation refuses until the envelope has actually been looked for', async () => {
   const treasurerPub = getPublicKey(generateSecretKey());
   const { fn, published, stubs } = runRotate({ ring: [freshKey, legacyKey] });
-  stubs._finChecked = false;                               // subscription has not reached EOSE
-  const r = await fn([treasurerPub], { [treasurerPub]: ['finance'] });
+  stubs._capState.finance.checked = false;                 // subscription has not reached EOSE
+  const r = await fn('finance', [treasurerPub], { [treasurerPub]: ['finance'] });
   assert.equal(r, false, 'rotated on an unfinished read of the corpus');
   assert.equal(published.length, 0, 'published an envelope before knowing what was already there');
 });

@@ -280,14 +280,39 @@ let _stewardNames = {};
 // rest — carried forward through unrelated edits, pruned with the steward it belongs to.
 let _stewardSince = {};
 const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content'];
-const FINKEY_D = 'trinityone/financekey:';   // the church books' key, wrapped per reader (owner-signed)
-let _finRing = [];        // hex keys for the books, newest first; the last entry is the legacy self-key
-let _finDocKeys = null;   // the envelope's key map as last seen (null = we have never seen one)
-let _finRev = 1, _finAt = 0;
+// ── A KEY PER CAPABILITY ──────────────────────────────────────────────────────────────────────────────────
+// One mechanism, not one per feature. The books got their own key on 2026-08-19 and kids check-in needed the
+// same shape the next morning — at which point writing a fourth hand-rolled envelope (after care, name and
+// media) would have meant hand-rolling the same five mistakes again: no mint gate, state not reset on a
+// church switch, the ring adopted before the publish landed, `rev` written but never compared, and history
+// orphaned by dropping superseded keys. Every one of those was a real bug in the finance key within a day of
+// writing it. So the envelope is described here once and instantiated per capability.
+//
+// `legacy: true` means the ring ends with nip44(churchSk, churchPub) — the key everything sealed by encSelf
+// used before capabilities existed. THAT KEY IS A SHARED SECRET across every such document, so it belongs in
+// exactly one ring: the books', which cannot be re-keyed because the ledger is append-only and the relay
+// demands the next sequence number (gateway.mjs, FINANCE_SEQ). Anything else that used encSelf must migrate
+// its old records onto its own key instead of inheriting the legacy one — otherwise granting Finance would
+// keep handing over that feature's history, which is the check-in leak this exists to close.
+const CAP_KEYS = {
+  finance: { d: 'trinityone/financekey:', cap: 'finance',      legacy: true  },   // the church books
+  checkin: { d: 'trinityone/checkinkey:', cap: 'safeguarding', legacy: false },   // the children's register
+};
+const _capState = {};   // kind -> { ring, docKeys, rev, at, checked }
+for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
+// WHO TO TELL WHEN A RING ARRIVES. A capability's envelope and the documents it seals arrive on two
+// independent subscriptions, in either order. When the documents win the race, every one of them fails to
+// decrypt — and, before this, was silently discarded: a delegated treasurer opened Finance to a permanently
+// empty ledger, with no error anywhere, until they happened to reload at a moment the envelope arrived first.
+let _checkinMigrated = '';   // which church we have already moved off the legacy key this session
+const _capWaiters = {};   // kind -> Set of fn, called whenever that capability's ring changes
+for (const k of Object.keys(CAP_KEYS)) _capWaiters[k] = new Set();
+const _capRingChanged = (kind) => { for (const fn of (_capWaiters[kind] || [])) { try { fn(); } catch (e) {} } };
+const FINKEY_D = CAP_KEYS.finance.d;
 // "Have we actually LOOKED for an envelope?" — the same gate as _careKeyChecked, and for the same reason: a
 // mint decided on an incomplete read of the corpus republishes a stale ring as new and orphans everything the
 // real key sealed. _isRelayAuthed() alone is one round trip; the church's documents are not.
-let _finChecked = false;
+
 // Only a console holding the CHURCH key can derive the key the existing books are sealed with. `sk` is the
 // signing key of whoever is acting; in delegated mode that is the steward's own, so this is also the honest
 // test for "am I the owner".
@@ -928,9 +953,10 @@ function _resetChurchScopedState() {
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
   _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false;
-  // The books' key belongs here too. The comment above is not decorative: carrying _finChecked across a
-  // church switch would answer "already looked" for a church nobody has looked at.
-  _finRing = []; _finDocKeys = null; _finRev = 1; _finAt = 0; _finChecked = false;
+  // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
+  // flag across a church switch answers "already looked" for a church nobody has looked at.
+  for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
+  _checkinMigrated = '';
   // NIP-42 is bound to the key that signed the challenge. These sockets authed as the PREVIOUS church and will
   // not be re-challenged while they stay open, so _isRelayAuthed() would answer true for a church that has
   // never proved itself — the exact false-true the comment above it warns "silently destroys a church's keys".
@@ -4501,131 +4527,163 @@ window.Steward = {
   //
   // Sharing that derived key shares the books and nothing else: encSelf/decSelf are used by Finance (and the
   // pilot-locked Manna module) and by nothing else in the product.
-  financeKeyRing() { return _finRing.slice(); },
-  subscribeFinanceKey(cb) {
+  capKeyRing(kind) { return (_capState[kind] ? _capState[kind].ring : []).slice(); },
+  financeKeyRing() { return window.Steward.capKeyRing('finance'); },
+
+  // Watch one capability's envelope. Owner-signed only — the relay enforces that too — and `checked` is set
+  // only on an AUTHENTICATED end-of-stored-events, because an unauthenticated read answers "no envelope" for
+  // a church that has one, and minting on that answer orphans everything the real key sealed.
+  subscribeCapKey(kind, cb) {
+    const spec = CAP_KEYS[kind]; const st = _capState[kind];
     const cp = actingChurch || pub;
-    if (!cp) { cb && cb([]); return () => {}; }
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [FINKEY_D + cp] }], {
+    if (!spec || !st || !cp) { cb && cb([]); return () => {}; }
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [spec.d + cp] }], {
       onevent(e) {
-        if (e.pubkey !== cp) return;                       // owner-signed only; the relay enforces it too
+        if (e.pubkey !== cp) return;                       // owner-signed only
         if (_authFuture(e)) return;
-        if ((e.created_at || 0) < _finAt) return; _finAt = e.created_at || 0;
+        if ((e.created_at || 0) < st.at) return; st.at = e.created_at || 0;
         try {
           const env = JSON.parse(e.content || '{}');
-          if ((env.rev || 1) < _finRev) return;    // a lagging relay must not resurrect an older envelope
-          _finDocKeys = env.keys || null;
-          _finRev = env.rev || 1;
+          if ((env.rev || 1) < st.rev) return;             // a lagging relay must not resurrect an older envelope
+          st.docKeys = env.keys || null;
+          st.rev = env.rev || 1;
           const mine = env.keys && env.keys[churchPub];
           if (mine) {
             const plain = nip44d(mine, nip44ck(sk, e.pubkey));
             let ring = null; try { const pj = JSON.parse(plain); if (Array.isArray(pj)) ring = pj.filter(x => typeof x === 'string' && x); } catch (x) {}
-            _finRing = ring && ring.length ? ring : [plain];
+            st.ring = ring && ring.length ? ring : [plain];
           } else if (!churchSkHeld()) {
-            _finRing = [];                                 // we are not (or no longer) keyed for the books
+            st.ring = [];                                  // we are not (or no longer) keyed for this
           }
         } catch (x) {}
-        cb && cb(_finRing.slice());
+        _capRingChanged(kind);            // documents that arrived before this key can now be opened
+        cb && cb(st.ring.slice());
       },
-      oneose() {
-        // EOSE only counts when the relay actually knows who we are: an unauthenticated read answers "no
-        // envelope" for a church that has one, and minting on that answer is how key material gets orphaned.
-        if (_isRelayAuthed()) _finChecked = true;
-        cb && cb(_finRing.slice());
-      },
+      oneose() { if (_isRelayAuthed()) st.checked = true; cb && cb(st.ring.slice()); },
     });
     return () => { try { sub.close(); } catch {} };
   },
-  // ROTATE the books' key — same contract as rotateCareKey. Taking Finance away from a treasurer used to
-  // rewrite the envelope without them and leave the KEY unchanged, so they carried on reading, including
-  // entries written after they left. The care key and the media key have rotated on removal for months; the
-  // books, shared for the first time on 2026-08-19, did not.
+
+  // OWNER-ONLY. Wrap this capability's key to the church and to every steward the roster grants it — which,
+  // for an unscoped steward, is all of them, exactly as it is everywhere else.
+  async ensureCapKeyFor(kind, stewardPubs, caps) {
+    const spec = CAP_KEYS[kind]; const st = _capState[kind];
+    if (!spec || !st) return false;
+    if (!churchSkHeld() || actingChurch) return false;      // only the owner mints
+    if (!st.checked || !_isRelayAuthed()) return false;     // never conclude "no envelope" from an unfinished read
+    const cp = pub;
+    const prevRing = st.ring.slice();          // to put back if the publish fails — see the rollback below
+    if (!st.ring.length) {
+      const first = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      // The legacy self-key rides ONLY in the ring of the thing that cannot be re-keyed. See CAP_KEYS.
+      const legacy = spec.legacy ? _legacyBookKeyHex() : '';
+      if (spec.legacy && !legacy) return false;
+      st.ring = legacy ? [first, legacy] : [first];
+    } else if (spec.legacy) {
+      const legacy = _legacyBookKeyHex();
+      if (legacy && st.ring.indexOf(legacy) < 0) st.ring = [...st.ring, legacy];
+    }
+    const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf(spec.cap) >= 0; };
+    const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+    const have = st.docKeys || {};
+    if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) { st.ring = prevRing; return false; }   // nothing changed
+    // THE FIRST MINT HAS TO BE ABLE TO HAPPEN. This used to read `if (!docKeys) return false` — guarding a
+    // real hazard (re-sealing the same key when we cannot see who was removed) but placed so that it also
+    // blocked the case where there is nothing to re-seal. Measured on the shipped bundle: for a church with
+    // no envelope, the old function returned false and published NOTHING, every time. So no church ever got
+    // a finance key, and the whole "share the books with a treasurer" feature was inert — the wall on the
+    // Finance screen was hiding a path that could not have worked anyway.
+    //
+    // What makes the distinction safe is `st.checked` above: it is set only on an AUTHENTICATED end-of-
+    // stored-events, and EOSE follows the stored events. So `checked && docKeys === null` is not "we have not
+    // looked" — it is the relay answering "there is no envelope". Minting one then loses nothing, because
+    // there is nothing yet to lose. Once an envelope DOES exist, docKeys is set and the shrink check below
+    // does its original job.
+    if (st.docKeys) {
+      const lost = Object.keys(have).filter(p2 => want.indexOf(p2) < 0);
+      if (lost.length) { st.ring = prevRing; return window.Steward.rotateCapKey(kind, stewardPubs, caps); }
+    }
+    const keys = await _sealEach(JSON.stringify(st.ring), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', spec.d + cp], ['t', NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
+    // ADOPT ONLY WHAT WAS PUBLISHED — the rule rotateCapKey already keeps, and for the same reason. The ring
+    // is assigned above so it can be sealed, but a failed publish would leave this console holding a key that
+    // exists nowhere else. It would then seal the church's records with it, and the next reload — which
+    // rebuilds the ring from the envelope that was never written — could not open any of them.
+    if (ok === false || ok == null) { st.ring = prevRing; return false; }
+    st.docKeys = keys;
+    return ok;
+  },
+
+  // ROTATE — the contract rotateCareKey and rotateMediaKey already keep. Taking a capability away used to
+  // rewrite the envelope without that person and leave the KEY unchanged, so they carried on reading,
+  // including anything written after they left.
   //
   // THE HONEST LIMIT, which belongs in the wording as much as the code: rotation protects the FUTURE, not the
-  // past. Anyone who held the old key can still open every entry written before the rotation — they already
-  // had it, and no amount of re-keying takes that back. What changes is that nothing they see from now on is
-  // new to them.
-  async rotateFinanceKey(stewardPubs, caps) {
+  // past. Anyone who held the old key can still open everything written before the rotation — they already
+  // had it, and no amount of re-keying takes that back.
+  async rotateCapKey(kind, stewardPubs, caps) {
+    const spec = CAP_KEYS[kind]; const st = _capState[kind];
+    if (!spec || !st) return false;
     if (!churchSkHeld() || actingChurch) return false;      // only the owner rotates
-    if (!_finChecked || !_isRelayAuthed()) return false;     // both: we have looked, AND the relay knows who we are
-    if (!_finRing.length) return false;                     // nothing to rotate yet — ensureFinanceKeyFor mints the first
+    if (!st.checked || !_isRelayAuthed()) return false;     // both: we have looked, AND the relay knows who we are
+    if (!st.ring.length) return false;                      // nothing to rotate yet — ensureCapKeyFor mints the first
     const cp = pub;
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-    // Newest first, superseded behind it, and the legacy self-key last so the history opens for whoever is
-    // still allowed to read it. Capped like the care ring so one envelope cannot outgrow what a relay accepts.
-    //
-    // COMPUTED, NOT ASSIGNED. rotateCareKey and rotateMediaKey both adopt the new ring only after the publish
-    // succeeds, and this did not: an offline minute left the console sealing ledger entries with a key that
-    // existed nowhere but that tab's memory, and the next reload overwrote it. In an append-only journal
-    // those entries cannot be recovered.
-    const nextRing = [fresh, ..._finRing].slice(0, 12);
-    const nextRev = (_finRev || 1) + 1;
-    const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf('finance') >= 0; };
+    // COMPUTED, NOT ASSIGNED. Both older rotations adopt the new ring only after the publish succeeds. Doing
+    // it first left a console sealing records with a key that existed nowhere but that tab's memory, and the
+    // next reload overwrote it — unrecoverable for an append-only ledger.
+    const nextRing = [fresh, ...st.ring].slice(0, 12);
+    const nextRev = (st.rev || 1) + 1;
+    const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf(spec.cap) >= 0; };
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
-    const ring = JSON.stringify(nextRing);
-    const keys = await _sealEach(ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', FINKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
+    const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', spec.d + cp], ['t', NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
     if (ok === false) return false;                          // nothing adopted — the old ring is still the truth
-    _finRing = nextRing; _finRev = nextRev; _finDocKeys = keys;
+    st.ring = nextRing; st.rev = nextRev; st.docKeys = keys;
+    _capRingChanged(kind);
     return ok;
   },
-  // OWNER-ONLY. Wrap the books' key to the church and to every steward the roster gives `finance` to —
-  // which, for an unscoped steward, is all of them, exactly as it is everywhere else.
-  async ensureFinanceKeyFor(stewardPubs, caps) {
-    if (!churchSkHeld() || actingChurch) return false;      // only the owner mints
-    if (!_finChecked || !_isRelayAuthed()) return false;    // never conclude "no envelope" from an unauthed or unfinished read
-    const cp = pub;
-    const legacy = _legacyBookKeyHex();
-    if (!legacy) return false;
-    if (!_finRing.length) _finRing = [_hex(crypto.getRandomValues(new Uint8Array(32))), legacy];
-    else if (_finRing.indexOf(legacy) < 0) _finRing = [..._finRing, legacy];
-    const allowed = (p) => {
-      const c = caps && caps[p];
-      return !Array.isArray(c) || c.indexOf('finance') >= 0;   // absent = unscoped = every capability
-    };
-    const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
-    const have = _finDocKeys || {};
-    if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) return false;   // nothing changed
-    // SOMEBODY LOST ACCESS. Rewrapping the same key without them changes nothing they can read — they hold
-    // it already. A shrink is the one case that must mint a new key rather than re-address the old one.
-    // `have` is null until the envelope has actually arrived, and null is not "nobody lost access" — on a
-    // cold console that silently re-sealed the SAME key and the removed treasurer carried on reading.
-    if (!_finDocKeys) return false;
-    const lost = Object.keys(have).filter(p2 => want.indexOf(p2) < 0);
-    if (lost.length) return window.Steward.rotateFinanceKey(stewardPubs, caps);
-    const ring = JSON.stringify(_finRing);
-    // Through _sealEach, like every other per-recipient seal here. This envelope is small today — the church
-    // and its finance-capable stewards — but a synchronous loop is the shape that froze the console on a
-    // church-wide rotation, and a guard that only holds while the list stays short is not a guard.
-    const keys = await _sealEach(ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', FINKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
-    if (ok !== false) _finDocKeys = keys;
-    return ok;
-  },
-  encSelf(obj) {                       // → ciphertext string, or null if we hold no key for the books
-    // Seal with the CURRENT books key when there is one; fall back to the owner's legacy self-key so a
-    // church that has never minted an envelope keeps working exactly as before.
+
+  // The books, by their old names — unchanged behaviour, one implementation underneath.
+  subscribeFinanceKey(cb) { return window.Steward.subscribeCapKey('finance', cb); },
+  ensureFinanceKeyFor(stewardPubs, caps) { return window.Steward.ensureCapKeyFor('finance', stewardPubs, caps); },
+  rotateFinanceKey(stewardPubs, caps) { return window.Steward.rotateCapKey('finance', stewardPubs, caps); },
+
+  // SEAL / OPEN, per capability. These used to be one pair of functions over one key, which is why granting
+  // Finance also handed over the children's register: both were sealed with the same derived self-key, so the
+  // books' ring opened check-in records too. `kind` names which ring does the sealing.
+  encSeal(kind, obj) {                 // → ciphertext string, or null if we hold no key for that capability
+    const st = _capState[kind]; if (!st) return null;
     try {
-      if (_finRing.length) return nip44e(JSON.stringify(obj), _unhex(_finRing[0]));
-      if (churchSkHeld()) return nip44e(JSON.stringify(obj), nip44ck(churchSk, churchPub));
+      if (st.ring.length) return nip44e(JSON.stringify(obj), _unhex(st.ring[0]));
+      // Fall back to the owner's legacy self-key ONLY where that key is already the historic one, so a church
+      // that has never minted an envelope keeps working exactly as before. Never for a new capability — that
+      // is how the shared secret spread in the first place.
+      if (CAP_KEYS[kind] && CAP_KEYS[kind].legacy && churchSkHeld()) return nip44e(JSON.stringify(obj), nip44ck(churchSk, churchPub));
     } catch (e) {}
     return null;
   },
-  decSelf(str) {                       // ciphertext → object, or null
+  encOpen(kind, str) {                 // ciphertext → object, or null
     if (!str) return null;
-    // Newest key first, then every superseded one — the last of which is the legacy self-key, so entries
-    // written before the envelope existed still open. A delegate holds the same ring and reads the same past.
-    for (const k of _finRing) { try { return JSON.parse(nip44d(str, _unhex(k))); } catch (e) {} }
+    const st = _capState[kind]; if (!st) return null;
+    // Newest key first, then every superseded one, so anything written before a rotation still opens.
+    for (const k of st.ring) { try { return JSON.parse(nip44d(str, _unhex(k))); } catch (e) {} }
+    // The legacy key opens the past for the OWNER of any capability — they can already read everything, and
+    // records written before this split existed must not become unreadable. churchSkHeld() is false for every
+    // delegate, so a `safeguarding` grant never inherits it and neither does anyone else.
     if (churchSkHeld()) { try { return JSON.parse(nip44d(str, nip44ck(churchSk, churchPub))); } catch (e) {} }
     return null;
   },
+  encSelf(obj) { return window.Steward.encSeal('finance', obj); },      // the books, by their old names
+  decSelf(str) { return window.Steward.encOpen('finance', str); },
   // Publish an encrypted addressable church doc (kind-30078). Signed by WHOEVER IS ACTING — the church key
   // for an owner, the steward's own key for a delegate — and feChurch() stamps the ['church',<cp>] tag that
   // lets the relay resolve which church a steward is writing for. It used to sign with churchSk
   // unconditionally, which in delegated mode is the steward's own key with no church tag: every write
   // refused, and the module then re-seeded an empty book from the empty read. (audit 2026-07-06 #3)
-  encPublish(dtag, obj) {
+  encPublish(dtag, obj, kind) {
     if (!sk) return Promise.resolve(null);
-    const content = window.Steward.encSelf(obj); if (content == null) return Promise.resolve(null);
+    const content = window.Steward.encSeal(kind || 'finance', obj); if (content == null) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', dtag], ['t', NET], ['enc', '1']], content }));
   },
   encRemove(dtag) {                    // tombstone an encrypted doc
@@ -4634,11 +4692,29 @@ window.Steward = {
   },
   // subscribe to all encrypted church docs whose d-tag starts with `prefix`; decrypts each and emits a
   // live array of { id (the d-tag suffix after prefix), ...decrypted, ts }. Returns an unsubscribe fn.
-  encSubscribe(prefix, cb) {
+  encSubscribe(prefix, cb, kind) {
     const cp = actingChurch || pub;
     if (!cp) { cb([]); return () => {}; }
     const byId = new Map();
     const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    // A HOLDING PEN, not a bin. A document that will not open is usually not corrupt — it is sealed with a
+    // key whose envelope is still in flight, and the two subscriptions race. Keep the ciphertext and try
+    // again each time the ring changes.
+    const kk = kind || 'finance';
+    const held = new Map();   // id -> { content, ts }
+    const take = (id, content, ts) => {
+      const obj = window.Steward.encOpen(kk, content);
+      if (obj == null) { held.set(id, { content, ts }); return false; }
+      held.delete(id); byId.set(id, { id, ...obj, ts });
+      return true;
+    };
+    const retry = () => {
+      if (!held.size) return;
+      let opened = 0;
+      for (const [id, h] of [...held]) { if (take(id, h.content, h.ts)) opened++; }
+      if (opened) emit();
+    };
+    if (_capWaiters[kk]) _capWaiters[kk].add(retry);
     // TWO FILTERS, because the books now have two kinds of author. The church key writes them, and so does a
     // steward the church gave `finance` to — whose events are signed with their own key and carry
     // ['church',<cp>]. Subscribing to `authors:[churchPub]` alone was also wrong in delegated mode, where
@@ -4653,15 +4729,20 @@ window.Steward = {
         // The relay gates these writes, and this is the client saying the same thing: the church, or a
         // steward currently on its roster. A revoked steward's entries stop being trusted here the moment
         // the roster changes, without waiting for a relay round-trip.
-        if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
+        //
+        // THE BOOKS ARE EXEMPT, exactly as they are in the relay's own retraction rule. The journal is
+        // append-only and sequence-pinned, so a departed treasurer's entries cannot have been tampered with —
+        // dropping them here would delete the months they served from the church's accounts, with the
+        // surrounding sequence numbers still present.
+        if (e.pubkey !== cp && !_careRoster.has(e.pubkey) && !d.startsWith('finance/journal:')) return;
         const id = d.slice(prefix.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        const obj = window.Steward.decSelf(e.content); if (obj == null) return;
-        byId.set(id, { id, ...obj, ts: e.created_at }); emit();
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); held.delete(id); emit(); return; }
+        if (!take(id, e.content, e.created_at)) return;   // held for a key that has not arrived yet
+        emit();
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} };
+    return () => { _capWaiters[kk] && _capWaiters[kk].delete(retry); try { sub.close(); } catch {} };
   },
 
   // ---- moderation: pin a message at the top of a group's chat ----
@@ -4892,17 +4973,74 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RUNSHEET_D + serviceId], ['t', NET]], content }));
   },
   subscribeRunsheets(onSheets) { return this._subAddr(RUNSHEET_D, (c) => ({ items: Array.isArray(c.items) ? c.items : [] }), onSheets); },
-  // ---- kids check-in (ENCRYPTED to the church key: a child's presence + pickup code never leave plaintext,
-  // so the relay + other members can't see them). Run by the church-key holder; d=checkin:<id>. ----
+  // ---- kids check-in (ENCRYPTED to the SAFEGUARDING key: a child's presence + pickup code never leave
+  // plaintext, so the relay + other members can't see them). d=checkin:<id>.
+  //
+  // Its own key, not the books'. Until 2026-08-20 these were sealed with the same derived self-key the ledger
+  // used, so a steward given Finance — a treasurer, with no safeguarding role at all — could open every
+  // child's name, room and pickup code. Records written before the split still open for the OWNER only, via
+  // the legacy fallback in encOpen; migrateCheckinKeys() re-seals them onto the safeguarding key. ----
   publishCheckin(rec) {
     const id = rec.id || ('ci' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
     return window.Steward.encPublish('trinityone/checkin:' + id, {
       id, child: rec.child || '', childName: rec.childName || '', date: rec.date || _todayISO(),
       in: rec.in || Math.floor(Date.now() / 1000), out: rec.out != null ? rec.out : null, code: rec.code || '', room: rec.room || '', note: rec.note || '',
-    });
+    }, 'checkin');
   },
   removeCheckin(id) { return window.Steward.encRemove('trinityone/checkin:' + id); },
-  subscribeCheckins(cb) { return window.Steward.encSubscribe('trinityone/checkin:', cb); },
+
+  // MIGRATION — move any check-in record still sealed with the legacy self-key onto the safeguarding key.
+  //
+  // Splitting the keys protects records written from now on. It does nothing about the ones already on the
+  // relay: those are sealed with the key that also seals the ledger, so a Finance grant would still open the
+  // register's history. Unlike the ledger — which the relay pins to an exact next sequence number, and so can
+  // never be re-keyed — a check-in is an ordinary addressable doc, and re-publishing the same d-tag REPLACES
+  // it. So this is possible here, and it is the whole point of doing it now while churches hold few or none.
+  //
+  // Owner-only, by two separate facts: only the owner can derive the legacy key at all, and only the owner
+  // mints the safeguarding envelope. Idempotent — a record already on the new key is skipped, so running it
+  // twice costs one read. Returns { scanned, moved, failed }.
+  async migrateCheckinKeys(timeoutMs) {
+    const st = _capState.checkin;
+    if (!churchSkHeld() || !st || !st.ring.length) return { scanned: 0, moved: 0, failed: 0, skipped: 'no safeguarding key held' };
+    const cp = actingChurch || pub; if (!cp) return { scanned: 0, moved: 0, failed: 0 };
+    // ONCE PER CHURCH PER SESSION. The console calls this from the same effect that keeps the key envelopes in
+    // step with the roster, which re-runs on every capability edit — and each run opens a subscription that
+    // waits for EOSE. Idempotent is not the same as free. `_resetChurchScopedState` clears this, so switching
+    // church runs it again for the church you switched to.
+    if (_checkinMigrated === cp) return { scanned: 0, moved: 0, failed: 0, skipped: 'already run this session' };
+    _checkinMigrated = cp;
+    const PRE = 'trinityone/checkin:';
+    const stale = new Map();
+    await new Promise((res) => {
+      let done = false; const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} res(); };
+      const sub = pool.subscribeMany(relays(), [
+        { kinds: [30078], authors: [cp], '#t': [NET] },
+        { kinds: [30078], '#church': [cp], '#t': [NET] },
+      ], {
+        onevent(e) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (!d.startsWith(PRE) || !e.content) return;
+          if (e.tags.some(t => t[0] === 'deleted')) return;
+          // Already on the new key? Nothing to do. Try the ring FIRST so a re-run is a no-op.
+          for (const k of st.ring) { try { JSON.parse(nip44d(e.content, _unhex(k))); return; } catch (x) {} }
+          try { stale.set(d.slice(PRE.length), JSON.parse(nip44d(e.content, nip44ck(churchSk, churchPub)))); } catch (x) {}
+        },
+        oneose: finish,
+      });
+      setTimeout(finish, timeoutMs || 8000);
+    });
+    let moved = 0, failed = 0;
+    for (const [id, rec] of stale) {
+      // Re-seal and republish under the SAME d-tag. Sequential, not parallel: a relay that rate-limits a
+      // burst would drop records, and a dropped record here means a child's register entry silently lost.
+      const ok = await window.Steward.encPublish(PRE + id, rec, 'checkin');
+      if (ok === false || ok == null) failed++; else moved++;
+    }
+    return { scanned: stale.size, moved, failed };
+  },
+
+  subscribeCheckins(cb) { return window.Steward.encSubscribe('trinityone/checkin:', cb, 'checkin'); },
 
   // ---- rooms & bookings: a shared room calendar (steward-booked) ----
   // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }

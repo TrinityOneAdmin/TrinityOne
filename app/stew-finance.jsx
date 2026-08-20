@@ -524,12 +524,24 @@ function DashFinance() {
   const F = window.FinanceLedger;
   if (!F) return <div style={{ padding: 28, color: 'var(--ink-3)' }}>Loading the ledger engine…</div>;
   const S = window.Steward;
-  // Defensive: never run relay-backed Finance under a delegated steward's key — encPublish would sign/encrypt
-  // with the wrong key and omit the ['church'] tag, so the relay rejects every write and the book silently
-  // re-seeds empty on reload. The nav already hides Finance when acting as a delegated steward; this guards
-  // any other entry (deep link, tab state). (audit 2026-07-06 #3)
-  if (S && S.actingChurch) return <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Finance is on the church console</div>The books are kept on the church’s own key. Open the console with the church key to record and view finances — delegated-steward bookkeeping isn’t available yet.</div>;
-  const useRelay = !!(S && S.encSubscribe && S.encPublish);   // real console w/ the church key → relay-backed; else localStorage
+  // DELEGATED BOOKKEEPING. This screen used to refuse to render for a delegated steward, because the three
+  // things it needs were all broken: encPublish signed with the wrong key and omitted the ['church'] tag
+  // (fixed 2026-07-06), the books had no shareable key (the finance envelope, 2026-08-19), and a delegate's
+  // ledger silently arrived empty or was silently dropped (the two fixes below, 2026-08-20).
+  //
+  // What still holds a delegate out is the KEY, not this component: without the finance capability the owner
+  // never wraps them into the envelope, so encSeal returns null and pubEntry refuses the write. That is the
+  // honest gate — a screen that hides itself is a preference, a key they do not hold is a protection.
+  const [finKey, setFinKey] = React.useState(() => !!(S && S.financeKeyRing && S.financeKeyRing().length));
+  React.useEffect(() => {
+    if (!S || !S.subscribeCapKey) return;
+    return S.subscribeCapKey('finance', (ring) => setFinKey(!!(ring && ring.length)));
+  }, []);
+  // ...and if they genuinely have no key, say which of the two it is rather than showing an empty ledger.
+  // An empty ledger is the single most misleading thing this screen can display: it reads as "your church has
+  // never recorded anything", which is exactly what a treasurer must not be told by mistake.
+  if (S && S.actingChurch && !finKey) return <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Waiting for the books to be shared with you</div>The church keeps its accounts under their own key. Whoever holds the church key needs to give you the <b>Finance</b> permission — once they do, the books open here on their own. If they already have, give it a moment to arrive.</div>;
+  const useRelay = !!(S && S.encSubscribe && S.encPublish);   // real console → relay-backed; else localStorage
   const bookRef = React.useRef(null);
   if (!bookRef.current) bookRef.current = useRelay ? F.createBook({ baseCurrency: 'GBP', decimals: 2 }) : booksLoad();
   const book = bookRef.current;
@@ -543,7 +555,13 @@ function DashFinance() {
     if (!useRelay) { booksSave(b); return true; }
     try {
       const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
-      if (ok === false) throw new Error('the relay refused the entry');
+      // NULL IS NOT SUCCESS. encPublish returns null — never false — when it declines before reaching the
+      // relay: no signing key, or no books key to seal with. `ok === false` alone let that through as a
+      // success, so a console without the finance ring showed the entry saved, wrote nothing anywhere, and
+      // lost it on reload. That is the exact shape of defect this repo keeps finding: a control reporting
+      // work it did not do. A delegated treasurer whose envelope has not arrived yet hits it on their first
+      // entry, which makes it far more likely now that Finance can be delegated at all.
+      if (ok === false || ok == null) throw new Error('the entry was not published');
       return true;
     } catch (x) {
       booksSave(b);   // keep it locally so the treasurer's work isn't lost while they retry

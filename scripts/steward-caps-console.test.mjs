@@ -95,10 +95,29 @@ test('the owner is told the limit of what this promise is worth', () => {
   void i;
 });
 
-test('the safeguarding LISTS stay owner-only, and the editor says so', () => {
+test('the Safeguarding blurb says what it really grants: SEE the lists, not CHANGE them', () => {
+  // This test used to require the literal phrase "the child and cleared-adult LISTS stay owner-only", which
+  // was the overclaim rather than the guard against one. Only the WRITES are owner-only (gateway.mjs:
+  // MINORS_D / APPROVED_D / GUARDIANS_D all demand e.pubkey === cp). The READS are granted — canRead serves
+  // those lists to any steward holding `safeguarding` — and since 2026-08-20 the capability also carries the
+  // key to the children's register: names, rooms and pickup codes.
+  //
+  // So an owner reading "stay owner-only" was told the opposite of the truth about the most sensitive data
+  // in the app, at the exact moment they were deciding whether to hand it over. Assert the two halves of the
+  // real rule, not a phrase.
   const src = stripComments(DASH);
-  assert.match(src, /child and cleared-adult LISTS stay owner-only/,
-    'the Safeguarding capability reads as though it grants the minors and cleared-adult lists. It does not — ' +
-    'the relay keeps those to the church key — and an owner who believes otherwise has been misled about ' +
-    'the one area where being wrong matters most');
+  // The LONGEST of them: `safeguarding:` appears both as a one-word chip label and as the sentence shown
+  // under it in the editor. The sentence is the one an owner reads while deciding.
+  const blurb = [...src.matchAll(/safeguarding: '([^']*)'/g)].map(m => m[1]).sort((a, b) => b.length - a.length)[0] || '';
+  assert.ok(blurb.length > 20, 're-anchor: the Safeguarding capability has no description in the editor at all');
+  assert.match(blurb, /\bSEE\b|\bsee\b/,
+    'the Safeguarding blurb does not tell the owner that this person will be able to SEE who is marked as a ' +
+    'child, which adults are cleared, and the check-in register. That is what the grant actually does.');
+  assert.match(blurb, /only you can CHANGE|only you can change/,
+    'the blurb does not say that changing those lists stays with the church key, so an owner cannot tell ' +
+    'what they are keeping');
+  assert.doesNotMatch(blurb, /LISTS stay owner-only|lists stay owner-only/,
+    'the blurb still says the lists "stay owner-only". Only the WRITES do — the reads are granted by this ' +
+    'very capability, and an owner who believes the lists are withheld has been misled about the one area ' +
+    'where being wrong matters most.');
 });

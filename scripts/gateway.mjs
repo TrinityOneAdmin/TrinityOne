@@ -392,6 +392,8 @@ const NAMEKEY_D = D.NAMEKEY;     // per-church name key envelope, wrapped per me
 const NAME_D = D.NAME;           // a MEMBER's own display name for one church, sealed under that key
 const CAREKEY_D = D.CAREKEY;     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
 const FINANCEKEY_D = D.FINANCEKEY;   // the church books' key, wrapped to the church + every finance-capable steward
+const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — d=checkin:<id>, sealed under the safeguarding key
+const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to the church + every safeguarding-capable steward. Separate from FINANCEKEY_D on purpose: they shared one derived key until 2026-08-20, so a treasurer could read every child's name, room and pickup code.
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
 const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
@@ -955,7 +957,7 @@ const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church
 //   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
 // Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
 const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
-  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, FINANCEKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
+  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, FINANCEKEY_D, CHECKINKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
 // not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
@@ -1642,6 +1644,9 @@ function accept(e) {
     // write the books, but only the church key mints or rotates the envelope that hands that access out:
     // otherwise a treasurer could re-key the books to themselves and lock the church out of its own ledger.
     if (d.startsWith(FINANCEKEY_D)) { const cp = toHexPub(d.slice(FINANCEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && e.pubkey === cp; }
+    // THE CHILDREN'S REGISTER KEY — owner-only for the same reason, and one more: whoever mints this envelope
+    // decides who may read a child's pickup code. That is not a decision to delegate to a delegate.
+    if (d.startsWith(CHECKINKEY_D)) { const cp = toHexPub(d.slice(CHECKINKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && e.pubkey === cp; }
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
     // the per-church NAME key envelope — same authority as the care key.
     if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members')); }
@@ -1805,6 +1810,15 @@ function accept(e) {
       const _p = (e.tags.find(t => t[0] === 'p') || [])[1]; const _asker = _p ? (toHexPub(_p) || _p) : '';
       if (_asker && MINORS.has(_asker) && e.pubkey !== _asker && !safeguardAllows(_asker, e.pubkey)) return false;
     }
+    // THE CHILDREN'S REGISTER — the church, or a steward it gave `safeguarding` to. Two reasons this needs
+    // saying out loud rather than falling to the member catch-all below:
+    //   1. these are ADDRESSABLE, so a write to an existing d-tag REPLACES it. Under the catch-all any member
+    //      of the church could overwrite `checkin:<id>` with anything, and a child's presence record would
+    //      simply disappear from the register. They cannot READ one — it is sealed — but destroying a
+    //      safeguarding record needs no ability to read it.
+    //   2. a delegated steward is not necessarily a member of the congregation they help run, so the
+    //      catch-all would refuse the very person the capability was granted to.
+    if (d.startsWith(CHECKIN_D)) { const cp = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : ''); return !!cp && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')); }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
@@ -2036,7 +2050,14 @@ function canRead(e, authed) {
     // steward roster), hiding it from EVERYONE — the church and care team included. Sibling of B1, which
     // exempted the sign-ups but missed the need itself. The need's PII is sealed and the authed branch below
     // still restricts readers to effective members of cp, so serving the clear half here is the design.
-    const retractionExempt = memberWritable || d.startsWith(NEED_D);
+    // THE CHURCH BOOKS are exempt for a different and stronger reason. The journal is APPEND-ONLY and the
+    // relay pins every entry to an exact next sequence number, so entries can never be rewritten — which means
+    // a removed treasurer's entries cannot be re-authored by anyone. Retracting them instead DELETES history:
+    // the church opens its accounts and finds the months that treasurer served simply missing, with the
+    // surrounding sequence numbers still there. Nothing about a person leaving makes the money they recorded
+    // untrue, and an accounts system that silently drops entries when staff change is not an accounts system.
+    // Their FUTURE writes are already refused by accept(); this is only about continuing to serve the past.
+    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith(FIN_JOURNAL_D);
     // 'any', deliberately, and NOT this document's own capability. This asks whether the author still acts
     // for the church at all, so that narrowing a delegate to Finance does not make every group they ever
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is
@@ -2801,6 +2822,7 @@ function serveStatic(req, res) {
         if (fresh && CHURCH_PUBS.size >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
         if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
         let imported = 0, duplicates = 0, invalid = 0;
+        const checkIds = [];   // everything we stored, re-checked against accept() once the maps are built
         for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
           const s = line.trim(); if (!s) continue;
           let e; try { e = JSON.parse(s); } catch { invalid++; continue; }
@@ -2809,14 +2831,41 @@ function serveStatic(req, res) {
           if (!ok) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
-            if (r === 'stored') imported++;
+            if (r === 'stored') { imported++; checkIds.push(e.id); }
             if (e.kind === 5) applyDeletions(e);   // ALWAYS — a kind-5 we already hold ('duplicate') still has to be applied, or a restore silently resurrects everything it deleted
             else duplicates++;
           } catch { invalid++; }
         }
         // respond BEFORE the heavy re-scan so a slow hydrate can't time the request out at the proxy (→ 502)
         res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
-        setImmediate(() => { try { hydrateMaps(); } catch {} try { store.cull(); } catch {} });   // membership/groups/care live once this settles
+        setImmediate(() => {
+          try { hydrateMaps(); } catch {}
+          // NOW APPLY THE WRITE POLICY. Every event above went in through store.put() without accept() ever
+          // being asked — the one path into this relay that skipped it. Signatures were checked, and note()
+          // re-checks authorship for the rosters and safeguarding lists, so the forged-list attack was never
+          // available; but accept() enforces things authorship alone does not. Most seriously the minor↔adult
+          // DM gate: an archive could carry kind-4 messages from an uncleared adult to a child, and this
+          // relay would then serve them. Restoring a backup is not a reason to hold a message the relay would
+          // have refused at the door.
+          //
+          // TWO PASSES, deliberately, and this is why accept() could not simply be called inline: accept()
+          // reads the membership, roster and group maps, and during an import those are built FROM the events
+          // being imported. Checking each one as it arrived would refuse every member-authored document that
+          // happened to land before the member: doc it depends on — which is most of a real archive, in an
+          // order nobody controls. So: store it all, hydrate, then ask the question with the maps complete.
+          let refused = 0;
+          try {
+            for (const id of checkIds) {
+              const ev = store.query({ ids: [id], limit: 1 })[0];
+              if (!ev) continue;
+              let ok = false; try { ok = accept(ev); } catch { ok = false; }
+              if (!ok) { store.del(id); refused++; }
+            }
+            if (refused) { try { hydrateMaps(); } catch {} }   // a refused event may have fed a map on the first pass
+          } catch {}
+          if (refused) console.log(`[import] ${refused} event(s) refused by the write policy and dropped`);
+          try { store.cull(); } catch {}
+        });   // membership/groups/care live once this settles
       } catch (err) { try { res.writeHead(500, H); res.end(JSON.stringify({ error: 'import failed: ' + ((err && err.message) || 'error') })); } catch {} }
     });
     return;
