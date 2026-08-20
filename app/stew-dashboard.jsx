@@ -1002,7 +1002,13 @@ function StewDashboard({ initial = 'overview' }) {
     return S.subscribeFinanceKey(() => setTick(t => t + 1));
   }, []);
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
-  React.useEffect(() => { if (church.name && window.Steward.selfRegister) window.Steward.selfRegister(church.name).catch(() => {}); }, [church.name]);
+  // Owner consoles only — see the note in selfRegister. A delegate's console fired this with the name of the
+  // church they were helping and registered THEIR OWN key under it.
+  React.useEffect(() => {
+    const S = window.Steward;
+    if (!S || S.actingChurch || !church.name || !S.selfRegister) return;
+    S.selfRegister(church.name).catch(() => {});
+  }, [church.name]);
   const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)
   const editName = () => setRenaming(true);
   // responsive: a phone/narrow window collapses the desktop sidebar into a top header + scrollable nav

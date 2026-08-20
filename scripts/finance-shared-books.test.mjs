@@ -143,3 +143,102 @@ test('Finance is offered to a capable delegate, and padlocked for the rest', () 
   assert.match(src, /const finOn = !!window\.DashFinance && stewCapState\('finance'\)\.allowed;/,
     'Finance is still hidden from every delegate regardless of what their church granted them');
 });
+
+// ── AND TAKING FINANCE AWAY MUST TAKE THE BOOKS AWAY ──────────────────────────────────────────────────────
+// Sharing the books was built on 2026-08-19 without rotation: removing a treasurer rewrote the envelope
+// without them and left the KEY unchanged, so they carried on reading — including entries written after they
+// left. The care key and the media key have rotated on removal for months. This is the same contract.
+//
+// The honest half, which the code comments carry too: rotation protects the FUTURE. Anyone who held the old
+// key can still open everything written before it. What changes is that nothing they see afterwards is new.
+test('after a rotation, the removed treasurer cannot read NEW entries', () => {
+  const oldKey = freshKey;
+  const newKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+
+  // the church, after rotating: newest key first, superseded behind it, legacy last
+  const church2 = books({ ring: [newKey, oldKey, legacyKey], ownerKey: true });
+  const afterEntry = church2.encSelf({ memo: 'Gas bill', amount: -140 });
+
+  // the removed treasurer still holds only what they had
+  const removed = books({ ring: [oldKey, legacyKey], ownerKey: false });
+  assert.equal(removed.decSelf(afterEntry), null,
+    'a treasurer whose Finance access was taken away can still read entries written afterwards, because the ' +
+    'envelope was rewritten without them but the key never changed');
+
+  // and the treasurer who remains does
+  const kept = books({ ring: [newKey, oldKey, legacyKey], ownerKey: false });
+  assert.deepEqual(kept.decSelf(afterEntry), { memo: 'Gas bill', amount: -140 },
+    'the remaining treasurer lost access at the rotation');
+});
+
+test('and the history still opens for everyone who had it', () => {
+  const oldKey = freshKey;
+  const newKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const before = books({ ring: [oldKey, legacyKey], ownerKey: false }).encSelf({ memo: 'Harvest offering', amount: 310 });
+  const kept = books({ ring: [newKey, oldKey, legacyKey], ownerKey: false });
+  assert.deepEqual(kept.decSelf(before), { memo: 'Harvest offering', amount: 310 },
+    'rotation orphaned the ledger written before it — the superseded keys must stay in the ring');
+});
+
+test('only the owner rotates, and only when somebody has actually lost access', () => {
+  const body = stripComments(fnBody(VENDOR, 'async rotateFinanceKey(stewardPubs, caps) {', 'rotateFinanceKey'));
+  assert.match(body, /if \(!churchSkHeld\(\) \|\| actingChurch\) return false/,
+    'a delegated steward can rotate the books key, which would let a treasurer re-key the ledger away from ' +
+    'the church that owns it');
+  assert.match(body, /_isRelayAuthed\(\)/,
+    'rotation can run on an unauthenticated read of the envelope — the same mistake that orphans key material');
+  assert.match(body, /slice\(0, 12\)/, 'the ring is unbounded, so an envelope can grow past what a relay accepts');
+
+  const ensure = stripComments(fnBody(VENDOR, 'async ensureFinanceKeyFor(stewardPubs, caps) {', 'ensureFinanceKeyFor'));
+  assert.match(ensure, /rotateFinanceKey/,
+    'losing a treasurer still only rewrites the envelope, which changes nothing they can read');
+});
+
+// Drive the SHIPPED rotation, rather than modelling it. The first version of the two tests above built the
+// rings by hand, so breaking the ring construction in the product left them green — the same flaw this repo
+// keeps re-learning: a sabotage must run through the code under test or it proves only that the test passes.
+function runRotate({ ring, allowed, caps }) {
+    const published = [];
+    const stubs = {
+      churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true,
+      _finRing: ring.slice(), _finRev: 1, _finDocKeys: null,
+      pub: church.pub, sk: church.sk, churchPub: church.pub,
+      crypto: webcrypto, _hex: hex, _unhex: unhex,
+      encrypt: (p2, k) => nip44.encrypt(p2, k), decrypt: (c, k) => nip44.decrypt(c, k),
+      getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
+      nip44e: (p2, k) => nip44.encrypt(p2, k), nip44ck: (a, b) => nip44.utils.getConversationKey(a, b),
+      _sealEach: async (payload, want, seal) => { const out = {}; for (const w of want) out[w] = seal(payload, w); return out; },
+      feChurch: (t) => t, publish: async (e) => { published.push(e); return e; },
+      now: () => 1787280000, FINKEY_D: 'trinityone/financekey:', NET: 'trinityone',
+      window: { Steward: {} },
+    };
+    const scope = new Proxy(stubs, {
+      has: (t, k) => (k in t) || !(String(k) in globalThis),
+      get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+        const b = String(k).replace(/[0-9]+$/, ''); if (b in t) return t[b];
+        throw new ReferenceError('needs a stub for ' + String(k)); },
+      set: (t, k, v) => { t[k] = v; return true; },
+    });
+    const body = fnBody(VENDOR, 'async rotateFinanceKey(stewardPubs, caps) {', 'rotateFinanceKey');
+    const fn = new Function('scope', `with (scope) { return ({ ${body} }).rotateFinanceKey; }`)(scope);
+    return { fn, published, stubs };
+}
+
+test('the SHIPPED rotation mints a new key and keeps the old ones', async () => {
+  const treasurerSk = generateSecretKey(), treasurerPub = getPublicKey(treasurerSk);
+  const oldKey = freshKey;
+  const { fn, published, stubs } = runRotate({ ring: [oldKey, legacyKey] });
+  await fn([treasurerPub], { [treasurerPub]: ['finance'] });
+  assert.equal(published.length, 1, 'rotation published no new envelope');
+
+  const env = JSON.parse(published[0].content);
+  const mine = env.keys[treasurerPub];
+  assert.ok(mine, 'the remaining treasurer was not given the new ring');
+  const ring = JSON.parse(nip44.decrypt(mine, nip44.utils.getConversationKey(church.sk, treasurerPub)));
+
+  assert.notEqual(ring[0], oldKey, 'rotation reused the same key, so nothing changed for anyone removed');
+  assert.ok(ring.includes(oldKey), 'the superseded key was dropped, orphaning every entry written before now');
+  assert.ok(ring.includes(legacyKey), 'the legacy key was dropped, orphaning the books written before sharing existed');
+  assert.equal(env.rev, 2, 'the revision did not advance, so a lagging relay cannot tell which envelope is newer');
+  void stubs;
+});

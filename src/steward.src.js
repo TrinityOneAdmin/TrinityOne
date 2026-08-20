@@ -4522,6 +4522,33 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
+  // ROTATE the books' key — same contract as rotateCareKey. Taking Finance away from a treasurer used to
+  // rewrite the envelope without them and leave the KEY unchanged, so they carried on reading, including
+  // entries written after they left. The care key and the media key have rotated on removal for months; the
+  // books, shared for the first time on 2026-08-19, did not.
+  //
+  // THE HONEST LIMIT, which belongs in the wording as much as the code: rotation protects the FUTURE, not the
+  // past. Anyone who held the old key can still open every entry written before the rotation — they already
+  // had it, and no amount of re-keying takes that back. What changes is that nothing they see from now on is
+  // new to them.
+  async rotateFinanceKey(stewardPubs, caps) {
+    if (!churchSkHeld() || actingChurch) return false;      // only the owner rotates
+    if (!_isRelayAuthed()) return false;                    // never act on an unauthenticated read of the envelope
+    if (!_finRing.length) return false;                     // nothing to rotate yet — ensureFinanceKeyFor mints the first
+    const cp = pub;
+    const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+    // Newest first, superseded behind it, and the legacy self-key last so the history opens for whoever is
+    // still allowed to read it. Capped like the care ring so one envelope cannot outgrow what a relay accepts.
+    _finRing = [fresh, ..._finRing].slice(0, 12);
+    _finRev = (_finRev || 1) + 1;
+    const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf('finance') >= 0; };
+    const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+    const ring = JSON.stringify(_finRing);
+    const keys = await _sealEach(ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', FINKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
+    if (ok !== false) _finDocKeys = keys;
+    return ok;
+  },
   // OWNER-ONLY. Wrap the books' key to the church and to every steward the roster gives `finance` to —
   // which, for an unscoped steward, is all of them, exactly as it is everywhere else.
   async ensureFinanceKeyFor(stewardPubs, caps) {
@@ -4539,6 +4566,10 @@ window.Steward = {
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
     const have = _finDocKeys || {};
     if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) return false;   // nothing changed
+    // SOMEBODY LOST ACCESS. Rewrapping the same key without them changes nothing they can read — they hold
+    // it already. A shrink is the one case that must mint a new key rather than re-address the old one.
+    const lost = Object.keys(have).filter(p2 => want.indexOf(p2) < 0);
+    if (lost.length) return window.Steward.rotateFinanceKey(stewardPubs, caps);
     const ring = JSON.stringify(_finRing);
     // Through _sealEach, like every other per-recipient seal here. This envelope is small today — the church
     // and its finance-capable stewards — but a synchronous loop is the shape that froze the console on a
@@ -5389,6 +5420,17 @@ window.Steward = {
   async selfRegister(name, opts) {
     // Hold the publish gate for as long as this takes, so the founding documents queue behind it rather than
     // racing it (see _publishSigned). Resolved in the finally below, on every exit path.
+    // NEVER REGISTER OURSELVES AS A CHURCH WHILE HELPING RUN SOMEBODY ELSE'S. selfRegister registers
+    // `churchPub`, which in delegated mode is the STEWARD'S OWN key — and the console fires it whenever a
+    // church name is in view, so a delegate registered themselves under the name of the church they were
+    // helping. Measured on 2026-08-19: four rows in one relay's church list, all called "St Aidan's,
+    // Ferrymead", three of them stewards.
+    //
+    // That is not merely untidy. A registered key is a church at the relay, and being a church used to skip
+    // the capability checks entirely — so scoping a steward to Finance stopped meaning anything the moment
+    // their own console did this. The relay half is fixed too (gateway.mjs leaderOf), and both halves matter:
+    // one stops the junk rows, the other stops any future junk row becoming authority.
+    if (actingChurch) return { ok: false, refused: [], unreachable: [], skipped: 'acting as a delegated steward' };
     _regNeedsName = false;
     _armRegGate();
     try {

@@ -18701,6 +18701,34 @@ zoo`.split("\n");
         }
       };
     },
+    // ROTATE the books' key — same contract as rotateCareKey. Taking Finance away from a treasurer used to
+    // rewrite the envelope without them and leave the KEY unchanged, so they carried on reading, including
+    // entries written after they left. The care key and the media key have rotated on removal for months; the
+    // books, shared for the first time on 2026-08-19, did not.
+    //
+    // THE HONEST LIMIT, which belongs in the wording as much as the code: rotation protects the FUTURE, not the
+    // past. Anyone who held the old key can still open every entry written before the rotation — they already
+    // had it, and no amount of re-keying takes that back. What changes is that nothing they see from now on is
+    // new to them.
+    async rotateFinanceKey(stewardPubs, caps) {
+      if (!churchSkHeld() || actingChurch) return false;
+      if (!_isRelayAuthed()) return false;
+      if (!_finRing.length) return false;
+      const cp = pub;
+      const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      _finRing = [fresh, ..._finRing].slice(0, 12);
+      _finRev = (_finRev || 1) + 1;
+      const allowed = (p2) => {
+        const c = caps && caps[p2];
+        return !Array.isArray(c) || c.indexOf("finance") >= 0;
+      };
+      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+      const ring = JSON.stringify(_finRing);
+      const keys = await _sealEach(ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FINKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
+      if (ok !== false) _finDocKeys = keys;
+      return ok;
+    },
     // OWNER-ONLY. Wrap the books' key to the church and to every steward the roster gives `finance` to —
     // which, for an unscoped steward, is all of them, exactly as it is everywhere else.
     async ensureFinanceKeyFor(stewardPubs, caps) {
@@ -18718,6 +18746,8 @@ zoo`.split("\n");
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
       const have = _finDocKeys || {};
       if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) return false;
+      const lost = Object.keys(have).filter((p2) => want.indexOf(p2) < 0);
+      if (lost.length) return window.Steward.rotateFinanceKey(stewardPubs, caps);
       const ring = JSON.stringify(_finRing);
       const keys = await _sealEach(ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FINKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
@@ -20036,6 +20066,7 @@ zoo`.split("\n");
       });
     },
     async selfRegister(name, opts) {
+      if (actingChurch) return { ok: false, refused: [], unreachable: [], skipped: "acting as a delegated steward" };
       _regNeedsName = false;
       _armRegGate();
       try {

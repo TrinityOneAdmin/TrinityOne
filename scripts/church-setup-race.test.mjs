@@ -157,3 +157,33 @@ test('the relay records a have-newer refusal like every other refusal', () => {
     'a have-newer refusal is the one that raises the alarming banner, and it is the only refusal the relay ' +
     'does not write to rejected.log — so diagnosing it needs a screenshot of somebody\'s phone');
 });
+
+test('a console helping run SOMEBODY ELSE\'s church never registers itself as one', () => {
+  // Measured on 2026-08-19: four rows in one relay's church list, all named "St Aidan's, Ferrymead", three of
+  // them delegated stewards. selfRegister registers `churchPub`, which in delegated mode is the STEWARD'S own
+  // key, and the console fired it whenever a church name was in view — so each helper registered themselves
+  // under the name of the church they were helping.
+  //
+  // It was not merely untidy. A registered key is a church at the relay, and being a church skipped the
+  // capability checks entirely, so scoping a steward to Finance stopped meaning anything the moment their own
+  // console did this. The relay half is guarded in relay-church-scope.test.mjs; this is the other half.
+  const body = stripComments(fnBody(VENDOR, 'async selfRegister(name, opts) {', 'selfRegister'));
+  assert.match(body, /if \(actingChurch\) return/,
+    'a delegated console still registers its own key as a church, which puts a junk row in the operator\'s ' +
+    'church list and hands that steward church-level authority at the relay');
+  const at = body.indexOf('if (actingChurch) return');
+  const fetchAt = body.indexOf('fetch(');
+  assert.ok(at > 0 && (fetchAt < 0 || at < fetchAt),
+    'the check runs after the registration request has already gone out');
+});
+
+test('and the screen that fires it asks the same question first', () => {
+  const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const src = stripComments(DASH);
+  const i = src.indexOf('selfRegister(church.name)');
+  assert.ok(i > 0, 're-anchor: the dashboard no longer self-registers on the church name');
+  const before = src.slice(Math.max(0, i - 400), i);
+  assert.match(before, /S\.actingChurch/,
+    'the dashboard fires self-registration for any console showing a church name, including a delegate ' +
+    'viewing the church they help with — which is how the junk rows were created in the first place');
+});
