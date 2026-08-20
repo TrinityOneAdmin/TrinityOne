@@ -27,9 +27,19 @@ import { v2 as nip44 } from 'nostr-tools/nip44';
 
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
+
 const SRC = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 const FIN = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'utf8');
+// Pull the per-church reset OUT of setActiveIdentity and make it runnable. If someone stops resetting a
+// ratchet there, this function stops resetting it here, and the behavioural tests at the foot of this file
+// fail — which is the whole point of lifting it rather than restating it.
+const SHIPPED_RESET = (() => {
+  const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub) {', 'setActiveIdentity'));
+  const line = body.match(/for \(const k of Object\.keys\(CAP_KEYS\)\) _capState\[k\] = \{[^}]*\};/);
+  assert.ok(line, 're-anchor: setActiveIdentity no longer resets _capState — the D1 fix is gone');
+  return new Function('CAP_KEYS', '_capState', line[0]);
+})();
 
 test('setActiveIdentity clears every capability ring', () => {
   const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub) {', 'setActiveIdentity'));
@@ -140,9 +150,13 @@ function twoChurches() {
   return { A, B, keyA, keyB, state, ctx, api,
     deliver: (e) => handlers.onevent(e), eose: () => handlers.oneose(),
     envelope,
-    // what setActiveIdentity does, per the shipped source
+    // THE SHIPPED RESET, LIFTED — not a copy of it. Hand-writing "what setActiveIdentity does" here would
+    // make these tests pass their own sabotage: drop `rev: 1` from the product and this harness would still
+    // reset it correctly in its own version, and the behavioural proof below would be about a
+    // reimplementation. This repo has shipped that mistake before. So the statement is pulled out of
+    // setActiveIdentity's own body and executed.
     switchTo: (C) => { ctx.actingChurch = ''; ctx.pub = C.pub; ctx.sk = C.sk; ctx.churchPub = C.pub; ctx.churchSk = C.sk;
-      for (const k of Object.keys(stubs.CAP_KEYS)) state[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false }; },
+      SHIPPED_RESET(stubs.CAP_KEYS, state); },
   };
 }
 

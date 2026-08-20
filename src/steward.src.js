@@ -4672,6 +4672,16 @@ window.Steward = {
     }
     const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     _warnUnsealed(spec.cap, _sealEachFailed);
+    // KNOWN GAP, recorded 2026-08-20 by the third review and deliberately not changed here.
+    // publish() resolves on Promise.any — "some relay took it". If the church's own relay is momentarily
+    // unreachable and a public relay in extraRelays() accepts, this envelope lands ONLY on the public relay
+    // and is never re-published. For the check-in key that is a safeguarding key sitting somewhere the church
+    // does not control, and a reload that cannot find it mints a fresh one instead.
+    //
+    // The ring MERGE in subscribeCapKey softens the reload case, and the clearance path already solves the
+    // general problem with `_publishToRelays` (all-must-accept) for exactly this reason — that is the shape
+    // to copy. Left alone because publish() is shared by 77 call sites and this branch has just been through
+    // three adversarial reviews; changing it here means changing it unaudited.
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', spec.d + cp], ['t', NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
     // ADOPT ONLY WHAT WAS PUBLISHED — the rule rotateCapKey already keeps, and for the same reason. The ring
     // is assigned above so it can be sealed, but a failed publish would leave this console holding a key that
@@ -4832,6 +4842,12 @@ window.Steward = {
         if (tomb && !authored) return;
         // Kept even when the author has left the roster: the append-only ledger, and the children's register.
         if (!authored && !d.startsWith('finance/') && !d.startsWith('trinityone/checkin:')) return;
+        // IF YOU ADD A DELETE FOR THESE, READ THIS FIRST. The branch is an unconditional forget with no
+        // marker, so a tombstone that arrives BEFORE the document it kills leaves nothing behind and the
+        // document is re-added when it turns up. Harmless today only because nothing produces such a
+        // tombstone: removeCheckin() has no callers, and Finance corrects by append-only reversal rather
+        // than deletion. A delete button on either would make it live, and the fix is to remember the
+        // tombstone's created_at and refuse anything older.
         if (tomb) { byId.delete(id); held.delete(id); emit(); return; }
         if (!take(id, e.content, e.created_at)) return;   // held for a key that has not arrived yet
         emit();
