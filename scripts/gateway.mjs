@@ -2057,7 +2057,16 @@ function canRead(e, authed) {
     // surrounding sequence numbers still there. Nothing about a person leaving makes the money they recorded
     // untrue, and an accounts system that silently drops entries when staff change is not an accounts system.
     // Their FUTURE writes are already refused by accept(); this is only about continuing to serve the past.
-    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith(FIN_JOURNAL_D);
+    // THE CHILDREN'S REGISTER, for the same reason and with more at stake. This commit is the first that lets
+    // a delegated steward write a check-in at all, so it is also the first where retraction can reach one.
+    // The crèche volunteer stands down — or is simply re-scoped to a different capability — and every record
+    // they ever wrote stops being served TO THE CHURCH ITSELF: children currently marked present disappear
+    // from the register mid-session, and the history of who was collected by whom goes with them.
+    //
+    // A safeguarding record is evidence. It does not stop being true because the person who wrote it left,
+    // and a register that quietly drops entries when a rota changes is worse than no register, because
+    // nobody can tell it has happened.
+    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith(FIN_JOURNAL_D) || d.startsWith(CHECKIN_D);
     // 'any', deliberately, and NOT this document's own capability. This asks whether the author still acts
     // for the church at all, so that narrowing a delegate to Finance does not make every group they ever
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is

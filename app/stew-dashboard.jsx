@@ -939,7 +939,7 @@ function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings sub-tab (e.g. relay → network)
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action within that sub-tab (e.g. open the Set-PIN dialog)
-  const [, setTick] = React.useState(0);   // the books' key arriving is not React state — nudge a re-render
+  const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
@@ -999,31 +999,46 @@ function StewDashboard({ initial = 'overview' }) {
   // nobody, so the first delegate to be given it silently sees an empty register.
   const _stewardsForKey = window.useStewardStewards ? window.useStewardStewards() : [];
   const _capKinds = ['finance', 'checkin'];
-  React.useEffect(() => {
-    const S = window.Steward;
-    if (!S || S.actingChurch || !S.ensureCapKeyFor) return;          // owner console only
-    const caps = (S.stewardCaps && S.stewardCaps()) || {};
-    const t = setTimeout(() => {
-      for (const kind of _capKinds) {
-        try {
-          Promise.resolve(S.ensureCapKeyFor(kind, _stewardsForKey, caps)).then((ok) => {
-            // Records written before check-in had its own key are still sealed with the key the LEDGER uses,
-            // so a Finance grant would keep opening the children's register until they move. Owner-only and
-            // idempotent; runs once the safeguarding key exists to move them onto.
-            if (kind === 'checkin' && S.migrateCheckinKeys) S.migrateCheckinKeys().catch(() => {});
-          }).catch(() => {});
-        } catch (e) {}
-      }
-    }, 1200);
-    return () => clearTimeout(t);
-  }, [_stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})]);
-  // every console watches each envelope: the owner to notice its own, a delegate to receive the ring
+  const _capIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _capConn = window.useStewardConn ? window.useStewardConn() : 0;
+  // [idv, conn] LIKE EVERY OTHER SUBSCRIPTION IN THIS CONSOLE (see makeSub in steward-root.jsx). These three
+  // were the only ones mounted with `[]`: they never re-subscribed when the steward switched church, and never
+  // re-issued their REQ after a relay reconnect — the failure this project already has a name for.
   React.useEffect(() => {
     const S = window.Steward;
     if (!S || !S.subscribeCapKey) return;
     const offs = _capKinds.map(kind => S.subscribeCapKey(kind, () => setTick(t => t + 1)));
     return () => { for (const off of offs) { try { off(); } catch (e) {} } };
-  }, []);
+  }, [_capIdv, _capConn]);
+  // MINT ON A SIGNAL, NOT ON A STOPWATCH. This used to be a single 1200 ms timer whose deps are CONSTANT for
+  // a church with no delegated stewards ('' and '{}') — so it fired exactly once, and if the envelope
+  // subscription had not reached an authenticated EOSE by then, ensureCapKeyFor answered "not checked yet"
+  // and nothing ever minted a key again that session. Kids check-in worked with no envelope at all before
+  // today; that timer made it depend on winning a race, with no second attempt.
+  //
+  // `tick` is bumped by the subscription above on every delivery and on EOSE, so this re-runs when the
+  // answer could actually have changed. ensureCapKeyFor is idempotent — an unchanged audience publishes
+  // nothing — so re-running it costs one comparison.
+  React.useEffect(() => {
+    const S = window.Steward;
+    if (!S || S.actingChurch || !S.ensureCapKeyFor) return;          // owner console only
+    const caps = (S.stewardCaps && S.stewardCaps()) || {};
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      for (const kind of _capKinds) {
+        try {
+          Promise.resolve(S.ensureCapKeyFor(kind, _stewardsForKey, caps)).then(() => {
+            // Records written before check-in had its own key are still sealed with the key the LEDGER uses,
+            // so a Finance grant would keep opening the children's register until they move. Owner-only, and
+            // it now retries on a later tick unless it genuinely completed.
+            if (kind === 'checkin' && S.migrateCheckinKeys) S.migrateCheckinKeys().catch(() => {});
+          }).catch(() => {});
+        } catch (e) {}
+      }
+    }, 1200);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [_capIdv, _capConn, tick, _stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})]);
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
   // Owner consoles only — see the note in selfRegister. A delegate's console fired this with the name of the
   // church they were helping and registered THEIR OWN key under it.
@@ -4294,11 +4309,14 @@ function DashCheckin() {
   // knows the difference between "no children are checked in" and "this console cannot write the register" —
   // which look identical, and one of them is a child marked present in a room nobody has a record of.
   const [sgKey, setSgKey] = React.useState(() => !!(window.Steward && window.Steward.capKeyRing && window.Steward.capKeyRing('checkin').length));
+  const _ckIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _ckConn = window.useStewardConn ? window.useStewardConn() : 0;
   React.useEffect(() => {
     const S = window.Steward;
     if (!S || !S.subscribeCapKey) return;
+    setSgKey(!!(S.capKeyRing && S.capKeyRing('checkin').length));   // a switch resets the ring; re-read it
     return S.subscribeCapKey('checkin', (ring) => setSgKey(!!(ring && ring.length)));
-  }, []);
+  }, [_ckIdv, _ckConn]);
   const fmtT = (ts) => { try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } };
   // AWAITED, AND ANSWERED. This was fire-and-forget: publishCheckin's promise was dropped on the floor, so a
   // refused write left the child on screen as "in" and nothing on the relay. On the day the register got its

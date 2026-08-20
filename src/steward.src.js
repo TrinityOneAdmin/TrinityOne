@@ -305,9 +305,24 @@ const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content'];
 // demands the next sequence number (gateway.mjs, FINANCE_SEQ). Anything else that used encSelf must migrate
 // its old records onto its own key instead of inheriting the legacy one — otherwise granting Finance would
 // keep handing over that feature's history, which is the check-in leak this exists to close.
+// `explicit: true` means an UNSCOPED steward does not get this key — only someone the church has actually
+// ticked the capability for. Everywhere else in this product, a roster entry with no `caps` list means "as
+// powerful as before capabilities existed", and that rule exists so upgrading a relay cannot strip a working
+// delegate. It is right for the books: a steward who could already act for the church could already be handed
+// the ledger.
+//
+// It is NOT right for the children's register, because there the crypto used to be a stricter gate than the
+// roster. Before 2026-08-20 no delegate of any kind could open a check-in record — they were sealed to the
+// church's own key, which only the owner holds. Wrapping the new key to unscoped stewards would hand every
+// steward appointed before capabilities existed the name, room and pickup code of every child, in an upgrade,
+// with nobody asked. The Safeguarding blurb that explains what the grant means is only ever shown to an owner
+// who opens the capability editor; an owner who never opens it would never see it.
+//
+// So this one capability requires the church to say yes. It takes nothing away — nobody could read these
+// records before — and it costs a church that wants a delegated safeguarding lead exactly one tick.
 const CAP_KEYS = {
-  finance: { d: 'trinityone/financekey:', cap: 'finance',      legacy: true  },   // the church books
-  checkin: { d: 'trinityone/checkinkey:', cap: 'safeguarding', legacy: false },   // the children's register
+  finance: { d: 'trinityone/financekey:', cap: 'finance',      legacy: true,  explicit: false },   // the church books
+  checkin: { d: 'trinityone/checkinkey:', cap: 'safeguarding', legacy: false, explicit: true  },   // the children's register
 };
 const _capState = {};   // kind -> { ring, docKeys, rev, at, checked }
 for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -322,6 +337,15 @@ const _capRingChanged = (kind) => { for (const fn of (_capWaiters[kind] || [])) 
 // Say so when a capability's envelope goes out WITHOUT someone it was meant for. Publishing the short
 // envelope is still the right move — one bad roster entry must not deny the capability to everyone else —
 // but it must not be reported as a clean success, because the person left out has no way to find out.
+// WHO GETS THIS CAPABILITY'S KEY. Written once and used by BOTH the mint and the rotation: if those two ever
+// disagreed, a rotation would quietly hand the key to someone the mint had excluded, or strand someone the
+// mint had included. `caps` absent for a pubkey = unscoped = every capability, EXCEPT where the capability
+// is marked `explicit` (see CAP_KEYS).
+const _capAllows = (spec, caps) => (p2) => {
+  const c = caps && caps[p2];
+  if (!Array.isArray(c)) return !spec.explicit;   // unscoped: everything, unless this capability demands a tick
+  return c.indexOf(spec.cap) >= 0;
+};
 const _warnUnsealed = (cap, failed) => {
   if (!failed || !failed.length) return;
   const who = failed.map(p2 => (_stewardNames && _stewardNames[p2]) || (p2 || '').slice(0, 10) + '…').join(', ');
@@ -4554,11 +4578,17 @@ window.Steward = {
   // only on an AUTHENTICATED end-of-stored-events, because an unauthenticated read answers "no envelope" for
   // a church that has one, and minting on that answer orphans everything the real key sealed.
   subscribeCapKey(kind, cb) {
-    const spec = CAP_KEYS[kind]; const st = _capState[kind];
+    const spec = CAP_KEYS[kind];
     const cp = actingChurch || pub;
-    if (!spec || !st || !cp) { cb && cb([]); return () => {}; }
+    // READ THE STATE LIVE, never hold it. A church switch REPLACES _capState[kind]; a subscription that
+    // captured the old object goes on writing the arriving ring into a detached one — and still fires its
+    // callback, so the screen reports a key the sealing path does not have.
+    const S = () => _capState[kind];
+    if (!spec || !S() || !cp) { cb && cb([]); return () => {}; }
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [spec.d + cp] }], {
       onevent(e) {
+        const st = S(); if (!st) return;                   // the church was switched out from under us
+        if ((actingChurch || pub) !== cp) return;          // ...or switched to a different one entirely
         if (e.pubkey !== cp) return;                       // owner-signed only
         if (_authFuture(e)) return;
         if ((e.created_at || 0) < st.at) return; st.at = e.created_at || 0;
@@ -4579,7 +4609,11 @@ window.Steward = {
         _capRingChanged(kind);            // documents that arrived before this key can now be opened
         cb && cb(st.ring.slice());
       },
-      oneose() { if (_isRelayAuthed()) st.checked = true; cb && cb(st.ring.slice()); },
+      oneose() {
+        const st = S(); if (!st || (actingChurch || pub) !== cp) return;
+        if (_isRelayAuthed()) st.checked = true;
+        cb && cb(st.ring.slice());
+      },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -4603,7 +4637,7 @@ window.Steward = {
       const legacy = _legacyBookKeyHex();
       if (legacy && st.ring.indexOf(legacy) < 0) st.ring = [...st.ring, legacy];
     }
-    const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf(spec.cap) >= 0; };
+    const allowed = _capAllows(spec, caps);
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
     const have = st.docKeys || {};
     if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) { st.ring = prevRing; return false; }   // nothing changed
@@ -4655,7 +4689,7 @@ window.Steward = {
     // next reload overwrote it — unrecoverable for an append-only ledger.
     const nextRing = [fresh, ...st.ring].slice(0, 12);
     const nextRev = (st.rev || 1) + 1;
-    const allowed = (p2) => { const c = caps && caps[p2]; return !Array.isArray(c) || c.indexOf(spec.cap) >= 0; };
+    const allowed = _capAllows(spec, caps);
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
     const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     _warnUnsealed(spec.cap, _sealEachFailed);
@@ -4752,11 +4786,12 @@ window.Steward = {
         // steward currently on its roster. A revoked steward's entries stop being trusted here the moment
         // the roster changes, without waiting for a relay round-trip.
         //
-        // THE BOOKS ARE EXEMPT, exactly as they are in the relay's own retraction rule. The journal is
-        // append-only and sequence-pinned, so a departed treasurer's entries cannot have been tampered with —
-        // dropping them here would delete the months they served from the church's accounts, with the
-        // surrounding sequence numbers still present.
-        if (e.pubkey !== cp && !_careRoster.has(e.pubkey) && !d.startsWith('finance/journal:')) return;
+        // THE BOOKS AND THE REGISTER ARE EXEMPT, exactly as they are in the relay's own retraction rule.
+        // The journal is append-only and sequence-pinned, so a departed treasurer's entries cannot have been
+        // tampered with — dropping them would delete the months they served from the church's accounts. The
+        // children's register is evidence, and does not stop being true because the volunteer who wrote it
+        // stood down; a church watching present children vanish mid-session has no way to tell why.
+        if (e.pubkey !== cp && !_careRoster.has(e.pubkey) && !d.startsWith('finance/journal:') && !d.startsWith('trinityone/checkin:')) return;
         const id = d.slice(prefix.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); held.delete(id); emit(); return; }
         if (!take(id, e.content, e.created_at)) return;   // held for a key that has not arrived yet
@@ -5031,11 +5066,11 @@ window.Steward = {
     // waits for EOSE. Idempotent is not the same as free. `_resetChurchScopedState` clears this, so switching
     // church runs it again for the church you switched to.
     if (_checkinMigrated === cp) return { scanned: 0, moved: 0, failed: 0, skipped: 'already run this session' };
-    _checkinMigrated = cp;
     const PRE = 'trinityone/checkin:';
     const stale = new Map();
+    let sawEose = false;   // a TIMEOUT is not "there is nothing left to move" — see the guard at the foot
     await new Promise((res) => {
-      let done = false; const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} res(); };
+      let done = false; const finish = (eose) => { if (done) return; done = true; if (eose) sawEose = true; try { sub.close(); } catch {} res(); };
       const sub = pool.subscribeMany(relays(), [
         { kinds: [30078], authors: [cp], '#t': [NET] },
         { kinds: [30078], '#church': [cp], '#t': [NET] },
@@ -5048,9 +5083,9 @@ window.Steward = {
           for (const k of st.ring) { try { JSON.parse(nip44d(e.content, _unhex(k))); return; } catch (x) {} }
           try { stale.set(d.slice(PRE.length), JSON.parse(nip44d(e.content, nip44ck(churchSk, churchPub)))); } catch (x) {}
         },
-        oneose: finish,
+        oneose: () => finish(true),
       });
-      setTimeout(finish, timeoutMs || 8000);
+      setTimeout(() => finish(false), timeoutMs || 8000);
     });
     let moved = 0, failed = 0;
     for (const [id, rec] of stale) {
@@ -5059,7 +5094,17 @@ window.Steward = {
       const ok = await window.Steward.encPublish(PRE + id, rec, 'checkin');
       if (ok === false || ok == null) failed++; else moved++;
     }
-    return { scanned: stale.size, moved, failed };
+    // ONLY NOW, AND ONLY IF IT ACTUALLY FINISHED. The guard used to be set on entry, so a run that reached
+    // none of the records — the relay never EOSEd, the church is large, the pipe is thin, every re-publish
+    // was refused — burned the one attempt this session was going to make and reported nothing. What is left
+    // behind in that case is the entire pre-split register, still sealed with the key the BOOKS ring carries,
+    // which is the exact disclosure this migration exists to close.
+    if (sawEose && !failed) _checkinMigrated = cp;
+    if (failed) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in records',
+        message: failed + ' older check-in record(s) could not be moved onto the safeguarding key. Until they are, anyone with Finance can still read them. Reopen Check-in while online to try again.' } })); } catch (e) {}
+    }
+    return { scanned: stale.size, moved, failed, complete: sawEose && !failed };
   },
 
   subscribeCheckins(cb) { return window.Steward.encSubscribe('trinityone/checkin:', cb, 'checkin'); },
@@ -5459,6 +5504,17 @@ window.Steward = {
     // church's moderation decisions into another's screen. Cleared here beside the other per-identity state;
     // subscribeSafeguard refills it within a beat. (Same shape as the member app, which resets on church change.)
     _applyNoPhotoList([]);
+    // CAPABILITY KEYS ARE PER CHURCH, and this is the line the note below was written to catch. Carrying
+    // _capState across a switch is not a stale-cache annoyance, it is corruption: `st.at` and `st.rev` only
+    // ever ratchet upward, so church B's envelope — which starts at rev 1 — is compared against church A's
+    // and DISCARDED as older. The ring then stays church A's for the rest of the session and encSeal seals
+    // church B's documents with it.
+    //
+    // Both halves are as bad as each other. B's children's register becomes readable by A's safeguarding
+    // stewards and unreadable by B. B's ledger entry is unreadable by B for ever, because the journal is
+    // append-only and the relay has already consumed that sequence number.
+    for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
+    _checkinMigrated = '';
     // NOTE: the block above is the same list as _resetChurchScopedState(), minus the care-key, media-key and
     // NIP-42 state. Deliberately NOT converged in this commit — a SWITCH keeps this device's key while a
     // RESTORE replaces it, so the wider reset is not obviously correct here and changing it is not what this

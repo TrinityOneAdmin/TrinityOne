@@ -33,13 +33,32 @@ const church = (() => { const sk = generateSecretKey(); return { sk, pub: getPub
 // THE SHIPPED CAPABILITY TABLE, read out of the bundle rather than restated. Which capability seals what, and
 // which one carries the legacy self-key, is the whole security question here — a copy in this file would go
 // on agreeing with itself after someone changed the real one.
+// The shipped who-gets-a-key predicate, lifted rather than stubbed. It is the single rule that decides
+// whether someone receives a capability's key; a stub here would let this file agree with itself while the
+// product handed the children's register to the wrong people.
+const SHIPPED_CAP_ALLOWS = (() => {
+  const m = VENDOR.match(/_capAllows = \(spec, caps\) => \(p2\) => \{[\s\S]*?\n  \};/);
+  assert.ok(m, 're-anchor: _capAllows is not in the bundle under that name');
+  return new Function('return ' + m[0].replace(/^_capAllows = /, ''))();
+})();
+
 const SHIPPED_CAP_KEYS = (() => {
   const m = VENDOR.match(/CAP_KEYS\s*=\s*\{([\s\S]*?)\n\s*\};/);
   assert.ok(m, 're-anchor: CAP_KEYS is not in the bundle under that name');
   const out = {};
+  // Parse the WHOLE entry, field by field, rather than a fixed field list. The first version of this matched
+  // d/cap/legacy positionally and silently dropped `explicit` when it was added — so every test below went on
+  // asserting against a table that no longer matched the product, and the one that should have caught an
+  // unscoped steward inheriting the children's register passed instead.
   for (const line of m[1].split('\n')) {
-    const e = line.match(/(\w+):\s*\{\s*d:\s*"([^"]+)",\s*cap:\s*"([^"]+)",\s*legacy:\s*(true|false)/);
-    if (e) out[e[1]] = { d: e[2], cap: e[3], legacy: e[4] === 'true' };
+    const e = line.match(/(\w+):\s*\{([^}]*)\}/);
+    if (!e) continue;
+    const entry = {};
+    for (const f of e[2].split(',')) {
+      const kv = f.match(/\s*(\w+):\s*(?:"([^"]*)"|(true|false))/);
+      if (kv) entry[kv[1]] = kv[2] !== undefined ? kv[2] : kv[3] === 'true';
+    }
+    if (entry.d) out[e[1]] = entry;
   }
   assert.ok(out.finance && out.checkin, 're-anchor: could not parse finance/checkin out of CAP_KEYS');
   return out;
@@ -161,9 +180,14 @@ test('minting stays with the owner', () => {
     'the mint gate does not check that the relay actually answered us. Concluding "no envelope exists" from ' +
     'an unauthenticated read is how key envelopes get minted twice and orphan what the first one sealed.');
   // quote-agnostic: the bundler rewrites single quotes to double on the way in
-  assert.match(body, /indexOf\(spec\.cap\)/,
+  assert.match(body, /_capAllows\(spec, caps\)/,
     'the envelope is wrapped to stewards the church never gave this capability to — the grant is a UI ' +
     'preference rather than a key');
+  // ...and the shared predicate really does gate on the capability, and honour the explicit-grant flag
+  const pred = stripComments(VENDOR.match(/_capAllows = \(spec, caps\) => \(p2\) => \{[\s\S]*?\n  \};/)[0]);
+  assert.match(pred, /indexOf\(spec\.cap\)/, 'the predicate does not check the capability at all');
+  assert.match(pred, /spec\.explicit/,
+    'the predicate ignores the explicit-grant flag, so an unscoped steward inherits the children\'s register');
 });
 
 test('a delegate writes as themselves, with the church named', () => {
@@ -229,7 +253,7 @@ function runRotate({ ring, allowed, caps }) {
       feChurch: (t) => t, publish: async (e) => { published.push(e); return e; },
       now: () => 1787280000, NET: 'trinityone',
       _capRingChanged: () => {},   // the retry notifier — nothing is subscribed in this harness
-      _warnUnsealed: () => {}, _sealEachFailed: [],
+      _warnUnsealed: () => {}, _sealEachFailed: [], _capAllows: SHIPPED_CAP_ALLOWS,
       window: { Steward: {} },
     };
     const scope = new Proxy(stubs, {
@@ -246,13 +270,17 @@ function runRotate({ ring, allowed, caps }) {
 
 // Drive ensureCapKeyFor for real. Everything above tests what happens once an envelope EXISTS; this asks the
 // question nobody asked — whether one is ever created.
-function runEnsure({ ring, docKeys, checked = true, publishOk = true, unsealable = [] }) {
+function runEnsure({ ring, docKeys, checked = true, publishOk = true, unsealable = [], kind = 'finance' }) {
   const published = [], warned = [];
   const stubs = {
     _warnUnsealed: (cap, failed) => { if (failed && failed.length) warned.push({ cap, failed: failed.slice() }); },
+    _capAllows: SHIPPED_CAP_ALLOWS,
     _sealEachFailed: [],
     churchSkHeld: () => true, actingChurch: '', _isRelayAuthed: () => true,
-    _capState: { finance: { ring: ring.slice(), docKeys, rev: 1, at: 0, checked } },
+    // every capability the shipped table knows about, so a test can drive any of them
+    _capState: Object.fromEntries(Object.keys(SHIPPED_CAP_KEYS).map(k => [k,
+      k === kind ? { ring: ring.slice(), docKeys, rev: 1, at: 0, checked }
+                 : { ring: [], docKeys: null, rev: 1, at: 0, checked: false }])),
     CAP_KEYS: JSON.parse(JSON.stringify(SHIPPED_CAP_KEYS)),
     pub: church.pub, sk: church.sk, churchPub: church.pub, churchSk: church.sk,
     crypto: webcrypto, _hex: hex, _unhex: unhex,
@@ -316,6 +344,46 @@ test('a church with NO envelope gets its FIRST one minted', async () => {
   assert.ok(env.keys[treasurerPub], 'the treasurer was not wrapped in, so the grant hands over nothing');
   assert.equal(stubs._capState.finance.ring.length, 2, 'the minted ring should be [fresh, legacy]');
   assert.equal(stubs._capState.finance.ring[1], legacyKey, 'the legacy key is not in the ring, so the existing books are lost');
+});
+
+test('an UNSCOPED steward gets the books, but NOT the children\'s register', () => {
+  // The upgrade rule everywhere else in this product: a roster entry with no `caps` list means "as powerful
+  // as before capabilities existed", so upgrading a relay cannot strip a working delegate. Right for the
+  // books — a steward who could already act for the church could already be handed the ledger.
+  //
+  // Wrong for the register, because there the CRYPTO used to be a stricter gate than the roster. Before
+  // 2026-08-20 no delegate of any kind could open a check-in record: they were sealed to the church's own
+  // key. Wrapping the new key to unscoped stewards would hand every steward appointed before capabilities
+  // existed the name, room and pickup code of every child — in an upgrade, with nobody asked, and the blurb
+  // that explains what Safeguarding grants is only ever shown to an owner who opens the capability editor.
+  return (async () => {
+    const old = getPublicKey(generateSecretKey());     // on the roster, no caps entry at all
+    for (const [kind, shouldGet] of [['finance', true], ['checkin', false]]) {
+      const { fn, published } = runEnsure({ kind, ring: kind === 'finance' ? [] : [freshKey], docKeys: null });
+      await fn(kind, [old], {});                        // caps deliberately EMPTY — the pre-capabilities shape
+      assert.equal(published.length, 1, `${kind}: nothing was published`);
+      const env = JSON.parse(published[0].content);
+      assert.equal(!!env.keys[old], shouldGet, shouldGet
+        ? 'an unscoped steward lost access to the books on upgrade — a working delegate stripped by a relay update'
+        : 'an unscoped steward was handed the children\'s register key. Nobody could read those records ' +
+          'before today; this hands them to every steward a church appointed before capabilities existed, ' +
+          'silently, on upgrade.');
+      assert.ok(env.keys[church.pub], `${kind}: the church itself was left out`);
+    }
+  })();
+});
+
+test('an EXPLICIT safeguarding grant does get the register', () => {
+  // The other half — the exception must not make the capability unusable.
+  return (async () => {
+    const lead = getPublicKey(generateSecretKey());
+    const { fn, published } = runEnsure({ kind: 'checkin', ring: [freshKey], docKeys: null });
+    await fn('checkin', [lead], { [lead]: ['safeguarding'] });
+    const env = JSON.parse(published[0].content);
+    assert.ok(env.keys[lead],
+      'a steward the church explicitly gave Safeguarding to did not receive the register key, so the ' +
+      'capability grants nothing at all');
+  })();
 });
 
 test('a church that ALREADY has an envelope is not re-minted over', async () => {

@@ -41,9 +41,19 @@ const CAP = (() => {
   const m = VENDOR.match(/CAP_KEYS\s*=\s*\{([\s\S]*?)\n\s*\};/);
   assert.ok(m, 're-anchor: CAP_KEYS is not in the bundle under that name');
   const out = {};
+  // Parse the WHOLE entry, field by field, rather than a fixed field list. The first version of this matched
+  // d/cap/legacy positionally and silently dropped `explicit` when it was added — so every test below went on
+  // asserting against a table that no longer matched the product, and the one that should have caught an
+  // unscoped steward inheriting the children's register passed instead.
   for (const line of m[1].split('\n')) {
-    const e = line.match(/(\w+):\s*\{\s*d:\s*"([^"]+)",\s*cap:\s*"([^"]+)",\s*legacy:\s*(true|false)/);
-    if (e) out[e[1]] = { d: e[2], cap: e[3], legacy: e[4] === 'true' };
+    const e = line.match(/(\w+):\s*\{([^}]*)\}/);
+    if (!e) continue;
+    const entry = {};
+    for (const f of e[2].split(',')) {
+      const kv = f.match(/\s*(\w+):\s*(?:"([^"]*)"|(true|false))/);
+      if (kv) entry[kv[1]] = kv[2] !== undefined ? kv[2] : kv[3] === 'true';
+    }
+    if (entry.d) out[e[1]] = entry;
   }
   assert.ok(out.finance && out.checkin, 're-anchor: could not parse finance/checkin out of CAP_KEYS');
   return out;
@@ -303,4 +313,46 @@ test('the owner console mints the register\'s key, or nothing can ever be writte
     'means the first delegate given it sees an empty screen');
   assert.match(src, /ensureCapKeyFor\(kind, _stewardsForKey, caps\)/, 're-anchor: the mint loop changed shape');
   assert.match(src, /migrateCheckinKeys/, 'nothing moves the pre-split records off the shared key');
+});
+
+test('the migration only spends its one attempt when it actually finished', () => {
+  // Found by adversarial audit, 2026-08-20. `_checkinMigrated = cp` was set on ENTRY, so a run that moved
+  // nothing — the relay never EOSEd, the pipe is thin, every re-publish was refused — burned the single
+  // attempt this session was going to make, threw its result away, and told nobody. What is left behind is
+  // the whole pre-split register, still sealed with the key the BOOKS ring carries: the exact disclosure the
+  // migration exists to close, now permanent for that session and invisible.
+  const body = stripComments(fnBody(STEW, 'async migrateCheckinKeys(timeoutMs) {', 'migrateCheckinKeys'));
+  // Anchored on ORDER, not on a character window: the guard must be set AFTER the publish loop, not before
+  // the scan. A fixed-width lookahead silently stopped matching when the return statement between them grew.
+  const setAt = body.indexOf('_checkinMigrated = cp;');
+  const loopAt = body.indexOf('for (const [id, rec] of stale)');
+  assert.ok(setAt > 0 && loopAt > 0, 're-anchor: the migration changed shape');
+  assert.ok(setAt > loopAt,
+    'the once-per-church guard is set before the records are moved, so a run that moves nothing still burns ' +
+    'the single attempt this session was going to make');
+  assert.match(body, /if \(sawEose && !failed\) _checkinMigrated = cp;/,
+    'the guard is not conditional on the run having completed cleanly');
+  assert.match(body, /steward-write-blocked/,
+    'a partial migration tells nobody, so a church cannot know its old records are still readable by Finance');
+  assert.match(body, /sawEose = true/,
+    'a TIMEOUT is being treated as "there is nothing left to move" — on a thin pipe that is every run');
+});
+
+test('a timeout is distinguishable from a finished scan', () => {
+  const body = stripComments(fnBody(STEW, 'async migrateCheckinKeys(timeoutMs) {', 'migrateCheckinKeys'));
+  assert.match(body, /oneose: \(\) => finish\(true\)/, 'EOSE no longer records that the scan completed');
+  assert.match(body, /setTimeout\(\(\) => finish\(false\)/, 'the timeout path is not marked as incomplete');
+});
+
+test('the register survives the volunteer standing down', () => {
+  // The relay half. This commit is the first that lets a delegated steward write a check-in at all, so it is
+  // the first where the retraction rule can reach one — and retraction would stop serving every record they
+  // wrote, TO THE CHURCH ITSELF. Children marked present vanish from the register mid-session.
+  const gw = stripComments(GW);
+  const line = gw.match(/const retractionExempt = [^\n]*/);
+  assert.ok(line, 're-anchor: retractionExempt is gone');
+  assert.match(line[0], /CHECKIN_D/,
+    'the children\'s register is not exempt from retraction, so a crèche volunteer standing down erases ' +
+    'every check-in they ever recorded — including children currently in the room');
+  assert.match(line[0], /FIN_JOURNAL_D/, 're-anchor: the ledger exemption went with it');
 });

@@ -533,10 +533,13 @@ function DashFinance() {
   // never wraps them into the envelope, so encSeal returns null and pubEntry refuses the write. That is the
   // honest gate — a screen that hides itself is a preference, a key they do not hold is a protection.
   const [finKey, setFinKey] = React.useState(() => !!(S && S.financeKeyRing && S.financeKeyRing().length));
+  const _fIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _fConn = window.useStewardConn ? window.useStewardConn() : 0;
   React.useEffect(() => {
     if (!S || !S.subscribeCapKey) return;
+    setFinKey(!!(S.capKeyRing && S.capKeyRing('finance').length));   // a church switch clears the ring
     return S.subscribeCapKey('finance', (ring) => setFinKey(!!(ring && ring.length)));
-  }, []);
+  }, [_fIdv, _fConn]);
   // ...and if they genuinely have no key, say which of the two it is rather than showing an empty ledger.
   // An empty ledger is the single most misleading thing this screen can display: it reads as "your church has
   // never recorded anything", which is exactly what a treasurer must not be told by mistake.

@@ -14530,9 +14530,9 @@ zoo`.split("\n");
   var _stewardSince = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
   var CAP_KEYS = {
-    finance: { d: "trinityone/financekey:", cap: "finance", legacy: true },
+    finance: { d: "trinityone/financekey:", cap: "finance", legacy: true, explicit: false },
     // the church books
-    checkin: { d: "trinityone/checkinkey:", cap: "safeguarding", legacy: false }
+    checkin: { d: "trinityone/checkinkey:", cap: "safeguarding", legacy: false, explicit: true }
     // the children's register
   };
   var _capState = {};
@@ -14547,6 +14547,11 @@ zoo`.split("\n");
       } catch (e) {
       }
     }
+  };
+  var _capAllows = (spec, caps) => (p2) => {
+    const c = caps && caps[p2];
+    if (!Array.isArray(c)) return !spec.explicit;
+    return c.indexOf(spec.cap) >= 0;
   };
   var _warnUnsealed = (cap, failed) => {
     if (!failed || !failed.length) return;
@@ -18695,15 +18700,18 @@ zoo`.split("\n");
     // a church that has one, and minting on that answer orphans everything the real key sealed.
     subscribeCapKey(kind, cb) {
       const spec = CAP_KEYS[kind];
-      const st = _capState[kind];
       const cp = actingChurch || pub;
-      if (!spec || !st || !cp) {
+      const S = () => _capState[kind];
+      if (!spec || !S() || !cp) {
         cb && cb([]);
         return () => {
         };
       }
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [spec.d + cp] }], {
         onevent(e) {
+          const st = S();
+          if (!st) return;
+          if ((actingChurch || pub) !== cp) return;
           if (e.pubkey !== cp) return;
           if (_authFuture(e)) return;
           if ((e.created_at || 0) < st.at) return;
@@ -18732,6 +18740,8 @@ zoo`.split("\n");
           cb && cb(st.ring.slice());
         },
         oneose() {
+          const st = S();
+          if (!st || (actingChurch || pub) !== cp) return;
           if (_isRelayAuthed()) st.checked = true;
           cb && cb(st.ring.slice());
         }
@@ -18762,10 +18772,7 @@ zoo`.split("\n");
         const legacy = _legacyBookKeyHex();
         if (legacy && st.ring.indexOf(legacy) < 0) st.ring = [...st.ring, legacy];
       }
-      const allowed = (p2) => {
-        const c = caps && caps[p2];
-        return !Array.isArray(c) || c.indexOf(spec.cap) >= 0;
-      };
+      const allowed = _capAllows(spec, caps);
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
       const have = st.docKeys || {};
       if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) {
@@ -18807,10 +18814,7 @@ zoo`.split("\n");
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const nextRing = [fresh, ...st.ring].slice(0, 12);
       const nextRev = (st.rev || 1) + 1;
-      const allowed = (p2) => {
-        const c = caps && caps[p2];
-        return !Array.isArray(c) || c.indexOf(spec.cap) >= 0;
-      };
+      const allowed = _capAllows(spec, caps);
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
       const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
@@ -18924,7 +18928,7 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(prefix)) return;
-          if (e.pubkey !== cp && !_careRoster.has(e.pubkey) && !d.startsWith("finance/journal:")) return;
+          if (e.pubkey !== cp && !_careRoster.has(e.pubkey) && !d.startsWith("finance/journal:") && !d.startsWith("trinityone/checkin:")) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byId.delete(id);
@@ -19353,14 +19357,15 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       if (!cp) return { scanned: 0, moved: 0, failed: 0 };
       if (_checkinMigrated === cp) return { scanned: 0, moved: 0, failed: 0, skipped: "already run this session" };
-      _checkinMigrated = cp;
       const PRE = "trinityone/checkin:";
       const stale = /* @__PURE__ */ new Map();
+      let sawEose = false;
       await new Promise((res) => {
         let done = false;
-        const finish = () => {
+        const finish = (eose) => {
           if (done) return;
           done = true;
+          if (eose) sawEose = true;
           try {
             sub.close();
           } catch {
@@ -19387,9 +19392,9 @@ zoo`.split("\n");
             } catch (x) {
             }
           },
-          oneose: finish
+          oneose: () => finish(true)
         });
-        setTimeout(finish, timeoutMs || 8e3);
+        setTimeout(() => finish(false), timeoutMs || 8e3);
       });
       let moved = 0, failed = 0;
       for (const [id, rec] of stale) {
@@ -19397,7 +19402,17 @@ zoo`.split("\n");
         if (ok === false || ok == null) failed++;
         else moved++;
       }
-      return { scanned: stale.size, moved, failed };
+      if (sawEose && !failed) _checkinMigrated = cp;
+      if (failed) {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+            what: "check-in records",
+            message: failed + " older check-in record(s) could not be moved onto the safeguarding key. Until they are, anyone with Finance can still read them. Reopen Check-in while online to try again."
+          } }));
+        } catch (e) {
+        }
+      }
+      return { scanned: stale.size, moved, failed, complete: sawEose && !failed };
     },
     subscribeCheckins(cb) {
       return window.Steward.encSubscribe("trinityone/checkin:", cb, "checkin");
@@ -19988,6 +20003,8 @@ zoo`.split("\n");
       _nameKeyChecked = false;
       _localBlocked = /* @__PURE__ */ new Set();
       _applyNoPhotoList([]);
+      for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
+      _checkinMigrated = "";
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;
