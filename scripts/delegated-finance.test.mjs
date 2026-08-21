@@ -310,3 +310,37 @@ test('the wall keeping Finance off a delegate console is gone', () => {
   assert.doesNotMatch(src, /if \(S && S\.actingChurch\) return/,
     'DashFinance still refuses to render for a delegated steward');
 });
+
+// ── which way the money goes ──────────────────────────────────────────────────────────────────────────────
+test('the money in/out control does not rely on colour alone', () => {
+  // THE WORST FINANCE DEFECT THESE ROUNDS HAVE FOUND. Three separate people across rounds 7 and 8 pressed
+  // "Money out", did not notice it had not taken, and recorded an EXPENSE AS INCOME. Verified in the ledger:
+  //     #2 Hall hire  utilities dr 9500 | bank cr 9500   <- correct
+  //     #4 Hall hire  bank dr 9500 | other-income cr 9500  <- the same transaction, recorded as income
+  // One treasurer's arithmetic and the app's disagreed by exactly double her three outgoings, because none
+  // was ever subtracted. The books balanced internally and said the parish earned money by hiring a hall.
+  //
+  // The control was two plain buttons distinguished ONLY by background colour: nothing for a screen reader,
+  // nothing for bright sunlight or a cheap screen, and no second cue for a tap that did not register.
+  const src = stripComments(FIN);
+  const seg = src.slice(src.indexOf('const seg = (v, label)'), src.indexOf('const seg = (v, label)') + 900);
+  assert.ok(seg.length > 100, 're-anchor: the segmented control is gone');
+  assert.match(seg, /aria-pressed=\{dir === v\}/,
+    'the toggle carries no pressed state, so a screen reader cannot say which direction is selected — and ' +
+    'neither can anything else that is not looking at pixels');
+  assert.match(seg, /'\+ ' : '− '/,
+    'the selected state is still signalled by colour alone. It needs a SHAPE — a + or a − — so the choice ' +
+    'survives sunlight, a cheap screen, and anyone who does not distinguish sage from clay.');
+});
+
+test('and the button you press names the direction', () => {
+  // The backstop for a tap that silently did not register: the last control you touch says what it will do.
+  // "Record money IN" under a hall-hire note reads wrong at a glance; a bare "Record" never could.
+  const src = stripComments(FIN);
+  assert.match(src, /'Record money ' \+ \(dir === 'in' \? 'IN' : 'OUT'\)/,
+    'the submit button still says only "Record", so nothing between the toggle and the saved entry states ' +
+    'which way the money went');
+  assert.match(src, /dir === 'in' \? '\+' : '−'/,
+    'the amount on the button is unsigned, so a treasurer checking it cannot see the direction where they ' +
+    'are looking — at the number');
+});

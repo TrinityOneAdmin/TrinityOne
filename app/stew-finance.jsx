@@ -110,9 +110,24 @@ function BooksRecord({ book, onRecord, onClose }) {
     try { onRecord({ dir, account, fund, amountMinor: minor, date, memo: memo.trim() }); onClose(); }
     catch (e) { setErr(e.message || 'Could not record that.'); }
   };
+  // WHICH WAY THE MONEY GOES, CARRIED BY MORE THAN COLOUR.
+  //
+  // This was two plain buttons whose only signal of which was chosen was their background colour. Three
+  // separate people across rounds 7 and 8 pressed "Money out", did not notice it had not taken, and recorded
+  // an EXPENSE AS INCOME. Verified in the ledger: "Hall hire — bank dr 9500 | other-income cr 9500". One
+  // treasurer's arithmetic and the app's disagreed by exactly double her three outgoings, because none of
+  // them was ever subtracted.
+  //
+  // For a church that is the worst kind of quiet wrong: the books balance internally, look perfectly
+  // plausible, and say the parish earned money by hiring a hall out.
+  //
+  // So: aria-pressed (a screen reader can now say which is active, and so can anything automated), and a
+  // + / − in the label so the state has a SHAPE, not just a hue — for bright sunlight, a cheap screen, and
+  // anyone who does not distinguish sage from clay.
   const seg = (v, label) => (
-    <button onClick={() => setDir(v)} style={{ flex: 1, height: 42, border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
-      background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{label}</button>
+    <button onClick={() => setDir(v)} aria-pressed={dir === v} aria-label={label + (dir === v ? ' (selected)' : '')}
+      style={{ flex: 1, height: 42, border: dir === v ? '2px solid transparent' : '2px dashed var(--line)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
+      background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{(v === 'in' ? '+ ' : '− ') + label}</button>
   );
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
@@ -133,7 +148,12 @@ function BooksRecord({ book, onRecord, onClose }) {
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-          <button onClick={submit} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Record</button>
+          {/* THE LAST THING YOU TOUCH NAMES THE DIRECTION. If the toggle above did not take, this is where a
+              person sees it — "Record money IN" under a hall-hire note reads wrong at a glance, which a bare
+              "Record" never could. */}
+          <button onClick={submit} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>
+            {'Record money ' + (dir === 'in' ? 'IN' : 'OUT') + (amount && Number(amount) > 0 ? ' · ' + (dir === 'in' ? '+' : '−') + (CCY_SYM[book.baseCurrency] || '') + Number(amount).toFixed(2) : '')}
+          </button>
         </div>
       </div>
     </div>
