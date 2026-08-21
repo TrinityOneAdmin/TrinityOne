@@ -243,8 +243,13 @@ function relayRejectionActive() {
 // relay-rejection alarm); each known reason gets its own sentence; anything else we do not recognise is quoted
 // from the relay verbatim rather than given an invented explanation. Only a genuine connection failure — the
 // case with no reason at all — is auto-dismissed, because the others need the steward to do something.
-function publishErrorMessage(reason) {
+function publishErrorMessage(reason, evt) {
   const r = String(reason || '');
+  // A DECLINED KIND IS NOT A WRONG KEY. "not a member or not permitted" is the relay's answer both to "you
+  // are not this church" and to "I do not store that kind of event" — and kind:10002, the NIP-65 relay
+  // list, is always the second. Reporting it as the first told stewards on healthy churches to restore
+  // their key, which overwrites it. Only the church's own documents can imply a key mismatch.
+  if (evt && evt.kind === 10002) return { wrongChurch: false, sticky: false, msg: '' };
   if (/not a member|not permitted/i.test(r)) return { wrongChurch: true, sticky: true,
     msg: 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.' };
   if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
@@ -288,7 +293,8 @@ function PublishErrorBanner() {
   const [sgMsg, setSgMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
-      const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '');
+      const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
+      if (!m) return;   // a refusal we deliberately do not surface (see publishErrorMessage)
       if (wrongChurch) noteRelayRejection();
       setMsg(m);
       clearTimeout(f._t);

@@ -15219,15 +15219,6 @@ zoo`.split("\n");
     window.Steward.churchPub = pub;
     window.Steward.activePub = pub;
     window.Steward.hasKey = true;
-    try {
-      Promise.resolve().then(() => {
-        try {
-          window.Steward.publishRelayList && window.Steward.publishRelayList();
-        } catch {
-        }
-      });
-    } catch {
-    }
   }
   function _resetChurchScopedState() {
     lastProfile = {};

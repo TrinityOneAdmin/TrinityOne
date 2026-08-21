@@ -969,9 +969,20 @@ function setKey(mnemonic) {
   window.Steward.churchPub = pub;
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
-  // FEDERATION-PLAN Phase 1b: publish/refresh the church's NIP-65 relay-list once the key is ready.
-  // Fire-and-forget + deferred so it never blocks unlock; replaceable, so re-running is harmless.
-  try { Promise.resolve().then(() => { try { window.Steward.publishRelayList && window.Steward.publishRelayList(); } catch {} }); } catch {}
+  // NO RELAY-LIST PUBLISH ON UNLOCK. This used to fire publishRelayList() here, deferred and
+  // fire-and-forget. The relay's write policy does not store kind:10002, so it came back "not a member or
+  // not permitted for this group" EVERY TIME any console unlocked — and publishErrorMessage() turns that
+  // string into "this relay is set up for a different church. Restore this church's key in Settings",
+  // stickily, on a perfectly healthy church. Measured on a church minutes old, signed by its own key
+  // (relay/rejected.log, by=a90cf8d0, kind=10002). Round 8 filed it as a delegate problem; it was every
+  // console, every unlock, the owner's included.
+  //
+  // The remedy that banner recommends OVERWRITES THE CHURCH KEY, as the media-key effect in
+  // stew-dashboard already warns. A steward who believes it on a working church can lose it.
+  //
+  // Nothing is lost by removing it: publishRelayList's own note says "nothing reads kind:10002 until
+  // Phase 2", and the list is still republished where there is an actual reason to (autoAddRelays, when
+  // the list has just changed). Removed 2026-08-21.
 }
 
 // Everything in this module that is scoped to ONE church, cleared in one place.
