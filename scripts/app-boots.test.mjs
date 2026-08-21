@@ -53,7 +53,7 @@ after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(data
 // `seed` is localStorage written BEFORE the app's real load: booting a first-run app with no church exercises
 // almost none of the subscription code, so the shallow version of this test missed the very ReferenceError it
 // was written for. We seed a followed+active church so the church-doc subscriptions actually run.
-async function boot(path, { ms = 15000, seed = null } = {}) {
+async function boot(path, { ms = 15000, seed = null, drive = null } = {}) {
   const prof = join(tmpdir(), 'trin-chr-' + process.pid + '-' + Math.abs(path.split('').reduce((a, c) => a + c.charCodeAt(0), 0)));
   // Never let a test reach production. The app dials wss://app.trinityone.church and the Tailscale funnel from
   // CANONICAL_RELAYS regardless of where the page came from; resolving them to a dead local port means a test
@@ -88,6 +88,17 @@ async function boot(path, { ms = 15000, seed = null } = {}) {
       await send('Page.reload', { ignoreCache: false });
     }
     await sleep(ms);
+    // WALK FURTHER IN, when a caller needs a screen that a first load never reaches. `drive` gets a small
+    // helper that evaluates JS in the page and waits — enough to press through a wizard. Errors thrown while
+    // driving are collected exactly like errors thrown at boot, which is the entire point: the screens behind
+    // a login are the ones nothing else in this suite ever renders.
+    if (drive) {
+      const evalIn = async (expression) => {
+        const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+        return rr && rr.result && rr.result.result ? rr.result.result.value : undefined;
+      };
+      await drive({ evalIn, wait: sleep });
+    }
     const r = await send('Runtime.evaluate', {
       expression: `JSON.stringify({ nodes: document.querySelectorAll('#root *').length, body: document.querySelectorAll('body *').length, text: (document.body.innerText||'').trim().slice(0,80) })`,
       returnByValue: true,
@@ -133,4 +144,42 @@ test('the steward console mounts and throws nothing', { skip: !CHROME ? 'no chro
   const r = await boot('/steward.html');
   assert.deepEqual(r.errors, [], `the console threw during boot:\n  ${r.errors.join('\n  ')}`);
   assert.ok(r.nodes > 20, `#root has ${r.nodes} nodes — the console rendered nothing`);
+});
+
+test('the steward console mounts its DASHBOARD without throwing', { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  // THE ONE THAT BITES, for the console — the sibling of the member app's "WITH a church" case above.
+  //
+  // The test before this one stops at the LOCKED screen, which renders a PIN box and half a dozen components.
+  // The dashboard renders dozens more: KeyDistributor, the capability mints, the nav, Members, Check-in. On
+  // 2026-08-21 I added a guard referencing `church` to a component that has no such variable. EVERY unlocked
+  // console died — "ReferenceError: church is not defined" — and the full suite was GREEN, because structural
+  // tests read source as text, esbuild transpiles it happily (the file parses perfectly), and nothing here
+  // ever rendered the screen. It was caught by hand, on a live console, hours later.
+  //
+  // Driving the real "Start a new church" path rather than seeding an encrypted key on purpose: the console
+  // refuses to hold a plaintext seed, so a fixture would have to reproduce its AES-GCM/PBKDF2 format — and a
+  // fixture that drifts from the real format silently stops testing anything. This cannot drift, because it
+  // IS the path a steward walks.
+  const r = await boot('/steward.html', { ms: 9000, drive: async ({ evalIn, wait }) => {
+    const click = (re) => `(() => { const b=[...document.querySelectorAll('button')].find(x=>${re}.test((x.textContent||'').trim())); if(b){b.click();return 'ok';} return 'miss'; })()`;
+    const type = (ph, val) => `(() => { const i=[...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes(${JSON.stringify(ph)}));
+      if(!i) return 'miss';
+      const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+    await evalIn(click('/Start a new church/i')); await wait(2500);
+    await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
+    await evalIn(type('Type it again', 'cedar-harbour-lamp-42'));
+    await evalIn(click('/Set PIN/i'));
+    await wait(9000);   // key generation + first render of the whole dashboard
+  } });
+
+  assert.deepEqual(r.errors, [],
+    `the console threw while rendering its dashboard:\n  ${r.errors.join('\n  ')}\n` +
+    'This is the failure every other test in this suite is blind to: the file parses, the build succeeds, ' +
+    'and the screen is dead.');
+  // and it must actually have got there — a dashboard is far bigger than a PIN box, and asserting "no errors"
+  // on a screen that never rendered would pass for ever.
+  assert.ok(r.nodes > 120,
+    `#root has ${r.nodes} nodes — the console did not reach its dashboard, so "no errors" proves nothing. ` +
+    `Screen text: ${JSON.stringify(r.text)}`);
 });
