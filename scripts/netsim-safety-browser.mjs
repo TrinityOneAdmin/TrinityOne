@@ -60,7 +60,11 @@ const cdpEval = async (ws, expr, ms = 60000) => {
   // the church names a care team, so 'care' has somebody in it
   await Promise.allSettled(pool.publish(relays, finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [['d', 'trinityone/careteam:' + church.pub], ['t', NET], ['church', church.pub]], content: JSON.stringify({ pubkeys: [care.pub] }) }, church.sk)));
 
-  chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=${UDD}`,
+  chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', 
+  // Never let this reach production — see the note in sim-launch.mjs. Port 9 discards; the page's own
+  // origin relay is unaffected.
+  '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9',
+  '--no-sandbox', `--user-data-dir=${UDD}`,
     `--remote-debugging-port=${CDP}`, `http://127.0.0.1:${PORT}/`], { stdio: 'ignore', detached: true });
   let ws = null;
   for (let i = 0; i < 60; i++) {

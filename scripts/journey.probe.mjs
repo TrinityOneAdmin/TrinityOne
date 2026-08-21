@@ -2,7 +2,13 @@
 //
 // Usage:
 //   nohup chromium-browser --headless --disable-gpu --no-sandbox \
+//        --host-resolver-rules='MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9' \
 //        --user-data-dir=$(mktemp -d) --remote-debugging-port=9333 about:blank &
+//
+// KEEP THE RESOLVER RULE. This script attaches to a browser YOU launched, so it cannot add the guard itself.
+// The app dials the canonical relays whatever origin served the page, and without that flag a probe writes to
+// production. Round 8 put three test-church documents on the live relay exactly this way. Port 9 discards;
+// the relay on the page's own origin still works.
 //   node scripts/journey.probe.mjs <url> <outPrefix> ["Click me"] ["Then me"] ...
 //
 // A FRESH --user-data-dir EVERY RUN. The app registers a service worker, and a reused profile serves run 1's
