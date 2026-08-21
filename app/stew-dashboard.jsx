@@ -3719,7 +3719,7 @@ function GuardianLinkModal({ child, childName, members, guardians, minorsSet, on
     .filter(m => !q.trim() || (m.name || '').toLowerCase().includes(q.toLowerCase()));
   return (
     <CkModal title={'Parents of ' + (childName || 'this child')} onClose={onClose}>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12, lineHeight: 1.45 }}>A linked parent can always message this child and collect them at check-in. The child keeps their own account — this just records who their guardian is. Only adults (not other children) can be linked.</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12, lineHeight: 1.45 }}>A linked parent can always message this child and collect them at check-in. The child keeps their own account — this just records who their guardian is. Only adults (not other children) can be linked. {/* Round 7: a parent went looking for this in her own app, was offered only “make a new account”, and would have created a second identity for a child who already had one. Her side now says to ask a steward; this is the steward’s half — that the request is normal, and that it is done from here. */}Parents often ask you for this — anyone already in your church can be linked here, and it appears in their app straight away.</div>
       {linked.length ? (
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Linked</div>

@@ -64,3 +64,24 @@ test('removing a link cannot leave the local store holding it', () => {
   assert.match(src, /filter\(c => c && c\.child !== childPub\)/,
     'the removal does not filter the child out of the stored list');
 });
+
+test('a steward is told that linking an EXISTING child is a thing they do', () => {
+  // Round 7: a parent went looking for this in her own app, found "Children's accounts", and was offered
+  // exactly one thing — make a new account. She would have created a second identity for a child who already
+  // had one, with only one of the two marked as a minor.
+  //
+  // The route was never missing. A steward can link any adult in the church to any child from this modal, and
+  // could all along. What was missing was anyone knowing: her app never mentioned it, and the steward had no
+  // cue that a parent might come and ask. Her half was fixed in identity.jsx; this is the steward's half.
+  //
+  // Deliberately NOT a new feature. A parent-initiated request adds nothing to the decision — a steward still
+  // has to approve it — while opening a path for any member to claim to be any other member's parent.
+  const modal = DASH.slice(DASH.indexOf('function GuardianLinkModal'), DASH.indexOf('function GuardianLinkModal') + 1800);
+  assert.ok(modal.length > 100, 're-anchor: GuardianLinkModal is gone');
+  assert.match(modal, /Parents often ask you for this/,
+    'the steward is not told that parents ask for this, or that it is done from here — so a parent who has ' +
+    'been told to ask meets a steward who does not know what is being asked for');
+  assert.match(modal, /already in your church can be linked/,
+    'it does not say the parent can already be a member — which is the whole point, and the difference ' +
+    'between linking an account and creating a duplicate one');
+});
