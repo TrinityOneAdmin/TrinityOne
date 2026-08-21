@@ -1155,7 +1155,9 @@ function maybePushMessage(evt) {
       // shared relay, so an unscoped fan-out pushes one church's announcement to unrelated churches (cross-tenant
       // metadata leak + spam). Mirror maybePushSermon's church filter.
       const gcp = GROUP_CHURCH.get(gid);
-      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
+      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
+        : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
+        : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
       for (const r of recips) {
         if (!r || r === evt.pubkey) continue;
         pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
@@ -1390,6 +1392,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : [])); GROUP_LEADER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
     // invite-only groups carry the allowlist of member pubkeys who may post
     if (c.visibility === 'invite') { GROUP_VIS.set(id, 'invite'); GROUP_MEMBERS.set(id, new Set((Array.isArray(c.members) ? c.members : []).map(p => toHexPub(p) || p).filter(Boolean))); }
+    // A SERVING TEAM'S ROOM IS PRIVATE TO ITS ROSTER. Its membership lives in the team's ROSTER doc
+    // (ROSTER_PEOPLE), not in the group doc's `members` — the two-list split that let round 9's "Members
+    // only" Welcome team, roster `people: []`, be read and posted in by the whole church while Serving
+    // correctly told those same people they were on no team.
+    else if (c.kind === 'team') { GROUP_VIS.set(id, 'team'); GROUP_MEMBERS.delete(id); }
     else { GROUP_VIS.set(id, 'open'); GROUP_MEMBERS.delete(id); }
   }
   else if (d.startsWith(BLOCKED_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(BLOCKED_D.length) === e.pubkey) {
@@ -1844,6 +1851,11 @@ function accept(e) {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const mem = GROUP_MEMBERS.get(g);
       return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'))) || !!(mem && mem.has(e.pubkey));
     }
+    // ...and the same for a serving team, whose allowlist is the roster rather than the group doc.
+    if (g && GROUP_VIS.get(g) === 'team') {
+      const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const ppl = ROSTER_PEOPLE.get(g);
+      return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'))) || !!(ppl && ppl.has(e.pubkey));
+    }
     // SAFEGUARDING (relay-enforced): a child may only post in a group their church marked child-safe. Was a
     // client-side list filter only, so a modified/old build could post into adult-only rooms.
     // Scoped PER CHURCH, deliberately: MINORS is a relay-wide union of every church's list, and using it here
@@ -2200,6 +2212,17 @@ function canRead(e, authed) {
   // docs (:1667), rather than refusing the write: reading is the disclosure, and a client that has some reason to
   // publish one keeps it.
   if (!g) return !!authed && authed === e.pubkey;
+  // A team room is gated like an invite-only one, but its allowlist is the ROSTER. Readable by the people on
+  // the team, the church, its network, and any steward who can EDIT groups (capability `content`, the
+  // "Groups & rotas" tickbox) — the last so a steward can manage a team, and can still see one they created
+  // before they have staffed it. NOT every steward: a finance-only delegate reading the church's team and
+  // youth rooms is the leak capability keys exist to prevent.
+  if (GROUP_VIS.get(g) === 'team') {
+    if (!authed) return false;
+    const tcp = GROUP_CHURCH.get(g);
+    if (tcp && (authed === tcp || networkOf(authed, tcp) || stewardCan(authed, tcp, 'content'))) return true;
+    const ppl = ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(authed));
+  }
   if (GROUP_VIS.get(g) !== 'invite') return true;
   if (!authed) return false;
   // REVIEW-2026-07-20 B3: this was the SAME unscoped check the C3/C4 fix removed from the 30078 branch, left
@@ -4296,7 +4319,7 @@ wss.on('connection', (ws, req) => {
       // Challenge for ANY group we know, child-safe included. Child-safe rooms used to be excluded here because
       // they were served anonymously; now that they require membership like every other room, a member whose
       // client was never challenged would simply render an empty room forever. AUDIT-2026-07-27.
-      const wantsInvite = !ws._auth && filters.some(f => Array.isArray(f['#t']) && f['#t'].some(t => (GROUP_VIS.get(t) === 'invite') || GROUP_CHURCH.has(t)));
+      const wantsInvite = !ws._auth && filters.some(f => Array.isArray(f['#t']) && f['#t'].some(t => (GROUP_VIS.get(t) === 'invite') || (GROUP_VIS.get(t) === 'team') || GROUP_CHURCH.has(t)));
       // Emergency-timing oracle: challenge from the FILTER (not only a found event) so an anon REQ for a safety d-tag
       // gets an identical AUTH whether or not a check is live — no "is this church under attack right now?" distinguisher.
       const wantsSafetyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && (d.startsWith(SAFETY_D) || d.startsWith(SAFE_D))));
