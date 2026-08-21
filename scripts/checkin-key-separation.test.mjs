@@ -358,3 +358,24 @@ test('the register survives the volunteer standing down', () => {
     're-anchor: the finance exemption went with it (it covers the whole module, not just the journal — see ' +
     'delegated-finance.test.mjs for why the journal alone was not enough)');
 });
+
+test('the pickup code is labelled where it can actually be read', () => {
+  // Round 7, the real half of R7-3. A safeguarding lead looking at a checked-in child saw two unlabelled
+  // values and said: "I couldn't tell which one is 'the' pickup code — I'd have read 9079 to a parent, but I
+  // was guessing." He was right, and guessing is not good enough for the number that decides whether a child
+  // leaves with the right adult.
+  //
+  // The hex he saw was a different bug (a PIN unlock left his console reading its own empty documents, so
+  // names fell back to 'Child <hex>'). But the code itself carried no visible label either way: its only one
+  // was a `title` tooltip, which does not exist on a touch screen and is not read aloud.
+  const src = stripComments(DASH);
+  const row = src.slice(src.indexOf("' · pickup: '"), src.indexOf("' · pickup: '") + 1400);
+  assert.ok(row.length > 100, 're-anchor: the checked-in row changed shape');
+  assert.match(row, />CODE</,
+    'the pickup code has no visible label, so the only way to know which number to read to a parent is to guess');
+  assert.match(row, /aria-label=\{'Pickup code '/,
+    'the code has no accessible name — a steward using a screen reader hears a bare number with no idea what it is');
+  assert.match(row, /split\(''\)\.join\(' '\)/,
+    'the accessible name reads the code as one number rather than digit by digit, which is how it gets ' +
+    'misheard on a phone call');
+});

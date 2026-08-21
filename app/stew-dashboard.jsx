@@ -4435,7 +4435,15 @@ function DashCheckin() {
                     <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.childName || nameFor(r.child)}</div>
                     <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>In {fmtT(r.in)}{gs.length ? ' · pickup: ' + gs.join(', ') : ' · no guardian linked'}</div>
                   </div>
-                  <div title="Pickup code — write it on the parent's slip" style={{ fontFamily: 'var(--mono)', fontWeight: 800, fontSize: 18, letterSpacing: '2px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 9, padding: '4px 10px', flexShrink: 0 }}>{r.code}</div>
+                  {/* LABELLED WHERE IT CAN BE READ. The only label was a `title` tooltip — invisible on a
+                      touch screen and to a screen reader. Round 7: a safeguarding lead looking at this row saw
+                      two unlabelled values and said "I couldn't tell which one is 'the' pickup code — I'd have
+                      read 9079 to a parent, but I was guessing." He was right, and guessing is not good enough
+                      for the number that decides whether a child leaves with the right adult. */}
+                  <div title="Pickup code — write it on the parent's slip" aria-label={'Pickup code ' + String(r.code || '').split('').join(' ')} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+                    <div style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: '.6px', color: 'var(--ink-3)' }}>CODE</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontWeight: 800, fontSize: 18, letterSpacing: '2px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 9, padding: '4px 10px' }}>{r.code}</div>
+                  </div>
                   <button onClick={() => setCheckout(r)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}>Check out</button>
                 </div>
               ); })}
