@@ -160,7 +160,15 @@ try {
           return n && n.indexOf(want)===0 && vis(x);});
       }
       if(!all.length) return null;
-      all.sort(function(a,b){return (a.innerText||'').length-(b.innerText||'').length;});
+      // A heading and its button often carry the SAME text ("Add relay" is a DIV label AND a BUTTON).
+      // Sorting by text length alone left that tie to document order, which put the heading first — so the
+      // harness tapped a label's coordinates, nothing happened, and it still printed "tapped Add relay".
+      // Round 9's vicar reported "Add relay does nothing" five times over a button that works perfectly.
+      // Real controls therefore win ties: anything a person could actually press beats a DIV/SPAN/LABEL.
+      var live=function(x){ return /^(BUTTON|A)$/.test(x.tagName) || x.getAttribute('role')==='button'
+        || (x.tagName==='INPUT' && /^(button|submit)$/i.test(x.type||'')); };
+      all.sort(function(a,b){ var d=(live(a)?0:1)-(live(b)?0:1); if(d) return d;
+        return (a.innerText||'').length-(b.innerText||'').length;});
       var e=all[0]; e.scrollIntoView({block:'center'}); var r=e.getBoundingClientRect();
       return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)});})()`);
     if (!box) { out('NOT FOUND: ' + a1 + ' — run `see` to check what is on screen'); process.exit(0); }

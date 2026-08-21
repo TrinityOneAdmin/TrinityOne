@@ -80,3 +80,4 @@ scripts/.sim-*.json
 # simulation findings + runbooks — local working notes, not repo history
 reference/sim/
 relay-backup-*.tgz
+relay2/
