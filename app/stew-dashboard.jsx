@@ -711,7 +711,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   if (step === 0) return (
     <WizShell step={step} title="Welcome to your console" sub="Let’s get your church set up — about a minute. First, what’s it called? Members see this name when they join."
       footer={<React.Fragment>
-        <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip setup</button>
+        {/* NO EXIT BEFORE THE TWELVE WORDS. "Skip setup" used to sit here, on step 0 — one tap and a steward
+            reached a working console having never seen the phrase that IS the church, with no way to recover
+            it afterwards. The quiz on step 1 is otherwise mandatory (canContinue requires saved && verified),
+            so this button was the only way past it. Moved to the groups step: the name and the words are
+            compulsory, everything after them is not. Owner's decision, 2026-08-21. */}
         <div style={{ flex: 1 }} />
         <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
@@ -857,6 +861,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     <WizShell step={step} title="Create a few spaces" sub="Groups are chat rooms (or announcement channels) your members join. Pick a few to start — you can add or remove any time."
       footer={<React.Fragment>
         <button onClick={() => setStep(2)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        {/* The exit lives HERE, not on step 0: groups, meetings and a serving team are genuinely optional, and
+            a steward who only wants a look round should not be trapped inventing a rota. Skipping now leaves
+            the church with no groups at all, which is correct — nothing is imposed — and the Groups page says
+            so plainly: "No groups yet — create your church's first chat room." */}
+        <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip setup</button>
         <div style={{ flex: 1 }} />
         <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
