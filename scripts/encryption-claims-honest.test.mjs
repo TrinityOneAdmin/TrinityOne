@@ -72,3 +72,38 @@ test('Manna says out loud that it shares the Finance key', () => {
   assert.doesNotMatch(src, /encrypted to your church key/i,
     'Manna still claims its records are sealed to the church key alone');
 });
+
+// ── what a capability DISCLOSES, not only what it lets you do ─────────────────────────────────────────────
+test('every capability blurb says what the person will SEE', () => {
+  // Round 7 watched a vicar read these while choosing, which is the only moment they matter. Safeguarding
+  // separated see-from-change — rewritten 2026-08-20 after the previous audit — and the other four named
+  // topic areas only: "Groups, rotas, services, events, posts". An owner ticking a box is deciding who may
+  // read something about a person in their congregation, and that sentence does not tell them so.
+  const src = stripComments(files['app/stew-dashboard.jsx']);
+  const i = src.indexOf('const CAP_SUB = {');
+  assert.ok(i > 0, 're-anchor: CAP_SUB is gone');
+  const block = src.slice(i, src.indexOf('};', i));
+  const blurbs = [...block.matchAll(/^\s*(\w+): '([^']+)',/gm)].map(m => [m[1], m[2]]);
+  assert.ok(blurbs.length >= 5, `only ${blurbs.length} capability blurbs found — re-anchor this test`);
+  for (const [cap, text] of blurbs) {
+    assert.match(text, /\bSEE\b/,
+      `the "${cap}" capability says what the person may DO and nothing about what they will SEE. An owner ` +
+      'granting it is choosing who may read something about people in their congregation, and is being told ' +
+      'only the name of a screen.');
+  }
+});
+
+test('and the refusal panels do not send a delegate to an owner-only page', () => {
+  // Every person who meets a refusal is, by definition, a delegate — and Settings → Security is owner-gated
+  // (`section === 'security' && !delegated`). Round 7: a steward followed the directions and reported "no
+  // such page exists; Security shows one general paragraph only". Directions to a door that is not there are
+  // worse than none.
+  const src = stripComments(files['app/stew-dashboard.jsx']);
+  const panel = src.slice(src.indexOf('function StewCapBlocked'), src.indexOf('function StewCapBlocked') + 2800);
+  assert.ok(panel.length > 100, 're-anchor: StewCapBlocked is gone');
+  assert.doesNotMatch(panel, /Settings → (Security → )?Delegated stewards/,
+    'the refusal panel still tells a delegate to go to Settings → Delegated stewards, which is owner-only — ' +
+    'so the one instruction it gives cannot be followed by anyone who reads it');
+  assert.match(panel, /whoever holds the church key/,
+    're-anchor: the panel no longer names who to ask, which was the useful half of the instruction');
+});

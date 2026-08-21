@@ -1641,14 +1641,21 @@ function FamilySheet({ open, onClose, ctx }) {
                     <Icon name={confirmed(k) ? 'check' : 'shield'} size={12} color="currentColor" /> {k.viaSteward ? 'Linked by your steward' : confirmed(k) ? 'Linked & protected' : 'Waiting for steward to confirm'}</div>
                 </div>
               </div>
-            )) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>No children set up yet.</div>}
+            )) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>
+              {/* "No children set up yet." full stop, read to a parent whose child DOES have an account and IS
+                  linked at the church, as "nothing is set up for my son". Round 7: the parent said she would
+                  have closed the app knowing no more than when she opened it. Say which case this is. */}
+              <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>No children linked to you yet</div>
+              If your child already uses the app, ask a steward to link you — it appears here on its own once they do.
+              If they have no account, you can make one below.
+            </div>}
             <button onClick={() => { setStage('name'); setName(''); setErr(''); }} style={{ marginTop: 8, width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><Icon name="plus" size={17} color="var(--on-clay)" /> Add a child</button>
           </React.Fragment>
         ) : stage === 'name' ? (
           <React.Fragment>
             <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '6px 0 8px' }}>CHILD’S NAME</label>
             <input value={name} autoFocus onChange={e => { setName(e.target.value.slice(0, 24)); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sam Carter" style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
-            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 2px 0', lineHeight: 1.5 }}>This creates a brand-new account for your child in <b>{(ctx.church && ctx.church.name) || 'your church'}</b>. You’ll get its recovery words on the next screen — keep them safe; they’re the only way to restore the account.</p>
+            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 2px 0', lineHeight: 1.5 }}><b>Only if they don’t already have one.</b> This makes a brand-new account for your child in <b>{(ctx.church && ctx.church.name) || 'your church'}</b>. You’ll get its recovery words on the next screen — keep them safe; they’re the only way to restore the account. If they already use the app on their own phone, don’t do this — ask a steward to link you to it instead, or they will end up with two accounts and only one of them known to the church.</p>
             {err ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', marginTop: 10 }}>{err}</div> : null}
             <button onClick={create} disabled={busy || !name.trim()} style={{ marginTop: 20, width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !name.trim()) ? 0.6 : 1 }}>{busy ? 'Setting up…' : 'Create the account'}</button>
           </React.Fragment>

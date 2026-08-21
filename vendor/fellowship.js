@@ -5867,6 +5867,13 @@
     } catch {
     }
   }
+  function _removeChildLink(childPub) {
+    const list = _loadChildren().filter((c) => c && c.child !== childPub);
+    try {
+      localStorage.setItem(FAMILY_KEY, JSON.stringify(list));
+    } catch {
+    }
+  }
   function _rebuildFamily(churchNpub) {
     const cp = toPub(churchNpub) || churchNpub;
     if (!pub || !cp) return Promise.resolve(0);
@@ -9227,6 +9234,14 @@
           try {
             dec = JSON.parse(decrypt(e.content, getConversationKey(sk, e.pubkey)));
           } catch {
+            return;
+          }
+          if (dec && dec.removed) {
+            _removeChildLink(dec.removed);
+            try {
+              window.dispatchEvent(new CustomEvent("trinity-guardian-removed", { detail: { child: dec.removed } }));
+            } catch (x) {
+            }
             return;
           }
           if (!dec || !dec.child || dec.child === pub) return;

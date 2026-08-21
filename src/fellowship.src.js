@@ -95,6 +95,9 @@ const SAFE_D = 'trinityone/safe:';         // a member's response — d=safe:<ch
 const FAMILY_KEY = 'trinityone.family';
 function _loadChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_KEY) || '[]') || []; } catch { return []; } }
 function _saveChildLink(link) { const list = _loadChildren().filter(c => c && c.child !== link.child); list.push(link); try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {} }
+// A church can take a guardian link away, and this is how the parent's app finds out. Without it the link
+// lived in localStorage for ever and a removed guardian went on being shown the child (round 7).
+function _removeChildLink(childPub) { const list = _loadChildren().filter(c => c && c.child !== childPub); try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {} }
 // REBUILD THE FAMILY LIST FROM THE RELAY. trinityone.family is written when a child account is created and
 // read straight back — nothing ever rebuilt it. It is also in the locked-boot wipe list, so restoring an
 // identity cleared it and a parent's children simply vanished from their phone. The accounts were never
@@ -3036,6 +3039,13 @@ window.Fellowship = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDNOTICE_D + pub) return;
         let dec; try { dec = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch { return; }
+        // A REMOVAL. The church has taken this guardian link away; drop it locally, or the parent's app goes
+        // on showing a child it has been told they are no longer responsible for.
+        if (dec && dec.removed) {
+          _removeChildLink(dec.removed);
+          try { window.dispatchEvent(new CustomEvent('trinity-guardian-removed', { detail: { child: dec.removed } })); } catch (x) {}
+          return;
+        }
         if (!dec || !dec.child || dec.child === pub) return;
         const ex = _loadChildren().find(c => c && c.child === dec.child);
         if (ex && ex.viaSteward) return;   // already recorded as a steward-initiated link — no-op

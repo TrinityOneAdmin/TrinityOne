@@ -4194,6 +4194,25 @@ window.Steward = {
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }, sk));
   },
 
+  // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
+  // told them nothing at all, and the parent's app stores the link in localStorage where nothing ever removed
+  // it. So a guardian the church had removed went on being shown that child, indefinitely.
+  //
+  // Found in round 7 while checking a different finding. The relay still refuses their DMs — the guardians:
+  // document is the authority and it had dropped them — so this is not an access hole. It is an app telling
+  // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
+  // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
+  // one"; this is the half that was missing.
+  notifyGuardianRemoved(parentPubIn, childPubIn) {
+    if (!sk) return Promise.resolve(null);
+    const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
+    if (!parentPub || !childPub) return Promise.resolve(null);
+    let content;
+    try { content = nip44e(JSON.stringify({ removed: childPub, church: churchPub }), nip44ck(sk, parentPub)); }
+    catch (e) { return Promise.resolve(null); }
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }, sk));
+  },
+
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
   // "require approval", and then a new member is held as a pending request until admitted. The relay
   // reads joinpolicy:<churchpub> + the admitted:<churchpub> allowlist and withholds posting until then. ----

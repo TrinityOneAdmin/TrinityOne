@@ -98,8 +98,8 @@ function StewCapBlocked({ cap, note }) {
             has always been kept to whoever holds the church key.
           </p>
           <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
-            If it’s your job now, ask them to tick <b>{STEW_CAP_LABEL[cap] || cap}</b> beside your name under
-            <b> Settings → Delegated stewards</b>. It takes them one click. {note || ''}
+            If it’s your job now, ask whoever holds the church key to tick <b>{STEW_CAP_LABEL[cap] || cap}</b>
+            beside your name. It takes them one click. {note || ''}
           </p>
         </React.Fragment>
       ) : (
@@ -109,7 +109,12 @@ function StewCapBlocked({ cap, note }) {
             broken and you haven’t done anything wrong.
           </p>
           <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
-            Whoever holds the church key can change that from <b>Settings → Delegated stewards</b>. {note || ''}
+            {/* THE PERSON READING THIS CANNOT GO THERE. Settings → Security is owner-only
+            (`section === 'security' && !delegated`), and this panel is shown to DELEGATES by definition —
+            they are the only people who get refused. Round 7: a steward followed it and reported "no such
+            page exists; Security shows one general paragraph only". Directions are worse than none when they
+            send someone to a door that is not there for them. Say who to ask instead. */}
+        Ask whoever holds the church key — they can change it in a couple of taps from their own console. {note || ''}
           </p>
         </React.Fragment>
       )}
@@ -1922,12 +1927,18 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   ) : null;
   // people asking to become a steward — surfaced big too, so a request never just sits unseen in Settings
   const stewardReqs = window.usePendingStewards ? window.usePendingStewards() : [];
+  // Approving a steward is owner-only, and this banner renders for whoever is on Overview — including a
+  // delegate. Sending them to Settings → Security, which is owner-gated, is directions to a door that is not
+  // there for them (round 7: a steward followed it and found "no such page exists").
+  const _ovDelegated = !!(window.Steward && window.Steward.actingChurch);
   const stewardReqBanner = stewardReqs.length ? (
     <button onClick={() => goSettings('security')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--gold) 38%, var(--line))', background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={22} color="#fff" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
-        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Security → Delegated stewards.</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{_ovDelegated
+          ? 'Only whoever holds the church key can approve them.'
+          : 'Approve them under Settings → Security → Delegated stewards.'}</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
@@ -3991,6 +4002,8 @@ function DashMembers() {
     // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
     // and goes on treating a removed adult as a parent it may always message.
     _reseal(sg.minors || [], sg.approved || [], [childPub], next);
+    // ...and tell the PARENT'S app, which stores the link locally and had no other way to learn it was gone.
+    if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(parentPub, childPub);
   };
   // joining: when approval is on, members who haven't been admitted yet are pending requests
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
@@ -4184,8 +4197,12 @@ function DashMembers() {
             );
           })}
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
-            They sign in with their own keys, not yours. Change what they may do, or remove them, under
-            Settings → Security → Delegated stewards.
+            {/* Delegates read this list too (round 7 — a steward found it and called it the one page naming
+                who runs the church). Settings → Security is owner-only, so pointing them there sends them to
+                a door that is not there for them. */}
+            They sign in with their own keys, not yours. {delegated
+              ? 'Only whoever holds the church key can change what they may do, or remove them.'
+              : 'Change what they may do, or remove them, under Settings → Security → Delegated stewards.'}
           </div>
         </div>
       ) : null}
@@ -4723,16 +4740,21 @@ function DashStewardsPanel({ church }) {
     // This used to warn that the books were sealed to the church key and a delegate could not open them.
     // That limit was removed the same afternoon (the books now have a key of their own, wrapped to whoever
     // holds this capability), and copy describing a limit that no longer exists is its own kind of lie.
-    finance: 'The church books, funds and statements — they can read the whole history and add entries.',
-    care: 'Care needs, the care team, safety checks',
+    finance: 'The church books, funds and statements. They can SEE every entry the church has ever recorded — giving, salaries, benevolence — and add more.',
+    // EACH ONE SAYS WHAT THEY WILL SEE, not only what they may do. Round 7 watched a vicar read these while
+    // choosing, which is the only moment they matter: Safeguarding separated see-from-change (rewritten
+    // 2026-08-20 after the last audit) and the other four named topic areas only. An owner ticking a box is
+    // deciding who may read something about a person in their congregation; "Groups, rotas, services, events,
+    // posts" does not tell them that.
+    care: 'Care needs, the care team, safety checks. They can SEE who has asked for help and what they asked for — often health, money or family trouble — and who is bringing meals.',
     // WRITES are owner-only; READS are not, and the old wording — "the child and cleared-adult LISTS stay
     // owner-only" — let an owner believe granting this disclosed nothing. It discloses a great deal: who in
     // the congregation is a child, which adults are cleared to work with them, who each child's guardians
     // are, and (since 2026-08-20) the children's register itself, with names, rooms and pickup codes. That
     // is the most sensitive data this app holds, and the moment to say so is while the owner is choosing.
     safeguarding: 'Clearances, photo decisions and kids check-in. They can SEE who is marked as a child, which adults are cleared, guardians, and check-in records — only you can CHANGE those lists.',
-    members: 'Admit people, join policy, re-seat someone who lost their words',
-    content: 'Groups, rotas, services, events, posts',
+    members: 'Admit people, set the join policy, re-seat someone who lost their words. They can SEE the whole membership list with real names, and who is waiting to join.',
+    content: 'Groups, rotas, services, events, posts. They can SEE every group including private ones, read what is said in them, and post to the whole church in its name.',
   };
   const setCaps = (pk, list) => {
     const next = { ...caps };
