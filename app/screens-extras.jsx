@@ -383,7 +383,7 @@ function CurrencyScreen({ open, onClose, ctx }) {
       </div>
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>
-          Choose the currency you’d like to see giving amounts in. Your money is always held as Bitcoin (in “sats”) — this just changes the friendly label shown next to it.
+          Choose the currency you’d like to see giving amounts in. TrinityOne never holds your money — when giving is switched on, it goes from your own wallet straight to your church. This only changes the label amounts are shown with.
         </p>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)' }}>
           {currencies.map((c, i) => {
