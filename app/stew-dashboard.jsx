@@ -2156,7 +2156,14 @@ function NewGroupModal({ open, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const cats = window.useStewardCategories ? window.useStewardCategories() : [];
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
-  const encByDefault = !!(church.features && church.features.encryptComms);   // "Encrypt all comms" → new groups sealed by default
+  // ENCRYPTED UNLESS THE CHURCH SAID OTHERWISE. Absent = ON: a brand-new church has no features object at
+  // all, and reading that as "off" meant every church started with unsealed rooms and had to go and find a
+  // setting. Round 9's members read the result exactly as you would fear — Grace: "the app encrypts my chat
+  // with one person, but not the place where people post about their health, their new job, and their
+  // loneliness"; Priya hesitated before posting a prayer request, having already said which hospital ward she
+  // works on. Only an explicit `false` — a steward deliberately turning it off — leaves new rooms unsealed.
+  // Owner's decision, 2026-08-22. Existing groups are untouched: this is the default for NEW ones.
+  const encByDefault = !church.features || church.features.encryptComms !== false;
   React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
@@ -5297,7 +5304,17 @@ function DashFeaturesPanel({ church }) {
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
   const allGroups = window.useStewardGroups ? window.useStewardGroups() : [];
   const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
-  const encOn = f.encryptComms === true;
+  // Read absent the same way encByDefault does, or the screen contradicts the behaviour: the toggle would sit
+  // OFF while every new room was in fact being sealed, and a steward who cannot trust the switch stops
+  // trusting the claim underneath it.
+  //
+  // …but NEVER CLAIM MORE THAN IS TRUE. "Encrypt all comms" means every room IS sealed, not merely that new
+  // ones will be. On a brand-new church there are no rooms, so absent-means-on is honest and the switch reads
+  // ON from the first minute. On an existing church that still has unsealed rooms it reads OFF — tapping it
+  // seals them — because a church shown a protection it does not have is the one failure this project cannot
+  // afford. Teams are excluded: the encrypt control is not offered for them (see the group list).
+  const encUnsealed = (allGroups || []).filter(g => g && g.kind !== 'team' && !g.encrypted);
+  const encOn = f.encryptComms !== false && encUnsealed.length === 0;
   const [confirmEnc, setConfirmEnc] = React.useState(false);
   const encRecips = (g) => g.visibility === 'invite' ? (g.members || []) : allMembers.map(m => m.pubkey);
   // AUDIT-2026-08-10 item A. This sweep used to fire flag+key for every group at once and read no results:
