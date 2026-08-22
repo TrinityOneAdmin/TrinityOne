@@ -1318,8 +1318,13 @@ function DirectoryToggle({ identity, onSave, ctx }) {
   useIdE(() => { setHidden(!!identity.hidden); }, [identity]);
   const visible = !hidden;
   const flip = () => { const nv = !hidden; setHidden(nv); onSave({ hidden: nv }); ctx.toast(nv ? 'Hidden from the church directory' : 'Visible in the church directory'); };
+  // THE ROW IS THE TARGET, not just the toggle. I named this switch and left its row inert, and the very
+  // next person to try it — Ronald, a churchwarden — hit the same wall the three before him did:
+  // "I tapped 'Show me in the directory' to turn it off and it stayed on; I couldn't reach the small
+  // switch on the right of the row." My own test asserted the row fix for the OTHER two files and
+  // never for this one, so it passed while the headline case stayed broken.
   return (
-    <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left' }}>
+    <div onClick={flip} style={{ cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left' }}>
       <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface-2)', color: 'var(--ink-2)' }}>
         <Icon name="users" size={19} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1330,7 +1335,7 @@ function DirectoryToggle({ identity, onSave, ctx }) {
           control that takes a member out of a list of named people. Halime, round 10, whose family does not
           know she attends church: "I'm still in a list of named people with no way I could find to step
           out of it." The mechanism worked all along; she could not operate it. */}
-      <button onClick={flip} role="switch" aria-checked={visible} aria-label={'Show me in the church directory' + (visible ? ' (on)' : ' (off)')} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: visible ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+      <button onClick={(e) => { e.stopPropagation(); flip(); }} role="switch" aria-checked={visible} aria-label={'Show me in the church directory' + (visible ? ' (on)' : ' (off)')} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: visible ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
         <div style={{ width: 22, height: 22, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow)', transform: visible ? 'translateX(18px)' : 'translateX(0)', transition: 'transform .15s' }} /></button>
     </div>
   );

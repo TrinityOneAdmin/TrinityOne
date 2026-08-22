@@ -23,6 +23,7 @@ import { stripComments } from './test-slice.mjs';
 
 const EXTRAS = stripComments(readFileSync(new URL('../app/screens-extras.jsx', import.meta.url), 'utf8'));
 const DASH   = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
+const IDENT  = stripComments(readFileSync(new URL('../app/identity.jsx', import.meta.url), 'utf8'));
 
 // Assert the exact row handlers rather than slicing by position. My first attempt windowed BACKWARDS from
 // the switch, which captured the BUTTON's own onClick and passed against unchanged code; the second walked
@@ -47,4 +48,14 @@ test('tapping the switch itself does not toggle twice', () => {
       `${name}: the button does not stop the event, so a tap on the switch fires the row handler too and ` +
       'toggles back — which looks exactly like nothing happening');
   }
+});
+
+test('the directory switch — the one four people could not work — has a tappable row', () => {
+  // I fixed the OTHER two files and asserted only those, so this passed while the control that started the
+  // whole thread stayed inert. Ronald was the fourth person to fail to operate it, AFTER I said it was fixed.
+  assert.match(IDENT, /<div onClick=\{flip\}/,
+    '"Show me in the directory" still requires hitting the small toggle itself — Grace, Halime, Colin and ' +
+    'Ronald have each now failed to work it');
+  assert.match(IDENT, /onClick=\{\(e\) => \{ e\.stopPropagation\(\); flip\(\); \}\}/,
+    'the switch must stop the event, or a tap on it fires the row handler too and toggles straight back');
 });
