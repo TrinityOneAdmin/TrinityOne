@@ -121,14 +121,21 @@ function DashMealsPanel({ church }) {
     return g;
   };
   const toggleBtn = (active, onClick, label) => (
-    <button onClick={onClick} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
     </button>
   );
   return (
     <Panel title="Practical care">
       <DismissibleNote id="care-intro" icon="heart" tone="sage" style={{ marginBottom: 12 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</DismissibleNote>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+            {/* THE ROW IS THE TARGET. This toggle is a 48x28 button at the far right and the words naming it had
+          no handler, so the obvious press did nothing. Rev. Miriam, session 3: "clicking the words
+          'Practical care (Meal trains)' and clicking the 'Off — turn on to…' line under them does nothing
+          at all; only the little switch itself responds, and I could not land on it." Care stayed off,
+          which was the thing she most wanted for her congregation that week.
+          I had already fixed this pattern in three other files and missed this one, because I audited by
+          role="switch" and this file uses a plain <button> as its toggle. */}
+<div onClick={() => setAll({ enabled: !on })} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Practical care (Meal trains)</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Care” tab is in your sidebar, and members see open needs in their app.' : 'Off — turn on to start opening needs and let the church sign up to help.'}</div>

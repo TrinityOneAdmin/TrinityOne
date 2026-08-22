@@ -189,7 +189,16 @@ try {
       var i;
       if (val === null) {
         val = ${JSON.stringify(a1)};
-        i = all.filter(function(x){ return !/^(checkbox|radio|button|submit|file)$/i.test(x.type||''); })[0];
+        // SKIP SEARCH BOXES. One-argument type() takes the first visible field, and on a chat screen that is
+        // the search box, not the composer — so the text lands somewhere harmless and send then submits an
+        // empty message. Nia (session 3) posted three times and a private message twice, watched the box
+        // empty each time, and concluded nobody in her church wanted to talk to her. Every one of them was
+        // this. Use the send command for chat; this only stops the silent mis-aim.
+        // (No backticks anywhere in this comment: it lives INSIDE a template literal, and one ends it
+        //  early. The file already warns about that further down, and I did it anyway.)
+        var usable = all.filter(function(x){ return !/^(checkbox|radio|button|submit|file)$/i.test(x.type||'')
+          && !/search|find/i.test(x.placeholder || '') && x.type !== 'search'; });
+        i = usable[0];
       } else {
         var hits = all.filter(function(x){return norm(x.placeholder||'').indexOf(want)>=0;});
         i = hits[nth > 0 ? (nth - 1) : 0];

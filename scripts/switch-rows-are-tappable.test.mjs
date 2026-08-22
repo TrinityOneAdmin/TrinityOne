@@ -24,6 +24,7 @@ import { stripComments } from './test-slice.mjs';
 const EXTRAS = stripComments(readFileSync(new URL('../app/screens-extras.jsx', import.meta.url), 'utf8'));
 const DASH   = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
 const IDENT  = stripComments(readFileSync(new URL('../app/identity.jsx', import.meta.url), 'utf8'));
+const MEALS  = stripComments(readFileSync(new URL('../app/stew-meals.jsx', import.meta.url), 'utf8'));
 
 // Assert the exact row handlers rather than slicing by position. My first attempt windowed BACKWARDS from
 // the switch, which captured the BUTTON's own onClick and passed against unchanged code; the second walked
@@ -58,4 +59,26 @@ test('the directory switch — the one four people could not work — has a tapp
     'Ronald have each now failed to work it');
   assert.match(IDENT, /onClick=\{\(e\) => \{ e\.stopPropagation\(\); flip\(\); \}\}/,
     'the switch must stop the event, or a tap on it fires the row handler too and toggles straight back');
+});
+
+test('the practical-care row works its own switch', () => {
+  // THIRD file with this pattern, and I missed it twice: I audited by role="switch" and stew-meals.jsx uses a
+  // plain <button> as its toggle, so the search never saw it. Rev. Miriam could not turn care on at all —
+  // "clicking the words does nothing at all; only the little switch itself responds, and I could not land on
+  // it" — and care was the thing she most wanted for her congregation that week.
+  assert.match(MEALS, /<div onClick=\{\(\) => setAll\(\{ enabled: !on \}\)\}/,
+    'the Practical care row does not toggle, so the words naming it are not a target');
+  assert.match(MEALS, /onClick=\{\(e\) => \{ e\.stopPropagation\(\); onClick\(\); \}\}/,
+    'the toggle button must stop the event or a tap on it fires the row handler too and toggles back');
+});
+
+test('no toggle-shaped control is left with an inert row', () => {
+  // Audit by SHAPE, not by attribute — that is what let stew-meals.jsx hide. A 46/48x28 pill with a sliding
+  // knob is a switch whatever its markup says.
+  const files = { 'stew-dashboard.jsx': DASH, 'identity.jsx': IDENT, 'screens-extras.jsx': EXTRAS, 'stew-meals.jsx': MEALS };
+  for (const [name, src] of Object.entries(files)) {
+    const pills = (src.match(/width: 4[68], height: 28/g) || []).length;
+    if (!pills) continue;
+    assert.match(src, /onClick=/, name + ' has a toggle-shaped control and no click handler anywhere');
+  }
 });
