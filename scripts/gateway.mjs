@@ -2113,6 +2113,20 @@ function canRead(e, authed) {
       if (vis === 'stewards') return false;                        // stewards already returned true above
       if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
     }
+    // A SERVING TEAM'S ROOM IS NOT ADVERTISED TO PEOPLE WHO ARE NOT ON IT. Gating only its MESSAGES left the
+    // room listed in the member's chat list, where it accepted typing and silently discarded it — Nkechi,
+    // round 10: "I typed a reply and pressed send; the box emptied but my message never appeared." Listing
+    // the room is what makes it look joinable, so the DEFINITION has to go too.
+    // Owner: "a user should just not see rooms they are not added to."
+    // Same allowlist as the message gate — roster, church, network, and a steward who can EDIT groups, so a
+    // steward keeps sight of a team they have not staffed yet. Stewards/church already returned true above.
+    if (d.startsWith(GROUP_D)) {
+      const gid = d.slice(GROUP_D.length);
+      if (GROUP_VIS.get(gid) === 'team') {
+        const ppl = ROSTER_PEOPLE.get(gid);
+        return !!authed && !!(ppl && ppl.has(authed));
+      }
+    }
     const md = MEMBER_DOCS.get(cp);
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     return !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));

@@ -152,6 +152,46 @@ test('a FINANCE-only steward cannot read it', async () => {
     'is the exact leak capability keys exist to prevent.');
 });
 
+// Reading the ROOM'S DEFINITION, not its messages. Gating the messages alone left the room listed in the
+// member's chat list, where it accepted typing and silently discarded it — Nkechi, round 10: "I typed a reply
+// and pressed send; the box emptied but my message never appeared." Owner: "a user should just not see rooms
+// they are not added to."
+function readGroupDoc(ws, subId, authSk, window = 800) {
+  const filter = { kinds: [30078], '#d': ['trinityone/group:' + TEAM] };
+  return new Promise((resolve) => {
+    const events = [];
+    const on = (d) => {
+      const m = JSON.parse(d);
+      if (m[0] === 'EVENT' && m[1] === subId) events.push(m[2]);
+      else if (m[0] === 'AUTH' && authSk) {
+        const a = finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, authSk);
+        ws.send(JSON.stringify(['AUTH', a]));
+        setTimeout(() => ws.send(JSON.stringify(['REQ', subId, filter])), 120);
+      }
+    };
+    ws.on('message', on);
+    ws.send(JSON.stringify(['REQ', subId, filter]));
+    setTimeout(() => { ws.off('message', on); try { ws.send(JSON.stringify(['CLOSE', subId])); } catch {} resolve(events); }, window);
+  });
+}
+const seesDef = (evts) => evts.some(e => /Welcome team/.test(e.content || ''));
+
+test('a non-roster member is not even shown that the team room exists', async () => {
+  const ws = await connect();
+  const seen = await readGroupDoc(ws, 'defoff', offSk); ws.close();
+  assert.equal(seesDef(seen), false,
+    'the team room\'s definition is still served to someone not on its roster, so the room is listed, ' +
+    'accepts typing, and silently discards it');
+});
+
+test('the roster, the church and a content steward still see the definition', async () => {
+  for (const [who, sk] of [['roster member', onSk], ['church', churchSk], ['content steward', contentSk]]) {
+    const ws = await connect();
+    const seen = await readGroupDoc(ws, 'def-' + who.replace(/\s/g, ''), sk); ws.close();
+    assert.equal(seesDef(seen), true, who + ' lost sight of a team room they must be able to manage or use');
+  }
+});
+
 test('an anonymous socket cannot read it', async () => {
   const ws = await connect();
   const seen = await readRoom(ws, 'anon', null); ws.close();
