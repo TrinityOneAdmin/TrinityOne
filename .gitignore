@@ -81,3 +81,4 @@ scripts/.sim-*.json
 reference/sim/
 relay-backup-*.tgz
 relay2/
+welcome-sim.html

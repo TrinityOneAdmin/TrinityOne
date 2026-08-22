@@ -20,7 +20,7 @@
 import { WebSocket } from 'ws';
 import { writeFileSync } from 'node:fs';
 
-const [port, cmd, a1, a2] = process.argv.slice(2);
+const [port, cmd, a1, a2, a3] = process.argv.slice(2);   // a3 = which match (1-based): three-box checks
 if (!port || !cmd) { console.error('usage: sim-actor.mjs <port> <see|tap|type|send|back|shot|eval> [args]'); process.exit(2); }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -182,12 +182,23 @@ try {
   } else if (cmd === 'type') {
     const r = await ev(`(function(){
       var norm=${NORM}; var want=norm(${JSON.stringify(a1)});
-      var i=[].slice.call(document.querySelectorAll('input,textarea')).filter(function(x){return norm(x.placeholder||'').indexOf(want)>=0;})[0];
+      var val=${JSON.stringify(a2 === undefined ? null : a2)};
+      var nth=${JSON.stringify(a3 ? parseInt(a3, 10) : 0)};
+      var vis=function(x){ var r=x.getBoundingClientRect(); return r.width>8 && r.height>6; };
+      var all=[].slice.call(document.querySelectorAll('input,textarea')).filter(vis);
+      var i;
+      if (val === null) {
+        val = ${JSON.stringify(a1)};
+        i = all.filter(function(x){ return !/^(checkbox|radio|button|submit|file)$/i.test(x.type||''); })[0];
+      } else {
+        var hits = all.filter(function(x){return norm(x.placeholder||'').indexOf(want)>=0;});
+        i = hits[nth > 0 ? (nth - 1) : 0];
+      }
       if(!i) return 'no field matching ' + ${JSON.stringify(a1)};
       i.focus();
       var proto = i.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
       var s=Object.getOwnPropertyDescriptor(proto,'value').set;
-      s.call(i, ${JSON.stringify(a2 || '')}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'typed';})()`);
+      s.call(i, String(val == null ? '' : val)); i.dispatchEvent(new Event('input',{bubbles:true})); return 'typed';})()`);
     out(r);
   } else if (cmd === 'send') {
     const ok = await ev(`(function(){
