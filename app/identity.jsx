@@ -1326,7 +1326,11 @@ function DirectoryToggle({ identity, onSave, ctx }) {
         <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show me in the directory</div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1 }}>{visible ? 'Your church can find you in People' : 'Hidden — you can still message and be messaged'}</div>
       </div>
-      <button onClick={flip} role="switch" aria-checked={visible} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: visible ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+      {/* NAMED, because a screen reader otherwise announces this as an unnamed switch — and it is the one
+          control that takes a member out of a list of named people. Halime, round 10, whose family does not
+          know she attends church: "I'm still in a list of named people with no way I could find to step
+          out of it." The mechanism worked all along; she could not operate it. */}
+      <button onClick={flip} role="switch" aria-checked={visible} aria-label={'Show me in the church directory' + (visible ? ' (on)' : ' (off)')} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: visible ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
         <div style={{ width: 22, height: 22, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow)', transform: visible ? 'translateX(18px)' : 'translateX(0)', transition: 'transform .15s' }} /></button>
     </div>
   );

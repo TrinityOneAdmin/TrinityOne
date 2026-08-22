@@ -5413,13 +5413,19 @@ function DashFeaturesPanel({ church }) {
     <Panel title="Congregation features">
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Choose which parts of the app your members see — turn off what your church doesn’t use.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* TAPPING THE WORDS WORKS THE SWITCH. The toggle is a small control at the far right of a
+            full-width row and the words naming it had no handler, so the obvious target did nothing. Four
+            people across two rounds hit it, the vicar on her own console included, and Colin put it best:
+            "you have to hit the little switch itself rather than the words, which Margaret will not work
+            out" — Margaret being 79. The button stops propagation so a tap on the switch itself does not
+            fire the row handler too and toggle straight back, which looks exactly like nothing happening. */}
         {ITEMS.map(([k, label, sub]) => (
-          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} onClick={() => toggle(k)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
             </div>
-            <button onClick={() => toggle(k)} aria-label={'Toggle ' + label} role="switch" aria-checked={on(k)} title={(on(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); toggle(k); }} aria-label={'Toggle ' + label} role="switch" aria-checked={on(k)} title={(on(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: on(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
