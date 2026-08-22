@@ -1910,7 +1910,12 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
   // a member's display: their chosen name, else their @handle (nip05 local part), else the anonymous handle
   const nameOf = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || FS.displayFor(m.pubkey).handle;
   const ql = q.trim().toLowerCase();
-  const people = members.filter(m => m.pubkey !== me);
+  // YOU ARE IN YOUR OWN CHURCH. This filtered the member out of their own directory, so a five-person church
+  // read "4 people" and nobody could confirm their own entry. That is what made the "Show me in the directory"
+  // toggle unverifiable — the switch works, but the one screen that would show you its effect was the one
+  // screen you were removed from. Grace, round 9: "The People list never shows me in it either way, so I can't
+  // see what anyone else sees about me. A privacy control I can't verify isn't really a control."
+  const people = members;
   // name-clash count: a name shared by 2+ people needs a discriminator so they're tellable apart
   const nameCounts = {}; people.forEach(m => { const n = nameOf(m).trim().toLowerCase(); if (n) nameCounts[n] = (nameCounts[n] || 0) + 1; });
   const list = people.filter(m => !ql || nameOf(m).toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql));
@@ -1942,7 +1947,7 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
             <Icon name="chevR" size={17} color="var(--clay)" />
           </div>
         ) : null}
-        {loading && people.length === 0 ? (
+        {loading && list.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
             {slow ? (
               <>
@@ -1961,7 +1966,18 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
             <Icon name="users" size={30} color="var(--ink-3)" />
             <p style={{ margin: '12px 0 0', fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, maxWidth: 260, marginLeft: 'auto', marginRight: 'auto' }}>{q ? 'No one matches that.' : 'No one else has joined yet. As your church follows along, they’ll show up here to chat with.'}</p>
           </div>
-        ) : list.map(m => {
+        ) : <React.Fragment>
+          {/* A ROSTER STREAMS IN. The spinner above only covers the EMPTY case, so the moment the first person
+              arrived a partial list looked final — Samuel read "2 people" as his whole church, and Daniel saw
+              "1 person" that became four after a reload. Say plainly that more may still be coming. */}
+          {loading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 2px 10px', fontSize: 12.5, color: 'var(--ink-3)' }}>
+              <div style={{ width: 13, height: 13, borderRadius: 999, border: '2px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .9s linear infinite' }} />
+              Still loading people — more may appear.
+            </div>
+          ) : null}
+          {list.map(m => {
+          const isMe = !!me && m.pubkey === me;   // your own row: labelled, and not a route to messaging yourself
           const d = FS.displayFor(m.pubkey);
           const name = nameOf(m);
           const local = m.nip05 ? String(m.nip05).split('@')[0] : '';
@@ -1971,19 +1987,30 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
           const keyTag = m.npub ? (m.npub.slice(0, 9) + '…' + m.npub.slice(-4)) : '';
           const allowDM = !ctx.canDMPeer || ctx.canDMPeer(m.pubkey);   // safeguarding: a child↔non-cleared-adult DM is blocked
           return (
-            <div key={m.pubkey} onClick={() => { if (!allowDM) return; onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: allowDM ? 'pointer' : 'default', opacity: allowDM ? 1 : 0.65 }}>
+            <div key={m.pubkey} onClick={() => { if (isMe || !allowDM) return; onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: allowDM ? 'pointer' : 'default', opacity: allowDM ? 1 : 0.65 }}>
               <UserAvatar av={avOf(d)} name={name} size={44} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {name}
+                  {/* Your own row, so the directory can be used to CHECK yourself: this is the entry the rest of
+                      the church sees, and the only honest answer to "what does my privacy switch actually do". */}
+                  {isMe ? <span style={{ marginLeft: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', background: 'var(--clay-wash, var(--surface-2))', border: '1px solid var(--line)', borderRadius: 999, padding: '2px 7px', verticalAlign: 'middle' }}>You</span> : null}
+                </div>
                 {local && !dup ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--ink-3)' }}>@{local}<Icon name="check" size={11} stroke={3} color="var(--sage)" /></div>
                   : clashNoHandle && keyTag ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontFamily: 'var(--mono, monospace)', color: 'var(--ink-3)' }} title="Shares a name with someone else — this is their unique key">· {keyTag}</div> : null}
               </div>
-              {allowDM
+              {/* Your own row offers nothing: you cannot message yourself, and a "Message" chip on it reads as
+                  though you could. The row exists so you can SEE your own entry — the answer to "what does the
+                  church see about me", which is the only way to verify the directory switch. */}
+              {isMe
+                ? null
+                : allowDM
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="chat" size={14} color="currentColor" /> Message</span>
                 : <button onClick={(e) => { e.stopPropagation(); setWhyRestricted(true); }} aria-label="Why is this restricted?" title="Why is this restricted?" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--ink-3)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="lock" size={13} color="currentColor" /> Restricted</button>}
             </div>
           );
-        })}
+          })}
+        </React.Fragment>}
       </div>
       {whyRestricted ? <RestrictedExplainer ctx={ctx} onClose={() => setWhyRestricted(false)} /> : null}
     </Overlay>
