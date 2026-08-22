@@ -2923,10 +2923,18 @@ function DashRelaysCard() {
     catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
     setSyncBusy(false);
   };
+  // ADDING A RELAY IS NOT THE SAME AS REGISTERING WITH IT, and nothing used to say so. A relay only starts
+  // enforcing this church's rules — and only counts toward redundancy — once the church is REGISTERED on it:
+  // gateway.mjs reports `enforces: CHURCH_PUBS.size > 0`, and the console refuses to count a relay that says
+  // enforces:false. So a steward adds their second box, sees it appear in the list, and nothing ever happens.
+  // Round 9's vicar did exactly that and stopped: "I typed our second office computer's address into the Add
+  // relay box and pressed Add relay... Because of that I never got to the bit about keeping the two in step."
+  const [addedNote, setAddedNote] = React.useState('');
   const addRelay = () => {
     const r = window.Steward.addRelay && window.Steward.addRelay(draft);
-    if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); return; }
+    if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); setAddedNote(''); return; }
     setDraft(''); setErr('');
+    setAddedNote(String(r));
   };
   // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
   // relay. (Registering write-access still uses the token/pairing below.)
@@ -3067,6 +3075,20 @@ function DashRelaysCard() {
             <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+          {/* The step nobody was told about. Says what was added, what it does NOT yet do, and the one thing
+              left to do about it — in a steward's words, not the relay's. */}
+          {addedNote ? (
+            <div style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--ink)' }}>Added {addedNote}</b> — your church will now read from it.
+              <div style={{ marginTop: 4 }}>
+                It is not yet holding your church, though. A relay only carries a church once that church is
+                <b> registered</b> on it — until then it stays a spare you read from, and it will not count
+                towards keeping two copies. If it is your own relay, open its setup page and add this church;
+                if someone else runs it, ask them to.
+              </div>
+              <button onClick={() => setAddedNote('')} className="sk-btn sk-btn--ghost" style={{ marginTop: 8, padding: '6px 10px', fontSize: 12 }}>Got it</button>
+            </div>
+          ) : null}
           <button onClick={autoFind} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Lists only relays that offer to host churches and enforce TrinityOne’s rules — so your safeguarding + membership policy still applies.</div>
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
