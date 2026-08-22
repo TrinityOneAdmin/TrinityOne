@@ -1015,7 +1015,29 @@ function guardianLinked(a, b) { const ga = GUARDIANS.get(a); if (ga && ga.has(b)
 // attack: membership is self-asserted (a `member:` doc signed by the member), so a hostile church can list
 // whoever it likes in its own minors doc but cannot make that child one of its members — it is excluded
 // from the evaluation entirely, and so can neither grant clearance nor withhold it.
-const approvedIn = (pub, cp) => { const s = APPROVED_BY.get(cp); return !!(s && s.has(pub)); };
+// A CHILD IS NEVER A CLEARED WORKER, whatever is stored. Being on a church's minors list BEATS being on its
+// cleared list, and the two cannot both count for the same person.
+//
+// Rev. Miriam, doing safeguarding on her console for the first time (long sim session 2): every member's
+// button reads the same words, "Clear for youth", with nothing on it naming the row. Her press landed on the
+// wrong one and cleared Ivy, aged six, whom she had marked as a child two minutes earlier. One tap, no
+// confirmation, no objection. Both documents then held Ivy:
+//     trinityone/minors:<cp>    {"pubkeys":["04c43921…"]}
+//     trinityone/approved:<cp>  {"pubkeys":["04c43921…", …]}
+//
+// The contradiction was harmless only by luck: the kind-4 gate checks BOTH directions, so a cleared child
+// still could not reach another child because the SENDER was a minor. The danger arrives when the steward
+// CORRECTS the mistake — unmark the child and the stale clearance is all that remains, and a six-year-old
+// becomes an adult this relay treats as cleared to privately message children. Fixing one error activated a
+// worse one, which is the worst shape a safeguarding bug can have.
+//
+// Enforced HERE rather than in the console because a console is a client: it can be old, modified, or simply
+// wrong, and this is the one boundary that has to hold anyway. Cleaning up the stored list is still worth
+// doing, but it is not what makes the rule true.
+const approvedIn = (pub, cp) => {
+  if (minorOf(pub, cp)) return false;
+  const s = APPROVED_BY.get(cp); return !!(s && s.has(pub));
+};
 const guardianLinkedIn = (a, b, cp) => { const m = GUARDIANS_BY.get(cp); if (!m) return false; const ga = m.get(a); if (ga && ga.has(b)) return true; const gb = m.get(b); return !!(gb && gb.has(a)); };
 // The churches whose safeguarding policy governs `pub`: ONLY churches that both list them as a minor AND
 // that they have actually joined.
@@ -1618,7 +1640,31 @@ function accept(e) {
     }
     // SAFEGUARDING lists (who's a child / cleared adult / guardian link) — OWNER-ONLY (church key), never a delegated steward
     for (const pfx of [MINORS_D, APPROVED_D, GUARDIANS_D]) {
-      if (d.startsWith(pfx)) return CHURCH_PUBS.has(e.pubkey) && d.slice(pfx.length) === e.pubkey;
+      if (d.startsWith(pfx)) {
+        if (!(CHURCH_PUBS.has(e.pubkey) && d.slice(pfx.length) === e.pubkey)) return false;
+        // A CHILD MAY NOT BE ON THE CLEARED LIST. Refuse the write rather than store a contradiction.
+        //
+        // Rev. Miriam, first time doing safeguarding on her console: every row's button reads the same words,
+        // "Clear for youth", with nothing naming the person. Her press landed on the wrong row and cleared
+        // Ivy, aged six, whom she had marked as a child two minutes earlier — one tap, no confirmation, no
+        // objection. Both documents then held Ivy.
+        //
+        // That contradiction was harmless only by accident: the kind-4 gate checks both directions, so a
+        // cleared child still could not reach another child because the SENDER was a minor. The danger is the
+        // CORRECTION. Unmark the child and the stale clearance is all that remains — measured, a six-year-old
+        // then privately messaged another child. Fixing one mistake activated a worse one.
+        //
+        // So the two lists are never allowed to disagree in the first place. Enforced here, not in the
+        // console, because a console can be old or modified and this boundary has to hold anyway.
+        if (d.startsWith(APPROVED_D)) {
+          const minors = MINORS_BY.get(e.pubkey);
+          if (minors && minors.size) {
+            let list = []; try { list = (JSON.parse(e.content || '{}').pubkeys) || []; } catch { return false; }
+            for (const p of list) { const h = toHexPub(p); if (h && minors.has(h)) return false; }
+          }
+        }
+        return true;
+      }
     }
     // a church->parent guardian-link NOTICE (d=guardnotice:<parentpub>). OWNER-signed only. NOT read-gated
     // (its content is encrypted to the parent) so the parent receives it WITHOUT auth — it's what prompts
