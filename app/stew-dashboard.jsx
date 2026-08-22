@@ -559,6 +559,8 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [name, setName] = React.useState(church.name || '');
   const [busy, setBusy] = React.useState(false);
   const [teamName, setTeamName] = React.useState('');
+  // Same rule as the Groups page: absent means ON, only an explicit false is a steward's decision to opt out.
+  const encByDefaultWiz = !church.features || church.features.encryptComms !== false;
   const STARTERS = [
     { id: 'whole', name: 'Whole Church', kind: 'broadcast', sub: 'Announcements for everyone' },
     { id: 'prayer', name: 'Prayer', kind: 'group', sub: 'Share & lift requests' },
@@ -657,7 +659,33 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     try { if (window.Steward.ensureJoinPolicy) await Promise.resolve(window.Steward.ensureJoinPolicy()); } catch (e) {}
     next();
   };
-  const saveGroups = async () => { const chosen = STARTERS.filter(s => picks.has(s.id)); if (chosen.length) { setBusy(true); for (const g of chosen) await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); setBusy(false); } next(); };
+  // THE WIZARD'S ROOMS ARE SEALED TOO. encryptComms defaults on now, but that default lived only in the New
+  // Group modal — so a church's very FIRST rooms, the ones every church gets, were the only ones created
+  // unencrypted. Measured on a live church: three groups, all enc=None. A church ending up with some rooms
+  // sealed and some not, by accident of which screen made them, is worse than either extreme.
+  //
+  // Mirrors the modal's safety exactly: if the key cannot be published, the room is UNFLAGGED rather than
+  // left claiming an encryption it does not have (a group flagged `encrypted` with no envelope refuses every
+  // member's send, for ever, silently). There are no members yet at this point, so the key seals to nobody
+  // and the roster effect keys each person as they join — its "first sighting" skip records the empty set,
+  // so the first real member counts as growth and triggers distribution.
+  const saveGroups = async () => {
+    const chosen = STARTERS.filter(s => picks.has(s.id));
+    if (chosen.length) {
+      setBusy(true);
+      for (const g of chosen) {
+        const seal = encByDefaultWiz && g.kind === 'group';   // broadcast channels are the church's own voice
+        const pub = await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub, ...(seal ? { encrypted: true } : {}) }));
+        if (seal && pub && pub.id && window.Steward.publishGroupKey) {
+          let r = null;
+          try { r = await window.Steward.publishGroupKey(pub.id, []); } catch (e) { r = null; }
+          if (r === null || r === false) { try { await window.Steward.publishGroup({ ...pub, encrypted: false }); } catch (e) {} }
+        }
+      }
+      setBusy(false);
+    }
+    next();
+  };
   // A TEAM WITH NO ROLES CANNOT HOLD A ROTA. This step took a name and published a group, and nothing else:
   // the steward reached the Rota tab, found their own Welcome Team sitting there empty, and could not put
   // anybody on a Sunday until they had typed the roles in by hand. Measured in the round of 2026-08-19 —

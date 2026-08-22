@@ -54,3 +54,20 @@ test('turning it off is still possible, and still explicit', () => {
   assert.match(DASH, /encryptComms: false/,
     'a steward can no longer turn encryption off — the decision was "default", not "compulsory"');
 });
+
+test('the wizard seals the church\'s FIRST rooms too', () => {
+  // The default lived only in the New Group modal, so the rooms every church starts with — the ones the
+  // wizard makes — were the only ones created unencrypted. Measured on a live church built after the flag
+  // change: three groups, all enc=None. A church with some rooms sealed and some not, decided by which screen
+  // happened to create them, is worse than either extreme.
+  const save = DASH.slice(DASH.indexOf('const saveGroups = async'));
+  const body = save.slice(0, save.indexOf('\n  const '));
+  assert.match(body, /encrypted: true/,
+    'the wizard still creates the church\'s first rooms unencrypted');
+  assert.match(body, /publishGroupKey/,
+    'a room flagged encrypted with no key envelope refuses every member\'s send, for ever and silently — the ' +
+    'key must be published, exactly as the New Group modal does');
+  assert.match(body, /encrypted: false/,
+    'if the key cannot be published the room must be UNFLAGGED rather than left claiming an encryption it ' +
+    'does not have');
+});
