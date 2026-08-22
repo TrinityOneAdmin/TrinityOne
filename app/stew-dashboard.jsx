@@ -4021,11 +4021,30 @@ function DashMembers() {
       .then(r => { if (!r || r.failed || r.pending) release(); })
       .catch(() => { release(); });
   }, [sg.loaded, sg.minors, sg.approved, members]);
+  // UNMARKING A CHILD ALSO DROPS ANY YOUTH CLEARANCE. Owner: "a steward should simply be able to unmark a
+  // child and they revert to full access" — and reverting must not mean becoming a CLEARED WORKER. Rev.
+  // Miriam cleared a six-year-old by mis-tapping an unnamed button; while the child mark stood the relay
+  // still protected everyone, and the danger arrived the moment a steward corrected the mark and left the
+  // clearance behind. Measured before the fix: the six-year-old could then privately message another child.
   const toggleMinor = (pk) => {
-    const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
-    const r = window.Steward.setMinors(next); _reseal(next, sg.approved || [], [pk]); return r;
+    const unmarking = minorsSet.has(pk);
+    const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
+    const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
+    const r = window.Steward.setMinors(next);
+    if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
+      try { window.Steward.setApproved(nextApproved); } catch (e) {}
+    }
+    _reseal(next, nextApproved, [pk]); return r;
   };
+  // A CHILD CANNOT BE CLEARED TO WORK WITH CHILDREN. The relay refuses to store it; refuse it here too, so a
+  // steward is told rather than left believing a press landed. Miriam: "not a word of objection that I was
+  // clearing a child I had marked as a child two minutes earlier."
   const toggleApproved = (pk) => {
+    if (!approvedSet.has(pk) && minorsSet.has(pk)) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'youth clearance',
+        message: (nameByPub[pk] || 'That person') + ' is marked as a child, so they cannot be cleared to work with young people. Unmark them first if that was wrong.' } })); } catch (e) {}
+      return null;
+    }
     const next = approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk];
     const r = window.Steward.setApproved(next); _reseal(sg.minors || [], next, [pk]); return r;
   };
@@ -4226,9 +4245,9 @@ function DashMembers() {
               was not on their screen. The other three write minors:/approved:/guardians:, which the relay
               really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
           {!delegated ? (<React.Fragment>
-          <button onClick={() => toggleMinor(m.pubkey)} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
-          <button onClick={() => toggleApproved(m.pubkey)} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="shield" size={14} color="currentColor" /> {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
           {minorsSet.has(m.pubkey) ? (
             <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
