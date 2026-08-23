@@ -235,7 +235,7 @@ function consoleSide() {
     grab(STEWARD, 'publishClearance(memberPub, status, urls)'),
     grab(STEWARD, 'refreshClearances(memberPubs, minors, approved, guardians)'),
     grab(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)'),
-    grab(STEWARD, 'setMinors(pubkeys)'), grab(STEWARD, 'setApproved(pubkeys)'),
+    grab(STEWARD, 'setMinors(pubkeys)'), grab(STEWARD, 'setApproved(pubkeys, opts)'),
     grab(STEWARD, 'setGuardians(links)'), grab(STEWARD, 'setReseats(pairs)'),
     grab(STEWARD, 'setAdmitted(pubkeys)'), grab(STEWARD, 'setBlocked(pubkeys)'),
     grab(STEWARD, 'async reseatMember(oldPub, newPub, o)'),
@@ -259,6 +259,11 @@ function consoleSide() {
     _careRoster: new Set(), _careRosterKnown: true, _clearanceSent: new Map(), _clearanceQueue: Promise.resolve(),
     _relaysTouched: new Set(), _returnAnnounced: new Map(),
     _isRelayAuthed: () => true, _requireTrustedView: () => {}, _viewingNetwork: () => false,
+    // The clearance record setApproved carries across a write. Both cases below happen to pass
+    // `approved: []`, so setApproved is never reached and its absence went unnoticed — until a case DID
+    // clear someone, when the rig would have thrown ReferenceError and read as the bug under test rather
+    // than as a broken harness. Bound now so the next case that needs it simply works.
+    _clearedTrail: { cp: '', map: {}, list: [], loaded: false },
     _authFuture: (e) => (e.created_at || 0) > Math.floor(Date.now() / 1000) + 600,
     _CLOCK_SKEW: 600, now, toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
     [feName]: finalizeEvent, feChurch: (t) => finalizeEvent(t, church.sk),

@@ -4069,7 +4069,11 @@ function DashMembers() {
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
     const r = window.Steward.setMinors(next);
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
-      try { window.Steward.setApproved(nextApproved); } catch (e) {}
+      // Whether the CLEARED list has actually been read — not whether the list of children has. Asking the
+      // wrong document broke the exact case this record was written for: a brand-new church clearing its first
+      // volunteer has no children marked, so the answer was always "we have not looked", and a clearance
+      // granted that minute was recorded as "no record of when".
+      try { window.Steward.setApproved(nextApproved, { listKnown: !!sg.clearedKnown }); } catch (e) {}
     }
     _reseal(next, nextApproved, [pk]); return r;
   };
@@ -4083,7 +4087,13 @@ function DashMembers() {
       return null;
     }
     const next = approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk];
-    const r = window.Steward.setApproved(next); _reseal(sg.minors || [], next, [pk]); return r;
+    // ONLY TELL THE MEMBER'S PHONE ONCE THE CHURCH'S OWN DOCUMENT SAYS SO. The first version resealed straight
+    // away, so a write that failed still put "your church has cleared you to work with young people" on the
+    // volunteer's screen while the church document said nothing and the relay still refused them.
+    const r = Promise.resolve(window.Steward.setApproved(next, { listKnown: !!sg.clearedKnown }))
+      .then((ok) => { if (ok !== false) _reseal(sg.minors || [], next, [pk]); return ok; })
+      .catch(() => false);
+    return r;
   };
   // safeguarding v2: parent↔child links — pending parent requests + the confirmed map
   const guardReqs = window.useStewardGuardianRequests ? window.useStewardGuardianRequests() : [];
@@ -4095,6 +4105,20 @@ function DashMembers() {
   // ourselves from the signer's pubkey, plus the npub — not the names carried in the request's content.
   const npubByPub = {}; members.forEach(m => { if (m.npub) npubByPub[m.pubkey] = m.npub; });
   const idOf = (pk) => npubByPub[pk] ? shortNpub(npubByPub[pk]) : ((pk || '').slice(0, 16) + '…');
+  // WHO IS CLEARED, IN ONE PLACE. "With a hundred members I'd be lost" — the only way to answer that question
+  // was to scroll the whole membership a row at a time, and the search box matches NAMES, so it could not even
+  // narrow to the people the question is about. This is the list a church would put in front of whoever asked.
+  //
+  // Declared HERE, below nameByPub and idOf, because it is worked out while the screen DRAWS — the first
+  // version sat above them and took the whole Members screen down to the error page.
+  const clearedList = (sg.approved || []).map(pk => ({ pk, name: nameByPub[pk] || '', rec: (sg.cleared || {})[pk] || null }))
+    .sort((a, b) => (a.name || 'zz').localeCompare(b.name || 'zz'));
+  const [showCleared, setShowCleared] = React.useState(false);
+  const _clDate = (rec) => {
+    if (!rec || !rec.at) return 'no record of when';
+    try { return new Date(rec.at * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+    catch (e) { return 'no record of when'; }
+  };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = (r) => {
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
@@ -4440,6 +4464,26 @@ function DashMembers() {
               </div>
             ))}
             </div>
+          </div>
+        ) : null}
+        {clearedList.length ? (
+          <div style={{ marginBottom: 10, flexShrink: 0, borderRadius: 12, border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', overflow: 'hidden' }}>
+            <button onClick={() => setShowCleared(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '11px 13px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+              <Icon name="shield" size={16} color="var(--sage)" />
+              <span style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--ink)' }}>Cleared for youth work · {clearedList.length}</span>
+              <span style={{ marginLeft: 'auto', display: 'flex' }}><Icon name={showCleared ? 'chevU' : 'chevD'} size={15} color="var(--ink-3)" /></span>
+            </button>
+            {showCleared ? (
+              <div className="no-scrollbar" style={{ maxHeight: 220, overflowY: 'auto', padding: '0 13px 11px' }}>
+                {clearedList.map(c => (
+                  <div key={c.pk} style={{ padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--sage) 18%, var(--line))' }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{c.name || idOf(c.pk)}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Cleared {_clDate(c.rec)}</div>
+                  </div>
+                ))}
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, paddingTop: 9 }}>Clearances granted before this record existed show as <b>no record of when</b> — they are not back-dated.</div>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>

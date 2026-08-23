@@ -132,7 +132,19 @@ function makeSub(getObj, method, makeInit) {
   return function () {
     const idv = useStewardIdv();
     const conn = useStewardConn();                                                       // reconnect → re-subscribe
-    const key = method + '|' + idv;                                                      // cache by IDENTITY only (stable across reconnects → no blank flash)
+    // CACHE BY THE CHURCH, NOT JUST BY A COUNTER. `idv` only bumps on a `steward-identity` event, and
+    // restoring a key does not fire one — so after a restore the screen repainted from the PREVIOUS church's
+    // cached lists, marked as loaded, while the key underneath was a different church. A steward who then
+    // pressed "Clear for youth" published one church's cleared adults into the other church's record, with
+    // today's date on all of them, and the relay went on to let those people contact children in a church that
+    // had never cleared them. Even where `idv` does bump, a mounted screen keeps painting the old value until
+    // the new stream delivers, which is the same few seconds with the same click in it.
+    //
+    // Naming the church in the key closes both without relying on anyone remembering to fire an event: a
+    // different church simply cannot read this entry. Falls back to the counter alone before a church is
+    // known, which is the pre-existing behaviour for a console with no church loaded.
+    const _who = (getObj() && (getObj().actingChurch || getObj().churchPub)) || '';
+    const key = method + '|' + idv + '|' + _who;                                          // identity + WHICH CHURCH (stable across reconnects → no blank flash)
     const [v, setV] = useSt(() => (key in _subCache ? _subCache[key] : makeInit()));   // paint last-known instantly
     useStE(() => {
       const o = getObj(); if (!o || !o[method]) return undefined;
@@ -158,7 +170,15 @@ function makeSub(getObj, method, makeInit) {
 // and "the admitted list hasn't arrived" look identical, and a screen that concludes from the wrong one
 // raises a false alarm for the second or two before the real data lands. Read it in a component that also
 // holds the matching subscription — that hook's re-render on first delivery is what makes this flip.
-window.stewardStreamLoaded = function (method, idv) { return (method + '|' + idv) in _subCache; };
+// Must build the key EXACTLY as makeSub does, church included. When the church was added to the key and this
+// was left behind, it stopped matching anything and quietly answered "this stream has never loaded" for every
+// stream — and its callers gate whether a pending-members list is trustworthy, so the console would have
+// treated a fully-loaded roster as unknown. A helper that silently always says no is worse than no helper.
+window.stewardStreamLoaded = function (method, idv) {
+  const S0 = window.Steward;
+  const who = (S0 && (S0.actingChurch || S0.churchPub)) || '';
+  return (method + '|' + idv + '|' + who) in _subCache;
+};
 
 const S = () => window.Steward, MA = () => window.StewardManna, ME = () => window.StewardMeals;
 
