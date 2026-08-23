@@ -336,6 +336,7 @@ function EventDetail({ event, open, onClose, ctx }) {
 }
 window.EventDetail = EventDetail;
 
+const RSVP_WORD = { going: 'You’re going', maybe: 'You said maybe', no: 'You can’t make it' };
 function svEventRsvpRow({ e, rsvps, ctx }) {
   // ONE ANSWER PER SERIES, SHOWN HONESTLY. A weekly meeting is stored as a single event and expanded into a
   // card per date, but the RSVP doc is keyed on the event id alone (rsvp:<eventId>) — so an answer applies to
@@ -351,8 +352,13 @@ function svEventRsvpRow({ e, rsvps, ctx }) {
       {/* SAY THE ANSWER IN WORDS. It existed only as a button fill colour, so three members across three
           rounds could not tell what they had chosen — before tapping, after tapping, or after a reload.
           Priyanka: "Going / Maybe / Can't read exactly the same in words." */}
-      {rsvps[e.id] ? <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', marginRight: 2 }}>
-        {rsvps[e.id] === 'going' ? 'You’re going' : rsvps[e.id] === 'maybe' ? 'You said maybe' : 'You can’t make it'}
+      {/* ONLY THE THREE REAL ANSWERS. Clearing an answer publishes `'none'` (app.jsx: `next || 'none'`), and
+          subscribeMyRsvps hydrates that raw value straight back — so a truthy test with "can't make it" as its
+          final else stated a POSITIVE answer for someone who had just withdrawn one. Tap Going, tap it again to
+          clear, reload: no button lit, and the row saying "You can't make it". The colour-only UI this replaced
+          was correct here, which is the trap — the fix has to be at least as right as what it replaces. */}
+      {RSVP_WORD[rsvps[e.id]] ? <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', marginRight: 2 }}>
+        {RSVP_WORD[rsvps[e.id]]}
       </span> : null}
       {[['going', 'Going'], ['maybe', 'Maybe'], ['no', 'Can’t']].map(([v, lbl]) => {
         const on = rsvps[e.id] === v; const c = v === 'going' ? 'var(--sage)' : v === 'maybe' ? 'var(--gold)' : 'var(--ink-3)';

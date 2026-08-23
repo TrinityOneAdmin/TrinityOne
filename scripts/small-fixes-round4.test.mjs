@@ -72,8 +72,10 @@ test('the Care card is mounted on Today, and shows the ask even with no open nee
   // nobody had asked yet, and she was the one needing to ask.
   assert.match(TODAY, /<CareCard ctx=\{ctx\} \/>/,
     'the Today variant of CareCard is still not mounted anywhere');
-  const i = TODAY.indexOf('function CareCard');
-  const fn = TODAY.slice(i, TODAY.indexOf('\n// Emergency', i));
+  // This used to end at '\n// Emergency' — a COMMENT, which only survived stripping because the stripper
+  // derailed on an apostrophe in JSX text earlier in the file. With that hole closed the anchor vanishes and
+  // the slice runs to end-of-file, so the second assertion below could match some other function entirely.
+  const fn = fnBody(TODAY, 'function CareCard');
   assert.equal(/if \(!live\.length\) return null;/.test(fn), false,
     'the Today card still hides itself when nobody has asked for help yet — the one moment somebody needs ' +
     'to ask');
@@ -98,7 +100,14 @@ test('C17 — the RSVP row states your answer and marks the pressed button', () 
   // aria-pressed past 1600 chars and the assertion failed on window size, not on the code.
   const fn = SERV.slice(i, SERV.indexOf('\nfunction ', i + 10));
   assert.match(fn, /aria-pressed=\{on\}/, 'the chosen button is not marked as pressed');
-  assert.match(fn, /You’re going|You're going/, 'your answer is still never stated in words');
+  assert.match(fn, /RSVP_WORD\[rsvps\[e\.id\]\]/, 'the row never states your answer in words');
+  assert.match(SERV, /You’re going|You're going/, 'the words themselves are gone');
+  // AND ONLY FOR A REAL ANSWER. Clearing publishes 'none', which hydrates straight back, so a truthy test with
+  // "can't make it" as its final else stated a positive answer for someone who had just withdrawn one.
+  assert.equal(/\{rsvps\[e\.id\] \? </.test(fn), false,
+    "a truthy test means 'none' — a CLEARED answer — renders words, and the last branch claims they can't make it");
+  assert.match(SERV, /RSVP_WORD = \{ going:[^}]*maybe:[^}]*no:/,
+    'the words are not restricted to the three answers a member can actually give');
 });
 
 const FELLOW = stripComments(readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8'));
@@ -119,8 +128,11 @@ test('C1 — the wire body carries every kind chosen, and type still holds the f
   // It must keep meaning what it meant, or older builds read "other" for a request they can see the note of.
   const i = FELLOW.indexOf('async publishCareRequest');
   const body = FELLOW.slice(i, FELLOW.indexOf('const keyBytes', i));
-  assert.match(body, /types:/, 'the published body drops every kind after the first');
-  assert.match(body, /type: /, 'the published body no longer carries `type`, which older readers require');
+  assert.match(body, /types: uniq/, 'the published body drops every kind after the first');
+  // `type: ` alone passed with `type: 'other'` HARDCODED — precisely the old-phone regression this test names.
+  // Proven by sabotage. It must be DERIVED from the list, and be its first element.
+  assert.match(body, /type: uniq\[0\]/,
+    '`type` is no longer the first kind chosen, so a build already on a phone reads the wrong one');
 });
 
 const LIBSRC = stripComments(readFileSync(new URL('../app/screens-library.jsx', import.meta.url), 'utf8'));
@@ -141,6 +153,13 @@ test('C2 — an audio-only church still gets its sermons labelled as audio', () 
   // was reported — saw no "Listen" anywhere.
   assert.equal(/bothTypes \?/.test(WATCH), false,
     'the sub-heads are still conditional on the church having both kinds');
+  // An absence assertion alone passed with BOTH sub-heads deleted — the state the church was already in.
+  // Proven by sabotage. Assert what must be THERE, inside the church's own section.
+  const i = WATCH.indexOf('<SectionLabel>From {chName}</SectionLabel>');
+  assert.ok(i > 0, "the church's own sermon section is gone");
+  const block = WATCH.slice(i, WATCH.indexOf('{hasYT ?', i) + 1 || i + 4000);
+  assert.match(block, /> Listen<\/div>/, 'nothing labels the audio group Listen');
+  assert.match(block, /> Watch<\/div>/, 'nothing labels the video group Watch');
 });
 
 test('C3 — an upload is not published under its file name', () => {
@@ -152,8 +171,15 @@ test('C3 — an upload is not published under its file name', () => {
 test('C3 — the steward is asked to name it, and the ask is what starts the upload', () => {
   // Also C4's symptom: picking a file started a silent background upload, so Miriam picked the file again.
   // A modal in front of you cannot be mistaken for nothing having happened.
-  assert.match(STEWD, /pendingUpload|SermonDetailsModal/,
-    'nothing stands between choosing a file and the upload beginning');
+  // The mere EXISTENCE of pendingUpload passed while onFile went straight to doUpload. Proven by sabotage.
+  // Assert the ROUTE: choosing a file must reach the naming step, and must not reach the upload directly.
+  const onFile = fnBody(STEWD, 'const onFile = async (e) =>');
+  assert.match(onFile, /askThenUpload\(f\)/, 'choosing a file does not reach the naming step');
+  assert.equal(/[^n]doUpload\(f\)/.test(onFile), false, 'choosing a file still starts the upload directly');
+  // fnBody cannot read a concise arrow body, so slice it by hand — to the next declaration, not a byte count.
+  const a0 = STEWD.indexOf('const askThenUpload = (f) =>');
+  assert.ok(a0 > 0, 'the naming step is gone');
+  assert.match(STEWD.slice(a0, STEWD.indexOf('const onFile', a0)), /setPendingUpload/, 'the naming step never opens');
 });
 
 test('C4 — the same bytes do not become a second sermon', () => {
@@ -168,8 +194,13 @@ test('C4 — the same bytes do not become a second sermon', () => {
 test('C4 — the encrypted case is warned about, not silently missed', () => {
   // Encryption uses a fresh nonce, so the same sermon encrypts to different bytes and a sha check CANNOT
   // see it. The file's own identity can, and it never leaves the console.
-  assert.match(STEWD, /lastModified/,
-    'no check covers the encrypted path, where the sha differs every time');
+  // `lastModified` appearing ANYWHERE passed with the warning UI deleted. Proven by sabotage. Assert that the
+  // signature is both RECORDED and READ, and that the reading of it reaches the steward's eyes.
+  assert.match(STEWD, /uploadedSigs\.current\.add\(f\.name \+ '\|' \+ f\.size \+ '\|' \+ f\.lastModified\)/,
+    'nothing records what this console has already sent');
+  assert.match(STEWD, /seenBefore: uploadedSigs\.current\.has\(/, 'the record is never consulted');
+  assert.match(STEWD, /upload\.seenBefore \?/, 'the warning is never rendered, so the steward never sees it');
+  assert.match(STEWD, /second copy/, 'the warning does not say what happens if they go ahead');
 });
 
 test('C3 — the speaker and date reach the member, not just the console', () => {
@@ -189,10 +220,15 @@ test('C8 — a queue of join requests can be admitted in one action', () => {
 test('C8 — admitting everyone still shows the steward who they are', () => {
   // Only a steward at an unlocked console admits anyone (decided 2026-08-18). A bulk button that hides the
   // names would keep the letter of that and lose the point of it.
-  const i = STEWD.indexOf('confirmAdmitAll');
-  assert.ok(i > 0, 'no confirm step');
-  assert.match(STEWD.slice(i - 3000, i + 3000), /pendingJoins\.map|names/,
-    'the confirm never names the people being let in');
+  // ANCHOR ON THE DIALOG, NOT ON THE FIRST MENTION OF THE FLAG. A ±3000-char window around the first
+  // `confirmAdmitAll` (its useState line) was satisfied by an unrelated `pendingJoins.map` inside admitAll,
+  // ~25,000 chars before the dialog — so this passed with a confirm that named nobody. Proven by sabotage.
+  const at = STEWD.indexOf('{confirmAdmitAll ? (() => {');
+  assert.ok(at > 0, 'no confirm step');
+  const dlg = STEWD.slice(at, STEWD.indexOf('})() : null}', at));
+  assert.match(dlg, /pendingJoins\.filter\(m => m\.name\)/, 'the confirm never names the people being let in');
+  assert.match(dlg, /\.join\(', '\)/, 'the names are gathered and never rendered');
+  assert.match(dlg, /not set a name yet/, 'anyone still anonymous is admitted without being pointed out');
 });
 
 const IDENT = stripComments(readFileSync(new URL('../app/identity.jsx', import.meta.url), 'utf8'));

@@ -1529,12 +1529,14 @@ function SkConfirm({ icon, tint, title, body, confirmLabel, onConfirm, onCancel,
   const dlgRef = useStewDialog(() => { if (!busy) onCancel(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onCancel} style={{ position: 'fixed', inset: 0, zIndex: 220, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'lumenFade .16s ease both' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both', outline: 'none' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ maxHeight: '86vh', overflowY: 'auto', width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both', outline: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 9 }}>
           <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, ' + t + ' 14%, var(--surface))', color: t, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={icon || 'lock'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1.15 }}>{title}</div>
         </div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px' }}>{body}</p>
+        {/* pre-line: a body that separates its parts with blank lines (the admit-all name list does) otherwise
+            collapses into one run-on paragraph, which is the shape nobody reads before pressing the button. */}
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px', whiteSpace: 'pre-line' }}>{body}</p>
         {err ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, lineHeight: 1.45, margin: '-8px 0 16px' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onCancel} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? .5 : 1 }}>Cancel</button>
@@ -4669,7 +4671,7 @@ function StewBackupModal({ church, onClose }) {
           <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Keep it somewhere separate from the file: together, they are one thing, not two.</div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+          <button onClick={guardedClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.5 : 1, cursor: busy ? 'default' : 'pointer' }}>Cancel</button>
           <button onClick={make} disabled={busy || done || pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
             <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? (savedAt ? 'Saved to ' + savedAt : 'Saved') : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
         </div>
@@ -5180,15 +5182,22 @@ function SermonEditModal({ sermon, onSave, onClose, upload }) {
   const [err, setErr] = React.useState('');
   const isVideo = String(sermon.mime || '').startsWith('video');
   const save = async () => {
-    if (!title.trim()) return;
+    // The Upload button is disabled while busy; ENTER IS NOT. Two quick presses ran two concurrent uploads,
+    // each dupe-checking against the same stale list and neither seeing the other in flight — two docs, and on
+    // an encrypted church two blobs. Exactly the defect the upload path was changed to prevent.
+    if (busy || !title.trim()) return;
     setBusy(true); setErr('');
     try { await onSave({ title: title.trim(), desc: desc.trim() }); onClose(); }   // close only on success
     catch (e) { setErr((e && e.message) || 'Couldn’t save — check your connection and try again.'); }
     finally { setBusy(false); }
   };
-  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  // A CANCEL THAT CANCELS NOTHING IS WORSE THAN NO CANCEL. doUpload is owned by DashSermons, so closing this
+  // modal mid-upload only hides it — the file still uploads, still publishes, still notifies the church. Video
+  // uploads run for minutes, so that window is wide. Hold every exit shut while it runs.
+  const guardedClose = () => { if (!busy) onClose(); };
+  const dlgRef = useStewDialog(guardedClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div onClick={guardedClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Edit ' + (isVideo ? 'video' : 'audio') + ' details'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
@@ -5232,13 +5241,14 @@ async function probeHevcVideo(file) {
 
 function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
+  const [sermonsLoaded, setSermonsLoaded] = React.useState(false);   // has the subscription answered? see doUpload's dupe check
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [encOn, setEncOn] = React.useState(false);
   const autoBackups = React.useMemo(() => { try { return (window.Steward.mediaHosts ? window.Steward.mediaHosts() : []).slice(1); } catch { return []; } }, []);
   const [mirrorHosts, setMirrorHosts] = React.useState(autoBackups.join(', '));   // auto-filled from the church's other relays; editable
   const [pinnedId, setPinnedId] = React.useState(null);   // the currently-featured sermon (pushed to members' Today)
   const conn = window.useStewardConn ? window.useStewardConn() : 0;   // re-subscribe after a relay restart / reconnect (else a sermon uploaded elsewhere never appears)
-  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(setSermons) : undefined), [conn]);
+  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(list => { setSermons(list || []); setSermonsLoaded(true); }) : undefined), [conn]);
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn]);
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn]);
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
@@ -5287,18 +5297,31 @@ function DashSermons() {
       const b = await window.Steward.uploadBlob(f, encFn, mirrors);
       // The blob store is content-addressed and deduped itself; it was the DOC that was minted twice, under a
       // fresh id each time, leaving one recording listed twice in every member's app.
-      const dupe = sermons.find(x => x && x.sha256 && x.sha256 === b.sha256);
+      // ONLY TRUST THE LIST ONCE IT HAS ARRIVED. This read `sermons` from state with nothing to say whether the
+      // subscription had answered yet, so on a cold console — or straight after a relay reconnect — the list is
+      // [] and the guard passes silently. That is the exact moment a steward re-picks the file: the panel looks
+      // empty, yesterday's upload is not visible, and they wonder whether it took. Fail CLOSED instead: with no
+      // list to check against, the modal's warning is the only guard, and it is the honest one to lean on.
+      const dupe = sermonsLoaded ? sermons.find(x => x && x.sha256 && x.sha256 === b.sha256) : null;
       if (dupe) {
-        setUpMsg('Already published as \u201c' + (dupe.title || 'a sermon') + '\u201d \u2014 nothing added. Rename that one if you meant to change it.');
-        setUpBusy(false); setTimeout(() => setUpMsg(''), 6000); return;
+        // Thrown, not toasted: it keeps the sheet open with the answer ON it, so the steward reads why nothing
+        // was added instead of watching the sheet close like a success and hunting for a grey line below.
+        setUpBusy(false);
+        throw new Error('Already published as \u201c' + (dupe.title || 'a sermon') + '\u201d \u2014 nothing was added. Close this, and rename that one if you meant to change it.');
       }
-      uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);
       const pub = await window.Steward.publishSermon({ title: (fields && fields.title) || f.name.replace(/\.[^.]+$/, ''), desc: (fields && fields.desc) || undefined, sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
+      uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);   // published, so a repeat really would be a second copy
       if (notify && pub && window.Steward.pinSermon) { try { await window.Steward.pinSermon(pub); } catch (e) {} }   // feature on members' Today → "New video / New audio clip" card + push
       const backups = (b.hosts || []).length - 1;
       setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? ' · members notified' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
       ok = true;
-    } catch (err) { setUpMsg('✗ ' + ((err && err.message) || 'Upload failed')); }   // surface the relay's real message (storage full / too large / …)
+    } catch (err) {
+      // RETHROW, so the modal stays open with the error ON it. Swallowing here made "close only on success"
+      // false for uploads: a failed upload closed the sheet exactly like a successful one, leaving a small grey
+      // line under the fold as the only sign — the below-the-fold feedback this whole flow exists to replace.
+      setUpBusy(false); setUpMsg('✗ ' + ((err && err.message) || 'Upload failed'));   // surface the relay's real message (storage full / too large / …)
+      throw err;
+    }
     setUpBusy(false); if (ok) setTimeout(() => setUpMsg(''), 3500);   // keep errors visible; only auto-clear success
   };
   const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';

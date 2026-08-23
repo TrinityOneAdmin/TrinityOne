@@ -199,6 +199,11 @@ function CareAvailRow({ a, ctx, myPub }) {
 // opens a chat. Lives at the top of the Care tab.
 // A request can name several kinds of help — one situation, one request. Older requests carry only `type`,
 // so read `types` and fall back; never show the first kind alone when the asker chose three.
+// The kinds a request named that the need being opened will NOT cover — approve mints one need, from the first.
+function careExtraKinds(r) {
+  const ts = (Array.isArray(r && r.types) ? r.types : []).filter(Boolean);
+  return ts.slice(1).map(t => CARE_TYPE_LABEL[t]).filter(Boolean);
+}
 function careTypeLabel(r) {
   const ts = (Array.isArray(r && r.types) && r.types.length ? r.types : [r && r.type]).filter(Boolean);
   const names = ts.map(t => CARE_TYPE_LABEL[t]).filter(Boolean);
@@ -315,7 +320,18 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Set up help" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Set up help</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 0' }}>Opens a need for <b style={{ color: 'var(--ink)' }}>{careTypeLabel(req)}</b> the church can sign up for. Pick the dates — you can refine it later in the console.</p>
+        {/* SAY WHAT THIS ACTUALLY OPENS. approveCareRequest mints ONE need, from the FIRST kind
+            (`type: req.type` — fellowship.src.js). When requests could only name one kind, naming the request
+            and naming the need were the same sentence. They stopped being the same the moment a request could
+            say "Rides · Errands", and this line was changed to the full list — promising a need for both and
+            opening one. The approval also drops the request out of the open queue, so the second kind would
+            have vanished silently while the asker's own row read "approved". */}
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 0' }}>Opens a need for <b style={{ color: 'var(--ink)' }}>{CARE_TYPE_LABEL[req.type] || 'help'}</b> the church can sign up for. Pick the dates — you can refine it later in the console.</p>
+        {careExtraKinds(req).length ? (
+          <p style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', lineHeight: 1.5, margin: '8px 0 0', fontWeight: 600 }}>
+            They also asked about <b>{careExtraKinds(req).join(' and ')}</b>. That isn’t covered by this need — set it up separately, or message them.
+          </p>
+        ) : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}><div style={lbl}>From</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
           <div style={{ flex: 1 }}><div style={lbl}>To</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
@@ -1171,7 +1187,19 @@ function TodayScreen({ ctx }) {
           rounds looked at Today first and saw a normal, working app. Bridget, 74: "On my home screen the
           church's name sits at the top with no sign at all that I'm still waiting, so at a glance I'd have
           believed I was already in." Eunice put the tablet down and assumed she had done it wrong. */}
-      {ctx.joinState && ctx.joinState.isPending ? (
+      {/* THREE GUARDS, NOT ONE — this banner shipped with only `isPending` and that was wrong twice over.
+          `isPending` is `approval && !isAdmitted`, and `removed` (app.jsx) is `wasAdmitted && approval &&
+          !isAdmitted` — so EVERY REMOVED MEMBER IS ALSO PENDING. The Community tab checks `removed` first,
+          deliberately (screens-chat.jsx, commit 66d7807, "do not show them the newcomer's 'a steward usually
+          lets people in within a day'"). Gating this on isPending alone undid that on the app's FIRST screen:
+          someone removed — including for a safeguarding reason — would open the app and read that they were
+          waiting to be let in, while Community told them they had been removed. Two tabs, opposite stories,
+          and the home screen was the one that lied.
+          The second guard is the same three-state split the chat page carries: a join the relay REFUSED is not
+          "sent", and "you don't need to do anything else" is the opposite of the truth for it — retrying is the
+          only thing that can help. Rather than restate that here and drift, this banner stays quiet for the
+          failed and queued cases and points at the page that handles them properly. */}
+      {ctx.joinState && ctx.joinState.isPending && !ctx.joinState.removed && !ctx.joinFailed && !ctx.joinQueued ? (
         <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Waiting to be let in</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
