@@ -895,6 +895,18 @@ function DashCalendar() {
   const [adding, setAdding] = useSch(null);   // day string for new event, or '' for generic
   const [showBookings, setShowBookings] = useSch(true);   // room bookings layer on the calendar
   const [evDetail, setEvDetail] = useSch(null);   // a tapped event → full details (with all RSVP names)
+  // THE ORDER OF SERVICE, WHERE SUNDAY IS. TrinityOne has had a Run sheet all along — items, times, who leads
+  // each, songs — and the relay serves it to the WHOLE CHURCH by default, not only the rota team. Miriam
+  // reported there was "nowhere to put an order of service" and pasted hers into a notice, because it hangs
+  // off a service inside Rota and someone holding an order of service looks under Resources, or at Sunday.
+  //
+  // The event card directly below this one already carries the lesson — "the tap target used to be just the
+  // title row, so 'how do I change this?' had no obvious answer" — and the service card beside it was left
+  // with no handler at all. Owner, 2026-08-23: "maybe the run sheet should be accessible via the calendar,
+  // when a service or event details are?"
+  const [svcDetail, setSvcDetail] = useSch(null);        // a tapped service → its run sheet
+  const [calRunsheet, setCalRunsheet] = useSch(null);    // …and the editor for it
+  const calRunsheets = (typeof window.useStewardRunsheets === 'function') ? window.useStewardRunsheets() : [];
 
   const coverageFor = (svcId) => {
     const rota = rotas.find(r => r.service === svcId); const assign = rota ? rota.assign : {};
@@ -958,7 +970,10 @@ function DashCalendar() {
                 <button onClick={() => setPickedDay(null)} title="Close this day" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
               </div>
               {it.services.map(s => { const c = coverageFor(s.id); return (
-                <div key={s.id} style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
+                <div key={s.id} role="button" tabIndex={0} onClick={() => setSvcDetail(s)}
+                  onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setSvcDetail(s); } }}
+                  title="Open this service — the order of service and who's on"
+                  style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9, cursor: 'pointer', textAlign: 'left' }}>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>{s.name}</div>
                   <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 7 }}>{s.time} · {c.filled}/{c.total} filled {c.published ? '· published' : ''}</div>
                   <div style={{ height: 6, borderRadius: 999, background: 'var(--surface-2)', overflow: 'hidden' }}><div style={{ width: `${c.total ? (c.filled / c.total) * 100 : 0}%`, height: '100%', background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} /></div>
@@ -1016,6 +1031,20 @@ function DashCalendar() {
 
       {adding !== null ? <SchEventModal day={adding} onClose={() => setAdding(null)} /> : null}
       {evDetail ? <SchEventDetail event={evDetail} onClose={() => setEvDetail(null)} /> : null}
+      {svcDetail ? (() => {
+        const c = coverageFor(svcDetail.id);
+        const sheet = (calRunsheets.find(r => r.id === svcDetail.id) || {}).items || [];
+        return (
+          <SchModal title={svcDetail.name || 'Service'} onClose={() => setSvcDetail(null)} width={480}>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 14 }}>{svcDetail.time}{svcDetail.date ? ' · ' + svcDetail.date : ''} · {c.filled}/{c.total} on the rota{c.published ? ' · published' : ''}</div>
+            <button onClick={() => { setCalRunsheet(svcDetail); setSvcDetail(null); }} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 13, fontSize: 14 }}>
+              <Icon name="plans" size={15} color="var(--on-clay)" /> {sheet.length ? 'Order of service · ' + sheet.length + (sheet.length === 1 ? ' item' : ' items') : 'Write the order of service'}
+            </button>
+            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 0 0' }}>Items, who's leading each, and songs. <b>Your whole church sees it</b> in Serving &amp; events — not just the people on the rota.</p>
+          </SchModal>
+        );
+      })() : null}
+      {calRunsheet ? <RunsheetModal service={calRunsheet} sheet={(calRunsheets.find(r => r.id === calRunsheet.id) || {}).items || []} onClose={() => setCalRunsheet(null)} /> : null}
     </div>
   );
 }
