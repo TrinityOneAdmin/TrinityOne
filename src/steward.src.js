@@ -125,7 +125,18 @@ const REQREPLY_D = 'trinityone/reqreply:';  // member -> steward accept/decline/
 const NETWORK_D = 'trinityone/network:';    // church -> network membership ("we belong to X"), p=network
 const BLOCKED_D = 'trinityone/blocked:';    // this church's blocklist (banned member pubkeys), d=blocked:<churchpub>
 const MINORS_D = 'trinityone/minors:';      // safeguarding: this church's minors (children), d=minors:<churchpub>
-const APPROVED_D = 'trinityone/approved:';  // safeguarding: adults cleared to contact youth, d=approved:<churchpub>
+const APPROVED_D = 'trinityone/approved:';
+// WHO CLEARED WHOM, AND WHEN — remembered from the church's own approved: document so a routine edit does not
+// wipe it. The document is addressable, so every write REPLACES it; without this, clearing one person would
+// re-stamp everyone else with today's date and erase the history a church may one day be asked to produce.
+//
+// `cp` IS NOT OPTIONAL. The first version of this was a bare module variable, and nothing cleared it when a
+// steward switched church, restored a key, or adopted a church by QR. Executed by audit: one church's records
+// were written into another church's document, a real record in the second church was destroyed, and a third
+// was re-stamped with today — the exact defect this exists to prevent. It is reset in
+// _resetChurchScopedState() AND stamped with the church it came from, because the reset alone is the
+// mechanism that already failed: it relies on someone remembering to add to it, and I did not.
+let _clearedTrail = { cp: '', map: {}, list: [], loaded: false };  // safeguarding: adults cleared to contact youth, d=approved:<churchpub>
 const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploaded photo is suppressed, d=nophoto:<churchpub>
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
 const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per member (ring: current first)
@@ -998,6 +1009,7 @@ function setKey(mnemonic) {
 // So: one function, called from both. Adding a per-church global without adding it here is the bug.
 function _resetChurchScopedState() {
   lastProfile = {}; _profileLoaded = false;
+  _clearedTrail = { cp: '', map: {}, list: [], loaded: false };   // safeguarding: whose clearance record this is
   _clearanceSent.clear();
   _careRoster = new Set(); _careRosterKnown = false;
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
@@ -3582,17 +3594,24 @@ window.Steward = {
     // filters — so a separate subscription could never tell the caller anything about THIS one's progress,
     // and the back-fill was left guessing. Guessing is what emptied children's parent lists. It also returns
     // a subscription slot, against a cap this codebase has been bitten by before.
+    let cleared = {};   // pub -> { by, at } — the record beside the list; see setApproved
     const isLoaded = () => sawMinors && sawEose;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
+          // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
+          // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped
+          // every clearance date permanently, because the wipe then echoed back as the truth. A church with
+          // two stewards and one stale browser tab would have lost its history. Keep what we hold.
+          if (_a.cleared && typeof _a.cleared === 'object') cleared = _a.cleared;
+          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() }); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -3600,7 +3619,7 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { sawEose = true; onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); },
+      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -4114,7 +4133,15 @@ window.Steward = {
     // three. An error is recoverable, false reassurance is not.
     return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
-  setApproved(pubkeys) {   // replace the whole approved-adults list (pass hex pubkeys)
+  // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
+  // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
+  // either "nobody is cleared" or "we have not looked yet", and those need opposite handling.
+  //
+  // IT NEVER REFUSES. The first version returned a rejected promise when it could not tell, which meant a
+  // brand-new church could never clear its first youth volunteer: no clearance list exists until the first
+  // write, and the first write was the thing being refused. Retrying could not help. Not knowing must degrade
+  // to an honest "no record", never to a wall.
+  setApproved(pubkeys, opts) {   // replace the whole approved-adults list (pass hex pubkeys)
     _requireTrustedView('cleared-adults list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
@@ -4127,7 +4154,26 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    // ONLY STAMP WHAT WE ARE SURE OF. Three cases, and the third is the one that keeps this honest:
+    //   • already recorded          → carry it across untouched
+    //   • certainly NOT on the old list → this is a new clearance, so record today
+    //   • anything else             → { at: 0 }, which the console shows as "no record of when"
+    // The third covers both a clearance granted before this record existed and a console that has not read
+    // the list. Writing today's date in either case would be a lie, and the console panel promises in so many
+    // words that old clearances are not back-dated.
+    //
+    // Nothing else goes in here. The relay serves this document to EVERY MEMBER on purpose, so a child's app
+    // can tell whom they may safely message — so a certificate number or any other note about a volunteer
+    // does not belong in it, and there is no field for one until a stewards-only document exists.
+    const mine = (_clearedTrail.cp === pub && _clearedTrail.loaded) ? _clearedTrail : null;
+    const prior = (mine && mine.map) || {};
+    const knownPrev = mine ? new Set(mine.list || []) : ((opts && opts.listKnown) ? new Set() : null);
+    const cleared = {};
+    for (const p of list) {
+      if (prior[p]) { cleared[p] = prior[p]; continue; }
+      cleared[p] = (knownPrev && !knownPrev.has(p)) ? { by: pub, at: now() } : { by: '', at: 0 };
+    }
+    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }, sk));
   },
 
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
@@ -4446,7 +4492,12 @@ window.Steward = {
     }
     if (wasCleared && appr.indexOf(newH) === -1) {
       nextAppr = [...appr, newH];
-      if (!await w(() => window.Steward.setApproved(nextAppr))) throw new Error('Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.');
+      // `listKnown` is safe to assert HERE specifically: this line is only reached because `appr` contained the
+      // OLD key, so the list is provably real and loaded rather than an empty placeholder. The new key has
+      // never been cleared before, so it is genuinely new and today's date is the truth about it.
+      // (Open question for later, not invented here: whether a re-seat should CARRY the old key's clearance
+      // date across, so the record survives someone changing phones. It reads as a fresh clearance today.)
+      if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true }))) throw new Error('Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.');
     }
 
     // The seat may be the CHILD (an entry keyed by them) or a PARENT (named in some child's list). Both break.

@@ -1457,6 +1457,25 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
               app might simply be broken. This says what her account is, in her own app, on her own device.
               It is deliberately NOT part of anyone else's view of her: `minors:` is never served to ordinary
               members, and a badge others could see would broadcast which accounts belong to children. */}
+          {/* CLEARED TO WORK WITH YOUNG PEOPLE. Two volunteers turned up to help not knowing whether the church
+              had cleared them; the guide explains marking a child and never mentions clearing an adult, and
+              their own app said nothing either way.
+              Nothing new is published for this — the sealed note each member already receives about themselves
+              carries it, the same way a child's own device is told they are a child.
+              `clearanceKnown` keeps a cold start SILENT rather than reading as a definite no.
+              The copy does NOT claim this is private to the reader: the church's cleared list is served to
+              every member on purpose, so a child's app can tell whom they may safely message. An earlier
+              version of this line said "only you and your church's stewards see this", which was untrue. */}
+          {ctx && ctx.safeguard && ctx.safeguard.clearanceKnown && ctx.safeguard.cleared && !ctx.safeguard.isMinor ? (
+            <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'flex-start', gap: 8, textAlign: 'left', maxWidth: 320,
+              background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid var(--line)',
+              borderRadius: 14, padding: '10px 13px' }}>
+              <Icon name="shield" size={15} color="var(--sage)" />
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                Your church has <b>cleared you to work with young people</b>. Others in your church can see that you are cleared.
+              </div>
+            </div>
+          ) : null}
           {ctx && ctx.safeguard && ctx.safeguard.isMinor ? (
             <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'flex-start', gap: 8, textAlign: 'left', maxWidth: 320,
               background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid var(--line)',
