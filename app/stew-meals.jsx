@@ -83,6 +83,44 @@ function mealsFmtDate(iso) {
 // ────────────────────────────────────────────────────────────────────────────────
 // Settings → Care enable card
 // ────────────────────────────────────────────────────────────────────────────────
+// The offer made when practical care is switched on. Pre-written, editable, and easy to decline — see setAll.
+// It posts to the broadcast group (what "New post" defaults to), because this is news for the whole church and
+// not for one room.
+function AnnounceCareModal({ onClose }) {
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
+  const broadcast = (groups || []).find(g => g.kind === 'broadcast');
+  const [text, setText] = React.useState(
+    'We\u2019ve switched on practical care in the church app.\n\n' +
+    'If you need a hand \u2014 a meal, a lift, an errand, a visit \u2014 open Today and tap \u201cAsk for help\u201d. ' +
+    'It goes privately to the care team; nobody else sees it.\n\n' +
+    'And if you can offer a hand, the same place lets you say what you\u2019re willing to help with.');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const dlgRef = useStewDialog(() => { if (!busy) onClose(); });
+  const post = async () => {
+    if (busy || !text.trim()) return;
+    setBusy(true); setErr('');
+    try { await window.Steward.publishPost(text.trim(), broadcast ? broadcast.id : 'announce'); onClose(); }
+    catch (e) { setErr((e && e.message) || 'Couldn\u2019t post \u2014 check your connection and try again.'); setBusy(false); }
+  };
+  return (
+    <div onClick={() => { if (!busy) onClose(); }} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Tell your church about practical care" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '94%', maxHeight: '86vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="heart" size={20} color="currentColor" /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Tell your church?</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Practical care is on. <b>Members already using the app are told nothing</b> — it simply appears — so the people who most need it are the least likely to find it. Post this, edit it, or say not now.</p>
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={8} aria-label="What to post" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, fontFamily: 'var(--font-ui)', lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
+        {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', margin: '12px 0 0', lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={() => { if (!busy) onClose(); }} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.5 : 1 }}>Not now</button>
+          <button onClick={post} disabled={busy || !text.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !text.trim()) ? 0.55 : 1 }}><Icon name="send" size={15} color="var(--on-clay)" /> {busy ? 'Posting\u2026' : 'Post to the church'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function DashMealsPanel({ church }) {
   const s = window.useMealsSettings ? window.useMealsSettings() : { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
@@ -110,11 +148,28 @@ function DashMealsPanel({ church }) {
     _careTeamPub.current = key;
     try { window.StewardMeals.publishCareTeam(pubs); } catch (e) {}
   }, [on, teamPeople.map(p => p && p.pub).join(',')]);
-  const setAll = (next) => window.StewardMeals.setEnabled(next.enabled !== undefined ? next.enabled : on, {
-    visibility:   next.visibility   !== undefined ? next.visibility   : s.visibility,
-    openedBy:     next.openedBy     !== undefined ? next.openedBy     : s.openedBy,
-    adminGroupId: next.adminGroupId !== undefined ? next.adminGroupId : s.adminGroupId,
-  });
+  // SWITCHING IT ON IS NOT THE SAME AS ANYONE KNOWING. Verity and Callum both had to be told, out of band,
+  // that this existed and where to find it; Miriam's own words about a feature she never noticed were "I never
+  // saw an option for that". The church already has a way to tell everyone — a post reaches every member's
+  // app — and nothing connected the two.
+  //
+  // It OFFERS. It does not post. A steward who flips this at eleven at night to see what it looks like has not
+  // decided to announce anything, and "our church now offers practical care" is their news to break, in their
+  // own words, at a time of their choosing. The words are written for them and are theirs to edit.
+  //
+  // Only on the way ON. "We have withdrawn practical care" is not an announcement any church wants sent on
+  // its behalf.
+  const [announceOn, setAnnounceOn] = React.useState(false);
+  const setAll = (next) => {
+    const turningOn = next.enabled === true && !on;
+    const r = window.StewardMeals.setEnabled(next.enabled !== undefined ? next.enabled : on, {
+      visibility:   next.visibility   !== undefined ? next.visibility   : s.visibility,
+      openedBy:     next.openedBy     !== undefined ? next.openedBy     : s.openedBy,
+      adminGroupId: next.adminGroupId !== undefined ? next.adminGroupId : s.adminGroupId,
+    });
+    if (turningOn) setAnnounceOn(true);
+    return r;
+  };
   // create a Care team group right here, select it, and open member assignment (no trip to Groups first)
   const [editTeam, setEditTeam] = React.useState(null);
   const [creating, setCreating] = React.useState(false);
@@ -135,6 +190,7 @@ function DashMealsPanel({ church }) {
   );
   return (
     <Panel title="Practical care">
+      {announceOn ? <AnnounceCareModal onClose={() => setAnnounceOn(false)} /> : null}
       <DismissibleNote id="care-intro" icon="heart" tone="sage" style={{ marginBottom: 12 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</DismissibleNote>
             {/* THE ROW IS THE TARGET. This toggle is a 48x28 button at the far right and the words naming it had
           no handler, so the obvious press did nothing. Rev. Miriam, session 3: "clicking the words
