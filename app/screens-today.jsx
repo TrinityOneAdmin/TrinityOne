@@ -197,13 +197,25 @@ function CareAvailRow({ a, ctx, myPub }) {
 // ── "Ask for help": a member privately asks the care team, via a short form that mirrors the need categories.
 // It publishes a sealed request (care-team only) — not a public need. The care team approves it into a need or
 // opens a chat. Lives at the top of the Care tab.
+// A request can name several kinds of help — one situation, one request. Older requests carry only `type`,
+// so read `types` and fall back; never show the first kind alone when the asker chose three.
+// The kinds a request named that the need being opened will NOT cover — approve mints one need, from the first.
+function careExtraKinds(r) {
+  const ts = (Array.isArray(r && r.types) ? r.types : []).filter(Boolean);
+  return ts.slice(1).map(t => CARE_TYPE_LABEL[t]).filter(Boolean);
+}
+function careTypeLabel(r) {
+  const ts = (Array.isArray(r && r.types) && r.types.length ? r.types : [r && r.type]).filter(Boolean);
+  const names = ts.map(t => CARE_TYPE_LABEL[t]).filter(Boolean);
+  return names.length ? names.join(' \u00b7 ') : 'Help';
+}
 const CARE_WHEN = [['once', 'Just once'], ['ongoing', 'For a while'], ['unsure', 'Not sure yet']];
 const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No rush']];
 
 function MyRequestRow({ r, onCancel, onMessage }) {
   const [busy, setBusy] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);   // Withdraw deletes the request AND its care-team thread — ask first
-  const label = CARE_TYPE_LABEL[r.type] || 'Help';
+  const label = careTypeLabel(r);
   const st = r.status || 'open';
   // "Declined" must not read like help is coming. Someone who worked up the courage to ask, and is told the
   // team "has this in hand", waits — and loses the chance to ask someone else. Say it's closed, and make the
@@ -265,7 +277,7 @@ function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{CARE_TYPE_LABEL[r.type] || 'Help'} · for {who}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{careTypeLabel(r)} · for {who}</div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[when, urg].filter(Boolean).join(' · ') || 'Asked for help'}</div>
         </div>
       </div>
@@ -308,7 +320,18 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Set up help" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Set up help</div>
+        {/* SAY WHAT THIS ACTUALLY OPENS. approveCareRequest mints ONE need, from the FIRST kind
+            (`type: req.type` — fellowship.src.js). When requests could only name one kind, naming the request
+            and naming the need were the same sentence. They stopped being the same the moment a request could
+            say "Rides · Errands", and this line was changed to the full list — promising a need for both and
+            opening one. The approval also drops the request out of the open queue, so the second kind would
+            have vanished silently while the asker's own row read "approved". */}
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 0' }}>Opens a need for <b style={{ color: 'var(--ink)' }}>{CARE_TYPE_LABEL[req.type] || 'help'}</b> the church can sign up for. Pick the dates — you can refine it later in the console.</p>
+        {careExtraKinds(req).length ? (
+          <p style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', lineHeight: 1.5, margin: '8px 0 0', fontWeight: 600 }}>
+            They also asked about <b>{careExtraKinds(req).join(' and ')}</b>. That isn’t covered by this need — set it up separately, or message them.
+          </p>
+        ) : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}><div style={lbl}>From</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
           <div style={{ flex: 1 }}><div style={lbl}>To</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
@@ -414,7 +437,7 @@ function careSentWording(res) {
 function AskForHelpForm({ ctx, onClose, onSent }) {
   const [forSelf, setForSelf] = React.useState(true);
   const [forName, setForName] = React.useState('');
-  const [type, setType] = React.useState('');
+  const [types, setTypes] = React.useState([]);
   const [when, setWhen] = React.useState('');
   const [urgency, setUrgency] = React.useState('');
   const [note, setNote] = React.useState('');
@@ -424,10 +447,10 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   const chip = (active) => ({ padding: '8px 13px', borderRadius: 999, border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', color: active ? 'var(--clay-deep, #b4462f)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 });
   const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' };
   const submit = async () => {
-    if (!type) { setErr('Pick what would help.'); return; }
+    if (!types.length) { setErr('Pick what would help.'); return; }
     setBusy(true); setErr('');
     let ok = null;
-    try { ok = await window.Fellowship.publishCareRequest({ type, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
+    try { ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
     setBusy(false);
     if (ok) onSent(ok); else setErr('Couldn’t send — check your connection and try again.');
   };
@@ -447,9 +470,12 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
         </div>
         {!forSelf ? <input value={forName} onChange={e => setForName(e.target.value)} placeholder="Their name (optional)" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} /> : null}
 
-        <div style={lbl}>What would help?</div>
+        <div style={lbl}>What would help? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600, color: 'var(--ink-3)' }}>Pick as many as you need</span></div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {TYPES.map(t => <button key={t} onClick={() => setType(t)} style={chip(type === t)}><Icon name={CARE_TYPE_ICON[t]} size={14} color="currentColor" /> {CARE_TYPE_LABEL[t]}</button>)}
+          {TYPES.map(t => {
+            const on = types.indexOf(t) >= 0;
+            return <button key={t} role="checkbox" aria-checked={on} onClick={() => setTypes(on ? types.filter(x => x !== t) : [...types, t])} style={chip(on)}><Icon name={on ? 'check' : CARE_TYPE_ICON[t]} size={14} color="currentColor" /> {CARE_TYPE_LABEL[t]}</button>;
+          })}
         </div>
 
         <div style={lbl}>When?</div>
@@ -655,7 +681,7 @@ function CareCard({ ctx, embedded }) {
         <CareSection id="need" icon="heart" title="If you need help" sub="Ask your care team, or reach someone who’s offered">
           <AskForHelp ctx={ctx} />
           <CareAvailability ctx={ctx} part="others" />
-          {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>Nobody has listed themselves as available yet — asking your care team above reaches them directly.</div> : null}
+          {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>Nobody else has listed themselves as available yet — asking your care team above reaches them directly.</div> : null}
         </CareSection>
         <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={live.length}>
           <CareAvailability ctx={ctx} part="mine" />
@@ -664,11 +690,19 @@ function CareCard({ ctx, embedded }) {
       </React.Fragment>
     );
   }
-  if (!live.length) return null;   // Today-card variant (currently unused): nothing to show with no needs
+  // TODAY VARIANT. It used to return null on `!live.length`, which hid it in exactly the moment somebody
+  // needs it: nobody has asked yet, and the person reading is the one who wants to ask. Verity, 71, with a
+  // broken wrist, hunted through Community and the You page and found Care only inside "Serving & events" —
+  // "Serving to me means ME doing something for the church, not the church doing something for me. If I'd
+  // needed help badly I'd have telephoned Miriam." Two more members never found it at all.
+  //
+  // So the card shows the ask first and any open needs under it. Still hidden entirely for a church that has
+  // not switched care on (the `!s.enabled` guard above) — owner's decision, 2026-08-23.
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       <SectionLabel>Practical care</SectionLabel>
-      {needsBlock}
+      <AskForHelp ctx={ctx} />
+      {live.length ? needsBlock : null}
     </div>
   );
 }
@@ -1148,7 +1182,38 @@ function TodayScreen({ ctx }) {
       </div>
       )}
 
-      {/* Practical care / meal trains now lives in its own tab inside Serving & events (not on Today) */}
+      {/* WAITING FOR APPROVAL, SAID ON THE FIRST SCREEN. The waiting page itself is praised by every member
+          who reaches it — the problem is that it lives on one tab out of five, and six people across four
+          rounds looked at Today first and saw a normal, working app. Bridget, 74: "On my home screen the
+          church's name sits at the top with no sign at all that I'm still waiting, so at a glance I'd have
+          believed I was already in." Eunice put the tablet down and assumed she had done it wrong. */}
+      {/* THREE GUARDS, NOT ONE — this banner shipped with only `isPending` and that was wrong twice over.
+          `isPending` is `approval && !isAdmitted`, and `removed` (app.jsx) is `wasAdmitted && approval &&
+          !isAdmitted` — so EVERY REMOVED MEMBER IS ALSO PENDING. The Community tab checks `removed` first,
+          deliberately (screens-chat.jsx, commit 66d7807, "do not show them the newcomer's 'a steward usually
+          lets people in within a day'"). Gating this on isPending alone undid that on the app's FIRST screen:
+          someone removed — including for a safeguarding reason — would open the app and read that they were
+          waiting to be let in, while Community told them they had been removed. Two tabs, opposite stories,
+          and the home screen was the one that lied.
+          The second guard is the same three-state split the chat page carries: a join the relay REFUSED is not
+          "sent", and "you don't need to do anything else" is the opposite of the truth for it — retrying is the
+          only thing that can help. Rather than restate that here and drift, this banner stays quiet for the
+          failed and queued cases and points at the page that handles them properly. */}
+      {ctx.joinState && ctx.joinState.isPending && !ctx.joinState.removed && !ctx.joinFailed && !ctx.joinQueued ? (
+        <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Waiting to be let in</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+            Your request has been sent{ctx.church && ctx.church.name ? ' to ' + ctx.church.name : ''}. A steward usually lets people in within a day — you don’t need to do anything else.
+          </div>
+          <button onClick={() => ctx.go && ctx.go('chat')} style={{ marginTop: 10, padding: '7px 12px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>
+            Check again
+          </button>
+        </div>
+      ) : null}
+
+      {/* Practical care: back on Today, gated on the church having switched it on. Three members failed to
+          find it inside Serving & events and all three read Today first; the full tab still exists. */}
+      <CareCard ctx={ctx} />
 
       {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages. */}
       {ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {

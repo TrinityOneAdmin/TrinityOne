@@ -23,7 +23,11 @@ const CHROME = ['/snap/bin/chromium', 'chromium-browser', 'chromium', 'google-ch
   .find(c => { try { return !spawnSync(c, ['--version'], { timeout: 4000 }).error; } catch { return false; } }) || '/snap/bin/chromium';
 const UDD = `/tmp/smoke-ui-${process.pid}`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=${UDD}`,
+const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', 
+  // Never let this reach production — see the note in sim-launch.mjs. Port 9 discards; the page's own
+  // origin relay is unaffected.
+  '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9',
+  '--no-sandbox', `--user-data-dir=${UDD}`,
   '--window-size=1100,860', `--remote-debugging-port=${PORT}`, URL], { stdio: 'ignore', detached: true });
 const cleanup = () => { try { process.kill(-chrome.pid); } catch {} try { spawnSync('rm', ['-rf', UDD]); } catch {} };
 

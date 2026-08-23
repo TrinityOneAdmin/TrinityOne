@@ -40,7 +40,11 @@ const check = (name, ok, detail) => { console.log('    ' + (ok ? 'PASS' : 'FAIL'
 async function persona(name, port) {
   const profile = mkdtempSync(join(process.env.TRINITY_SCRATCH || '/mnt/storage/tmp/trinity-scratch', 'sim-' + name + '-'));
   const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=' + port, '--user-data-dir=' + profile,
-    '--no-first-run', '--disable-gpu', '--no-sandbox', 'about:blank'], { stdio: 'ignore' });
+    '--no-first-run', '--disable-gpu', 
+  // Never let this reach production — see the note in sim-launch.mjs. Port 9 discards; the page's own
+  // origin relay is unaffected.
+  '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9',
+  '--no-sandbox', 'about:blank'], { stdio: 'ignore' });
   let t;
   for (let i = 0; i < 40 && !t; i++) { await sleep(300); try { const r = await fetch(`http://127.0.0.1:${port}/json/list`); t = (await r.json()).find(x => x.type === 'page'); } catch {} }
   if (!t) throw new Error(name + ': no browser');

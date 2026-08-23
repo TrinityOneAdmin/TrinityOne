@@ -57,6 +57,14 @@ which is what every roster written before this change means. An **explicit empty
 "nothing". Anything else would strip working churches of their delegates the moment their relay updated:
 an availability failure dressed as a security improvement.
 
+**Being *a* church is not being *this* church (2026-08-20).** The relay's leader check was relay-wide: it
+asked `CHURCH_PUBS.has(author)` and never whether the author was the church being written to, and it sits in
+front of every capability check as `isLeader || stewardCan(…)`. So any church key on the box skipped the whole
+capability system. Found by simulation, not by reading — three delegated stewards, scoped to Finance, Care and
+Groups & rotas, each walked straight through their padlock, because their own console had registered their own
+key as a church. `isLeader` is gone; `leaderOf(cp)` takes a required church and also requires that the relay
+actually carries it. The seventh rule of this shape; six others were scoped on 2026-07-30.
+
 **Enforcement is the relay's**, on reads as well as writes — a Finance restriction that still serves the
 ledger is decoration. `stewardOf(pub, cp)` no longer exists; `stewardCan(pub, cp, cap)` takes a required
 capability, so a call site left un-swept is a startup error rather than a silent full grant. `'any'` is for

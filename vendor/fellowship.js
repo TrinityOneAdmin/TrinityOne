@@ -5867,6 +5867,13 @@
     } catch {
     }
   }
+  function _removeChildLink(childPub) {
+    const list = _loadChildren().filter((c) => c && c.child !== childPub);
+    try {
+      localStorage.setItem(FAMILY_KEY, JSON.stringify(list));
+    } catch {
+    }
+  }
   function _rebuildFamily(churchNpub) {
     const cp = toPub(churchNpub) || churchNpub;
     if (!pub || !cp) return Promise.resolve(0);
@@ -8092,6 +8099,7 @@
       let profSub = null;
       const profAuthors = /* @__PURE__ */ new Set();
       let profTimer = null;
+      let lastProfCount = 0;
       const emit = (done) => {
         const visible = [...hub.byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0) && !_superseded(cp, m.pubkey)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         if (!hub.eosed && !done && !visible.length) return;
@@ -8101,8 +8109,10 @@
       const emitSoon = _coalesce(() => emit(false));
       const refreshProfiles = () => {
         profTimer = null;
-        const authors = [...profAuthors].filter((pk) => !(pk in profiles));
+        const authors = [...profAuthors];
         if (!authors.length) return;
+        if (profSub && authors.length === lastProfCount) return;
+        lastProfCount = authors.length;
         try {
           profSub && profSub.close();
         } catch {
@@ -8137,7 +8147,7 @@
         });
       };
       const ensureProfile = (pk) => {
-        if (profAuthors.has(pk) || pk in profiles) return;
+        if (profAuthors.has(pk)) return;
         profAuthors.add(pk);
         if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);
       };
@@ -9229,6 +9239,14 @@
           } catch {
             return;
           }
+          if (dec && dec.removed) {
+            _removeChildLink(dec.removed);
+            try {
+              window.dispatchEvent(new CustomEvent("trinity-guardian-removed", { detail: { child: dec.removed } }));
+            } catch (x) {
+            }
+            return;
+          }
           if (!dec || !dec.child || dec.child === pub) return;
           const ex = _loadChildren().find((c) => c && c.child === dec.child);
           if (ex && ex.viaSteward) return;
@@ -9778,9 +9796,12 @@
       const team = await _fetchCareTeam(cp);
       const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
       const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
+      const types = (Array.isArray(fields.types) ? fields.types : [fields.type]).map((t) => String(t || "").trim()).filter(Boolean);
+      const uniq = [...new Set(types)];
       const body = {
         v: 1,
-        type: String(fields.type || "other"),
+        type: uniq[0] || "other",
+        types: uniq.length ? uniq : ["other"],
         forSelf: fields.forSelf !== false,
         forName: String(fields.forName || "").trim(),
         when: String(fields.when || "").trim(),

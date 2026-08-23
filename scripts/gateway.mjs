@@ -229,7 +229,11 @@ function _exportAuth(req, host, path) {
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || (CHURCH_PUBS.has(ev.pubkey) ? ev.pubkey : '');
-  return cp && (ev.pubkey === cp || stewardCan(ev.pubkey, cp, 'any')) ? cp : null;   // the church key, or a steward of that church
+  // OWNER-ONLY. /export streams the church's ENTIRE corpus — every message, every member document, and the
+  // safeguarding lists in cleartext. It was reachable by any steward holding any one capability, so a
+  // content-scoped rota helper could take the lot, including minors: and guardians:. Whatever else a
+  // capability grants, it does not grant the whole church.
+  return cp && ev.pubkey === cp ? cp : null;
 }
 // resync gate: a fresh NIP-98 proof bound to /sync, signed by a relay the church TRUSTS (its pubkey is in the
 // church-signed trusted-relays doc) — or by the church key / a steward. Only they receive the FULL corpus (incl.
@@ -388,6 +392,8 @@ const NAMEKEY_D = D.NAMEKEY;     // per-church name key envelope, wrapped per me
 const NAME_D = D.NAME;           // a MEMBER's own display name for one church, sealed under that key
 const CAREKEY_D = D.CAREKEY;     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
 const FINANCEKEY_D = D.FINANCEKEY;   // the church books' key, wrapped to the church + every finance-capable steward
+const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — d=checkin:<id>, sealed under the safeguarding key
+const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to the church + every safeguarding-capable steward. Separate from FINANCEKEY_D on purpose: they shared one derived key until 2026-08-20, so a treasurer could read every child's name, room and pickup code.
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
 const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
@@ -951,7 +957,7 @@ const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church
 //   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
 // Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
 const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
-  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, FINANCEKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
+  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, FINANCEKEY_D, CHECKINKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
 // not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
@@ -1009,7 +1015,29 @@ function guardianLinked(a, b) { const ga = GUARDIANS.get(a); if (ga && ga.has(b)
 // attack: membership is self-asserted (a `member:` doc signed by the member), so a hostile church can list
 // whoever it likes in its own minors doc but cannot make that child one of its members — it is excluded
 // from the evaluation entirely, and so can neither grant clearance nor withhold it.
-const approvedIn = (pub, cp) => { const s = APPROVED_BY.get(cp); return !!(s && s.has(pub)); };
+// A CHILD IS NEVER A CLEARED WORKER, whatever is stored. Being on a church's minors list BEATS being on its
+// cleared list, and the two cannot both count for the same person.
+//
+// Rev. Miriam, doing safeguarding on her console for the first time (long sim session 2): every member's
+// button reads the same words, "Clear for youth", with nothing on it naming the row. Her press landed on the
+// wrong one and cleared Ivy, aged six, whom she had marked as a child two minutes earlier. One tap, no
+// confirmation, no objection. Both documents then held Ivy:
+//     trinityone/minors:<cp>    {"pubkeys":["04c43921…"]}
+//     trinityone/approved:<cp>  {"pubkeys":["04c43921…", …]}
+//
+// The contradiction was harmless only by luck: the kind-4 gate checks BOTH directions, so a cleared child
+// still could not reach another child because the SENDER was a minor. The danger arrives when the steward
+// CORRECTS the mistake — unmark the child and the stale clearance is all that remains, and a six-year-old
+// becomes an adult this relay treats as cleared to privately message children. Fixing one error activated a
+// worse one, which is the worst shape a safeguarding bug can have.
+//
+// Enforced HERE rather than in the console because a console is a client: it can be old, modified, or simply
+// wrong, and this is the one boundary that has to hold anyway. Cleaning up the stored list is still worth
+// doing, but it is not what makes the rule true.
+const approvedIn = (pub, cp) => {
+  if (minorOf(pub, cp)) return false;
+  const s = APPROVED_BY.get(cp); return !!(s && s.has(pub));
+};
 const guardianLinkedIn = (a, b, cp) => { const m = GUARDIANS_BY.get(cp); if (!m) return false; const ga = m.get(a); if (ga && ga.has(b)) return true; const gb = m.get(b); return !!(gb && gb.has(a)); };
 // The churches whose safeguarding policy governs `pub`: ONLY churches that both list them as a minor AND
 // that they have actually joined.
@@ -1149,7 +1177,9 @@ function maybePushMessage(evt) {
       // shared relay, so an unscoped fan-out pushes one church's announcement to unrelated churches (cross-tenant
       // metadata leak + spam). Mirror maybePushSermon's church filter.
       const gcp = GROUP_CHURCH.get(gid);
-      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
+      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
+        : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
+        : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
       for (const r of recips) {
         if (!r || r === evt.pubkey) continue;
         pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
@@ -1384,6 +1414,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : [])); GROUP_LEADER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
     // invite-only groups carry the allowlist of member pubkeys who may post
     if (c.visibility === 'invite') { GROUP_VIS.set(id, 'invite'); GROUP_MEMBERS.set(id, new Set((Array.isArray(c.members) ? c.members : []).map(p => toHexPub(p) || p).filter(Boolean))); }
+    // A SERVING TEAM'S ROOM IS PRIVATE TO ITS ROSTER. Its membership lives in the team's ROSTER doc
+    // (ROSTER_PEOPLE), not in the group doc's `members` — the two-list split that let round 9's "Members
+    // only" Welcome team, roster `people: []`, be read and posted in by the whole church while Serving
+    // correctly told those same people they were on no team.
+    else if (c.kind === 'team') { GROUP_VIS.set(id, 'team'); GROUP_MEMBERS.delete(id); }
     else { GROUP_VIS.set(id, 'open'); GROUP_MEMBERS.delete(id); }
   }
   else if (d.startsWith(BLOCKED_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(BLOCKED_D.length) === e.pubkey) {
@@ -1444,7 +1479,10 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     }
   }
   else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
-    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'finance') ? cp : '');
+    // The CARE module's settings, so the care capability — this asked for 'finance' because yesterday's
+    // sweep classified the line by its neighbour rather than by the document it governs. accept() has always
+    // asked for 'care' here, so a care steward's write was taken and then ignored.
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'care') ? cp : '');
     if (!owner) return;
     if (removed) { MEALS_ADMIN_GROUP.delete(owner); MEALS_OPEN_MEMBER.delete(owner); return; }
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
@@ -1494,8 +1532,34 @@ function accept(e) {
   // church must be the one that declared the network. An event naming no church can still only act for
   // itself — every church-scoped rule below keys off the d-tag suffix, which is checked separately.
   const _netCp = namedChurch(e);
-  const isChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = _netCp ? networkOf(e.pubkey, _netCp) : NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
-  if (BLOCKED.has(e.pubkey) && !isLeader) return false;          // a blocked member can't write anything
+  // THE SEVENTH UNSCOPED WRITE RULE. `isLeader` used to be `CHURCH_PUBS.has(e.pubkey) || …` — relay-wide, so
+  // it answered "is this key A church?" and never "is this key THIS church?". Six rules of exactly this shape
+  // were scoped on 2026-07-30 (see the isMember notes below); this one was missed, one level up, and it sits
+  // in front of the capability checks as `isLeader || stewardCan(…)`. Being any church on the box therefore
+  // skipped the capability system entirely.
+  //
+  // Found by simulation, 2026-08-19, and not by reading: a steward scoped to Finance created a group, a
+  // steward scoped to Care created a group, and a steward scoped to Groups & rotas switched the care module
+  // on for the whole church. All three were registered churches, because their own console had registered
+  // their own key under the name of the church they were helping (fixed in src/steward.src.js).
+  //
+  // The network half of this line has been scoped since that audit — note `networkOf(e.pubkey, _netCp)`.
+  // Only the church half was global. So: no `isLeader` any more. Every authority site must name the church
+  // it means, and a site that forgets is a ReferenceError at startup rather than a silent grant.
+  // CHURCH_PUBS.has(cp) is not decoration: the old relay-wide check refused a church this relay has never
+  // been told about, because such a key was never in CHURCH_PUBS at all. Scoping without it would have let an
+  // unknown church write its own join policy — caught by the existing tests, which is what they are for.
+  const leaderOf = (cp) => !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || networkOf(e.pubkey, cp));
+  // The church this event is FOR, when it does not carry the church in its own d-tag: the tag if it names a
+  // configured church, else the author when the author is itself a church writing its own documents.
+  const ownCp = () => _netCp || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
+  // BREADTH, NEVER AUTHORITY. `isAnyChurch` answers "is this key known to this relay at all", which is what
+  // the member-shaped gates below need (a church posting its own chat message is not an authority question).
+  // It must never be used to decide whether someone may write another church's documents — that is exactly
+  // the mistake above. Use leaderOf(cp).
+  const isAnyChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = _netCp ? networkOf(e.pubkey, _netCp) : NETWORKS.has(e.pubkey);
+  const isMember = isAnyChurch || isNetwork || MEMBERS.has(e.pubkey);
+  if (BLOCKED.has(e.pubkey) && !(isAnyChurch || isNetwork)) return false;   // a blocked member can't write anything
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     if (isMember) return true;                                   // members/leaders: always
@@ -1517,14 +1581,19 @@ function accept(e) {
     // passes exactly as before; a rostered steward of the relevant church ALSO passes for DELEGATED ops.
     // OWNER-ONLY ops never consult the roster — so they stay church-key-only automatically.
     if (d.startsWith(STEWARDS_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey;   // OWNER-ONLY: only the church key edits its own steward roster
-    if (d.startsWith(BLOCKED_D)) return isLeader;                                                                // OWNER-ONLY: banning is not delegated to stewards
+    if (d.startsWith(BLOCKED_D)) return leaderOf(d.slice(BLOCKED_D.length));   // OWNER-ONLY, and only your OWN blocklist                                                                // OWNER-ONLY: banning is not delegated to stewards
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide
       // SECURITY-AUDIT-2026-07-06 M5: bind authority to the church that actually OWNS the referenced group,
       // not the one the author self-declares in its ['church'] tag. Otherwise a steward of church A could
       // pin/hide content in church B's group by naming A. GROUP_CHURCH is the group's true owner.
       const g = eventGroup(e); const owner = g && GROUP_CHURCH.get(g);
       if (owner) {
-        if (e.pubkey === owner || isNetwork || stewardCan(e.pubkey, owner, 'content')) return true;   // owner church, its network, or a steward OF THE OWNER
+        // `isNetwork` was the relay-wide union — for an event carrying no church tag it asked "is this key a
+        // network of ANY church here?", never "of THIS group's church". So a key that self-registered on a
+        // community relay held event, pin and hide authority over every group on the box, and this line
+        // returns BEFORE the safeguarding checks below it. Sibling of the leader check fixed on 2026-08-20;
+        // the same mistake, one clause along. networkOf() is already scoped — use it.
+        if (e.pubkey === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'content')) return true;   // owner church, ITS network, or a steward of the owner
 
         // ── SAFEGUARDING. Everything past this line is a MEMBER acting under delegated authority, and until
         // now this path asked only "do you have authority over the group?" — never "are you a child?" or "is
@@ -1563,15 +1632,39 @@ function accept(e) {
         if (GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(e.pubkey)); }
         return churchWriter(e.pubkey, owner);
       }
-      return isLeader || stewardCan(e.pubkey, namedChurch(e), 'content');   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
+      return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
     }
     // <cp>-keyed membership admin: the church is named in the d-tag → delegate to a steward of THAT church
     for (const pfx of [JOINPOLICY_D, ADMITTED_D]) {
-      if (d.startsWith(pfx)) return isLeader || stewardCan(e.pubkey, d.slice(pfx.length), 'members');
+      if (d.startsWith(pfx)) { const cp2 = d.slice(pfx.length); return leaderOf(cp2) || stewardCan(e.pubkey, cp2, 'members'); }
     }
     // SAFEGUARDING lists (who's a child / cleared adult / guardian link) — OWNER-ONLY (church key), never a delegated steward
     for (const pfx of [MINORS_D, APPROVED_D, GUARDIANS_D]) {
-      if (d.startsWith(pfx)) return CHURCH_PUBS.has(e.pubkey) && d.slice(pfx.length) === e.pubkey;
+      if (d.startsWith(pfx)) {
+        if (!(CHURCH_PUBS.has(e.pubkey) && d.slice(pfx.length) === e.pubkey)) return false;
+        // A CHILD MAY NOT BE ON THE CLEARED LIST. Refuse the write rather than store a contradiction.
+        //
+        // Rev. Miriam, first time doing safeguarding on her console: every row's button reads the same words,
+        // "Clear for youth", with nothing naming the person. Her press landed on the wrong row and cleared
+        // Ivy, aged six, whom she had marked as a child two minutes earlier — one tap, no confirmation, no
+        // objection. Both documents then held Ivy.
+        //
+        // That contradiction was harmless only by accident: the kind-4 gate checks both directions, so a
+        // cleared child still could not reach another child because the SENDER was a minor. The danger is the
+        // CORRECTION. Unmark the child and the stale clearance is all that remains — measured, a six-year-old
+        // then privately messaged another child. Fixing one mistake activated a worse one.
+        //
+        // So the two lists are never allowed to disagree in the first place. Enforced here, not in the
+        // console, because a console can be old or modified and this boundary has to hold anyway.
+        if (d.startsWith(APPROVED_D)) {
+          const minors = MINORS_BY.get(e.pubkey);
+          if (minors && minors.size) {
+            let list = []; try { list = (JSON.parse(e.content || '{}').pubkeys) || []; } catch { return false; }
+            for (const p of list) { const h = toHexPub(p); if (h && minors.has(h)) return false; }
+          }
+        }
+        return true;
+      }
     }
     // a church->parent guardian-link NOTICE (d=guardnotice:<parentpub>). OWNER-signed only. NOT read-gated
     // (its content is encrypted to the parent) so the parent receives it WITHOUT auth — it's what prompts
@@ -1604,6 +1697,9 @@ function accept(e) {
     // write the books, but only the church key mints or rotates the envelope that hands that access out:
     // otherwise a treasurer could re-key the books to themselves and lock the church out of its own ledger.
     if (d.startsWith(FINANCEKEY_D)) { const cp = toHexPub(d.slice(FINANCEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && e.pubkey === cp; }
+    // THE CHILDREN'S REGISTER KEY — owner-only for the same reason, and one more: whoever mints this envelope
+    // decides who may read a child's pickup code. That is not a decision to delegate to a delegate.
+    if (d.startsWith(CHECKINKEY_D)) { const cp = toHexPub(d.slice(CHECKINKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && e.pubkey === cp; }
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
     // the per-church NAME key envelope — same authority as the care key.
     if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members')); }
@@ -1648,7 +1744,7 @@ function accept(e) {
     // SECURITY-AUDIT-2026-07-06 M4: a giving fund carries the church's PAYMENT DESTINATION (lnaddr) — where
     // donations go. That is OWNER-ONLY: a delegated steward must not be able to create/replace a fund with
     // their own Lightning address and silently redirect members' gifts. Not in the steward-delegated set below.
-    if (d.startsWith(FUND_D)) return isLeader;
+    if (d.startsWith(FUND_D)) return leaderOf(ownCp());
     // church-authored CONTENT docs: a steward names the church via a ["church", <cp>] tag
     if (d.startsWith(GROUP_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
       || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)
@@ -1659,7 +1755,7 @@ function accept(e) {
       // yourself care-admin over their private corpus). Refuse at the door once an id has an owner.
       if (d.startsWith(GROUP_D) && !idOwnerOk(GROUP_CHURCH.get(d.slice(GROUP_D.length)), e, d.slice(GROUP_D.length))) return false;
       if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e, d.slice(ROSTER_D.length))) return false; }
-      return isLeader || stewardCan(e.pubkey, namedChurch(e), 'content');   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
+      return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     }
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
@@ -1681,7 +1777,7 @@ function accept(e) {
       return pend < STEWARDREQ_CAP;
     }
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
-    if (d === MEALS_SETTINGS_D) return isLeader || stewardCan(e.pubkey, namedChurch(e), 'care');   // enable/configure the module: church or rostered steward
+    if (d === MEALS_SETTINGS_D) return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'care');   // enable/configure the module: church or rostered steward
     // Who may fetch the rota: the church, or one of its rostered stewards. SCOPED, unlike its meals-settings
     // neighbour above: `isLeader` includes the unscoped `CHURCH_PUBS.has(e.pubkey)`, so a co-tenant church key
     // on a shared relay could write a rota-settings doc tagged ['church', <someone else>] — measured as
@@ -1689,7 +1785,7 @@ function accept(e) {
     // revoked-steward check refused to serve it), but it is the same unscoped shape as the two cross-tenant
     // CRITICALs this repo has already shipped, and the client trusts this write gate rather than checking
     // authorship itself. Refuse it at the door instead of relying on two downstream accidents.
-    if (d === ROTA_SETTINGS_D) { const nc = namedChurch(e); return (isLeader && (!nc || nc === e.pubkey)) || stewardCan(e.pubkey, nc, 'content'); }
+    if (d === ROTA_SETTINGS_D) { const nc = namedChurch(e); return leaderOf(nc || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '')) || stewardCan(e.pubkey, nc, 'content'); }
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
       // AUDIT-2026-07-30 S2: `care:<id>` is a relay-GLOBAL id and the rule below resolves the owning church from
       // the EVENT, so a co-tenant church naming ITSELF satisfied `e.pubkey === cp` and could republish another
@@ -1697,7 +1793,7 @@ function accept(e) {
       // own correct per-day token stopped matching — nobody brings food, and they cannot fix it, silently. Same
       // guard group: and roster: were given in AUDIT-2026-07-24 C1/C2.
       if (!idOwnerOk(CARE_CHURCH.get(d.slice(NEED_D.length)), e, d.slice(NEED_D.length))) return false;
-      const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
+      const cp = ownCp();   // the church named in the tag, else the author when the author IS a church
       // B-2: was `isLeader ||`, which an untagged event from any church's network key satisfied for EVERY
       // church — a forged care need in someone else's congregation. Require a resolved owning church.
       // church / steward / care-team admin; or any NON-minor member when the church allows member-opened needs (children never open needs)
@@ -1718,7 +1814,7 @@ function accept(e) {
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
       const parts = d.slice(SKIP_D.length).split(':');
       const careId = parts[0], date = parts[1] || '';
-      const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
+      const cp = ownCp();   // the church named in the tag, else the author when the author IS a church
       // recipient-only, proven WITHOUT identifying them: present THIS day's token, we hash and compare it to
       // the need's per-day hash for THIS date. A token captured for one day cannot skip another. Falls back
       // to the v2 whole-need hash, then the v1 cleartext-recipient check, for needs published before v3.
@@ -1767,6 +1863,15 @@ function accept(e) {
       const _p = (e.tags.find(t => t[0] === 'p') || [])[1]; const _asker = _p ? (toHexPub(_p) || _p) : '';
       if (_asker && MINORS.has(_asker) && e.pubkey !== _asker && !safeguardAllows(_asker, e.pubkey)) return false;
     }
+    // THE CHILDREN'S REGISTER — the church, or a steward it gave `safeguarding` to. Two reasons this needs
+    // saying out loud rather than falling to the member catch-all below:
+    //   1. these are ADDRESSABLE, so a write to an existing d-tag REPLACES it. Under the catch-all any member
+    //      of the church could overwrite `checkin:<id>` with anything, and a child's presence record would
+    //      simply disappear from the register. They cannot READ one — it is sealed — but destroying a
+    //      safeguarding record needs no ability to read it.
+    //   2. a delegated steward is not necessarily a member of the congregation they help run, so the
+    //      catch-all would refuse the very person the capability was granted to.
+    if (d.startsWith(CHECKIN_D)) { const cp = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : ''); return !!cp && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')); }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
@@ -1791,6 +1896,11 @@ function accept(e) {
     if (g && GROUP_VIS.get(g) === 'invite') {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const mem = GROUP_MEMBERS.get(g);
       return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'))) || !!(mem && mem.has(e.pubkey));
+    }
+    // ...and the same for a serving team, whose allowlist is the roster rather than the group doc.
+    if (g && GROUP_VIS.get(g) === 'team') {
+      const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const ppl = ROSTER_PEOPLE.get(g);
+      return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'))) || !!(ppl && ppl.has(e.pubkey));
     }
     // SAFEGUARDING (relay-enforced): a child may only post in a group their church marked child-safe. Was a
     // client-side list filter only, so a modified/old build could post into adult-only rooms.
@@ -1998,7 +2108,29 @@ function canRead(e, authed) {
     // steward roster), hiding it from EVERYONE — the church and care team included. Sibling of B1, which
     // exempted the sign-ups but missed the need itself. The need's PII is sealed and the authed branch below
     // still restricts readers to effective members of cp, so serving the clear half here is the design.
-    const retractionExempt = memberWritable || d.startsWith(NEED_D);
+    // THE CHURCH BOOKS are exempt for a different and stronger reason. The journal is APPEND-ONLY and the
+    // relay pins every entry to an exact next sequence number, so entries can never be rewritten — which means
+    // a removed treasurer's entries cannot be re-authored by anyone. Retracting them instead DELETES history:
+    // the church opens its accounts and finds the months that treasurer served simply missing, with the
+    // surrounding sequence numbers still there. Nothing about a person leaving makes the money they recorded
+    // untrue, and an accounts system that silently drops entries when staff change is not an accounts system.
+    // Their FUTURE writes are already refused by accept(); this is only about continuing to serve the past.
+    // THE CHILDREN'S REGISTER, for the same reason and with more at stake. This commit is the first that lets
+    // a delegated steward write a check-in at all, so it is also the first where retraction can reach one.
+    // The crèche volunteer stands down — or is simply re-scoped to a different capability — and every record
+    // they ever wrote stops being served TO THE CHURCH ITSELF: children currently marked present disappear
+    // from the register mid-session, and the history of who was collected by whom goes with them.
+    //
+    // A safeguarding record is evidence. It does not stop being true because the person who wrote it left,
+    // and a register that quietly drops entries when a rota changes is worse than no register, because
+    // nobody can tell it has happened.
+    // 'finance/' — the WHOLE module, not just the journal. Exempting the journal alone leaves the entries
+    // served and useless: the chart of accounts, the funds and the settings are steward-writable too, so a
+    // departed treasurer takes those with them and the ledger then replays against accounts that no longer
+    // exist ("unknown account a1", "sequence gap: expected 1, got 2"). The church still opens its books to
+    // find the months missing, by a different route. Every finance/ document is church-or-finance-steward
+    // writable at the door, so retaining them is the same judgement in every case.
+    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith('finance/') || d.startsWith(CHECKIN_D);
     // 'any', deliberately, and NOT this document's own capability. This asks whether the author still acts
     // for the church at all, so that narrowing a delegate to Finance does not make every group they ever
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is
@@ -2026,6 +2158,20 @@ function canRead(e, authed) {
       const vis = (ROTA_VIS.get(cp) || {}).v || 'church';
       if (vis === 'stewards') return false;                        // stewards already returned true above
       if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
+    }
+    // A SERVING TEAM'S ROOM IS NOT ADVERTISED TO PEOPLE WHO ARE NOT ON IT. Gating only its MESSAGES left the
+    // room listed in the member's chat list, where it accepted typing and silently discarded it — Nkechi,
+    // round 10: "I typed a reply and pressed send; the box emptied but my message never appeared." Listing
+    // the room is what makes it look joinable, so the DEFINITION has to go too.
+    // Owner: "a user should just not see rooms they are not added to."
+    // Same allowlist as the message gate — roster, church, network, and a steward who can EDIT groups, so a
+    // steward keeps sight of a team they have not staffed yet. Stewards/church already returned true above.
+    if (d.startsWith(GROUP_D)) {
+      const gid = d.slice(GROUP_D.length);
+      if (GROUP_VIS.get(gid) === 'team') {
+        const ppl = ROSTER_PEOPLE.get(gid);
+        return !!authed && !!(ppl && ppl.has(authed));
+      }
     }
     const md = MEMBER_DOCS.get(cp);
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
@@ -2126,6 +2272,17 @@ function canRead(e, authed) {
   // docs (:1667), rather than refusing the write: reading is the disclosure, and a client that has some reason to
   // publish one keeps it.
   if (!g) return !!authed && authed === e.pubkey;
+  // A team room is gated like an invite-only one, but its allowlist is the ROSTER. Readable by the people on
+  // the team, the church, its network, and any steward who can EDIT groups (capability `content`, the
+  // "Groups & rotas" tickbox) — the last so a steward can manage a team, and can still see one they created
+  // before they have staffed it. NOT every steward: a finance-only delegate reading the church's team and
+  // youth rooms is the leak capability keys exist to prevent.
+  if (GROUP_VIS.get(g) === 'team') {
+    if (!authed) return false;
+    const tcp = GROUP_CHURCH.get(g);
+    if (tcp && (authed === tcp || networkOf(authed, tcp) || stewardCan(authed, tcp, 'content'))) return true;
+    const ppl = ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(authed));
+  }
   if (GROUP_VIS.get(g) !== 'invite') return true;
   if (!authed) return false;
   // REVIEW-2026-07-20 B3: this was the SAME unscoped check the C3/C4 fix removed from the 30078 branch, left
@@ -2778,6 +2935,29 @@ function serveStatic(req, res) {
         }
         // respond BEFORE the heavy re-scan so a slow hydrate can't time the request out at the proxy (→ 502)
         res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
+        // WHY THERE IS NO accept() PASS HERE. One was added on 2026-08-20 and reverted the same day: it
+        // deleted a church's entire finance journal on a legitimate restore, and every message ever written
+        // by anyone who has since left. accept() is a WRITE-TIME ADMISSION GATE — "may this author add this,
+        // right now, given who is a member and what sequence number we are on" — and an archive cannot answer
+        // that question. Its journal entries are compared against a sequence counter the archive itself has
+        // just set, so every one of them is "not the next entry"; its historical messages are compared
+        // against today's membership, so everyone who has left fails.
+        //
+        // Two further reasons the shape was wrong, both measured: store.del() is a bare DELETE that records no
+        // tombstone (see event-store.mjs), so anything it removed came straight back on the next peer sync;
+        // and the loop blocked the event loop for ~7.5 s on a 7.8 MB archive, AFTER the client had been told
+        // the import succeeded, on a relay serving other churches.
+        //
+        // AND THE FINDING IT WAS BUILT FOR WAS OVERSTATED. Yes, /import is the one path in that skips the
+        // write policy — but canRead() applies safeguardAllows() to every kind-4 on the way OUT, in both
+        // directions, so an imported minor↔uncleared-adult DM is stored and served to nobody at all: not the
+        // sender, not the child, not the church. Measured, not argued; see
+        // scripts/import-applies-policy.test.mjs, which pins it and fails if that read gate is removed.
+        //
+        // Which is where the rule belongs. A write gate is bypassed by anything that writes to the store;
+        // a read gate is bypassed by nothing, because every delivery goes through it, and it consults
+        // TODAY's clearance rather than what was true when the message was sent. If you are tempted to add a
+        // policy pass here again, check first whether the read gate already covers the harm.
         setImmediate(() => { try { hydrateMaps(); } catch {} try { store.cull(); } catch {} });   // membership/groups/care live once this settles
       } catch (err) { try { res.writeHead(500, H); res.end(JSON.stringify({ error: 'import failed: ' + ((err && err.message) || 'error') })); } catch {} }
     });
@@ -4199,7 +4379,7 @@ wss.on('connection', (ws, req) => {
       // Challenge for ANY group we know, child-safe included. Child-safe rooms used to be excluded here because
       // they were served anonymously; now that they require membership like every other room, a member whose
       // client was never challenged would simply render an empty room forever. AUDIT-2026-07-27.
-      const wantsInvite = !ws._auth && filters.some(f => Array.isArray(f['#t']) && f['#t'].some(t => (GROUP_VIS.get(t) === 'invite') || GROUP_CHURCH.has(t)));
+      const wantsInvite = !ws._auth && filters.some(f => Array.isArray(f['#t']) && f['#t'].some(t => (GROUP_VIS.get(t) === 'invite') || (GROUP_VIS.get(t) === 'team') || GROUP_CHURCH.has(t)));
       // Emergency-timing oracle: challenge from the FILTER (not only a found event) so an anon REQ for a safety d-tag
       // gets an identical AUTH whether or not a check is live — no "is this church under attack right now?" distinguisher.
       const wantsSafetyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && (d.startsWith(SAFETY_D) || d.startsWith(SAFE_D))));

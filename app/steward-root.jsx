@@ -279,7 +279,8 @@ window.useStewardChurch = useStewardChurch;
 
 // load the church key if this device already has one. A fresh install has NO key — it shows the
 // welcome screen (Start a new church / Restore a church) instead of silently minting one, so the
-// steward chooses. Seeding the starter groups happens in "Start a new church" (seedNewChurch).
+// steward chooses. "Start a new church" (seedNewChurch) no longer seeds any groups: a church gets only the
+// rooms its steward ticked in the wizard, and none at all if they skipped that step.
 function initChurch() {
   const params = new URLSearchParams(location.search);
   // SECURITY-AUDIT-2026-07-06 H7: ?churchkey= is a DEV-ONLY test hook that overwrites the church key in
@@ -321,40 +322,26 @@ function seedNewChurch() {
   // replace the real ones). Also clear `done`: creating a new church should run setup even on a device that
   // has been through it before. AUDIT 2026-07-25.
   try { localStorage.setItem('trinityone.steward.newchurch', '1'); localStorage.removeItem('trinityone.steward.wizard.done'); } catch (e) {}
-  try {
-    if (!localStorage.getItem('trinityone.steward.seeded')) {
-      // SEED WHEN THE CHURCH EXISTS ON A RELAY, not 74 milliseconds after the key is minted. These went out
-      // immediately, before the church was registered, and all five were refused as "not a member or not
-      // permitted for this group" — the relay is right, there was no such church yet. Waiting on a timer only
-      // races how fast the steward types the name the relay is waiting for. So wait for the registration
-      // itself, and if it never comes, leave the marker unset so a later mount can seed instead of leaving a
-      // church that believes it has starter groups it never got. (R5-5, measured 2026-08-19.)
-      const seedNow = () => {
-      localStorage.setItem('trinityone.steward.seeded', '1');
-      // Seed with honest descriptions — NOT the showcase stats on SK.groups ("312 reached", "18 members"),
-      // which would show invented member counts to a brand-new church's first real member.
-      const SEED_SUB = { announce: 'Announcements for everyone', men: 'A midweek small group', women: 'A weekly Bible study', youth: 'For the young people', prayer: 'Share & lift requests' };
-      // NAMESPACE THE SEEDED IDS. Group ids are a relay-GLOBAL namespace and the relay enforces first-writer
-      // ownership (gateway.mjs idOwnerOk, AUDIT-2026-07-24 CRITICAL-1) — correctly, since it stops one church
-      // rewriting another's group and flipping it public. But these seeds used FIXED ids, so the first church
-      // on a relay claimed `announce`/`men`/`women`/`youth`/`prayer` and every church after it silently got
-      // none of its starter groups: a wizard that completed, and an empty Groups page with no explanation.
-      //
-      // Measured 2026-08-17 with two churches on one relay — all four seeds refused, the same seeds under
-      // prefixed ids accepted immediately. It had never bitten because nothing had ever set up a SECOND church
-      // on one relay, which is exactly what a network relay, a diocese relay or a shared pilot relay is.
-      // SIXTEEN, not eight. The relay now REFUSES a claim on an id whose embedded owner is not the signer's
-      // church, so this prefix is load-bearing rather than cosmetic. Eight hex characters is 32 bits and can be
-      // ground out on a GPU — an attacker could mint a key sharing a church's prefix and claim ids in its
-      // namespace. Sixteen is 64 bits, which cannot. Ids already in the field keep working: the relay accepts
-      // any prefix of 8 or more that matches a church it carries.
-      const nsp = String(window.Steward.pubkey || '').slice(0, 16);
-      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: nsp ? (nsp + '-' + g.id) : g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));
-      };
-      if (window.Steward.whenRegistered) window.Steward.whenRegistered(120000).then(ok => { if (ok) seedNow(); });
-      else seedNow();
-    }
-  } catch (e) {}
+  // NO GROUPS ARE IMPOSED ON A NEW CHURCH. This used to publish five starter rooms the moment the church
+  // registered — announce, men, women, youth, prayer — silently, with no UI and no choice, taking their names
+  // from window.SK, the design MOCK-UP object that also holds "Grace Chapel" and "Pastor John".
+  //
+  // The wizard SEPARATELY asks the steward to pick starter groups, and neither seeder knew about the other.
+  // Round 9 measured the result on one church, 86 seconds apart on the relay: nine groups where three were
+  // offered, with three exact duplicate pairs sharing a blurb — Announcements/Whole Church, Prayer Wall/Prayer,
+  // Men's Life Group/Life Group. The seeder deliberately waits for registration (correctly — firing at key-mint
+  // got all five refused), which is precisely why it lands WHILE the steward is still in the wizard, so the
+  // picker cannot see what already exists.
+  //
+  // Members did not read the extra rooms as clutter. They read them as statements about themselves:
+  //   Bea, 73: "I'm on the list for Youth and for Men's Life Group. I am a 73-year-old woman."
+  //   Samuel:  "I'm a man and Women's Bible Study is listed under Your groups and I can read it."
+  // Neither was in any group — open rooms carry no members field — but nothing on screen distinguishes an open
+  // room from one you were put in.
+  //
+  // A church that skips the groups step now gets none, which the Groups page already handles properly:
+  // "No groups yet — create your church's first chat room (or a team on the Rota page)."
+  // The steward's choices are the only source of groups. Removed 2026-08-21 on the owner's decision.
 }
 
 // first-run choice for a fresh install: start a new church, or restore one (scan a handoff QR / paste

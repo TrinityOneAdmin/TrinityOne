@@ -14475,14 +14475,17 @@ zoo`.split("\n");
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   };
   var CAREKEY_D = "trinityone/carekey:";
+  var _sealEachFailed = [];
   async function _sealEach(payload, targets, sealTo, onProgress) {
     const keys = {};
     const list = [...targets];
+    _sealEachFailed = [];
     for (let i3 = 0; i3 < list.length; i3++) {
       const mp = list[i3];
       try {
         keys[mp] = sealTo(payload, mp);
       } catch (e) {
+        _sealEachFailed.push(mp);
       }
       if (i3 % 25 === 24) {
         if (onProgress) {
@@ -14526,11 +14529,42 @@ zoo`.split("\n");
   var _stewardNames = {};
   var _stewardSince = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
-  var FINKEY_D = "trinityone/financekey:";
-  var _finRing = [];
-  var _finDocKeys = null;
-  var _finRev = 1;
-  var _finAt = 0;
+  var CAP_KEYS = {
+    finance: { d: "trinityone/financekey:", cap: "finance", legacy: true, explicit: false },
+    // the church books
+    checkin: { d: "trinityone/checkinkey:", cap: "safeguarding", legacy: false, explicit: true }
+    // the children's register
+  };
+  var _capState = {};
+  for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
+  var _checkinMigrated = "";
+  var _capWaiters = {};
+  for (const k of Object.keys(CAP_KEYS)) _capWaiters[k] = /* @__PURE__ */ new Set();
+  var _capRingChanged = (kind) => {
+    for (const fn of _capWaiters[kind] || []) {
+      try {
+        fn();
+      } catch (e) {
+      }
+    }
+  };
+  var _capAllows = (spec, caps) => (p2) => {
+    const c = caps && caps[p2];
+    if (!Array.isArray(c)) return !spec.explicit;
+    return c.indexOf(spec.cap) >= 0;
+  };
+  var _warnUnsealed = (cap, failed) => {
+    if (!failed || !failed.length) return;
+    const who = failed.map((p2) => _stewardNames && _stewardNames[p2] || (p2 || "").slice(0, 10) + "\u2026").join(", ");
+    try {
+      window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+        what: "steward permissions",
+        message: "Could not give " + cap + " access to " + who + " \u2014 their steward code looks damaged. Everyone else was updated. Remove and re-add them from the roster."
+      } }));
+    } catch (e) {
+    }
+  };
+  var FINKEY_D = CAP_KEYS.finance.d;
   var churchSkHeld = () => !actingChurch && !!churchSk && !!churchPub;
   var _legacyBookKeyHex = () => {
     try {
@@ -15185,15 +15219,6 @@ zoo`.split("\n");
     window.Steward.churchPub = pub;
     window.Steward.activePub = pub;
     window.Steward.hasKey = true;
-    try {
-      Promise.resolve().then(() => {
-        try {
-          window.Steward.publishRelayList && window.Steward.publishRelayList();
-        } catch {
-        }
-      });
-    } catch {
-    }
   }
   function _resetChurchScopedState() {
     lastProfile = {};
@@ -15215,6 +15240,8 @@ zoo`.split("\n");
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
     _mediaKeyChecked = false;
+    for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
+    _checkinMigrated = "";
     _authedRelays.clear();
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
@@ -16029,6 +16056,15 @@ zoo`.split("\n");
         const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
         setKey(seed);
         window.Steward.locked = false;
+        if (actingChurch) {
+          const target = actingChurch;
+          actingChurch = "";
+          window.Steward.actingChurch = "";
+          try {
+            window.Steward.setActiveIdentity(target);
+          } catch (e) {
+          }
+        }
         window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
         return true;
       } catch {
@@ -18248,6 +18284,27 @@ zoo`.split("\n");
       }
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }, sk));
     },
+    // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
+    // told them nothing at all, and the parent's app stores the link in localStorage where nothing ever removed
+    // it. So a guardian the church had removed went on being shown that child, indefinitely.
+    //
+    // Found in round 7 while checking a different finding. The relay still refuses their DMs — the guardians:
+    // document is the authority and it had dropped them — so this is not an access hole. It is an app telling
+    // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
+    // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
+    // one"; this is the half that was missing.
+    notifyGuardianRemoved(parentPubIn, childPubIn) {
+      if (!sk) return Promise.resolve(null);
+      const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
+      if (!parentPub || !childPub) return Promise.resolve(null);
+      let content;
+      try {
+        content = encrypt3(JSON.stringify({ removed: childPub, church: churchPub }), getConversationKey(sk, parentPub));
+      } catch (e) {
+        return Promise.resolve(null);
+      }
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }, sk));
+    },
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
     // reads joinpolicy:<churchpub> + the admitted:<churchpub> allowlist and withholds posting until then. ----
@@ -18653,26 +18710,49 @@ zoo`.split("\n");
     //
     // Sharing that derived key shares the books and nothing else: encSelf/decSelf are used by Finance (and the
     // pilot-locked Manna module) and by nothing else in the product.
-    financeKeyRing() {
-      return _finRing.slice();
+    capKeyRing(kind) {
+      return (_capState[kind] ? _capState[kind].ring : []).slice();
     },
-    subscribeFinanceKey(cb) {
+    // DOES THIS CAPABILITY HAVE TO BE GIVEN ON PURPOSE? Asked by the console so the padlocks and the KEYS can
+    // never disagree — and they did. `explicit` lives in CAP_KEYS, so the console must read it from here rather
+    // than keep a copy: a second copy is how the two layers drifted apart in the first place.
+    //
+    // Round 7 measured what the drift costs. An unscoped steward's console said she could run safeguarding
+    // (`stewCapState` treats "no caps list" as "everything"), rendered the Check-in screen for her, and then
+    // withheld the register key — which is correct, and which nobody told her. Her words: "I never got told no
+    // in plain words… I found the edges of what I could do by things quietly not happening."
+    capNeedsExplicitGrant(cap) {
+      return Object.keys(CAP_KEYS).some((k) => CAP_KEYS[k].cap === cap && CAP_KEYS[k].explicit);
+    },
+    financeKeyRing() {
+      return window.Steward.capKeyRing("finance");
+    },
+    // Watch one capability's envelope. Owner-signed only — the relay enforces that too — and `checked` is set
+    // only on an AUTHENTICATED end-of-stored-events, because an unauthenticated read answers "no envelope" for
+    // a church that has one, and minting on that answer orphans everything the real key sealed.
+    subscribeCapKey(kind, cb) {
+      const spec = CAP_KEYS[kind];
       const cp = actingChurch || pub;
-      if (!cp) {
+      const S = () => _capState[kind];
+      if (!spec || !S() || !cp) {
         cb && cb([]);
         return () => {
         };
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [FINKEY_D + cp] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [spec.d + cp] }], {
         onevent(e) {
+          const st = S();
+          if (!st) return;
+          if ((actingChurch || pub) !== cp) return;
           if (e.pubkey !== cp) return;
           if (_authFuture(e)) return;
-          if ((e.created_at || 0) < _finAt) return;
-          _finAt = e.created_at || 0;
+          if ((e.created_at || 0) < st.at) return;
+          st.at = e.created_at || 0;
           try {
             const env = JSON.parse(e.content || "{}");
-            _finDocKeys = env.keys || null;
-            _finRev = env.rev || 1;
+            if ((env.rev || 1) < st.rev) return;
+            st.docKeys = env.keys || null;
+            st.rev = env.rev || 1;
             const mine = env.keys && env.keys[churchPub];
             if (mine) {
               const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
@@ -18682,16 +18762,21 @@ zoo`.split("\n");
                 if (Array.isArray(pj)) ring = pj.filter((x) => typeof x === "string" && x);
               } catch (x) {
               }
-              _finRing = ring && ring.length ? ring : [plain];
+              const incoming = ring && ring.length ? ring : [plain];
+              st.ring = [...incoming, ...st.ring.filter((k) => incoming.indexOf(k) === -1)].slice(0, 12);
             } else if (!churchSkHeld()) {
-              _finRing = [];
+              st.ring = [];
             }
           } catch (x) {
           }
-          cb && cb(_finRing.slice());
+          _capRingChanged(kind);
+          cb && cb(st.ring.slice());
         },
         oneose() {
-          cb && cb(_finRing.slice());
+          const st = S();
+          if (!st || (actingChurch || pub) !== cp) return;
+          if (_isRelayAuthed()) st.checked = true;
+          cb && cb(st.ring.slice());
         }
       });
       return () => {
@@ -18701,40 +18786,99 @@ zoo`.split("\n");
         }
       };
     },
-    // OWNER-ONLY. Wrap the books' key to the church and to every steward the roster gives `finance` to —
-    // which, for an unscoped steward, is all of them, exactly as it is everywhere else.
-    async ensureFinanceKeyFor(stewardPubs, caps) {
+    // OWNER-ONLY. Wrap this capability's key to the church and to every steward the roster grants it — which,
+    // for an unscoped steward, is all of them, exactly as it is everywhere else.
+    async ensureCapKeyFor(kind, stewardPubs, caps) {
+      const spec = CAP_KEYS[kind];
+      const st = _capState[kind];
+      if (!spec || !st) return false;
       if (!churchSkHeld() || actingChurch) return false;
-      if (!_isRelayAuthed()) return false;
+      if (!st.checked || !_isRelayAuthed()) return false;
       const cp = pub;
-      const legacy = _legacyBookKeyHex();
-      if (!legacy) return false;
-      if (!_finRing.length) _finRing = [_hex(crypto.getRandomValues(new Uint8Array(32))), legacy];
-      else if (_finRing.indexOf(legacy) < 0) _finRing = [..._finRing, legacy];
-      const allowed = (p) => {
-        const c = caps && caps[p];
-        return !Array.isArray(c) || c.indexOf("finance") >= 0;
-      };
+      let nextRing = st.ring.slice();
+      if (!nextRing.length) {
+        const first = _hex(crypto.getRandomValues(new Uint8Array(32)));
+        const legacy = spec.legacy ? _legacyBookKeyHex() : "";
+        if (spec.legacy && !legacy) return false;
+        nextRing = legacy ? [first, legacy] : [first];
+      } else if (spec.legacy) {
+        const legacy = _legacyBookKeyHex();
+        if (legacy && nextRing.indexOf(legacy) < 0) nextRing = [...nextRing, legacy];
+      }
+      const allowed = _capAllows(spec, caps);
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
-      const have = _finDocKeys || {};
+      const have = st.docKeys || {};
       if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) return false;
-      const ring = JSON.stringify(_finRing);
-      const keys = await _sealEach(ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FINKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _finRev }) }));
-      if (ok !== false) _finDocKeys = keys;
+      if (st.docKeys) {
+        const lost = Object.keys(have).filter((p2) => want.indexOf(p2) < 0);
+        if (lost.length) return window.Steward.rotateCapKey(kind, stewardPubs, caps);
+      }
+      const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      _warnUnsealed(spec.cap, _sealEachFailed);
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
+      if (ok === false || ok == null) return false;
+      st.ring = nextRing;
+      st.docKeys = keys;
       return ok;
     },
-    encSelf(obj) {
+    // ROTATE — the contract rotateCareKey and rotateMediaKey already keep. Taking a capability away used to
+    // rewrite the envelope without that person and leave the KEY unchanged, so they carried on reading,
+    // including anything written after they left.
+    //
+    // THE HONEST LIMIT, which belongs in the wording as much as the code: rotation protects the FUTURE, not the
+    // past. Anyone who held the old key can still open everything written before the rotation — they already
+    // had it, and no amount of re-keying takes that back.
+    async rotateCapKey(kind, stewardPubs, caps) {
+      const spec = CAP_KEYS[kind];
+      const st = _capState[kind];
+      if (!spec || !st) return false;
+      if (!churchSkHeld() || actingChurch) return false;
+      if (!st.checked || !_isRelayAuthed()) return false;
+      if (!st.ring.length) return false;
+      const cp = pub;
+      const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      const nextRing = [fresh, ...st.ring].slice(0, 12);
+      const nextRev = (st.rev || 1) + 1;
+      const allowed = _capAllows(spec, caps);
+      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+      const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      _warnUnsealed(spec.cap, _sealEachFailed);
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
+      if (ok === false) return false;
+      st.ring = nextRing;
+      st.rev = nextRev;
+      st.docKeys = keys;
+      _capRingChanged(kind);
+      return ok;
+    },
+    // The books, by their old names — unchanged behaviour, one implementation underneath.
+    subscribeFinanceKey(cb) {
+      return window.Steward.subscribeCapKey("finance", cb);
+    },
+    ensureFinanceKeyFor(stewardPubs, caps) {
+      return window.Steward.ensureCapKeyFor("finance", stewardPubs, caps);
+    },
+    rotateFinanceKey(stewardPubs, caps) {
+      return window.Steward.rotateCapKey("finance", stewardPubs, caps);
+    },
+    // SEAL / OPEN, per capability. These used to be one pair of functions over one key, which is why granting
+    // Finance also handed over the children's register: both were sealed with the same derived self-key, so the
+    // books' ring opened check-in records too. `kind` names which ring does the sealing.
+    encSeal(kind, obj) {
+      const st = _capState[kind];
+      if (!st) return null;
       try {
-        if (_finRing.length) return encrypt3(JSON.stringify(obj), _unhex(_finRing[0]));
-        if (churchSkHeld()) return encrypt3(JSON.stringify(obj), getConversationKey(churchSk, churchPub));
+        if (st.ring.length) return encrypt3(JSON.stringify(obj), _unhex(st.ring[0]));
+        if (CAP_KEYS[kind] && CAP_KEYS[kind].legacy && churchSkHeld()) return encrypt3(JSON.stringify(obj), getConversationKey(churchSk, churchPub));
       } catch (e) {
       }
       return null;
     },
-    decSelf(str) {
+    encOpen(kind, str) {
       if (!str) return null;
-      for (const k of _finRing) {
+      const st = _capState[kind];
+      if (!st) return null;
+      for (const k of st.ring) {
         try {
           return JSON.parse(decrypt3(str, _unhex(k)));
         } catch (e) {
@@ -18748,14 +18892,21 @@ zoo`.split("\n");
       }
       return null;
     },
+    encSelf(obj) {
+      return window.Steward.encSeal("finance", obj);
+    },
+    // the books, by their old names
+    decSelf(str) {
+      return window.Steward.encOpen("finance", str);
+    },
     // Publish an encrypted addressable church doc (kind-30078). Signed by WHOEVER IS ACTING — the church key
     // for an owner, the steward's own key for a delegate — and feChurch() stamps the ['church',<cp>] tag that
     // lets the relay resolve which church a steward is writing for. It used to sign with churchSk
     // unconditionally, which in delegated mode is the steward's own key with no church tag: every write
     // refused, and the module then re-seeded an empty book from the empty read. (audit 2026-07-06 #3)
-    encPublish(dtag, obj) {
+    encPublish(dtag, obj, kind) {
       if (!sk) return Promise.resolve(null);
-      const content = window.Steward.encSelf(obj);
+      const content = window.Steward.encSeal(kind || "finance", obj);
       if (content == null) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", "1"]], content }));
     },
@@ -18765,7 +18916,7 @@ zoo`.split("\n");
     },
     // subscribe to all encrypted church docs whose d-tag starts with `prefix`; decrypts each and emits a
     // live array of { id (the d-tag suffix after prefix), ...decrypted, ts }. Returns an unsubscribe fn.
-    encSubscribe(prefix, cb) {
+    encSubscribe(prefix, cb, kind) {
       const cp = actingChurch || pub;
       if (!cp) {
         cb([]);
@@ -18774,6 +18925,34 @@ zoo`.split("\n");
       }
       const byId = /* @__PURE__ */ new Map();
       const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const kk = kind || "finance";
+      const held = /* @__PURE__ */ new Map();
+      const HELD_CAP = 2e3;
+      const take = (id, content, ts) => {
+        const obj = window.Steward.encOpen(kk, content);
+        if (obj == null) {
+          if (!held.has(id) && held.size >= HELD_CAP) {
+            const oldest = held.keys().next().value;
+            held.delete(oldest);
+          }
+          held.set(id, { content, ts });
+          return false;
+        }
+        held.delete(id);
+        const prev = byId.get(id);
+        if (prev && (prev.ts || 0) > (ts || 0)) return true;
+        byId.set(id, { id, ...obj, ts });
+        return true;
+      };
+      const retry = () => {
+        if (!held.size) return;
+        let opened = 0;
+        for (const [id, h] of [...held]) {
+          if (take(id, h.content, h.ts)) opened++;
+        }
+        if (opened) emit();
+      };
+      if (_capWaiters[kk]) _capWaiters[kk].add(retry);
       const sub = pool.subscribeMany(relays(), [
         { kinds: [30078], authors: [cp], "#t": [NET] },
         { kinds: [30078], "#church": [cp], "#t": [NET] }
@@ -18781,16 +18960,18 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(prefix)) return;
-          if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
+          const authored = e.pubkey === cp || _careRoster.has(e.pubkey);
           const id = d.slice(prefix.length);
-          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+          const tomb = e.tags.some((t) => t[0] === "deleted") || !e.content;
+          if (tomb && !authored) return;
+          if (!authored && !d.startsWith("finance/") && !d.startsWith("trinityone/checkin:")) return;
+          if (tomb) {
             byId.delete(id);
+            held.delete(id);
             emit();
             return;
           }
-          const obj = window.Steward.decSelf(e.content);
-          if (obj == null) return;
-          byId.set(id, { id, ...obj, ts: e.created_at });
+          if (!take(id, e.content, e.created_at)) return;
           emit();
         },
         oneose() {
@@ -18798,6 +18979,7 @@ zoo`.split("\n");
         }
       });
       return () => {
+        _capWaiters[kk] && _capWaiters[kk].delete(retry);
         try {
           sub.close();
         } catch {
@@ -19169,8 +19351,13 @@ zoo`.split("\n");
     subscribeRunsheets(onSheets) {
       return this._subAddr(RUNSHEET_D, (c) => ({ items: Array.isArray(c.items) ? c.items : [] }), onSheets);
     },
-    // ---- kids check-in (ENCRYPTED to the church key: a child's presence + pickup code never leave plaintext,
-    // so the relay + other members can't see them). Run by the church-key holder; d=checkin:<id>. ----
+    // ---- kids check-in (ENCRYPTED to the SAFEGUARDING key: a child's presence + pickup code never leave
+    // plaintext, so the relay + other members can't see them). d=checkin:<id>.
+    //
+    // Its own key, not the books'. Until 2026-08-20 these were sealed with the same derived self-key the ledger
+    // used, so a steward given Finance — a treasurer, with no safeguarding role at all — could open every
+    // child's name, room and pickup code. Records written before the split still open for the OWNER only, via
+    // the legacy fallback in encOpen; migrateCheckinKeys() re-seals them onto the safeguarding key. ----
     publishCheckin(rec) {
       const id = rec.id || "ci" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       return window.Steward.encPublish("trinityone/checkin:" + id, {
@@ -19183,13 +19370,87 @@ zoo`.split("\n");
         code: rec.code || "",
         room: rec.room || "",
         note: rec.note || ""
-      });
+      }, "checkin");
     },
     removeCheckin(id) {
       return window.Steward.encRemove("trinityone/checkin:" + id);
     },
+    // MIGRATION — move any check-in record still sealed with the legacy self-key onto the safeguarding key.
+    //
+    // Splitting the keys protects records written from now on. It does nothing about the ones already on the
+    // relay: those are sealed with the key that also seals the ledger, so a Finance grant would still open the
+    // register's history. Unlike the ledger — which the relay pins to an exact next sequence number, and so can
+    // never be re-keyed — a check-in is an ordinary addressable doc, and re-publishing the same d-tag REPLACES
+    // it. So this is possible here, and it is the whole point of doing it now while churches hold few or none.
+    //
+    // Owner-only, by two separate facts: only the owner can derive the legacy key at all, and only the owner
+    // mints the safeguarding envelope. Idempotent — a record already on the new key is skipped, so running it
+    // twice costs one read. Returns { scanned, moved, failed }.
+    async migrateCheckinKeys(timeoutMs) {
+      const st = _capState.checkin;
+      if (!churchSkHeld() || !st || !st.ring.length) return { scanned: 0, moved: 0, failed: 0, skipped: "no safeguarding key held" };
+      const cp = actingChurch || pub;
+      if (!cp) return { scanned: 0, moved: 0, failed: 0 };
+      if (_checkinMigrated === cp) return { scanned: 0, moved: 0, failed: 0, skipped: "already run this session" };
+      const PRE = "trinityone/checkin:";
+      const stale = /* @__PURE__ */ new Map();
+      let sawEose = false;
+      await new Promise((res) => {
+        let done = false;
+        const finish = (eose) => {
+          if (done) return;
+          done = true;
+          if (eose) sawEose = true;
+          try {
+            sub.close();
+          } catch {
+          }
+          res();
+        };
+        const sub = pool.subscribeMany(relays(), [
+          { kinds: [30078], authors: [cp], "#t": [NET] },
+          { kinds: [30078], "#church": [cp], "#t": [NET] }
+        ], {
+          onevent(e) {
+            const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (!d.startsWith(PRE) || !e.content) return;
+            if (e.tags.some((t) => t[0] === "deleted")) return;
+            for (const k of st.ring) {
+              try {
+                JSON.parse(decrypt3(e.content, _unhex(k)));
+                return;
+              } catch (x) {
+              }
+            }
+            try {
+              stale.set(d.slice(PRE.length), JSON.parse(decrypt3(e.content, getConversationKey(churchSk, churchPub))));
+            } catch (x) {
+            }
+          },
+          oneose: () => finish(true)
+        });
+        setTimeout(() => finish(false), timeoutMs || 8e3);
+      });
+      let moved = 0, failed = 0;
+      for (const [id, rec] of stale) {
+        const ok = await window.Steward.encPublish(PRE + id, rec, "checkin");
+        if (ok === false || ok == null) failed++;
+        else moved++;
+      }
+      if (sawEose && !failed) _checkinMigrated = cp;
+      if (failed) {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+            what: "check-in records",
+            message: failed + " older check-in record(s) could not be moved onto the safeguarding key. Until they are, anyone with Finance can still read them. Reopen Check-in while online to try again."
+          } }));
+        } catch (e) {
+        }
+      }
+      return { scanned: stale.size, moved, failed, complete: sawEose && !failed };
+    },
     subscribeCheckins(cb) {
-      return window.Steward.encSubscribe("trinityone/checkin:", cb);
+      return window.Steward.encSubscribe("trinityone/checkin:", cb, "checkin");
     },
     // ---- rooms & bookings: a shared room calendar (steward-booked) ----
     // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }
@@ -19777,6 +20038,8 @@ zoo`.split("\n");
       _nameKeyChecked = false;
       _localBlocked = /* @__PURE__ */ new Set();
       _applyNoPhotoList([]);
+      for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
+      _checkinMigrated = "";
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;
@@ -20036,6 +20299,7 @@ zoo`.split("\n");
       });
     },
     async selfRegister(name, opts) {
+      if (actingChurch) return { ok: false, refused: [], unreachable: [], skipped: "acting as a delegated steward" };
       _regNeedsName = false;
       _armRegGate();
       try {

@@ -29,7 +29,12 @@ let relay, dataDir, ws;
 const connect = () => new Promise((res, rej) => { const s = new WebSocket(WS_URL); s.on('open', () => res(s)); s.on('error', rej); });
 const publish = (sock, evt) => new Promise((res) => { const on = d => { const m = JSON.parse(d); if (m[0] === 'OK' && m[1] === evt.id) { sock.off('message', on); res([m[2], m[3] || '']); } }; sock.on('message', on); sock.send(JSON.stringify(['EVENT', evt])); });
 // what the console publishes for an event: content carries date/time/recur/day, d-tag carries the id
-const evtDoc = (id, body, at) => finalizeEvent({ kind: 30078, created_at: at || now(), tags: [['d', EVENT_D + id], ['t', 'trinityone'], ['church', church.pub]], content: JSON.stringify(body) }, church.sk);
+// NO ['church'] TAG, because a church writing its OWN event does not produce one: feChurch (steward.src.js)
+// stamps that tag only when acting as a DELEGATED steward. This fixture used to hand-write it, which made
+// every event here look like a delegate's — and hid a regression on 2026-08-20 in which the owner was refused
+// permission to create any church-wide event while the delegate was still allowed. A fixture the shipped
+// console cannot produce tests something nobody does.
+const evtDoc = (id, body, at) => finalizeEvent({ kind: 30078, created_at: at || now(), tags: [['d', EVENT_D + id], ['t', 'trinityone']], content: JSON.stringify(body) }, church.sk);
 
 // Church docs are read-gated behind NIP-42, so the reader must answer the AUTH challenge — reading without it
 // returns an empty set, which looks exactly like "the event isn't there" and would make this test lie.

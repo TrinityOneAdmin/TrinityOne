@@ -20,7 +20,7 @@
 import { WebSocket } from 'ws';
 import { writeFileSync } from 'node:fs';
 
-const [port, cmd, a1, a2] = process.argv.slice(2);
+const [port, cmd, a1, a2, a3] = process.argv.slice(2);   // a3 = which match (1-based): three-box checks
 if (!port || !cmd) { console.error('usage: sim-actor.mjs <port> <see|tap|type|send|back|shot|eval> [args]'); process.exit(2); }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -160,7 +160,15 @@ try {
           return n && n.indexOf(want)===0 && vis(x);});
       }
       if(!all.length) return null;
-      all.sort(function(a,b){return (a.innerText||'').length-(b.innerText||'').length;});
+      // A heading and its button often carry the SAME text ("Add relay" is a DIV label AND a BUTTON).
+      // Sorting by text length alone left that tie to document order, which put the heading first — so the
+      // harness tapped a label's coordinates, nothing happened, and it still printed "tapped Add relay".
+      // Round 9's vicar reported "Add relay does nothing" five times over a button that works perfectly.
+      // Real controls therefore win ties: anything a person could actually press beats a DIV/SPAN/LABEL.
+      var live=function(x){ return /^(BUTTON|A)$/.test(x.tagName) || x.getAttribute('role')==='button'
+        || (x.tagName==='INPUT' && /^(button|submit)$/i.test(x.type||'')); };
+      all.sort(function(a,b){ var d=(live(a)?0:1)-(live(b)?0:1); if(d) return d;
+        return (a.innerText||'').length-(b.innerText||'').length;});
       var e=all[0]; e.scrollIntoView({block:'center'}); var r=e.getBoundingClientRect();
       return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)});})()`);
     if (!box) { out('NOT FOUND: ' + a1 + ' — run `see` to check what is on screen'); process.exit(0); }
@@ -174,12 +182,32 @@ try {
   } else if (cmd === 'type') {
     const r = await ev(`(function(){
       var norm=${NORM}; var want=norm(${JSON.stringify(a1)});
-      var i=[].slice.call(document.querySelectorAll('input,textarea')).filter(function(x){return norm(x.placeholder||'').indexOf(want)>=0;})[0];
+      var val=${JSON.stringify(a2 === undefined ? null : a2)};
+      var nth=${JSON.stringify(a3 ? parseInt(a3, 10) : 0)};
+      var vis=function(x){ var r=x.getBoundingClientRect(); return r.width>8 && r.height>6; };
+      var all=[].slice.call(document.querySelectorAll('input,textarea')).filter(vis);
+      var i;
+      if (val === null) {
+        val = ${JSON.stringify(a1)};
+        // SKIP SEARCH BOXES. One-argument type() takes the first visible field, and on a chat screen that is
+        // the search box, not the composer — so the text lands somewhere harmless and send then submits an
+        // empty message. Nia (session 3) posted three times and a private message twice, watched the box
+        // empty each time, and concluded nobody in her church wanted to talk to her. Every one of them was
+        // this. Use the send command for chat; this only stops the silent mis-aim.
+        // (No backticks anywhere in this comment: it lives INSIDE a template literal, and one ends it
+        //  early. The file already warns about that further down, and I did it anyway.)
+        var usable = all.filter(function(x){ return !/^(checkbox|radio|button|submit|file)$/i.test(x.type||'')
+          && !/search|find/i.test(x.placeholder || '') && x.type !== 'search'; });
+        i = usable[0];
+      } else {
+        var hits = all.filter(function(x){return norm(x.placeholder||'').indexOf(want)>=0;});
+        i = hits[nth > 0 ? (nth - 1) : 0];
+      }
       if(!i) return 'no field matching ' + ${JSON.stringify(a1)};
       i.focus();
       var proto = i.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
       var s=Object.getOwnPropertyDescriptor(proto,'value').set;
-      s.call(i, ${JSON.stringify(a2 || '')}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'typed';})()`);
+      s.call(i, String(val == null ? '' : val)); i.dispatchEvent(new Event('input',{bubbles:true})); return 'typed';})()`);
     out(r);
   } else if (cmd === 'send') {
     const ok = await ev(`(function(){

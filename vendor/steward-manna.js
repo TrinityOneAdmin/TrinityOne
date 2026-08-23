@@ -1,8 +1,12 @@
 (() => {
   // src/steward-manna.src.js
+  var MANNA_CAP = "finance";
   (function() {
     const S = () => window.Steward;
     const PFX = "trinityone/manna-";
+    const mPublish = (dtag, obj) => S().encPublish(dtag, obj, MANNA_CAP);
+    const mSubscribe = (prefix, cb) => S().encSubscribe(prefix, cb, MANNA_CAP);
+    const mRemove = (dtag) => S().encRemove(dtag);
     const SETTINGS_D = PFX + "settings";
     const FUND_D = PFX + "fund:";
     const REQUEST_D = PFX + "request:";
@@ -39,7 +43,7 @@
         };
       }
       cb({ enabled: cachedEnabled(), ...DEFAULTS });
-      return S().encSubscribe(SETTINGS_D, (items) => {
+      return mSubscribe(SETTINGS_D, (items) => {
         const doc = items.find((x) => x.id === "") || items[0] || {};
         try {
           localStorage.setItem(enKey(), doc.enabled ? "1" : "0");
@@ -61,7 +65,7 @@
         localStorage.setItem(enKey(), on ? "1" : "0");
       } catch {
       }
-      return S().encPublish(SETTINGS_D, {
+      return mPublish(SETTINGS_D, {
         enabled: !!on,
         baseCurrency: opts.baseCurrency || "GBP",
         mercyCapSats: num(opts.mercyCapSats) || DEFAULTS.mercyCapSats,
@@ -76,7 +80,7 @@
         return () => {
         };
       }
-      return S().encSubscribe(FUND_D, (items) => cb(items.sort((a, b) => (a.name || "").localeCompare(b.name || ""))));
+      return mSubscribe(FUND_D, (items) => cb(items.sort((a, b) => (a.name || "").localeCompare(b.name || ""))));
     }
     function saveFund(f) {
       if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -88,10 +92,10 @@
         // 0 = no per-fund cap (falls back to settings.mercyCapSats for mercy)
         note: (f.note || "").trim()
       };
-      return S().encPublish(FUND_D + id, rec).then(() => ({ id, ...rec }));
+      return mPublish(FUND_D + id, rec).then(() => ({ id, ...rec }));
     }
     function removeFund(id) {
-      return S() && S().encRemove ? S().encRemove(FUND_D + id) : Promise.resolve(null);
+      return S() && S().encRemove ? mRemove(FUND_D + id) : Promise.resolve(null);
     }
     function subscribeRequests(cb) {
       if (!S() || !S().encSubscribe) {
@@ -99,7 +103,7 @@
         return () => {
         };
       }
-      return S().encSubscribe(REQUEST_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
+      return mSubscribe(REQUEST_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
     }
     function openRequest(r) {
       if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -121,12 +125,12 @@
         status: "open",
         ts: nowS()
       };
-      return S().encPublish(REQUEST_D + id, rec).then(() => ({ id, ...rec }));
+      return mPublish(REQUEST_D + id, rec).then(() => ({ id, ...rec }));
     }
     function setRequestStatus(id, status, patch) {
       if (!S() || !S().encSubscribe) return Promise.resolve(null);
       return new Promise((resolve) => {
-        const unsub = S().encSubscribe(REQUEST_D, (items) => {
+        const unsub = mSubscribe(REQUEST_D, (items) => {
           const cur = items.find((x) => x.id === id);
           try {
             unsub();
@@ -134,7 +138,7 @@
           }
           if (!cur) return resolve(null);
           const { id: _id, ts: _ts, ...rest } = cur;
-          S().encPublish(REQUEST_D + id, { ...rest, ...patch || {}, status, ts: nowS() }).then(resolve);
+          mPublish(REQUEST_D + id, { ...rest, ...patch || {}, status, ts: nowS() }).then(resolve);
         });
       });
     }
@@ -142,7 +146,7 @@
       return setRequestStatus(id, "closed");
     }
     function removeRequest(id) {
-      return S() && S().encRemove ? S().encRemove(REQUEST_D + id) : Promise.resolve(null);
+      return S() && S().encRemove ? mRemove(REQUEST_D + id) : Promise.resolve(null);
     }
     function subscribeVouches(cb) {
       if (!S() || !S().encSubscribe) {
@@ -150,7 +154,7 @@
         return () => {
         };
       }
-      return S().encSubscribe(VOUCH_D, (items) => cb(items.sort((a, b) => (a.ts || 0) - (b.ts || 0))));
+      return mSubscribe(VOUCH_D, (items) => cb(items.sort((a, b) => (a.ts || 0) - (b.ts || 0))));
     }
     function addVouch(v) {
       if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -164,10 +168,10 @@
         // "I'll walk with this person" — an act of love, not a gate
         ts: nowS()
       };
-      return S().encPublish(VOUCH_D + id, rec).then(() => ({ id, ...rec }));
+      return mPublish(VOUCH_D + id, rec).then(() => ({ id, ...rec }));
     }
     function removeVouch(id) {
-      return S() && S().encRemove ? S().encRemove(VOUCH_D + id) : Promise.resolve(null);
+      return S() && S().encRemove ? mRemove(VOUCH_D + id) : Promise.resolve(null);
     }
     function requiredWitnesses(tier, amountSats, settings) {
       if (tier !== "covenant") return 0;
@@ -194,7 +198,7 @@
         return () => {
         };
       }
-      return S().encSubscribe(APPROVAL_D, (items) => cb(items));
+      return mSubscribe(APPROVAL_D, (items) => cb(items));
     }
     function approve(req, opts) {
       if (!S() || !S().encPublish) return Promise.resolve({ ok: false, error: "no key" });
@@ -212,7 +216,7 @@
         note: (opts.note || "").trim(),
         ts: nowS()
       };
-      return S().encPublish(APPROVAL_D + req.id, rec).then(() => setRequestStatus(req.id, "approved")).then(() => ({ ok: true, approval: rec }));
+      return mPublish(APPROVAL_D + req.id, rec).then(() => setRequestStatus(req.id, "approved")).then(() => ({ ok: true, approval: rec }));
     }
     const defaultPayout = {
       wired: false,
@@ -245,7 +249,7 @@
         return () => {
         };
       }
-      return S().encSubscribe(RECORD_D, (items) => cb(items.sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0))));
+      return mSubscribe(RECORD_D, (items) => cb(items.sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0))));
     }
     function recordDisbursement(req, info) {
       if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -258,7 +262,7 @@
         witnesses: info.witnesses || [],
         paidAt: nowS()
       };
-      return S().encPublish(RECORD_D + req.id, rec).then(() => ({ ...rec }));
+      return mPublish(RECORD_D + req.id, rec).then(() => ({ ...rec }));
     }
     function subscribeTestimony(cb) {
       if (!S() || !S().encSubscribe) {
@@ -266,7 +270,7 @@
         return () => {
         };
       }
-      return S().encSubscribe(TESTIMONY_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
+      return mSubscribe(TESTIMONY_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
     }
     function addTestimony(t) {
       if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -281,10 +285,10 @@
         // later: relay this into TrinityOne Gather
         ts: nowS()
       };
-      return S().encPublish(TESTIMONY_D + id, rec).then(() => ({ id, ...rec }));
+      return mPublish(TESTIMONY_D + id, rec).then(() => ({ id, ...rec }));
     }
     function removeTestimony(id) {
-      return S() && S().encRemove ? S().encRemove(TESTIMONY_D + id) : Promise.resolve(null);
+      return S() && S().encRemove ? mRemove(TESTIMONY_D + id) : Promise.resolve(null);
     }
     window.StewardManna = {
       DEFAULTS,

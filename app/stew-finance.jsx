@@ -110,9 +110,24 @@ function BooksRecord({ book, onRecord, onClose }) {
     try { onRecord({ dir, account, fund, amountMinor: minor, date, memo: memo.trim() }); onClose(); }
     catch (e) { setErr(e.message || 'Could not record that.'); }
   };
+  // WHICH WAY THE MONEY GOES, CARRIED BY MORE THAN COLOUR.
+  //
+  // This was two plain buttons whose only signal of which was chosen was their background colour. Three
+  // separate people across rounds 7 and 8 pressed "Money out", did not notice it had not taken, and recorded
+  // an EXPENSE AS INCOME. Verified in the ledger: "Hall hire — bank dr 9500 | other-income cr 9500". One
+  // treasurer's arithmetic and the app's disagreed by exactly double her three outgoings, because none of
+  // them was ever subtracted.
+  //
+  // For a church that is the worst kind of quiet wrong: the books balance internally, look perfectly
+  // plausible, and say the parish earned money by hiring a hall out.
+  //
+  // So: aria-pressed (a screen reader can now say which is active, and so can anything automated), and a
+  // + / − in the label so the state has a SHAPE, not just a hue — for bright sunlight, a cheap screen, and
+  // anyone who does not distinguish sage from clay.
   const seg = (v, label) => (
-    <button onClick={() => setDir(v)} style={{ flex: 1, height: 42, border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
-      background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{label}</button>
+    <button onClick={() => setDir(v)} aria-pressed={dir === v} aria-label={label + (dir === v ? ' (selected)' : '')}
+      style={{ flex: 1, height: 42, border: dir === v ? '2px solid transparent' : '2px dashed var(--line)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
+      background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{(v === 'in' ? '+ ' : '− ') + label}</button>
   );
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
@@ -133,7 +148,12 @@ function BooksRecord({ book, onRecord, onClose }) {
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-          <button onClick={submit} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Record</button>
+          {/* THE LAST THING YOU TOUCH NAMES THE DIRECTION. If the toggle above did not take, this is where a
+              person sees it — "Record money IN" under a hall-hire note reads wrong at a glance, which a bare
+              "Record" never could. */}
+          <button onClick={submit} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>
+            {'Record money ' + (dir === 'in' ? 'IN' : 'OUT') + (amount && Number(amount) > 0 ? ' · ' + (dir === 'in' ? '+' : '−') + (CCY_SYM[book.baseCurrency] || '') + Number(amount).toFixed(2) : '')}
+          </button>
         </div>
       </div>
     </div>
@@ -520,16 +540,50 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
 }
 
 // ---- the main screen ----
+// THE GATE LIVES IN ITS OWN COMPONENT, and it must stay that way.
+//
+// DELEGATED BOOKKEEPING. This screen used to refuse to render for a delegated steward, because the three
+// things it needs were all broken: encPublish signed with the wrong key and omitted the ['church'] tag
+// (fixed 2026-07-06), the books had no shareable key (the finance envelope, 2026-08-19), and a delegate's
+// ledger silently arrived empty or was silently dropped (2026-08-20).
+//
+// What holds a delegate out is the KEY, not this component: without the finance capability the owner never
+// wraps them into the envelope, so encSeal returns null and pubEntry refuses the write. A screen that hides
+// itself is a preference; a key they do not hold is a protection.
+//
+// WHY THE SPLIT. The first version of this gate was an early `return` in the middle of DashFinance, after two
+// hooks and before nine more. React counts hooks per render: the moment the key arrived and `finKey` flipped,
+// the component rendered eleven hooks where it had rendered two, which is React error #310 — and the console
+// has exactly one error boundary, around the whole of StewardRoot. So the first time a church actually granted
+// Finance to a treasurer, the ENTIRE console dropped to the crash card. Revoking it threw the mirror error.
+//
+// A conditional return is only safe above every hook in the component, or in a wrapper like this one. Do not
+// move the gate back inside DashFinanceBook.
 function DashFinance() {
   const F = window.FinanceLedger;
-  if (!F) return <div style={{ padding: 28, color: 'var(--ink-3)' }}>Loading the ledger engine…</div>;
   const S = window.Steward;
-  // Defensive: never run relay-backed Finance under a delegated steward's key — encPublish would sign/encrypt
-  // with the wrong key and omit the ['church'] tag, so the relay rejects every write and the book silently
-  // re-seeds empty on reload. The nav already hides Finance when acting as a delegated steward; this guards
-  // any other entry (deep link, tab state). (audit 2026-07-06 #3)
-  if (S && S.actingChurch) return <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Finance is on the church console</div>The books are kept on the church’s own key. Open the console with the church key to record and view finances — delegated-steward bookkeeping isn’t available yet.</div>;
-  const useRelay = !!(S && S.encSubscribe && S.encPublish);   // real console w/ the church key → relay-backed; else localStorage
+  const [finKey, setFinKey] = React.useState(() => !!(S && S.financeKeyRing && S.financeKeyRing().length));
+  const _fIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _fConn = window.useStewardConn ? window.useStewardConn() : 0;
+  React.useEffect(() => {
+    if (!S || !S.subscribeCapKey) return;
+    setFinKey(!!(S.capKeyRing && S.capKeyRing('finance').length));   // a church switch clears the ring
+    return S.subscribeCapKey('finance', (ring) => setFinKey(!!(ring && ring.length)));
+  }, [_fIdv, _fConn]);
+  if (!F) return <div style={{ padding: 28, color: 'var(--ink-3)' }}>Loading the ledger engine…</div>;
+  // If they genuinely have no key, say which of the two it is rather than showing an empty ledger. An empty
+  // ledger is the most misleading thing this screen can display: it reads as "your church has never recorded
+  // anything", which is exactly what a treasurer must not be told by mistake.
+  if (S && S.actingChurch && !finKey) return <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Waiting for the books to be shared with you</div>The church keeps its accounts under their own key. Whoever holds the church key needs to give you the <b>Finance</b> permission — once they do, the books open here on their own. If they already have, give it a moment to arrive.</div>;
+  return <DashFinanceBook />;
+}
+
+function DashFinanceBook() {
+  const F = window.FinanceLedger;
+  const S = window.Steward;
+  const _bIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _bConn = window.useStewardConn ? window.useStewardConn() : 0;
+  const useRelay = !!(S && S.encSubscribe && S.encPublish);   // real console → relay-backed; else localStorage
   const bookRef = React.useRef(null);
   if (!bookRef.current) bookRef.current = useRelay ? F.createBook({ baseCurrency: 'GBP', decimals: 2 }) : booksLoad();
   const book = bookRef.current;
@@ -543,11 +597,23 @@ function DashFinance() {
     if (!useRelay) { booksSave(b); return true; }
     try {
       const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
-      if (ok === false) throw new Error('the relay refused the entry');
+      // NULL IS NOT SUCCESS. encPublish returns null — never false — when it declines before reaching the
+      // relay: no signing key, or no books key to seal with. `ok === false` alone let that through as a
+      // success, so a console without the finance ring showed the entry saved, wrote nothing anywhere, and
+      // lost it on reload. That is the exact shape of defect this repo keeps finding: a control reporting
+      // work it did not do. A delegated treasurer whose envelope has not arrived yet hits it on their first
+      // entry, which makes it far more likely now that Finance can be delegated at all.
+      if (ok === false || ok == null) throw new Error('the entry was not published');
       return true;
     } catch (x) {
-      booksSave(b);   // keep it locally so the treasurer's work isn't lost while they retry
-      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'journal entry', message: 'That entry could not be saved to your church\'s relay — it is kept on this device. Reopen Finance to retry.' } })); } catch (e2) {}
+      // NO LOCAL SAVE ON THE RELAY PATH, and no promise of one. booksSave() writes `trinityone.books.v1`,
+      // which booksLoad() reads ONLY when !useRelay — never on a console. So the old wording, "it is kept on
+      // this device, reopen Finance to retry", described a recovery that could not happen: reopening calls
+      // F.createBook() and rebuilds from the relay. The entry was gone, and the message said it was safe.
+      //
+      // The screen does correct itself — every relay delivery rebuilds the book from the stored documents, so
+      // the optimistic row disappears — but not before the treasurer has been told the opposite.
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'journal entry', message: 'That entry was NOT recorded — your church\'s relay refused or did not answer. Nothing has been saved. Check you are online and enter it again.' } })); } catch (e2) {}
       return false;
     }
   };
@@ -577,7 +643,9 @@ function DashFinance() {
       const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; bump(); }
     });
     return unsub;
-  }, []);
+    // [idv, conn], like every other subscription in this console — this one was the last still mounted with
+    // [], so it never followed a church switch and never re-issued its REQ after a relay reconnect.
+  }, [_bIdv, _bConn]);
   const [recording, setRecording] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
   const [reports, setReports] = React.useState(false);
@@ -604,9 +672,12 @@ function DashFinance() {
     const P = dir === 'in'
       ? [{ account: 'bank', dir: 'dr', amount: amountMinor }, { account, fund, dir: 'cr', amount: amountMinor }]
       : [{ account, fund, dir: 'dr', amount: amountMinor }, { account: 'bank', dir: 'cr', amount: amountMinor }];
-    const entry = F.post(b, { date, memo, postings: P }); pubEntry(b, entry); bump();
+    // Awaited: pubEntry's answer is the only thing that distinguishes a recorded entry from a lost one, and
+    // all three call sites used to drop it, so the row rendered as recorded either way.
+    const entry = F.post(b, { date, memo, postings: P });
+    return pubEntry(b, entry).then((ok) => { bump(); return ok; });
   };
-  const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); pubEntry(b, rev); bump(); } catch (e) {} };
+  const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
   // Post the lines the treasurer selected in the import modal. Each carries its statement lineKey as importKey
   // so a future re-import of the same statement is flagged as already-imported (see FinanceImport de-dup).
   const importStatement = (picks) => {

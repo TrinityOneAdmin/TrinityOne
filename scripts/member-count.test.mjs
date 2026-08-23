@@ -67,6 +67,9 @@ test('the pending-requests list is bounded so it cannot push the page away', () 
   // and everything below it off-screen. The rows scroll inside the panel now.
   const at = DASH.indexOf('Requests to join · {pendingJoins.length}');
   assert.notEqual(at, -1, 'the requests panel is gone');
-  const block = DASH.slice(at, at + 900);
+  // NOT a fixed window. A 900-char slice passed until an "Admit all" button was added to the same header and
+  // pushed maxHeight out of range — the test then failed over a change that did not touch the bound at all.
+  // Read to the end of the panel instead.
+  const block = DASH.slice(at, DASH.indexOf('{pendingJoins.map(', at));
   assert.match(block, /maxHeight: 268, overflowY: 'auto'/, 'the requests list is unbounded again');
 });

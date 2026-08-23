@@ -32,6 +32,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=' + port,
   '--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
   '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage',
+  // NEVER LET A ROUND REACH PRODUCTION. The app dials the canonical relays — app.trinityone.church and the
+  // Tailscale funnel — from CANONICAL_RELAYS, whatever origin served the page. app-boots.test.mjs has blocked
+  // this since it was written; the SIM LAUNCHERS never did, so every actor console had a live line out.
+  //
+  // Round 8 measured what that costs. A treasurer's console wrote to BOTH relays and read back from both, so
+  // her books held ten entries while the local relay held two, and the screen showed a balance neither could
+  // justify alone. publish() resolves on Promise.any — "some relay took it" — so "did it save?" had two
+  // answers, which is the one question the finance phase exists to ask. Two actors also reported entries
+  // appearing and reversing "on their own": that was the other console, in the same shared ledger.
+  //
+  // Port 9 is the discard port. Nothing listens, so the connection fails instantly rather than hanging.
+  // The relay on the page's OWN ORIGIN is unaffected, and that is where a round's data actually lives.
+  '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9',
   // MUTE. These are real browsers on the operator's machine, so an actor tapping the audio Bible or
   // "Listen to this page" plays out of the box's speakers — which happened mid-round on 2026-08-18 and
   // is startling if you have walked away from the desk. It does NOT disable the audio element, so an

@@ -26,9 +26,11 @@ function LibraryScreen({ ctx }) {
     <ScreenScroll>
       <h1 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'lumenFade .5s ease both' }}>Library</h1>
 
-      {/* segmented: Library / Watch */}
+      {/* segmented: Library / Watch & Listen.
+          A church that publishes AUDIO sermons had them filed under a tab named "Watch", next to a "Listen"
+          section holding only Audio Bibles. Nobody looking for a sermon to listen to opens Watch. */}
       <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 15, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 20 }} data-comment-anchor="dd2234f87c-div-30-7">
-        {[['library', 'Library', 'library'], ['watch', 'Watch', 'play']].map(([id, label, ic]) => {
+        {[['library', 'Library', 'library'], ['watch', 'Watch & Listen', 'play']].map(([id, label, ic]) => {
           const on = view === id;
           return (
             <button key={id} onClick={() => setView(id)} style={{
@@ -746,9 +748,15 @@ function InstalledBrowser({ ctx, category, force }) {
   rows.sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
 
   const CAT_LABEL = { bibles: 'Bible', dictionaries: 'Dictionary', commentaries: 'Commentary', devotionals: 'Devotional' };
-  const remove = (r) => {
+  // AWAIT IT. removeModule is `async`, so this tested a PROMISE — always truthy — and the success toast
+  // fired even when the removal returned false. A commentary that is not in `modules` cannot be removed at
+  // all, and the app said "Removed" anyway. Same family as every other control in this programme that
+  // reported success over nothing happening.
+  const remove = async (r) => {
     if (r.abbr === active) { ctx.toast('Switch to another Bible before removing this one'); return; }
-    if (window.Bible.removeModule(r.abbr)) { ctx.toast(`Removed ${r.abbr || r.name}`); force(x => x + 1); }
+    let ok = false;
+    try { ok = await window.Bible.removeModule(r.abbr); } catch (e) { ok = false; }
+    if (ok) { ctx.toast(`Removed ${r.abbr || r.name}`); force(x => x + 1); }
     else ctx.toast(`Couldn't remove ${r.name}`);
   };
 

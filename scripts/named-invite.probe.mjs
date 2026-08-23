@@ -18,7 +18,11 @@ const WANT = 'Deborah';
 const PROFILE = join(tmpdir(), 'namedinvite-' + process.pid + '-' + Date.now());
 const PORT = 9397;
 const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=' + PORT,
-  '--user-data-dir=' + PROFILE, '--window-size=400,800', '--no-first-run', '--disable-gpu', 'about:blank'], { stdio: 'ignore' });
+  '--user-data-dir=' + PROFILE, '--window-size=400,800', '--no-first-run', '--disable-gpu', 
+  // Never let this reach production — see the note in sim-launch.mjs. Port 9 discards; the page's own
+  // origin relay is unaffected.
+  '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9',
+  'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let ws, id = 0;
 const send = (m, p) => new Promise((res, rej) => {

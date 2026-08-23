@@ -59,7 +59,17 @@ test('the two refusals are worded differently — one is permanent, one is not',
   const src = stripComments(DASH);
   const blocked = fnBody(src, 'function StewCapBlocked(', 'StewCapBlocked');
   assert.match(blocked, /hasn’t been given to you/, 'the capability refusal does not say it can be changed');
-  assert.match(blocked, /Settings → Delegated stewards/, 'it does not say where the owner would change it');
+  // UPDATED after round 7. This used to require the panel to say "Settings → Delegated stewards" — written
+  // when that looked like helpfully precise directions. It is not: Settings → Security is owner-gated
+  // (`section === 'security' && !delegated`), and this panel is shown to DELEGATES by definition, because
+  // they are the only people who ever get refused. A steward followed it and reported "no such page exists;
+  // Security shows one general paragraph only". Directions to a door that is not there for you are worse
+  // than no directions. Name the person to ask instead.
+  assert.doesNotMatch(blocked, /Settings → (Security → )?Delegated stewards/,
+    'the refusal still sends a delegate to an owner-only page — the one instruction it gives cannot be ' +
+    'followed by anyone who reads it');
+  assert.match(blocked, /whoever holds the church key/i,
+    'the refusal does not name who to ask, which is the only actionable thing it can offer a delegate');
   assert.match(src, /Only the church key can change who the stewards are/,
     'the owner-only boundary reads like a capability their church could grant. It cannot be granted — it is ' +
     'what stops a steward adding themselves — and a delegate who confuses the two asks for the wrong thing.');

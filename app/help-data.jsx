@@ -443,7 +443,7 @@ window.HelpData = {
           { lead: 'Share a statement', text: 'Produce a summary for a quarter or a year — totals by category and fund — then download it as a PDF, copy it into a message, or post it to members. You choose what goes in.' },
           { lead: 'Export for your accountant', text: 'Export the full ledger as a CSV whenever you need it.' },
         ] },
-        { type: 'callout', tone: 'gold', text: 'The books are your church’s private bookkeeping, encrypted to the church’s own key — the relay only ever holds unreadable ciphertext, and only this console can open it. A statement you choose to share carries totals only, never member names, so it’s safe to hand out or post.' },
+        { type: 'callout', tone: 'gold', text: 'The books are your church’s private bookkeeping, encrypted to a key of their own — the relay only ever holds unreadable ciphertext. The people who can open them are you and anyone you have given <b>Finance</b> to; nobody else, including whoever runs the relay. A statement you choose to share carries totals only, never member names, so it’s safe to hand out or post.' },
         { type: 'note', text: 'More is on the way, all free: a balance sheet and trustees’ report, budgets, and regional giving-relief packs (like UK Gift Aid). Giving straight from your own phone wallet is a separate idea we’re still building — nothing to set up for it yet.' },
       ],
     },

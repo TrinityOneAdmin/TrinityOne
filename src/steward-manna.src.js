@@ -14,8 +14,25 @@
 //
 // NON-NEGOTIABLE: the disbursement ledger NAMES vulnerable people — more sensitive than donor records.
 // So every recipient-naming doc (request, vouch, approval, record, testimony) is stored NIP-44-ENCRYPTED
-// to the church's own key via window.Steward.encPublish/encSubscribe — the relay only ever sees ciphertext.
-// This module never touches the raw key; it talks only to those primitives. Off by default.
+// via window.Steward.encPublish/encSubscribe — the relay only ever sees ciphertext. This module never
+// touches the raw key; it talks only to those primitives. Off by default.
+//
+// WHICH KEY, AND HOW TO CHANGE IT. Capability keys are a table in src/steward.src.js (CAP_KEYS): one key per
+// capability, so a grant hands over that capability's records and nothing else. Manna rides the FINANCE key
+// today, which is a defensible default — benevolence is money out, and the treasurer keeps those books — and
+// it is what these documents were already sealed with before capabilities existed, so nothing has to migrate.
+//
+// It is a default, not a decision. Benevolence requests and testimonies say things about people that a
+// treasurer has no particular business reading, and when Manna leaves the pilot lock that judgement should be
+// made deliberately. Doing so is: add a `manna` entry to CAP_KEYS (legacy: false), add `manna` to the relay's
+// STEWARD_CAPS and a doc-type entry for its key, change the ONE line below, and migrate the existing records
+// the way migrateCheckinKeys() does — they are ordinary addressable docs, so re-publishing re-keys them.
+// That last step is why this constant exists here rather than fourteen literals through the file: the
+// check-in split needed exactly that change, and hunting call sites is how one gets missed.
+const MANNA_CAP = 'finance';
+// ...and three wrappers, so MANNA_CAP is named ONCE. Threading it through twenty call sites by hand is how
+// one gets missed, and a missed one seals a benevolence record under a different key than the rest — which
+// looks like nothing at all until someone opens the module and finds part of its history unreadable.
 //
 // Real money is deliberately NOT wired here (build order: model the events first, on regtest/a tiny
 // wallet later). pay() routes through a pluggable window.MannaPayout adapter whose default REFUSES.
@@ -25,6 +42,10 @@
 (function () {
   const S = () => window.Steward;
   const PFX = 'trinityone/manna-';
+  // Every encrypted-document call in this module goes through these, so the capability is named once.
+  const mPublish   = (dtag, obj) => S().encPublish(dtag, obj, MANNA_CAP);
+  const mSubscribe = (prefix, cb) => S().encSubscribe(prefix, cb, MANNA_CAP);
+  const mRemove    = (dtag) => S().encRemove(dtag);
   const SETTINGS_D  = PFX + 'settings';     // single doc: { enabled, baseCurrency, mercyCapSats, mercyAutoSats, witness1MaxSats }
   const FUND_D      = PFX + 'fund:';        // + fundId   — a benevolence purse with its own tier + policy
   const REQUEST_D   = PFX + 'request:';     // + reqId    — a grant request (names a person → encrypted)
@@ -52,7 +73,7 @@
   function subscribeSettings(cb) {
     if (!S() || !S().encSubscribe) { cb({ enabled: false, ...DEFAULTS }); return () => {}; }
     cb({ enabled: cachedEnabled(), ...DEFAULTS });   // instant paint from cache — no relay wait for the nav item
-    return S().encSubscribe(SETTINGS_D, (items) => {
+    return mSubscribe(SETTINGS_D, (items) => {
       const doc = items.find(x => x.id === '') || items[0] || {};
       try { localStorage.setItem(enKey(), doc.enabled ? '1' : '0'); } catch {}
       cb({
@@ -68,7 +89,7 @@
     if (!S() || !S().encPublish) return Promise.resolve(null);
     opts = opts || {};
     try { localStorage.setItem(enKey(), on ? '1' : '0'); } catch {}
-    return S().encPublish(SETTINGS_D, {
+    return mPublish(SETTINGS_D, {
       enabled: !!on,
       baseCurrency: opts.baseCurrency || 'GBP',
       mercyCapSats: num(opts.mercyCapSats) || DEFAULTS.mercyCapSats,
@@ -83,7 +104,7 @@
   // shape: { id, name, tier:'mercy'|'covenant', capSats, note }
   function subscribeFunds(cb) {
     if (!S() || !S().encSubscribe) { cb([]); return () => {}; }
-    return S().encSubscribe(FUND_D, (items) => cb(items.sort((a, b) => (a.name || '').localeCompare(b.name || ''))));
+    return mSubscribe(FUND_D, (items) => cb(items.sort((a, b) => (a.name || '').localeCompare(b.name || ''))));
   }
   function saveFund(f) {
     if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -94,9 +115,9 @@
       capSats: num(f.capSats),     // 0 = no per-fund cap (falls back to settings.mercyCapSats for mercy)
       note: (f.note || '').trim(),
     };
-    return S().encPublish(FUND_D + id, rec).then(() => ({ id, ...rec }));
+    return mPublish(FUND_D + id, rec).then(() => ({ id, ...rec }));
   }
-  function removeFund(id) { return (S() && S().encRemove) ? S().encRemove(FUND_D + id) : Promise.resolve(null); }
+  function removeFund(id) { return (S() && S().encRemove) ? mRemove(FUND_D + id) : Promise.resolve(null); }
 
   // ---- grant requests (the ledger of need). Plain-language fields; never a "case file". ----
   // status: 'open' → 'approved' → 'paid' → 'closed'  (covenant also passes through vouching first)
@@ -104,7 +125,7 @@
   // recipient.ln = a Lightning Address the recipient brings (self-custodial); recipient.pub = optional npub/hex.
   function subscribeRequests(cb) {
     if (!S() || !S().encSubscribe) { cb([]); return () => {}; }
-    return S().encSubscribe(REQUEST_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
+    return mSubscribe(REQUEST_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
   }
   function openRequest(r) {
     if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -124,23 +145,23 @@
       status: 'open',
       ts: nowS(),
     };
-    return S().encPublish(REQUEST_D + id, rec).then(() => ({ id, ...rec }));
+    return mPublish(REQUEST_D + id, rec).then(() => ({ id, ...rec }));
   }
   function setRequestStatus(id, status, patch) {
     // re-publish the addressable request doc with a new status (addressable: same d-tag replaces)
     if (!S() || !S().encSubscribe) return Promise.resolve(null);
     return new Promise((resolve) => {
-      const unsub = S().encSubscribe(REQUEST_D, (items) => {
+      const unsub = mSubscribe(REQUEST_D, (items) => {
         const cur = items.find(x => x.id === id);
         try { unsub(); } catch {}
         if (!cur) return resolve(null);
         const { id: _id, ts: _ts, ...rest } = cur;
-        S().encPublish(REQUEST_D + id, { ...rest, ...(patch || {}), status, ts: nowS() }).then(resolve);
+        mPublish(REQUEST_D + id, { ...rest, ...(patch || {}), status, ts: nowS() }).then(resolve);
       });
     });
   }
   function closeRequest(id) { return setRequestStatus(id, 'closed'); }
-  function removeRequest(id) { return (S() && S().encRemove) ? S().encRemove(REQUEST_D + id) : Promise.resolve(null); }
+  function removeRequest(id) { return (S() && S().encRemove) ? mRemove(REQUEST_D + id) : Promise.resolve(null); }
 
   // ---- vouches (the Barnabas chain). A nominator stands behind a person; witnesses co-sign for covenant.
   // For now these RECORD who vouched (by pubkey), church-key-signed — true independent multi-sig (NIP-46)
@@ -149,7 +170,7 @@
   // shape: { id, requestId, role, pub, name, note, ts }
   function subscribeVouches(cb) {
     if (!S() || !S().encSubscribe) { cb([]); return () => {}; }
-    return S().encSubscribe(VOUCH_D, (items) => cb(items.sort((a, b) => (a.ts || 0) - (b.ts || 0))));
+    return mSubscribe(VOUCH_D, (items) => cb(items.sort((a, b) => (a.ts || 0) - (b.ts || 0))));
   }
   function addVouch(v) {
     if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -162,9 +183,9 @@
       note: (v.note || '').trim(),   // "I'll walk with this person" — an act of love, not a gate
       ts: nowS(),
     };
-    return S().encPublish(VOUCH_D + id, rec).then(() => ({ id, ...rec }));
+    return mPublish(VOUCH_D + id, rec).then(() => ({ id, ...rec }));
   }
-  function removeVouch(id) { return (S() && S().encRemove) ? S().encRemove(VOUCH_D + id) : Promise.resolve(null); }
+  function removeVouch(id) { return (S() && S().encRemove) ? mRemove(VOUCH_D + id) : Promise.resolve(null); }
 
   // ---- policy helpers (pure; the UI shows these and the engine guards on them) ----
   function requiredWitnesses(tier, amountSats, settings) {
@@ -193,7 +214,7 @@
   // shape (RECORD_D-adjacent, keyed by requestId): { requestId, approvedBy:[pub], witnesses:[pub], method, note, ts }
   function subscribeApprovals(cb) {
     if (!S() || !S().encSubscribe) { cb([]); return () => {}; }
-    return S().encSubscribe(APPROVAL_D, (items) => cb(items));
+    return mSubscribe(APPROVAL_D, (items) => cb(items));
   }
   // Guarded: refuses to approve a covenant request that lacks its required relationship/witnesses.
   function approve(req, opts) {
@@ -212,7 +233,7 @@
       note: (opts.note || '').trim(),
       ts: nowS(),
     };
-    return S().encPublish(APPROVAL_D + req.id, rec)
+    return mPublish(APPROVAL_D + req.id, rec)
       .then(() => setRequestStatus(req.id, 'approved'))
       .then(() => ({ ok: true, approval: rec }));
   }
@@ -247,7 +268,7 @@
   // shape (keyed by requestId): { requestId, amountSats, payoutRef, approvedBy, witnesses, paidAt }
   function subscribeRecords(cb) {
     if (!S() || !S().encSubscribe) { cb([]); return () => {}; }
-    return S().encSubscribe(RECORD_D, (items) => cb(items.sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0))));
+    return mSubscribe(RECORD_D, (items) => cb(items.sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0))));
   }
   function recordDisbursement(req, info) {
     if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -260,7 +281,7 @@
       witnesses: info.witnesses || [],
       paidAt: nowS(),
     };
-    return S().encPublish(RECORD_D + req.id, rec).then(() => ({ ...rec }));
+    return mPublish(RECORD_D + req.id, rec).then(() => ({ ...rec }));
   }
 
   // ---- consented testimony (the fruit that flows back to givers). NEVER derived from payout/purchase
@@ -268,7 +289,7 @@
   // shape: { id, requestId, message, consentedBy, sharedToGather, ts }
   function subscribeTestimony(cb) {
     if (!S() || !S().encSubscribe) { cb([]); return () => {}; }
-    return S().encSubscribe(TESTIMONY_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
+    return mSubscribe(TESTIMONY_D, (items) => cb(items.sort((a, b) => (b.ts || 0) - (a.ts || 0))));
   }
   function addTestimony(t) {
     if (!S() || !S().encPublish) return Promise.resolve(null);
@@ -281,9 +302,9 @@
       sharedToGather: !!t.sharedToGather,           // later: relay this into TrinityOne Gather
       ts: nowS(),
     };
-    return S().encPublish(TESTIMONY_D + id, rec).then(() => ({ id, ...rec }));
+    return mPublish(TESTIMONY_D + id, rec).then(() => ({ id, ...rec }));
   }
-  function removeTestimony(id) { return (S() && S().encRemove) ? S().encRemove(TESTIMONY_D + id) : Promise.resolve(null); }
+  function removeTestimony(id) { return (S() && S().encRemove) ? mRemove(TESTIMONY_D + id) : Promise.resolve(null); }
 
   window.StewardManna = {
     DEFAULTS,

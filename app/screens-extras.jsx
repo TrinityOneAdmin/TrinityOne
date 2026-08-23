@@ -263,13 +263,19 @@ const transBtn = { width: 44, height: 44, borderRadius: 999, border: 'none', bac
 function NotifToggleRow({ icon, accent, label, sub, on, disabled, onFlip }) {
   return (
     <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left', opacity: disabled ? .45 : 1 }}>
-      <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `color-mix(in oklab, ${safeCssColor(accent, 'var(--ink-2)')} 14%, var(--surface-2))`, color: safeCssColor(accent, 'var(--ink-2)') }}>
+            {/* TAPPING THE WORDS WORKS THE SWITCH. The toggle is 46x28 at the far right of a full-width row and
+          the words naming it had no handler, so the obvious target did nothing. Four people across two
+          rounds hit it, the vicar included, and Colin put it best: "you have to hit the little switch
+          itself rather than the words, which Margaret will not work out" — Margaret being 79. */}
+<div onClick={() => !disabled && onFlip()} style={{ cursor: disabled ? 'default' : 'pointer', width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `color-mix(in oklab, ${safeCssColor(accent, 'var(--ink-2)')} 14%, var(--surface-2))`, color: safeCssColor(accent, 'var(--ink-2)') }}>
         <Icon name={icon} size={19} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
         {sub ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1, lineHeight: 1.4 }}>{sub}</div> : null}
       </div>
-      <button onClick={() => !disabled && onFlip()} role="switch" aria-checked={on} disabled={disabled} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: disabled ? 'default' : 'pointer', padding: 3, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+      {/* The label is rendered in a sibling div, so the button itself has no text and no accessible name.
+          One aria-label here names every switch this row renders. */}
+      <button onClick={(e) => { e.stopPropagation(); if (!disabled) onFlip(); }} role="switch" aria-checked={on} aria-label={String(label || '') + (on ? ' (on)' : ' (off)')} disabled={disabled} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: disabled ? 'default' : 'pointer', padding: 3, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
         <div style={{ width: 22, height: 22, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow)', transform: on ? 'translateX(18px)' : 'translateX(0)', transition: 'transform .15s' }} /></button>
     </div>
   );
@@ -377,7 +383,7 @@ function CurrencyScreen({ open, onClose, ctx }) {
       </div>
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>
-          Choose the currency you’d like to see giving amounts in. Your money is always held as Bitcoin (in “sats”) — this just changes the friendly label shown next to it.
+          Choose the currency you’d like to see giving amounts in. TrinityOne never holds your money — when giving is switched on, it goes from your own wallet straight to your church. This only changes the label amounts are shown with.
         </p>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)' }}>
           {currencies.map((c, i) => {

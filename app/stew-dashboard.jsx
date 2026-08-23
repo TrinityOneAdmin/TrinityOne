@@ -56,26 +56,68 @@ function stewCapState(cap) {
   const S = window.Steward || {};
   if (!S.actingChurch) return { allowed: true, owner: true, why: '' };          // the owner console: unrestricted
   const caps = S.myStewardCaps ? S.myStewardCaps() : null;
-  if (caps === null || !Array.isArray(caps)) return { allowed: true, owner: false, why: '' };   // unscoped, or not known yet
+  if (caps === null || !Array.isArray(caps)) {
+    // UNSCOPED — "no capability list" means a steward appointed before capabilities existed, and everywhere
+    // else it means "as powerful as before", so that upgrading cannot strip a working delegate.
+    //
+    // Except where the capability carries a key that must be given on purpose. The children's register is the
+    // only one today: before 2026-08-20 NO delegate could open a check-in record at all, so inheriting it on
+    // upgrade would hand every steward a church ever appointed the name, room and pickup code of every child,
+    // with nobody asked. The KEY layer already refuses; this is the padlock agreeing with it out loud, instead
+    // of opening a screen that then does nothing.
+    if (S.capNeedsExplicitGrant && S.capNeedsExplicitGrant(cap)) {
+      return { allowed: false, owner: false, unscoped: true,
+        why: (STEW_CAP_LABEL[cap] || cap) + ' has to be given on purpose — it isn’t included in “everything”.' };
+    }
+    return { allowed: true, owner: false, why: '' };
+  }
   if (caps.indexOf(cap) >= 0) return { allowed: true, owner: false, why: '' };
   return { allowed: false, owner: false, why: 'Your church hasn’t given you ' + (STEW_CAP_LABEL[cap] || cap) + '.' };
 }
 // The panel a delegate meets instead of a screen they were not granted. It names who can change it, because
 // the useful next step is asking them — not staring at a locked page.
 function StewCapBlocked({ cap, note }) {
+  // TWO REFUSALS, because two different people are reading. A scoped steward was given some areas and not
+  // this one; telling them "this hasn't been given to you" is the plain truth. An UNSCOPED steward believes
+  // they have everything — and everywhere else they do — so the same sentence reads as a mistake or a
+  // demotion. They need to know this one area is not part of "everything", and why.
+  const st = stewCapState(cap);
+  const unscoped = !!st.unscoped;
   return (
     <div style={{ padding: '28px 22px', maxWidth: 520 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <Icon name="lock" size={20} color="var(--clay-deep, #b4462f)" />
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>{STEW_CAP_LABEL[cap] || cap} isn’t yours to run</div>
       </div>
-      <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
-        You’re helping run this church as a steward, and this part hasn’t been given to you. Nothing is
-        broken and you haven’t done anything wrong.
-      </p>
-      <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
-        Whoever holds the church key can change that from <b>Settings → Delegated stewards</b>. {note || ''}
-      </p>
+      {unscoped ? (
+        <React.Fragment>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+            You can run everything else in this church — but <b>{STEW_CAP_LABEL[cap] || cap}</b> is never
+            included automatically. It opens children’s records: their names, the room they’re in, and the
+            code that says who may collect them. Nothing is broken and you haven’t lost anything — this part
+            has always been kept to whoever holds the church key.
+          </p>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
+            If it’s your job now, ask whoever holds the church key to tick <b>{STEW_CAP_LABEL[cap] || cap}</b>
+            beside your name. It takes them one click. {note || ''}
+          </p>
+        </React.Fragment>
+      ) : (
+        <React.Fragment>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>
+            You’re helping run this church as a steward, and this part hasn’t been given to you. Nothing is
+            broken and you haven’t done anything wrong.
+          </p>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: 0 }}>
+            {/* THE PERSON READING THIS CANNOT GO THERE. Settings → Security is owner-only
+            (`section === 'security' && !delegated`), and this panel is shown to DELEGATES by definition —
+            they are the only people who get refused. Round 7: a steward followed it and reported "no such
+            page exists; Security shows one general paragraph only". Directions are worse than none when they
+            send someone to a door that is not there for them. Say who to ask instead. */}
+        Ask whoever holds the church key — they can change it in a couple of taps from their own console. {note || ''}
+          </p>
+        </React.Fragment>
+      )}
     </div>
   );
 }
@@ -201,8 +243,13 @@ function relayRejectionActive() {
 // relay-rejection alarm); each known reason gets its own sentence; anything else we do not recognise is quoted
 // from the relay verbatim rather than given an invented explanation. Only a genuine connection failure — the
 // case with no reason at all — is auto-dismissed, because the others need the steward to do something.
-function publishErrorMessage(reason) {
+function publishErrorMessage(reason, evt) {
   const r = String(reason || '');
+  // A DECLINED KIND IS NOT A WRONG KEY. "not a member or not permitted" is the relay's answer both to "you
+  // are not this church" and to "I do not store that kind of event" — and kind:10002, the NIP-65 relay
+  // list, is always the second. Reporting it as the first told stewards on healthy churches to restore
+  // their key, which overwrites it. Only the church's own documents can imply a key mismatch.
+  if (evt && evt.kind === 10002) return { wrongChurch: false, sticky: false, msg: '' };
   if (/not a member|not permitted/i.test(r)) return { wrongChurch: true, sticky: true,
     msg: 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.' };
   if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
@@ -246,7 +293,8 @@ function PublishErrorBanner() {
   const [sgMsg, setSgMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
-      const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '');
+      const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
+      if (!m) return;   // a refusal we deliberately do not surface (see publishErrorMessage)
       if (wrongChurch) noteRelayRejection();
       setMsg(m);
       clearTimeout(f._t);
@@ -343,6 +391,7 @@ function JoinNotifier() {
 // allowlist). reuse-only — it never mints a new key in the background (that would orphan history); removals
 // are rotated explicitly from the edit-members modal. Renders nothing.
 function KeyDistributor() {
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const last = React.useRef({});
@@ -396,6 +445,14 @@ function KeyDistributor() {
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
+    // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
+    // OWN identity has no acting church, so this effect ran on a console whose church exists nowhere and
+    // published media/care/name key envelopes the relay could only refuse. round 7 measured one seated
+    // steward at 28 refusals in a session — carekey x13, namekey, joinpolicy among them — and each refusal
+    // raises the sticky banner "Changes weren't saved: this relay is set up for a different church. Restore
+    // this church's key in Settings…". That banner then sat on every screen telling a treasurer her work was
+    // not saving WHILE THE RELAY ACCEPTED EVERY ENTRY, and its remedy destroys a church key if followed.
+    if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
@@ -502,6 +559,8 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [name, setName] = React.useState(church.name || '');
   const [busy, setBusy] = React.useState(false);
   const [teamName, setTeamName] = React.useState('');
+  // Same rule as the Groups page: absent means ON, only an explicit false is a steward's decision to opt out.
+  const encByDefaultWiz = !church.features || church.features.encryptComms !== false;
   const STARTERS = [
     { id: 'whole', name: 'Whole Church', kind: 'broadcast', sub: 'Announcements for everyone' },
     { id: 'prayer', name: 'Prayer', kind: 'group', sub: 'Share & lift requests' },
@@ -600,7 +659,33 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     try { if (window.Steward.ensureJoinPolicy) await Promise.resolve(window.Steward.ensureJoinPolicy()); } catch (e) {}
     next();
   };
-  const saveGroups = async () => { const chosen = STARTERS.filter(s => picks.has(s.id)); if (chosen.length) { setBusy(true); for (const g of chosen) await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); setBusy(false); } next(); };
+  // THE WIZARD'S ROOMS ARE SEALED TOO. encryptComms defaults on now, but that default lived only in the New
+  // Group modal — so a church's very FIRST rooms, the ones every church gets, were the only ones created
+  // unencrypted. Measured on a live church: three groups, all enc=None. A church ending up with some rooms
+  // sealed and some not, by accident of which screen made them, is worse than either extreme.
+  //
+  // Mirrors the modal's safety exactly: if the key cannot be published, the room is UNFLAGGED rather than
+  // left claiming an encryption it does not have (a group flagged `encrypted` with no envelope refuses every
+  // member's send, for ever, silently). There are no members yet at this point, so the key seals to nobody
+  // and the roster effect keys each person as they join — its "first sighting" skip records the empty set,
+  // so the first real member counts as growth and triggers distribution.
+  const saveGroups = async () => {
+    const chosen = STARTERS.filter(s => picks.has(s.id));
+    if (chosen.length) {
+      setBusy(true);
+      for (const g of chosen) {
+        const seal = encByDefaultWiz && g.kind === 'group';   // broadcast channels are the church's own voice
+        const pub = await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub, ...(seal ? { encrypted: true } : {}) }));
+        if (seal && pub && pub.id && window.Steward.publishGroupKey) {
+          let r = null;
+          try { r = await window.Steward.publishGroupKey(pub.id, []); } catch (e) { r = null; }
+          if (r === null || r === false) { try { await window.Steward.publishGroup({ ...pub, encrypted: false }); } catch (e) {} }
+        }
+      }
+      setBusy(false);
+    }
+    next();
+  };
   // A TEAM WITH NO ROLES CANNOT HOLD A ROTA. This step took a name and published a group, and nothing else:
   // the steward reached the Rota tab, found their own Welcome Team sitting there empty, and could not put
   // anybody on a Sunday until they had typed the roles in by hand. Measured in the round of 2026-08-19 —
@@ -660,7 +745,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   if (step === 0) return (
     <WizShell step={step} title="Welcome to your console" sub="Let’s get your church set up — about a minute. First, what’s it called? Members see this name when they join."
       footer={<React.Fragment>
-        <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip setup</button>
+        {/* NO EXIT BEFORE THE TWELVE WORDS. "Skip setup" used to sit here, on step 0 — one tap and a steward
+            reached a working console having never seen the phrase that IS the church, with no way to recover
+            it afterwards. The quiz on step 1 is otherwise mandatory (canContinue requires saved && verified),
+            so this button was the only way past it. Moved to the groups step: the name and the words are
+            compulsory, everything after them is not. Owner's decision, 2026-08-21. */}
         <div style={{ flex: 1 }} />
         <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
@@ -806,6 +895,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     <WizShell step={step} title="Create a few spaces" sub="Groups are chat rooms (or announcement channels) your members join. Pick a few to start — you can add or remove any time."
       footer={<React.Fragment>
         <button onClick={() => setStep(2)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        {/* The exit lives HERE, not on step 0: groups, meetings and a serving team are genuinely optional, and
+            a steward who only wants a look round should not be trapped inventing a rota. Skipping now leaves
+            the church with no groups at all, which is correct — nothing is imposed — and the Groups page says
+            so plainly: "No groups yet — create your church's first chat room." */}
+        <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip setup</button>
         <div style={{ flex: 1 }} />
         <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
@@ -939,19 +1033,17 @@ function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings sub-tab (e.g. relay → network)
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action within that sub-tab (e.g. open the Set-PIN dialog)
-  const [, setTick] = React.useState(0);   // the books' key arriving is not React state — nudge a re-render
+  const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
   const church = window.useStewardChurch();   // real church profile + npub from the relay
-  // double-entry Finance module — church-key console ONLY. Under a delegated steward's key encPublish
-  // signs/encrypts with the wrong key and carries no ['church'] tag, so the relay rejects every write and
-  // encSubscribe returns nothing → the book silently re-seeds empty on reload (data loss). Hide it until
-  // the delegated-steward finance path exists. (audit 2026-07-06 #3)
   // Finance is no longer owner-only. The books have a key of their own now, wrapped to the church and to
   // every steward granted `finance` (src/steward.src.js), so a treasurer can read the whole history and
   // write to it. A delegate who was NOT granted it still sees the padlock rather than a missing tab.
+  // A stable string for "which capabilities do I hold" — the thing every padlock below is computed from.
+  const _capsSig = JSON.stringify((window.Steward && window.Steward.myStewardCaps && window.Steward.myStewardCaps()) || null);
   const finOn = !!window.DashFinance && stewCapState('finance').allowed;
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
@@ -969,7 +1061,15 @@ function StewDashboard({ initial = 'overview' }) {
     if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
     if (mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
     return copy.map(mark);
-  }, [finOn, mannaOn, mealsOn, checkinOn]);
+    // THE CAPABILITY LIST IS A DEPENDENCY. mark() calls stewCapState() for eight tabs, but the deps listed
+    // only the four module toggles — so when an owner granted or withdrew a capability, every padlock except
+    // Finance's (which happens to feed finOn) kept the state it had at mount. A delegate given Members went
+    // on seeing "your church hasn't given you Members" until they restarted the console, and — the direction
+    // that matters — a delegate whose capability was WITHDRAWN went on seeing the tab unlocked.
+    //
+    // The screens themselves re-check, so this was never the security boundary; it is what the person is
+    // told, and being told the wrong thing about your own permissions is its own defect.
+  }, [finOn, mannaOn, mealsOn, checkinOn, _capsSig]);
   // WHAT A DELEGATE IS TOLD WHEN THEY ARRIVE. Once per church, not a tour. Before this, the only way to
   // learn the shape of the job was to press things: two of the most serious bugs found on 2026-07-28 were in
   // delegated paths precisely because nobody goes there, and an agent in a simulation would report each
@@ -984,25 +1084,80 @@ function StewDashboard({ initial = 'overview' }) {
   const closeBrief = () => { try { localStorage.setItem(_briefKey, '1'); } catch (e) {} setBrief(false); };
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
-  // KEEP THE BOOKS' KEY IN STEP WITH THE ROSTER. Only the owner can mint or rotate it, and it must be
-  // rewrapped whenever the finance-capable set changes — add a treasurer and they need the ring; take the
-  // capability away and the next rotation should stop including them.
+  // KEEP EACH CAPABILITY'S KEY IN STEP WITH THE ROSTER. Only the owner can mint or rotate one, and each must
+  // be rewrapped whenever the set of people holding that capability changes — add a treasurer and they need
+  // the books' ring; take the capability away and the next rotation should stop including them.
+  //
+  // One loop over the capabilities that HAVE a key, not a hand-written line per capability. The check-in key
+  // was added on 2026-08-20 and a hand-written list is exactly how the next one gets forgotten — minted for
+  // nobody, so the first delegate to be given it silently sees an empty register.
   const _stewardsForKey = window.useStewardStewards ? window.useStewardStewards() : [];
+  const _capKinds = ['finance', 'checkin'];
+  const _capIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _capConn = window.useStewardConn ? window.useStewardConn() : 0;
+  // [idv, conn] LIKE EVERY OTHER SUBSCRIPTION IN THIS CONSOLE (see makeSub in steward-root.jsx). These three
+  // were the only ones mounted with `[]`: they never re-subscribed when the steward switched church, and never
+  // re-issued their REQ after a relay reconnect — the failure this project already has a name for.
   React.useEffect(() => {
     const S = window.Steward;
-    if (!S || S.actingChurch || !S.ensureFinanceKeyFor) return;      // owner console only
+    if (!S || !S.subscribeCapKey) return;
+    const offs = _capKinds.map(kind => S.subscribeCapKey(kind, () => setTick(t => t + 1)));
+    return () => { for (const off of offs) { try { off(); } catch (e) {} } };
+  }, [_capIdv, _capConn]);
+  // MINT ON A SIGNAL, NOT ON A STOPWATCH. This used to be a single 1200 ms timer whose deps are CONSTANT for
+  // a church with no delegated stewards ('' and '{}') — so it fired exactly once, and if the envelope
+  // subscription had not reached an authenticated EOSE by then, ensureCapKeyFor answered "not checked yet"
+  // and nothing ever minted a key again that session. Kids check-in worked with no envelope at all before
+  // today; that timer made it depend on winning a race, with no second attempt.
+  //
+  // `tick` is bumped by the subscription above on every delivery and on EOSE, so this re-runs when the
+  // answer could actually have changed. ensureCapKeyFor is idempotent — an unchanged audience publishes
+  // nothing — so re-running it costs one comparison.
+  React.useEffect(() => {
+    const S = window.Steward;
+    // OWNER CONSOLE ONLY — and "owner" is not the same as "not currently acting for someone else".
+    //
+    // A delegated steward viewing THEIR OWN identity has `actingChurch` empty, so this guard passed and the
+    // console cheerfully minted capability envelopes for the delegate's own church — one that exists nowhere,
+    // least of all on this relay. Measured in round 7 (`relay/rejected.log`): Con, a properly seated steward,
+    // was refused 28 times, all for d-tags keyed to his OWN pubkey — financekey x6, checkinkey x6, carekey
+    // x13. Those refusals raise the sticky banner "Changes weren't saved: this relay is set up for a
+    // different church. Restore this church's key in Settings…", which then sat on every screen for the whole
+    // session — telling a treasurer her work was not saving WHILE THE RELAY WAS ACCEPTING EVERY ENTRY, and
+    // offering a remedy that destroys a church key if followed.
+    //
+    // Pre-existing for the care and name keys; this branch made it worse by adding two more capabilities to
+    // the loop. `church.name` is the proxy for "this console's church actually exists": a shell created by
+    // "Help run a church" has never named or published one. It is a proxy, not a proof — the honest signal
+    // would be asking the relay which churches it hosts, which it does not expose unauthenticated — but it
+    // costs nothing when wrong, because the effect re-runs the moment a name arrives.
+    if (!S || S.actingChurch || !S.ensureCapKeyFor) return;
+    if (!church.name) return;   // no church of our own to mint for — see above
     const caps = (S.stewardCaps && S.stewardCaps()) || {};
-    const t = setTimeout(() => { try { S.ensureFinanceKeyFor(_stewardsForKey, caps); } catch (e) {} }, 1200);
-    return () => clearTimeout(t);
-  }, [_stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})]);
-  // every console watches the envelope: the owner to notice its own, a delegate to receive the ring
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      for (const kind of _capKinds) {
+        try {
+          Promise.resolve(S.ensureCapKeyFor(kind, _stewardsForKey, caps)).then(() => {
+            // Records written before check-in had its own key are still sealed with the key the LEDGER uses,
+            // so a Finance grant would keep opening the children's register until they move. Owner-only, and
+            // it now retries on a later tick unless it genuinely completed.
+            if (kind === 'checkin' && S.migrateCheckinKeys) S.migrateCheckinKeys().catch(() => {});
+          }).catch(() => {});
+        } catch (e) {}
+      }
+    }, 1200);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [_capIdv, _capConn, tick, _stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})]);
+  // once the church name resolves, re-run self-registration so the pool relays store the readable name
+  // Owner consoles only — see the note in selfRegister. A delegate's console fired this with the name of the
+  // church they were helping and registered THEIR OWN key under it.
   React.useEffect(() => {
     const S = window.Steward;
-    if (!S || !S.subscribeFinanceKey) return;
-    return S.subscribeFinanceKey(() => setTick(t => t + 1));
-  }, []);
-  // once the church name resolves, re-run self-registration so the pool relays store the readable name
-  React.useEffect(() => { if (church.name && window.Steward.selfRegister) window.Steward.selfRegister(church.name).catch(() => {}); }, [church.name]);
+    if (!S || S.actingChurch || !church.name || !S.selfRegister) return;
+    S.selfRegister(church.name).catch(() => {});
+  }, [church.name]);
   const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)
   const editName = () => setRenaming(true);
   // responsive: a phone/narrow window collapses the desktop sidebar into a top header + scrollable nav
@@ -1070,12 +1225,27 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'settings' && <DashSettings onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
+  // "New post" and "New team" both write content, so both need the `content` capability — and both sat in the
+  // header on EVERY tab, offered to delegates who did not have it. The delegate wrote the post, pressed send,
+  // and the relay refused it with nothing said on screen. That is worse than a locked button: they believe
+  // their church has just been told something.
+  //
+  // Marked, not hidden — the same choice the nav makes a few lines up. A button that vanishes reads as a
+  // broken console; a dimmed one that says why reads as a church that has scoped you.
+  const _contentCap = stewCapState('content');
+  const _capBtn = (allowed, why, label, icon, onClick, title) => (
+    <button onClick={allowed ? onClick : () => { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'church', message: why + ' Ask whoever holds the church key if you need it.' } })); } catch (e) {} }}
+      aria-disabled={!allowed} title={allowed ? title : why}
+      className={'sk-btn ' + (allowed ? 'sk-btn--clay' : 'sk-btn--ghost')}
+      style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13, opacity: allowed ? 1 : 0.55, cursor: allowed ? 'pointer' : 'not-allowed' }}>
+      <Icon name={allowed ? icon : 'lock'} size={15} color="currentColor" /> {narrow ? '' : label}</button>
+  );
   const actions = (
     <React.Fragment>
       <button onClick={() => setInvite(true)} title="Show your church’s joining code and QR for new members" className="sk-btn sk-btn--ghost" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> {narrow ? '' : 'Invite code'}</button>
       {tab === 'rota'
-        ? <button onClick={() => setAddingTeam(true)} title="Create a new serving team" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> {narrow ? '' : 'New team'}</button>
-        : <button onClick={() => setPosting(true)} title="Write a new post for your church" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="var(--on-clay)" /> {narrow ? '' : 'New post'}</button>}
+        ? _capBtn(_contentCap.allowed, _contentCap.why, 'New team', 'plus', () => setAddingTeam(true), 'Create a new serving team')
+        : _capBtn(_contentCap.allowed, _contentCap.why, 'New post', 'send', () => setPosting(true), 'Write a new post for your church')}
       <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
     </React.Fragment>
   );
@@ -1359,12 +1529,14 @@ function SkConfirm({ icon, tint, title, body, confirmLabel, onConfirm, onCancel,
   const dlgRef = useStewDialog(() => { if (!busy) onCancel(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onCancel} style={{ position: 'fixed', inset: 0, zIndex: 220, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'lumenFade .16s ease both' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both', outline: 'none' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ maxHeight: '86vh', overflowY: 'auto', width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both', outline: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 9 }}>
           <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, ' + t + ' 14%, var(--surface))', color: t, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={icon || 'lock'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1.15 }}>{title}</div>
         </div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px' }}>{body}</p>
+        {/* pre-line: a body that separates its parts with blank lines (the admit-all name list does) otherwise
+            collapses into one run-on paragraph, which is the shape nobody reads before pressing the button. */}
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px', whiteSpace: 'pre-line' }}>{body}</p>
         {err ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, lineHeight: 1.45, margin: '-8px 0 16px' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onCancel} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? .5 : 1 }}>Cancel</button>
@@ -1800,12 +1972,18 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   ) : null;
   // people asking to become a steward — surfaced big too, so a request never just sits unseen in Settings
   const stewardReqs = window.usePendingStewards ? window.usePendingStewards() : [];
+  // Approving a steward is owner-only, and this banner renders for whoever is on Overview — including a
+  // delegate. Sending them to Settings → Security, which is owner-gated, is directions to a door that is not
+  // there for them (round 7: a steward followed it and found "no such page exists").
+  const _ovDelegated = !!(window.Steward && window.Steward.actingChurch);
   const stewardReqBanner = stewardReqs.length ? (
     <button onClick={() => goSettings('security')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--gold) 38%, var(--line))', background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={22} color="#fff" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
-        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Security → Delegated stewards.</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{_ovDelegated
+          ? 'Only whoever holds the church key can approve them.'
+          : 'Approve them under Settings → Security → Delegated stewards.'}</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
@@ -2008,7 +2186,14 @@ function NewGroupModal({ open, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const cats = window.useStewardCategories ? window.useStewardCategories() : [];
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
-  const encByDefault = !!(church.features && church.features.encryptComms);   // "Encrypt all comms" → new groups sealed by default
+  // ENCRYPTED UNLESS THE CHURCH SAID OTHERWISE. Absent = ON: a brand-new church has no features object at
+  // all, and reading that as "off" meant every church started with unsealed rooms and had to go and find a
+  // setting. Round 9's members read the result exactly as you would fear — Grace: "the app encrypts my chat
+  // with one person, but not the place where people post about their health, their new job, and their
+  // loneliness"; Priya hesitated before posting a prayer request, having already said which hospital ward she
+  // works on. Only an explicit `false` — a steward deliberately turning it off — leaves new rooms unsealed.
+  // Owner's decision, 2026-08-22. Existing groups are untouched: this is the default for NEW ones.
+  const encByDefault = !church.features || church.features.encryptComms !== false;
   React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
@@ -2768,10 +2953,18 @@ function DashRelaysCard() {
     catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
     setSyncBusy(false);
   };
+  // ADDING A RELAY IS NOT THE SAME AS REGISTERING WITH IT, and nothing used to say so. A relay only starts
+  // enforcing this church's rules — and only counts toward redundancy — once the church is REGISTERED on it:
+  // gateway.mjs reports `enforces: CHURCH_PUBS.size > 0`, and the console refuses to count a relay that says
+  // enforces:false. So a steward adds their second box, sees it appear in the list, and nothing ever happens.
+  // Round 9's vicar did exactly that and stopped: "I typed our second office computer's address into the Add
+  // relay box and pressed Add relay... Because of that I never got to the bit about keeping the two in step."
+  const [addedNote, setAddedNote] = React.useState('');
   const addRelay = () => {
     const r = window.Steward.addRelay && window.Steward.addRelay(draft);
-    if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); return; }
+    if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); setAddedNote(''); return; }
     setDraft(''); setErr('');
+    setAddedNote(String(r));
   };
   // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
   // relay. (Registering write-access still uses the token/pairing below.)
@@ -2912,6 +3105,20 @@ function DashRelaysCard() {
             <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+          {/* The step nobody was told about. Says what was added, what it does NOT yet do, and the one thing
+              left to do about it — in a steward's words, not the relay's. */}
+          {addedNote ? (
+            <div style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--ink)' }}>Added {addedNote}</b> — your church will now read from it.
+              <div style={{ marginTop: 4 }}>
+                It is not yet holding your church, though. A relay only carries a church once that church is
+                <b> registered</b> on it — until then it stays a spare you read from, and it will not count
+                towards keeping two copies. If it is your own relay, open its setup page and add this church;
+                if someone else runs it, ask them to.
+              </div>
+              <button onClick={() => setAddedNote('')} className="sk-btn sk-btn--ghost" style={{ marginTop: 8, padding: '6px 10px', fontSize: 12 }}>Got it</button>
+            </div>
+          ) : null}
           <button onClick={autoFind} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Lists only relays that offer to host churches and enforce TrinityOne’s rules — so your safeguarding + membership policy still applies.</div>
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
@@ -3586,7 +3793,7 @@ function GuardianLinkModal({ child, childName, members, guardians, minorsSet, on
     .filter(m => !q.trim() || (m.name || '').toLowerCase().includes(q.toLowerCase()));
   return (
     <CkModal title={'Parents of ' + (childName || 'this child')} onClose={onClose}>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12, lineHeight: 1.45 }}>A linked parent can always message this child and collect them at check-in. The child keeps their own account — this just records who their guardian is. Only adults (not other children) can be linked.</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12, lineHeight: 1.45 }}>A linked parent can always message this child and collect them at check-in. The child keeps their own account — this just records who their guardian is. Only adults (not other children) can be linked. {/* Round 7: a parent went looking for this in her own app, was offered only “make a new account”, and would have created a second identity for a child who already had one. Her side now says to ask a steward; this is the steward’s half — that the request is normal, and that it is done from here. */}Parents often ask you for this — anyone already in your church can be linked here, and it appears in their app straight away.</div>
       {linked.length ? (
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Linked</div>
@@ -3816,11 +4023,30 @@ function DashMembers() {
       .then(r => { if (!r || r.failed || r.pending) release(); })
       .catch(() => { release(); });
   }, [sg.loaded, sg.minors, sg.approved, members]);
+  // UNMARKING A CHILD ALSO DROPS ANY YOUTH CLEARANCE. Owner: "a steward should simply be able to unmark a
+  // child and they revert to full access" — and reverting must not mean becoming a CLEARED WORKER. Rev.
+  // Miriam cleared a six-year-old by mis-tapping an unnamed button; while the child mark stood the relay
+  // still protected everyone, and the danger arrived the moment a steward corrected the mark and left the
+  // clearance behind. Measured before the fix: the six-year-old could then privately message another child.
   const toggleMinor = (pk) => {
-    const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
-    const r = window.Steward.setMinors(next); _reseal(next, sg.approved || [], [pk]); return r;
+    const unmarking = minorsSet.has(pk);
+    const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
+    const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
+    const r = window.Steward.setMinors(next);
+    if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
+      try { window.Steward.setApproved(nextApproved); } catch (e) {}
+    }
+    _reseal(next, nextApproved, [pk]); return r;
   };
+  // A CHILD CANNOT BE CLEARED TO WORK WITH CHILDREN. The relay refuses to store it; refuse it here too, so a
+  // steward is told rather than left believing a press landed. Miriam: "not a word of objection that I was
+  // clearing a child I had marked as a child two minutes earlier."
   const toggleApproved = (pk) => {
+    if (!approvedSet.has(pk) && minorsSet.has(pk)) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'youth clearance',
+        message: (nameByPub[pk] || 'That person') + ' is marked as a child, so they cannot be cleared to work with young people. Unmark them first if that was wrong.' } })); } catch (e) {}
+      return null;
+    }
     const next = approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk];
     const r = window.Steward.setApproved(next); _reseal(sg.minors || [], next, [pk]); return r;
   };
@@ -3869,6 +4095,8 @@ function DashMembers() {
     // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
     // and goes on treating a removed adult as a parent it may always message.
     _reseal(sg.minors || [], sg.approved || [], [childPub], next);
+    // ...and tell the PARENT'S app, which stores the link locally and had no other way to learn it was gone.
+    if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(parentPub, childPub);
   };
   // joining: when approval is on, members who haven't been admitted yet are pending requests
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
@@ -3883,6 +4111,27 @@ function DashMembers() {
   const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !isBlocked(m.pubkey)) : [];
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
   const admitMember = (pk) => window.Steward.setAdmitted([...admittedList, pk]);
+  // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
+  // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
+  // eighteen round trips for a single decision.
+  //
+  // It still goes through a confirm that NAMES everyone, because only a steward at an unlocked console admits
+  // anyone (decided 2026-08-18) and a bulk button that hid the names would keep the letter of that rule while
+  // losing the point of it. Anyone who has not set a name is called out separately — "Anonymous" is exactly
+  // the row a steward would want to look at twice.
+  const [confirmAdmitAll, setConfirmAdmitAll] = React.useState(false);
+  const [admitAllBusy, setAdmitAllBusy] = React.useState(false);
+  const [admitAllErr, setAdmitAllErr] = React.useState('');
+  const admitAll = async () => {
+    setAdmitAllBusy(true); setAdmitAllErr('');
+    const pks = pendingJoins.map(m => m.pubkey).filter(Boolean);
+    try {
+      const r = await Promise.resolve(window.Steward.setAdmitted([...new Set([...admittedList, ...pks])]));
+      if (r === false) throw new Error('Every relay rejected it. Check your connection and try again.');
+      setConfirmAdmitAll(false);
+    } catch (e) { setAdmitAllErr((e && e.message) || 'Couldn\u2019t admit them \u2014 nobody was let in. Try again.'); }
+    finally { setAdmitAllBusy(false); }
+  };
   const [copied, setCopied] = React.useState('');
   const [showInactive, setShowInactive] = React.useState(false);
   const [showBlocked, setShowBlocked] = React.useState(false);
@@ -4011,22 +4260,31 @@ function DashMembers() {
           {parentSet.has(m.pubkey) ? <SkPill tint="sage">parent account</SkPill> : null}
           <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="chat" size={15} color="currentColor" /> Chat</button>
+          {/* WHAT EACH CONTROL ACTUALLY NEEDS, rather than "are you the owner". One `!delegated` wrapper used to
+              hide all five of these from every delegated steward, including the two the relay would have
+              accepted: Reconnect is granted by `members` (gateway.mjs, RESEAT_D) and photo suppression by
+              `safeguarding` (NOPHOTO_D). So a church could grant Members to someone precisely so they could
+              re-seat people who lost their words — the capability's own description says so — and the button
+              was not on their screen. The other three write minors:/approved:/guardians:, which the relay
+              really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
           {!delegated ? (<React.Fragment>
-          <button onClick={() => toggleMinor(m.pubkey)} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
-          <button onClick={() => toggleApproved(m.pubkey)} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="shield" size={14} color="currentColor" /> {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
           {minorsSet.has(m.pubkey) ? (
             <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="users" size={14} color="currentColor" /> {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
           ) : null}
+          </React.Fragment>) : null}
+          {stewCapState('members').allowed ? (
           <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="swap" size={14} color="currentColor" /> Reconnect</button>
-          {photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
+          ) : null}
+          {stewCapState('safeguarding').allowed && photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
             <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="refresh" size={14} color="currentColor" /> {nophotoSet.has(m.pubkey) ? 'Photos off ✓' : 'Turn off photo'}</button>
           ) : null}
-          </React.Fragment>) : null}
         </div>
       </div>
     );
@@ -4053,8 +4311,12 @@ function DashMembers() {
             );
           })}
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
-            They sign in with their own keys, not yours. Change what they may do, or remove them, under
-            Settings → Security → Delegated stewards.
+            {/* Delegates read this list too (round 7 — a steward found it and called it the one page naming
+                who runs the church). Settings → Security is owner-only, so pointing them there sends them to
+                a door that is not there for them. */}
+            They sign in with their own keys, not yours. {delegated
+              ? 'Only whoever holds the church key can change what they may do, or remove them.'
+              : 'Change what they may do, or remove them, under Settings → Security → Delegated stewards.'}
           </div>
         </div>
       ) : null}
@@ -4083,10 +4345,21 @@ function DashMembers() {
             {q ? <button onClick={() => setQ('')} title="Clear the search" style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} /></button> : null}
           </div>
         ) : null}
+        {confirmAdmitAll ? (() => {
+          const named = pendingJoins.filter(m => m.name);
+          const anon = pendingJoins.length - named.length;
+          const list = named.map(m => m.name).join(', ');
+          return <SkConfirm icon="check" title={'Admit ' + pendingJoins.length + ' ' + (pendingJoins.length === 1 ? 'person' : 'people') + '?'} confirmLabel={'Admit all ' + pendingJoins.length}
+            body={'They get everything a member gets \u2014 the directory, chat, the calendar, and any group they join. You can remove someone afterwards, but they will have seen the church in the meantime.\n\n'
+              + (list ? list + '.' : '')
+              + (anon ? (list ? '\n\n' : '') + anon + (anon === 1 ? ' person has' : ' people have') + ' not set a name yet \u2014 you will be admitting them without knowing who they are.' : '')}
+            busy={admitAllBusy} err={admitAllErr} onConfirm={admitAll} onCancel={() => { if (!admitAllBusy) { setConfirmAdmitAll(false); setAdmitAllErr(''); } }} />;
+        })() : null}
         {pendingJoins.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="qr" size={15} color="currentColor" /> Requests to join · {pendingJoins.length}
-              {pendingJoins.length > 4 ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>scroll for the rest</span> : null}</div>
+              {pendingJoins.length > 4 ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>scroll for the rest</span> : null}
+              {pendingJoins.length > 1 ? <button onClick={() => { setAdmitAllErr(''); setConfirmAdmitAll(true); }} className="sk-btn sk-btn--ghost" style={{ marginLeft: pendingJoins.length > 4 ? 10 : 'auto', padding: '5px 10px', fontSize: 12 }}>Admit all {pendingJoins.length}</button> : null}</div>
             {/* The list scrolls INSIDE the panel. It used to grow without limit, so a church with a queue of
                 requests had the whole page pushed down — the members list, the safeguarding note and everything
                 below it were shoved off-screen behind a wall of Approve buttons. ~4 rows visible, rest scroll. */}
@@ -4174,7 +4447,7 @@ function DashMembers() {
 }
 window.DashMembers = DashMembers;
 
-// ── Kids check-in (opt-in; encrypted to the church key) ──────────────────────────────────────────
+// ── Kids check-in (opt-in; encrypted under the SAFEGUARDING key, not the church key) ────────────
 function CkModal({ title, children, onClose }) {
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
@@ -4237,17 +4510,43 @@ function DashCheckin() {
   const available = minors.filter(c => !inIds.has(c));
   const [picking, setPicking] = React.useState(false);
   const [checkout, setCheckout] = React.useState(null);
+  // THE REGISTER HAS ITS OWN KEY NOW, and a record cannot be written without it. Watch for it, so this screen
+  // knows the difference between "no children are checked in" and "this console cannot write the register" —
+  // which look identical, and one of them is a child marked present in a room nobody has a record of.
+  const [sgKey, setSgKey] = React.useState(() => !!(window.Steward && window.Steward.capKeyRing && window.Steward.capKeyRing('checkin').length));
+  const _ckIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _ckConn = window.useStewardConn ? window.useStewardConn() : 0;
+  React.useEffect(() => {
+    const S = window.Steward;
+    if (!S || !S.subscribeCapKey) return;
+    setSgKey(!!(S.capKeyRing && S.capKeyRing('checkin').length));   // a switch resets the ring; re-read it
+    return S.subscribeCapKey('checkin', (ring) => setSgKey(!!(ring && ring.length)));
+  }, [_ckIdv, _ckConn]);
   const fmtT = (ts) => { try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } };
-  const checkIn = (childPub) => {
+  // AWAITED, AND ANSWERED. This was fire-and-forget: publishCheckin's promise was dropped on the floor, so a
+  // refused write left the child on screen as "in" and nothing on the relay. On the day the register got its
+  // own key that stopped being theoretical — a console without the safeguarding key returns null from
+  // encPublish and writes nowhere. Of every screen in this console, this is the one that must never claim a
+  // record it does not have: a child's presence, and who may collect them.
+  const writeCheckin = async (rec, what) => {
+    let ok = null;
+    try { ok = await window.Steward.publishCheckin(rec); } catch (e) { ok = null; }
+    if (ok === false || ok == null) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in', message: what + ' was NOT recorded — the register could not be written. Check you are online, and that whoever holds the church key has given you Safeguarding.' } })); } catch (e) {}
+      return false;
+    }
+    return true;
+  };
+  const checkIn = async (childPub) => {
     const code = String(Math.floor(1000 + Math.random() * 9000));
-    window.Steward.publishCheckin({ child: childPub, childName: nameFor(childPub), date: today, in: Math.floor(Date.now() / 1000), code });
     setPicking(false);
+    await writeCheckin({ child: childPub, childName: nameFor(childPub), date: today, in: Math.floor(Date.now() / 1000), code }, nameFor(childPub) + '’s check-in');
   };
   return (
     <Panel title="Kids check-in" action={
-      <button onClick={() => setPicking(true)} disabled={!minors.length} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: minors.length ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
+      <button onClick={() => setPicking(true)} disabled={!minors.length || !sgKey} title={!sgKey ? 'The register’s key hasn’t reached this console yet — a check-in written now would not be saved.' : ''} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (minors.length && sgKey) ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your church key</b> — only this console sees who’s present.</DismissibleNote>
+      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>This is a <b>door operation</b>, done by a leader on this device — parents do nothing in their own app, and nothing about check-in appears there. Say so when you announce it, or they will go looking. Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext, and the only people who can open them are you and anyone you have given <b>Safeguarding</b> to.</DismissibleNote>
       {!minors.length ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>
       ) : (
@@ -4261,7 +4560,15 @@ function DashCheckin() {
                     <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.childName || nameFor(r.child)}</div>
                     <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>In {fmtT(r.in)}{gs.length ? ' · pickup: ' + gs.join(', ') : ' · no guardian linked'}</div>
                   </div>
-                  <div title="Pickup code — write it on the parent's slip" style={{ fontFamily: 'var(--mono)', fontWeight: 800, fontSize: 18, letterSpacing: '2px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 9, padding: '4px 10px', flexShrink: 0 }}>{r.code}</div>
+                  {/* LABELLED WHERE IT CAN BE READ. The only label was a `title` tooltip — invisible on a
+                      touch screen and to a screen reader. Round 7: a safeguarding lead looking at this row saw
+                      two unlabelled values and said "I couldn't tell which one is 'the' pickup code — I'd have
+                      read 9079 to a parent, but I was guessing." He was right, and guessing is not good enough
+                      for the number that decides whether a child leaves with the right adult. */}
+                  <div title="Pickup code — write it on the parent's slip" aria-label={'Pickup code ' + String(r.code || '').split('').join(' ')} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+                    <div style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: '.6px', color: 'var(--ink-3)' }}>CODE</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontWeight: 800, fontSize: 18, letterSpacing: '2px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 9, padding: '4px 10px' }}>{r.code}</div>
+                  </div>
                   <button onClick={() => setCheckout(r)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}>Check out</button>
                 </div>
               ); })}
@@ -4283,7 +4590,7 @@ function DashCheckin() {
         </div>
       )}
       {picking ? <CheckinPicker available={available} nameFor={nameFor} guardiansOf={guardiansOf} onPick={checkIn} onClose={() => setPicking(false)} /> : null}
-      {checkout ? <CheckoutModal rec={checkout} onConfirm={() => { window.Steward.publishCheckin({ ...checkout, out: Math.floor(Date.now() / 1000) }); setCheckout(null); }} onClose={() => setCheckout(null)} /> : null}
+      {checkout ? <CheckoutModal rec={checkout} onConfirm={async () => { const r = checkout; setCheckout(null); await writeCheckin({ ...r, out: Math.floor(Date.now() / 1000) }, (r.childName || 'That child') + '’s collection'); }} onClose={() => setCheckout(null)} /> : null}
     </Panel>
   );
 }
@@ -4364,7 +4671,7 @@ function StewBackupModal({ church, onClose }) {
           <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Keep it somewhere separate from the file: together, they are one thing, not two.</div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+          <button onClick={guardedClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.5 : 1, cursor: busy ? 'default' : 'pointer' }}>Cancel</button>
           <button onClick={make} disabled={busy || done || pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
             <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? (savedAt ? 'Saved to ' + savedAt : 'Saved') : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
         </div>
@@ -4566,11 +4873,21 @@ function DashStewardsPanel({ church }) {
     // This used to warn that the books were sealed to the church key and a delegate could not open them.
     // That limit was removed the same afternoon (the books now have a key of their own, wrapped to whoever
     // holds this capability), and copy describing a limit that no longer exists is its own kind of lie.
-    finance: 'The church books, funds and statements — they can read the whole history and add entries.',
-    care: 'Care needs, the care team, safety checks',
-    safeguarding: 'Clearances and photo decisions (the child and cleared-adult LISTS stay owner-only)',
-    members: 'Admit people, join policy, re-seat someone who lost their words',
-    content: 'Groups, rotas, services, events, posts',
+    finance: 'The church books, funds and statements. They can SEE every entry the church has ever recorded — giving, salaries, benevolence — and add more.',
+    // EACH ONE SAYS WHAT THEY WILL SEE, not only what they may do. Round 7 watched a vicar read these while
+    // choosing, which is the only moment they matter: Safeguarding separated see-from-change (rewritten
+    // 2026-08-20 after the last audit) and the other four named topic areas only. An owner ticking a box is
+    // deciding who may read something about a person in their congregation; "Groups, rotas, services, events,
+    // posts" does not tell them that.
+    care: 'Care needs, the care team, safety checks. They can SEE who has asked for help and what they asked for — often health, money or family trouble — and who is bringing meals.',
+    // WRITES are owner-only; READS are not, and the old wording — "the child and cleared-adult LISTS stay
+    // owner-only" — let an owner believe granting this disclosed nothing. It discloses a great deal: who in
+    // the congregation is a child, which adults are cleared to work with them, who each child's guardians
+    // are, and (since 2026-08-20) the children's register itself, with names, rooms and pickup codes. That
+    // is the most sensitive data this app holds, and the moment to say so is while the owner is choosing.
+    safeguarding: 'Clearances, photo decisions and kids check-in. They can SEE who is marked as a child, which adults are cleared, guardians, and check-in records — only you can CHANGE those lists.',
+    members: 'Admit people, set the join policy, re-seat someone who lost their words. They can SEE the whole membership list with real names, and who is waiting to join.',
+    content: 'Groups, rotas, services, events, posts. They can SEE every group including private ones, read what is said in them, and post to the whole church in its name.',
   };
   const setCaps = (pk, list) => {
     const next = { ...caps };
@@ -4857,28 +5174,37 @@ function DashMediaPanel({ church }) {
 // Self-hosted media (Tier 2) — the church uploads its OWN audio/video, stored on its relay, members-only.
 // Lives under Resources (content authoring), not Settings. Backup hosts auto-fill from the church's relays.
 // Edit an uploaded sermon's name + details (re-publishes the same doc; the file/blob is untouched).
-function SermonEditModal({ sermon, onSave, onClose }) {
+// Also used BEFORE an upload, to name the file — `upload` swaps the wording and the button. See onFile.
+function SermonEditModal({ sermon, onSave, onClose, upload }) {
   const [title, setTitle] = React.useState(sermon.title || '');
   const [desc, setDesc] = React.useState(sermon.desc || '');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const isVideo = String(sermon.mime || '').startsWith('video');
   const save = async () => {
-    if (!title.trim()) return;
+    // The Upload button is disabled while busy; ENTER IS NOT. Two quick presses ran two concurrent uploads,
+    // each dupe-checking against the same stale list and neither seeing the other in flight — two docs, and on
+    // an encrypted church two blobs. Exactly the defect the upload path was changed to prevent.
+    if (busy || !title.trim()) return;
     setBusy(true); setErr('');
     try { await onSave({ title: title.trim(), desc: desc.trim() }); onClose(); }   // close only on success
     catch (e) { setErr((e && e.message) || 'Couldn’t save — check your connection and try again.'); }
     finally { setBusy(false); }
   };
-  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  // A CANCEL THAT CANCELS NOTHING IS WORSE THAN NO CANCEL. doUpload is owned by DashSermons, so closing this
+  // modal mid-upload only hides it — the file still uploads, still publishes, still notifies the church. Video
+  // uploads run for minutes, so that window is wide. Hold every exit shut while it runs.
+  const guardedClose = () => { if (!busy) onClose(); };
+  const dlgRef = useStewDialog(guardedClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div onClick={guardedClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Edit ' + (isVideo ? 'video' : 'audio') + ' details'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Edit {isVideo ? 'video' : 'audio'} details</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{upload ? 'Name this ' + (isVideo ? 'video' : 'recording') : 'Edit ' + (isVideo ? 'video' : 'audio') + ' details'}</div>
         </div>
-        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Rename it and add details{isVideo ? ' — members see the description under the video in Watch' : ''}. This only changes the label — the file itself stays as uploaded.</p>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>{upload ? 'This is what members see in the list. ' + (upload.name || '') + ' \u00b7 ' + upload.sizeText + ' \u2014 nothing is uploaded until you press Upload.' : 'Rename it and add details.'}</p>
+        {upload && upload.seenBefore ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--ink-2)', background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, var(--line))', borderRadius: 10, padding: '9px 11px', marginBottom: 14, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--gold)" /><span>You already uploaded this file from this console. Uploading it again adds a <b>second copy</b> to everyone&rsquo;s list.</span></div> : null}
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. Sunday sermon — the Prodigal Son" aria-label="Title" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Details <span style={{ textTransform: 'none', fontWeight: 500 }}>· optional</span></div>
@@ -4886,7 +5212,7 @@ function SermonEditModal({ sermon, onSave, onClose }) {
         {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', marginBottom: 12, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name={upload ? 'arrowUp' : 'check'} size={15} color="var(--on-clay)" /> {busy ? (upload ? 'Uploading…' : 'Saving…') : (upload ? 'Upload' : 'Save')}</button>
         </div>
       </div>
     </div>
@@ -4915,13 +5241,14 @@ async function probeHevcVideo(file) {
 
 function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
+  const [sermonsLoaded, setSermonsLoaded] = React.useState(false);   // has the subscription answered? see doUpload's dupe check
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [encOn, setEncOn] = React.useState(false);
   const autoBackups = React.useMemo(() => { try { return (window.Steward.mediaHosts ? window.Steward.mediaHosts() : []).slice(1); } catch { return []; } }, []);
   const [mirrorHosts, setMirrorHosts] = React.useState(autoBackups.join(', '));   // auto-filled from the church's other relays; editable
   const [pinnedId, setPinnedId] = React.useState(null);   // the currently-featured sermon (pushed to members' Today)
   const conn = window.useStewardConn ? window.useStewardConn() : 0;   // re-subscribe after a relay restart / reconnect (else a sermon uploaded elsewhere never appears)
-  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(setSermons) : undefined), [conn]);
+  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(list => { setSermons(list || []); setSermonsLoaded(true); }) : undefined), [conn]);
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn]);
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn]);
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
@@ -4930,16 +5257,37 @@ function DashSermons() {
   const [editing, setEditing] = React.useState(null);
   const [notify, setNotify] = React.useState(true);   // feature the new upload on members' Today + push
   const [pendingDelete, setPendingDelete] = React.useState(null);
+  const [pendingUpload, setPendingUpload] = React.useState(null);   // a chosen file awaiting its title — see askThenUpload
+  const uploadedSigs = React.useRef(new Set());   // name|size|lastModified of what this console has already sent — never published
   const [pendingHevc, setPendingHevc] = React.useState(null);   // an HEVC video awaiting "upload anyway?" confirmation
   const [pendingBigEnc, setPendingBigEnc] = React.useState(null);   // a large ENCRYPTED video awaiting "upload anyway?" (OOM risk on low-end phones)
   const ENC_VIDEO_WARN = 50 * 1048576;   // encrypted media downloads whole + decrypts in RAM (~2-3× its size); above this a 2GB phone can OOM before it plays
+  // NAME IT BEFORE IT GOES. An upload used to be published under its FILE NAME, so members opened Watch and
+  // found "sermon-the-good-shepherd" — two of them read it as a broken entry rather than a sermon. The title
+  // is the only thing anyone sees in the list, and the one moment the steward has the sermon in mind is the
+  // moment they pick the file.
+  //
+  // The same modal fixes the second half of that report: choosing a file started a silent background upload
+  // with its only feedback below the fold, so a steward who saw nothing happen picked the file AGAIN and
+  // double-posted it. A modal standing in front of you cannot be mistaken for nothing having happened.
+  //
+  // TWO GUARDS, because one cannot cover both cases. The exact one is the sha256 in doUpload. It cannot see an
+  // ENCRYPTED repeat: media is sealed with a fresh nonce, so the same sermon encrypts to different bytes and a
+  // different sha every time. The file's own identity can see it, costs nothing, and never leaves this console
+  // — publishing a plaintext hash beside encrypted media would hand a seized relay a way to confirm exactly
+  // which recording it holds.
+  const askThenUpload = (f) => setPendingUpload({
+    file: f, name: f.name, sizeText: fmtSize(f.size), mime: f.type || '',
+    seenBefore: uploadedSigs.current.has(f.name + '|' + f.size + '|' + f.lastModified),
+    title: f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^./, c => c.toUpperCase()),
+  });
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
     if (await probeHevcVideo(f)) { setPendingHevc(f); return; }   // warn before uploading a format web browsers can't play
     if (encOn && String(f.type || '').startsWith('video') && f.size > ENC_VIDEO_WARN) { setPendingBigEnc(f); return; }   // #18 interim: guard the real OOM path
-    doUpload(f);
+    askThenUpload(f);
   };
-  const doUpload = async (f) => {
+  const doUpload = async (f, fields) => {
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
     setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     let ok = false;
@@ -4947,23 +5295,45 @@ function DashSermons() {
       const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
       const mirrors = mirrorHosts.split(',').map(s => s.trim()).filter(Boolean);
       const b = await window.Steward.uploadBlob(f, encFn, mirrors);
-      const pub = await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
+      // The blob store is content-addressed and deduped itself; it was the DOC that was minted twice, under a
+      // fresh id each time, leaving one recording listed twice in every member's app.
+      // ONLY TRUST THE LIST ONCE IT HAS ARRIVED. This read `sermons` from state with nothing to say whether the
+      // subscription had answered yet, so on a cold console — or straight after a relay reconnect — the list is
+      // [] and the guard passes silently. That is the exact moment a steward re-picks the file: the panel looks
+      // empty, yesterday's upload is not visible, and they wonder whether it took. Fail CLOSED instead: with no
+      // list to check against, the modal's warning is the only guard, and it is the honest one to lean on.
+      const dupe = sermonsLoaded ? sermons.find(x => x && x.sha256 && x.sha256 === b.sha256) : null;
+      if (dupe) {
+        // Thrown, not toasted: it keeps the sheet open with the answer ON it, so the steward reads why nothing
+        // was added instead of watching the sheet close like a success and hunting for a grey line below.
+        setUpBusy(false);
+        throw new Error('Already published as \u201c' + (dupe.title || 'a sermon') + '\u201d \u2014 nothing was added. Close this, and rename that one if you meant to change it.');
+      }
+      const pub = await window.Steward.publishSermon({ title: (fields && fields.title) || f.name.replace(/\.[^.]+$/, ''), desc: (fields && fields.desc) || undefined, sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
+      uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);   // published, so a repeat really would be a second copy
       if (notify && pub && window.Steward.pinSermon) { try { await window.Steward.pinSermon(pub); } catch (e) {} }   // feature on members' Today → "New video / New audio clip" card + push
       const backups = (b.hosts || []).length - 1;
       setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? ' · members notified' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
       ok = true;
-    } catch (err) { setUpMsg('✗ ' + ((err && err.message) || 'Upload failed')); }   // surface the relay's real message (storage full / too large / …)
+    } catch (err) {
+      // RETHROW, so the modal stays open with the error ON it. Swallowing here made "close only on success"
+      // false for uploads: a failed upload closed the sheet exactly like a successful one, leaving a small grey
+      // line under the fold as the only sign — the below-the-fold feedback this whole flow exists to replace.
+      setUpBusy(false); setUpMsg('✗ ' + ((err && err.message) || 'Upload failed'));   // surface the relay's real message (storage full / too large / …)
+      throw err;
+    }
     setUpBusy(false); if (ok) setTimeout(() => setUpMsg(''), 3500);   // keep errors visible; only auto-clear success
   };
   const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   return (
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
+      {pendingUpload ? <SermonEditModal upload={pendingUpload} sermon={{ title: pendingUpload.title, mime: pendingUpload.mime }} onSave={(fields) => doUpload(pendingUpload.file, fields)} onClose={() => setPendingUpload(null)} /> : null}
       {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
       {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { window.Steward.removeSermon(pendingDelete); setPendingDelete(null); }} onCancel={() => setPendingDelete(null)} /> : null}
-      {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); doUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
-      {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); doUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
+      {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); askThenUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
+      {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); askThenUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
       <Panel title="Self-hosted sermons">
-        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Audio appears in members’ <b>Listen</b> tab, video in <b>Watch</b>. Great over a thin connection.</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Both land in members’ <b>Watch &amp; Listen</b> tab — audio under Listen, video under Watch. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
@@ -5090,7 +5460,17 @@ function DashFeaturesPanel({ church }) {
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
   const allGroups = window.useStewardGroups ? window.useStewardGroups() : [];
   const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
-  const encOn = f.encryptComms === true;
+  // Read absent the same way encByDefault does, or the screen contradicts the behaviour: the toggle would sit
+  // OFF while every new room was in fact being sealed, and a steward who cannot trust the switch stops
+  // trusting the claim underneath it.
+  //
+  // …but NEVER CLAIM MORE THAN IS TRUE. "Encrypt all comms" means every room IS sealed, not merely that new
+  // ones will be. On a brand-new church there are no rooms, so absent-means-on is honest and the switch reads
+  // ON from the first minute. On an existing church that still has unsealed rooms it reads OFF — tapping it
+  // seals them — because a church shown a protection it does not have is the one failure this project cannot
+  // afford. Teams are excluded: the encrypt control is not offered for them (see the group list).
+  const encUnsealed = (allGroups || []).filter(g => g && g.kind !== 'team' && !g.encrypted);
+  const encOn = f.encryptComms !== false && encUnsealed.length === 0;
   const [confirmEnc, setConfirmEnc] = React.useState(false);
   const encRecips = (g) => g.visibility === 'invite' ? (g.members || []) : allMembers.map(m => m.pubkey);
   // AUDIT-2026-08-10 item A. This sweep used to fire flag+key for every group at once and read no results:
@@ -5139,13 +5519,19 @@ function DashFeaturesPanel({ church }) {
     <Panel title="Congregation features">
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Choose which parts of the app your members see — turn off what your church doesn’t use.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* TAPPING THE WORDS WORKS THE SWITCH. The toggle is a small control at the far right of a
+            full-width row and the words naming it had no handler, so the obvious target did nothing. Four
+            people across two rounds hit it, the vicar on her own console included, and Colin put it best:
+            "you have to hit the little switch itself rather than the words, which Margaret will not work
+            out" — Margaret being 79. The button stops propagation so a tap on the switch itself does not
+            fire the row handler too and toggle straight back, which looks exactly like nothing happening. */}
         {ITEMS.map(([k, label, sub]) => (
-          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} onClick={() => toggle(k)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
             </div>
-            <button onClick={() => toggle(k)} aria-label={'Toggle ' + label} role="switch" aria-checked={on(k)} title={(on(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); toggle(k); }} aria-label={'Toggle ' + label} role="switch" aria-checked={on(k)} title={(on(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: on(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>

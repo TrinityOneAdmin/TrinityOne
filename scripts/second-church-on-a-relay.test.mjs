@@ -29,21 +29,40 @@ const ROOT = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), '
 const SRC = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
-test('the starter groups are namespaced to the church that seeds them', () => {
-  const seed = stripComments(fnBody(ROOT, 'function seedNewChurch()'));
-  // 8 → 16 on 2026-08-17. The prefix stopped being cosmetic: the relay now REFUSES a claim on an id whose
+test('every group id is namespaced to the church that creates it', () => {
+  // RETARGETED 2026-08-21. This used to assert on seedNewChurch(), which published five starter groups on
+  // registration. That seeder is gone — a church now gets only the rooms its steward ticked in the wizard
+  // (round 9 measured nine groups where three were offered, because the seeder and the wizard both ran and
+  // neither knew about the other). The INVARIANT it guarded is untouched and matters as much as it ever did:
+  // group ids are a relay-GLOBAL namespace with first-writer ownership (gateway.mjs idOwnerOk,
+  // AUDIT-2026-07-24 CRITICAL-1), so an unprefixed id means the first church on a shared relay owns it for
+  // ever and every church after it silently loses that group.
+  //
+  // Asserting on publishGroup is STRONGER than asserting on the old seeder: it covers every route that makes
+  // a group — the wizard, the Groups page, a serving team — not just the five that used to be seeded.
+  const fn = stripComments(fnBody(SRC, 'publishGroup(group)'));
+  const m = fn.match(/String\(pub \|\| ''\)\.slice\(0, (\d+)\)/);
+  assert.ok(m, 'a generated group id must embed the church that owns it, or the first church on the relay ' +
+    'claims it for ever');
+  // 8 -> 16 on 2026-08-17. The prefix stopped being cosmetic: the relay now REFUSES a claim on an id whose
   // embedded owner is not the signer's church, so a grindable 32-bit prefix would have been an authorisation
-  // check an attacker could satisfy by minting keys. Asserted as "at least 16" rather than pinned, so making
-  // it longer later is not a test failure.
-  const m = seed.match(/window\.Steward\.pubkey \|\| ''\)\.slice\(0, (\d+)\)/);
-  assert.ok(m, 'the seeded ids must be scoped to this church, or the first church on the relay owns them all for ever');
+  // check an attacker could satisfy by minting keys. "At least 16" so making it longer is not a failure.
   assert.ok(Number(m[1]) >= 16,
     `the namespace is ${m[1]} hex characters — under 16 it is grindable, and the relay now authorises id ` +
     'claims against it (gateway.mjs idNamesOwner)');
-  assert.match(seed, /id: nsp \? \(nsp \+ '-' \+ g\.id\) : g\.id/,
-    'every seeded group needs the prefix — one unprefixed id is one group the second church silently loses');
-  assert.doesNotMatch(seed, /publishGroup\(\{ id: g\.id,/,
-    'that is the fixed-id form that collides');
+});
+
+test('nothing publishes groups to a church behind the steward\'s back', () => {
+  // The seeder's real defect was not the duplicates — it was that five rooms appeared with no UI and no
+  // choice, and members read them as statements about themselves ("I'm on the list for Youth and for Men's
+  // Life Group. I am a 73-year-old woman."). Guard the absence, so it cannot come back quietly.
+  const root = stripComments(ROOT);
+  assert.equal(/SK\.groups/.test(root), false,
+    'steward-root.jsx seeds groups again — and from window.SK, the design mock-up object that also holds ' +
+    '"Grace Chapel" and "Pastor John"');
+  assert.equal(/publishGroup/.test(root), false,
+    'steward-root.jsx publishes a group; group creation belongs to the wizard and the Groups page, where a ' +
+    'steward can see it happening');
 });
 
 test('a refused registration reaches the steward, in the relay’s own words', () => {

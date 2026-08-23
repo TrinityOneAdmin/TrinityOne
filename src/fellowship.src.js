@@ -95,6 +95,9 @@ const SAFE_D = 'trinityone/safe:';         // a member's response — d=safe:<ch
 const FAMILY_KEY = 'trinityone.family';
 function _loadChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_KEY) || '[]') || []; } catch { return []; } }
 function _saveChildLink(link) { const list = _loadChildren().filter(c => c && c.child !== link.child); list.push(link); try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {} }
+// A church can take a guardian link away, and this is how the parent's app finds out. Without it the link
+// lived in localStorage for ever and a removed guardian went on being shown the child (round 7).
+function _removeChildLink(childPub) { const list = _loadChildren().filter(c => c && c.child !== childPub); try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {} }
 // REBUILD THE FAMILY LIST FROM THE RELAY. trinityone.family is written when a child account is created and
 // read straight back — nothing ever rebuilt it. It is also in the locked-boot wipe list, so restoring an
 // identity cleared it and a parent's children simply vanished from their phone. The accounts were never
@@ -2158,7 +2161,7 @@ window.Fellowship = {
     // ONE kept-open kind-0 subscription resolves ALL members' names at once. A sub-per-member blew past
     // the relay's 64-subscription-per-connection cap (members + chat + a sub each = the later name fetches
     // got 'rate-limited' and dropped — the cause of blank names). Batched = a single sub regardless of size.
-    let profSub = null; const profAuthors = new Set(); let profTimer = null;
+    let profSub = null; const profAuthors = new Set(); let profTimer = null; let lastProfCount = 0;
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
     const emit = (done) => {
       // _superseded drops the dead key of a member who was re-seated onto a new one, so the directory shows
@@ -2178,8 +2181,26 @@ window.Fellowship = {
       // so filtering on the name meant every member of the church qualified on every pass, for ever. The same
       // defect as requestProfiles/_flushProfiles — this is the member hub's own copy of that logic, and it is
       // the path the roster actually uses. AUDIT-2026-07-27.
-      const authors = [...profAuthors].filter(pk => !(pk in profiles));
+      // ASK ABOUT EVERYONE, NOT ONLY THE UNKNOWN. This filtered to `!(pk in profiles)`, so once a member's
+      // profile had arrived the hub never asked about them again. A kind-0 is REPLACEABLE, so a later change
+      // is delivered only to a subscription still asking — and nobody who already knew you was. The field
+      // that matters is `hidden`: a member who took themselves out of the church directory reached strangers
+      // and nobody who had already seen them, which is exactly the wrong way round. Every other kind-0 field
+      // (avatar, about) staled the same way.
+      //
+      // Obi, session 3, who found it without being able to prove it: "I could not verify from my own phone
+      // that hiding from the directory actually hides me from anyone else." Measured: the relay held
+      // "hidden":true on his kind-0 while another member's app still showed him after a full reload.
+      // Halime (round 10) is who this is for — her family does not know she attends church.
+      //
+      // NOT a periodic refetch: clearCommunityCache's note above records that gating on "have we asked"
+      // replaced an "is there an entry" gate precisely to stop refetch churn. This is one WIDER LIVE
+      // subscription instead — the sub is already kept open, so replaceable updates arrive for free — and it
+      // is re-opened only when the roster actually GREW, so a settled church never re-subscribes at all.
+      const authors = [...profAuthors];
       if (!authors.length) return;
+      if (profSub && authors.length === lastProfCount) return;
+      lastProfCount = authors.length;
       try { profSub && profSub.close(); } catch {}   // replace the old one — never accumulate subscriptions
       profSub = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
         // MERGE, and never let an empty name win. A kind-0 carries no name since Stage 2, and this overwrote
@@ -2191,7 +2212,11 @@ window.Fellowship = {
       });
     };
     const ensureProfile = (pk) => {
-      if (profAuthors.has(pk) || (pk in profiles)) return;
+      // ONLY skip people we are ALREADY subscribed for. The `(pk in profiles)` half meant a member whose
+      // profile had been restored from localStorage on boot never entered profAuthors at all — so widening
+      // the subscription above would have covered nobody who mattered, since that is exactly the state a
+      // returning member's app is in. Two halves of one defect; fixing either alone changes nothing.
+      if (profAuthors.has(pk)) return;
       profAuthors.add(pk);
       if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);   // debounce the burst of arriving members
     };
@@ -3036,6 +3061,13 @@ window.Fellowship = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDNOTICE_D + pub) return;
         let dec; try { dec = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch { return; }
+        // A REMOVAL. The church has taken this guardian link away; drop it locally, or the parent's app goes
+        // on showing a child it has been told they are no longer responsible for.
+        if (dec && dec.removed) {
+          _removeChildLink(dec.removed);
+          try { window.dispatchEvent(new CustomEvent('trinity-guardian-removed', { detail: { child: dec.removed } })); } catch (x) {}
+          return;
+        }
         if (!dec || !dec.child || dec.child === pub) return;
         const ex = _loadChildren().find(c => c && c.child === dec.child);
         if (ex && ex.viaSteward) return;   // already recorded as a steward-initiated link — no-op
@@ -3408,8 +3440,18 @@ window.Fellowship = {
     const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
     // always seal to the church key (the owner can always triage) + ourselves; plus the published care team.
     const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
+    // ONE SITUATION IS ONE REQUEST. Verity needed a lift to the hospital and someone to do her shop; the form
+    // held a single kind, so tapping Rides then Errands kept only Errands and she sent two requests for one
+    // afternoon. The care team triaged them as two people in need.
+    //
+    // `types` is the truth. `type` stays, and stays FIRST, because it is what every existing reader keys off —
+    // the row label, the icon, the need the care team opens — including builds already on phones that have
+    // never heard of `types`. Dropping it would show an older app "other" for a request whose note it can read.
+    const types = (Array.isArray(fields.types) ? fields.types : [fields.type])
+      .map(t => String(t || '').trim()).filter(Boolean);
+    const uniq = [...new Set(types)];
     const body = {
-      v: 1, type: String(fields.type || 'other'),
+      v: 1, type: uniq[0] || 'other', types: uniq.length ? uniq : ['other'],
       forSelf: fields.forSelf !== false, forName: String(fields.forName || '').trim(),
       when: String(fields.when || '').trim(), urgency: String(fields.urgency || '').trim(),
       note: String(fields.note || '').trim(), by: pub, at: Math.floor(Date.now() / 1000),

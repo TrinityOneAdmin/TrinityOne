@@ -16,6 +16,14 @@ const MEALS_TYPES = [
   ['other',     'Other',     'sparkle'],
 ];
 const MEALS_TYPE_LABEL = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[1]]));
+// A request can name several kinds of help — one situation, one request (2026-08-23). Older requests carry
+// only `type`, so read `types` and fall back. Showing the first kind alone is how a steward triaging Verity's
+// "a lift AND my shop" saw a request for a lift and closed it when the lift was covered.
+const mealsTypeLabel = (r) => {
+  const ts = (Array.isArray(r && r.types) && r.types.length ? r.types : [r && r.type]).filter(Boolean);
+  const names = ts.map(t => MEALS_TYPE_LABEL[t]).filter(Boolean);
+  return names.length ? names.join(' \u00b7 ') : 'Help';
+};
 const MEALS_TYPE_ICON  = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[2]]));
 // Does THIS device hold the church care key? Distinguishes "the key hasn't synced here yet" (fixable) from
 // "we have the key and this need still won't open" (sealed with a lost key generation — unrecoverable).
@@ -121,14 +129,21 @@ function DashMealsPanel({ church }) {
     return g;
   };
   const toggleBtn = (active, onClick, label) => (
-    <button onClick={onClick} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
     </button>
   );
   return (
     <Panel title="Practical care">
       <DismissibleNote id="care-intro" icon="heart" tone="sage" style={{ marginBottom: 12 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</DismissibleNote>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+            {/* THE ROW IS THE TARGET. This toggle is a 48x28 button at the far right and the words naming it had
+          no handler, so the obvious press did nothing. Rev. Miriam, session 3: "clicking the words
+          'Practical care (Meal trains)' and clicking the 'Off — turn on to…' line under them does nothing
+          at all; only the little switch itself responds, and I could not land on it." Care stayed off,
+          which was the thing she most wanted for her congregation that week.
+          I had already fixed this pattern in three other files and missed this one, because I audited by
+          role="switch" and this file uses a plain <button> as its toggle. */}
+<div onClick={() => setAll({ enabled: !on })} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Practical care (Meal trains)</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Care” tab is in your sidebar, and members see open needs in their app.' : 'Off — turn on to start opening needs and let the church sign up to help.'}</div>
@@ -397,12 +412,12 @@ function StewCareRequests() {
         <div key={r.id} style={{ padding: 14, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 32%, var(--line))', marginBottom: 9 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{MEALS_TYPE_LABEL[r.type] || 'Help'}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{mealsTypeLabel(r)}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
           </div>
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
             {!r.sealed ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
-            <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: (MEALS_TYPE_LABEL[r.type] || 'Help') })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
+            <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: mealsTypeLabel(r) })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
             <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>
           </div>
         </div>

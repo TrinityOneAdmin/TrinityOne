@@ -92,7 +92,22 @@ export function stripComments(src) {
   let out = '', q = '';
   for (let i = 0; i < src.length; i++) {
     const c = src[i], prev = src[i - 1];
-    if (q) { out += c; if (c === q && prev !== '\\') q = ''; continue; }
+    if (q) {
+      out += c;
+      // A ' or " STRING CANNOT CONTAIN A RAW NEWLINE. If we are "inside" one and reach the end of a line, we
+      // were never inside a string — we walked into an apostrophe in JSX TEXT ("Nobody else has…", "don't")
+      // and every following line was swallowed as string content, comments included.
+      //
+      // Measured 2026-08-23: 34 full-line // comments survived stripping in app/screens-today.jsx alone, and a
+      // new test was unknowingly anchored on one of them. This is the shield built after a safeguarding bug
+      // survived 935 green tests because an ordering assertion was satisfied by the COMMENT explaining the
+      // rule — so a hole in it is the same class of defect, one level down.
+      //
+      // Backticks are left alone: a template literal spans newlines legitimately.
+      if (c === '\n' && q !== '`') { q = ''; continue; }
+      if (c === q && prev !== '\\') q = '';
+      continue;
+    }
     if (c === '"' || c === "'" || c === '`') { q = c; out += c; continue; }
     if (c === '/' && src[i + 1] === '/') {
       let nl = src.indexOf('\n', i); if (nl === -1) nl = src.length;

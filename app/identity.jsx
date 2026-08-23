@@ -1318,15 +1318,24 @@ function DirectoryToggle({ identity, onSave, ctx }) {
   useIdE(() => { setHidden(!!identity.hidden); }, [identity]);
   const visible = !hidden;
   const flip = () => { const nv = !hidden; setHidden(nv); onSave({ hidden: nv }); ctx.toast(nv ? 'Hidden from the church directory' : 'Visible in the church directory'); };
+  // THE ROW IS THE TARGET, not just the toggle. I named this switch and left its row inert, and the very
+  // next person to try it — Ronald, a churchwarden — hit the same wall the three before him did:
+  // "I tapped 'Show me in the directory' to turn it off and it stayed on; I couldn't reach the small
+  // switch on the right of the row." My own test asserted the row fix for the OTHER two files and
+  // never for this one, so it passed while the headline case stayed broken.
   return (
-    <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left' }}>
+    <div onClick={flip} style={{ cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left' }}>
       <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface-2)', color: 'var(--ink-2)' }}>
         <Icon name="users" size={19} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show me in the directory</div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1 }}>{visible ? 'Your church can find you in People' : 'Hidden — you can still message and be messaged'}</div>
       </div>
-      <button onClick={flip} role="switch" aria-checked={visible} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: visible ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+      {/* NAMED, because a screen reader otherwise announces this as an unnamed switch — and it is the one
+          control that takes a member out of a list of named people. Halime, round 10, whose family does not
+          know she attends church: "I'm still in a list of named people with no way I could find to step
+          out of it." The mechanism worked all along; she could not operate it. */}
+      <button onClick={(e) => { e.stopPropagation(); flip(); }} role="switch" aria-checked={visible} aria-label={'Show me in the church directory' + (visible ? ' (on)' : ' (off)')} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: visible ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
         <div style={{ width: 22, height: 22, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow)', transform: visible ? 'translateX(18px)' : 'translateX(0)', transition: 'transform .15s' }} /></button>
     </div>
   );
@@ -1429,6 +1438,20 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
             padding: '5px 13px', borderRadius: 999, fontSize: 12.5, fontWeight: 700 }}>
             <Icon name="shield" size={13} /> {named ? 'TrinityOne member' : 'Anonymous member'}</div>
+          {/* ADA CHOSE THIS BY ACCIDENT AND FOUND IT ONLY BY HUNTING. "Continue without a name" stays exactly
+              as it is — anonymity is a real option and some people need it — but the state it leaves you in was
+              a single word on this screen with nothing to press. This says what the church sees and fixes it in
+              one tap. It is not a nag: a member who means to stay anonymous simply never presses it. */}
+          {!named ? (
+            <button onClick={() => setEdit(true)} style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', width: '100%', maxWidth: 340, marginLeft: 'auto', marginRight: 'auto', cursor: 'pointer', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', borderRadius: 14, padding: '11px 13px', fontFamily: 'var(--font-ui)' }}>
+              <div style={{ width: 34, height: 34, borderRadius: 11, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pen" size={16} color="currentColor" /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>Add your name</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.4 }}>You appear as <b>Anonymous</b> to everyone in your church — in the directory, in chat, and on every rota.</div>
+              </div>
+              <Icon name="chevR" size={17} color="var(--clay)" />
+            </button>
+          ) : null}
           {/* THE YOUNG PERSON'S OWN SCREEN, AND ONLY THEIRS. A 15-year-old in the 2026-08-19 simulation saw
               most of her church marked "Restricted" with nothing anywhere explaining it, and concluded the
               app might simply be broken. This says what her account is, in her own app, on her own device.
@@ -1446,13 +1469,10 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
               </div>
             </div>
           ) : null}
-          {!named ? (
-            <div style={{ marginTop: 16 }}>
-              <button onClick={() => setEdit(true)} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 22px',
-                borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Add a name</button>
-              <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 22px 0', lineHeight: 1.5 }}>Optional. A name helps your church recognise you — you’ll still share no personal data.</p>
-            </div>
-          ) : (
+          {/* The bare "Add a name" button that used to sit here has moved UP, under the word Anonymous. It said
+              "Optional. A name helps your church recognise you", which is an invitation, not a description of
+              where you already stand — and it sat far enough below the badge that Ada never joined the two. */}
+          {!named ? null : (
             <button onClick={() => setEdit(true)} style={{ marginTop: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)',
               padding: '10px 20px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>Edit name & mark</button>
           )}
@@ -1630,7 +1650,7 @@ function FamilySheet({ open, onClose, ctx }) {
               <Icon name="shield" size={20} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
               <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{(kids.length === 0 || kids.some(k => !k.viaSteward))
                 ? 'You set up the account and keep its recovery words. Once your steward confirms the link, the account is marked as a child — they’ll only see child-safe groups, and only you and cleared leaders can message them privately.'
-                : 'Your steward linked you as this child’s parent. You can message them privately and collect them at check-in — they only see child-safe groups, protected by the church.'}</div>
+                : 'Your steward linked you as this child’s parent. You can message them privately, and they only see child-safe groups. If your church runs check-in, a leader signs children in and out at the door on the church’s own device — there is nothing for you to do in the app.'}</div>
             </div>
             {kids.length ? kids.map(k => (
               <div key={k.child} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 10 }}>
@@ -1641,14 +1661,21 @@ function FamilySheet({ open, onClose, ctx }) {
                     <Icon name={confirmed(k) ? 'check' : 'shield'} size={12} color="currentColor" /> {k.viaSteward ? 'Linked by your steward' : confirmed(k) ? 'Linked & protected' : 'Waiting for steward to confirm'}</div>
                 </div>
               </div>
-            )) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>No children set up yet.</div>}
+            )) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>
+              {/* "No children set up yet." full stop, read to a parent whose child DOES have an account and IS
+                  linked at the church, as "nothing is set up for my son". Round 7: the parent said she would
+                  have closed the app knowing no more than when she opened it. Say which case this is. */}
+              <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>No children linked to you yet</div>
+              If your child already uses the app, ask a steward to link you — it appears here on its own once they do.
+              If they have no account, you can make one below.
+            </div>}
             <button onClick={() => { setStage('name'); setName(''); setErr(''); }} style={{ marginTop: 8, width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><Icon name="plus" size={17} color="var(--on-clay)" /> Add a child</button>
           </React.Fragment>
         ) : stage === 'name' ? (
           <React.Fragment>
             <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '6px 0 8px' }}>CHILD’S NAME</label>
             <input value={name} autoFocus onChange={e => { setName(e.target.value.slice(0, 24)); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sam Carter" style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
-            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 2px 0', lineHeight: 1.5 }}>This creates a brand-new account for your child in <b>{(ctx.church && ctx.church.name) || 'your church'}</b>. You’ll get its recovery words on the next screen — keep them safe; they’re the only way to restore the account.</p>
+            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 2px 0', lineHeight: 1.5 }}><b>Only if they don’t already have one.</b> This makes a brand-new account for your child in <b>{(ctx.church && ctx.church.name) || 'your church'}</b>. You’ll get its recovery words on the next screen — keep them safe; they’re the only way to restore the account. If they already use the app on their own phone, don’t do this — ask a steward to link you to it instead, or they will end up with two accounts and only one of them known to the church.</p>
             {err ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', marginTop: 10 }}>{err}</div> : null}
             <button onClick={create} disabled={busy || !name.trim()} style={{ marginTop: 20, width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !name.trim()) ? 0.6 : 1 }}>{busy ? 'Setting up…' : 'Create the account'}</button>
           </React.Fragment>

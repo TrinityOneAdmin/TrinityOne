@@ -1,6 +1,7 @@
 // stew-manna.jsx — the optional Manna module UI (money-OUT / disbursement governance). Exports
 // DashManna (the console section) + DashMannaPanel (the enable card in Settings). All data is held
-// encrypted to the church key via window.StewardManna — the relay only ever sees ciphertext.
+// encrypted under the FINANCE capability key via window.StewardManna (see MANNA_CAP in
+// src/steward-manna.src.js) — the relay only ever sees ciphertext.
 //
 // This is the IMPLEMENTATION of the Manna UI kit (reference/manna-design) for the Steward Console:
 // the three console screens — Overview/Treasury, Nomination/Vouch, and Steward Approval (with the
@@ -87,7 +88,7 @@ function DashMannaPanel({ church }) {
       </div>
       <div style={{ display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
         <Icon name="lock" size={17} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Manna is the <b>money-out</b> counterpart to Finance: how your church gives to its own in need. Like Finance, it keeps <b>named, identified</b> records (it names the people you help) — so every record is <b>encrypted to your church key</b>, minimised, and never a watch-list. Payments themselves stay <b>off</b> until you wire a wallet. Use it only under your church’s safeguarding &amp; privacy policy.</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Manna is the <b>money-out</b> counterpart to Finance: how your church gives to its own in need. Like Finance, it keeps <b>named, identified</b> records (it names the people you help) — so every record is <b>encrypted</b>, minimised, and never a watch-list. Manna shares the <b>Finance</b> key, so anyone you give Finance to can read these records too — bear that in mind before granting it. Payments themselves stay <b>off</b> until you wire a wallet. Use it only under your church’s safeguarding &amp; privacy policy.</div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
