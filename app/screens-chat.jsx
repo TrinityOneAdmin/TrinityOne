@@ -747,7 +747,11 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
             <div style={{ borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
               border: me ? 'none' : '1.5px solid color-mix(in oklab, ' + ac + ' 38%, var(--line))', boxShadow: 'var(--shadow)',
               borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
-              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
+              {/* pre-wrap: the author's line breaks are IN the message — HTML just collapses them. Miriam had an
+                  order of service and nowhere to put it, so she pasted it into a notice and the congregation
+                  received hymn numbers, readings and prayers welded into one paragraph. `pretty` still handles
+                  the wrapping within each line. */}
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', whiteSpace: 'pre-wrap' }}>{m.text}</p>
             </div>
           </div>
           {react}
@@ -784,7 +788,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 6 }}>
             <Icon name="pen" size={13} color="var(--clay)" /> NOTE · {c.ref}</div>
           {c.text ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 14, lineHeight: 1.4, margin: '0 0 8px', color: 'var(--ink-2)', fontStyle: 'italic', textWrap: 'pretty' }}>“{c.text}”</p> : null}
-          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, color: 'var(--ink)', textWrap: 'pretty' }}>{c.note}</p>
+          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, color: 'var(--ink)', textWrap: 'pretty', whiteSpace: 'pre-wrap' }}>{c.note}</p>
         </div>
         {react}
       </Row>
@@ -827,7 +831,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
       <div style={{ maxWidth: 270, borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
         border: me ? 'none' : '1px solid var(--line)', boxShadow: 'var(--shadow)',
         borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
-        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', whiteSpace: 'pre-wrap' }}>{m.text}</p>
       </div>
       {react}
     </Row>
@@ -1547,7 +1551,7 @@ function SharePreview({ p, type }) {
       <div style={{ borderRadius: 18, padding: '16px 18px', background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 18 }}>
         <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 7 }}>NOTE · {p.ref}</div>
         {p.text ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.4, margin: '0 0 8px', color: 'var(--ink-2)', fontStyle: 'italic', textWrap: 'pretty' }}>“{p.text}”</p> : null}
-        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 15, lineHeight: 1.45, margin: 0, color: 'var(--ink)', textWrap: 'pretty' }}>{p.note}</p>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 15, lineHeight: 1.45, margin: 0, color: 'var(--ink)', textWrap: 'pretty', whiteSpace: 'pre-wrap' }}>{p.note}</p>
       </div>
     );
   }
@@ -1797,7 +1801,10 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
             <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
-              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word' }}>{m.content}</p>
+              {/* Same as the group bubble: the line breaks are in the message, HTML just collapses them.
+                  This sibling was never reported — only the notice was — and fixing one of two is how half a
+                  defect ships. */}
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{m.content}</p>
             </div>
             {m.reactions && m.reactions.length ? (
               <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>

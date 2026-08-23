@@ -666,8 +666,16 @@ function CareCard({ ctx, embedded }) {
   ) : (
     <div style={{ textAlign: 'center', padding: '36px 24px 8px', color: 'var(--ink-3)' }}>
       <div style={{ width: 56, height: 56, borderRadius: 18, margin: '0 auto 14px', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={26} stroke={1.5} color="var(--sage)" /></div>
-      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink)', marginBottom: 6 }}>No open needs right now</div>
-      <div style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>When someone in the church needs a hand — a meal, a ride, an errand — it’ll show up here for you to help.</div>
+      {/* THIS IS WHAT CALLUM READ WHILE VERITY WAS WAITING. He had listed himself as ready for DIY, Moving and
+          Rides; she had asked for a lift and a shop. He saw "No open needs right now — when someone in the
+          church needs a hand it'll show up here" three times over fifteen minutes and reasonably concluded
+          that nobody did. The request was on the relay the whole time.
+          He cannot be told it exists — a care request is sealed to the care team, and who has asked for what
+          is not a volunteer's business. But the app can stop asserting the opposite of the truth, and it can
+          name the step nobody knew was there: a request reaches the care team first, and only becomes
+          something to sign up for once they open it. */}
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink)', marginBottom: 6 }}>Nothing to sign up for yet</div>
+      <div style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 300, margin: '0 auto' }}>When someone asks for help it goes to the care team first. Once they set it up — a meal, a ride, an errand — it appears here for you to take a day.</div>
     </div>
   );
   // embedded = the Serving "Care" tab: availability module first (offer help + who's ready), then the needs.
