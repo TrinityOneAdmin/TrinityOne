@@ -2161,7 +2161,7 @@ window.Fellowship = {
     // ONE kept-open kind-0 subscription resolves ALL members' names at once. A sub-per-member blew past
     // the relay's 64-subscription-per-connection cap (members + chat + a sub each = the later name fetches
     // got 'rate-limited' and dropped — the cause of blank names). Batched = a single sub regardless of size.
-    let profSub = null; const profAuthors = new Set(); let profTimer = null;
+    let profSub = null; const profAuthors = new Set(); let profTimer = null; let lastProfCount = 0;
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
     const emit = (done) => {
       // _superseded drops the dead key of a member who was re-seated onto a new one, so the directory shows
@@ -2181,8 +2181,26 @@ window.Fellowship = {
       // so filtering on the name meant every member of the church qualified on every pass, for ever. The same
       // defect as requestProfiles/_flushProfiles — this is the member hub's own copy of that logic, and it is
       // the path the roster actually uses. AUDIT-2026-07-27.
-      const authors = [...profAuthors].filter(pk => !(pk in profiles));
+      // ASK ABOUT EVERYONE, NOT ONLY THE UNKNOWN. This filtered to `!(pk in profiles)`, so once a member's
+      // profile had arrived the hub never asked about them again. A kind-0 is REPLACEABLE, so a later change
+      // is delivered only to a subscription still asking — and nobody who already knew you was. The field
+      // that matters is `hidden`: a member who took themselves out of the church directory reached strangers
+      // and nobody who had already seen them, which is exactly the wrong way round. Every other kind-0 field
+      // (avatar, about) staled the same way.
+      //
+      // Obi, session 3, who found it without being able to prove it: "I could not verify from my own phone
+      // that hiding from the directory actually hides me from anyone else." Measured: the relay held
+      // "hidden":true on his kind-0 while another member's app still showed him after a full reload.
+      // Halime (round 10) is who this is for — her family does not know she attends church.
+      //
+      // NOT a periodic refetch: clearCommunityCache's note above records that gating on "have we asked"
+      // replaced an "is there an entry" gate precisely to stop refetch churn. This is one WIDER LIVE
+      // subscription instead — the sub is already kept open, so replaceable updates arrive for free — and it
+      // is re-opened only when the roster actually GREW, so a settled church never re-subscribes at all.
+      const authors = [...profAuthors];
       if (!authors.length) return;
+      if (profSub && authors.length === lastProfCount) return;
+      lastProfCount = authors.length;
       try { profSub && profSub.close(); } catch {}   // replace the old one — never accumulate subscriptions
       profSub = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
         // MERGE, and never let an empty name win. A kind-0 carries no name since Stage 2, and this overwrote
@@ -2194,7 +2212,11 @@ window.Fellowship = {
       });
     };
     const ensureProfile = (pk) => {
-      if (profAuthors.has(pk) || (pk in profiles)) return;
+      // ONLY skip people we are ALREADY subscribed for. The `(pk in profiles)` half meant a member whose
+      // profile had been restored from localStorage on boot never entered profAuthors at all — so widening
+      // the subscription above would have covered nobody who mattered, since that is exactly the state a
+      // returning member's app is in. Two halves of one defect; fixing either alone changes nothing.
+      if (profAuthors.has(pk)) return;
       profAuthors.add(pk);
       if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);   // debounce the burst of arriving members
     };

@@ -8099,6 +8099,7 @@
       let profSub = null;
       const profAuthors = /* @__PURE__ */ new Set();
       let profTimer = null;
+      let lastProfCount = 0;
       const emit = (done) => {
         const visible = [...hub.byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0) && !_superseded(cp, m.pubkey)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         if (!hub.eosed && !done && !visible.length) return;
@@ -8108,8 +8109,10 @@
       const emitSoon = _coalesce(() => emit(false));
       const refreshProfiles = () => {
         profTimer = null;
-        const authors = [...profAuthors].filter((pk) => !(pk in profiles));
+        const authors = [...profAuthors];
         if (!authors.length) return;
+        if (profSub && authors.length === lastProfCount) return;
+        lastProfCount = authors.length;
         try {
           profSub && profSub.close();
         } catch {
@@ -8144,7 +8147,7 @@
         });
       };
       const ensureProfile = (pk) => {
-        if (profAuthors.has(pk) || pk in profiles) return;
+        if (profAuthors.has(pk)) return;
         profAuthors.add(pk);
         if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);
       };
