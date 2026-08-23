@@ -1040,7 +1040,7 @@ function DashCalendar() {
             <button onClick={() => { setCalRunsheet(svcDetail); setSvcDetail(null); }} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 13, fontSize: 14 }}>
               <Icon name="plans" size={15} color="var(--on-clay)" /> {sheet.length ? 'Order of service · ' + sheet.length + (sheet.length === 1 ? ' item' : ' items') : 'Write the order of service'}
             </button>
-            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 0 0' }}>Items, who's leading each, and songs. <b>Your whole church sees it</b> in Serving &amp; events — not just the people on the rota.</p>
+            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 0 0' }}>Items, who's leading each, and songs. <b>The people serving on this service</b> see it in Serving &amp; events.</p>
           </SchModal>
         );
       })() : null}

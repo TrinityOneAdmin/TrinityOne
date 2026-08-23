@@ -45,3 +45,14 @@ test('and the whole church can still fetch one by default', () => {
   assert.match(GATE, /ROTA_VIS\.get\(cp\) \|\| \{\}\)\.v \|\| 'church'/,
     'runsheet visibility no longer defaults to the whole church');
 });
+
+test('the console does not promise the whole church sees a run sheet', () => {
+  // The relay WOULD serve it church-wide (ROTA_VIS falls back to 'church'), but a member reaches one only
+  // through their own rota slots — so only people rostered on that service ever see it. Decided 2026-08-23:
+  // that is intended. Which makes "your whole church sees it" a claim the product does not keep, and this
+  // file's own guard against writing from the relay's permission rather than the member's reality.
+  const i = SCH.indexOf('setSvcDetail(s)');
+  assert.ok(i > 0, 'the service dialog is gone — re-anchor');
+  assert.equal(/whole church sees it/.test(SCH), false,
+    'the steward is told the congregation will see an order of service that only the rota can reach');
+});
