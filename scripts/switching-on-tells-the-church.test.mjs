@@ -45,3 +45,15 @@ test('C9 — turning it OFF announces nothing', () => {
   assert.match(MEALS.slice(i, MEALS.indexOf('};', i)), /if \(turningOn\) setAnnounceOn\(true\)/,
     'the offer is not gated on the switch having just gone ON');
 });
+
+test('C9 — the offer posts somewhere members actually read', () => {
+  // It fell back to the string 'announce' when a church had no broadcast room, and nothing listens to that:
+  // members subscribe to rooms they know about. The relay accepted the event, the sheet closed as though it
+  // had worked, and not one person could ever receive it.
+  assert.equal(/'announce'\)/.test(MEALS), false, "it can still post to a room nobody is listening to");
+  assert.match(MEALS, /const target = broadcast \? broadcast\.id : \(\(groups \|\| \[\]\)\[0\] \|\| \{\}\)\.id/,
+    'it does not fall back to a real room the way the ordinary composer does');
+  assert.match(MEALS, /ok === false/,
+    'publishPost resolves FALSE when every relay refuses, so the sheet still closes as a success');
+  assert.match(MEALS, /no chat room yet/, 'a church with nowhere to post is shown a button that cannot work');
+});

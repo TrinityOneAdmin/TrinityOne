@@ -97,10 +97,22 @@ function AnnounceCareModal({ onClose }) {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const dlgRef = useStewDialog(() => { if (!busy) onClose(); });
+  // POST IT SOMEWHERE MEMBERS ACTUALLY READ. This fell back to the string 'announce' when a church had no
+  // broadcast room — and nothing listens to that. Members subscribe to rooms they know about, so the relay
+  // accepted the event, this sheet closed as though it had worked, and not one person could ever receive it.
+  // The ordinary composer already falls back to the church's first room; this now does the same, and if the
+  // church has no rooms at all there is nothing to post to and the offer is not made.
+  const target = broadcast ? broadcast.id : ((groups || [])[0] || {}).id || '';
   const post = async () => {
-    if (busy || !text.trim()) return;
+    if (busy || !text.trim() || !target) return;
     setBusy(true); setErr('');
-    try { await window.Steward.publishPost(text.trim(), broadcast ? broadcast.id : 'announce'); onClose(); }
+    try {
+      // publishPost resolves FALSE when every relay rejects it rather than throwing, so awaiting alone would
+      // have closed this sheet on a failure exactly as it closes on a success.
+      const ok = await window.Steward.publishPost(text.trim(), target);
+      if (ok === false) throw new Error('Every relay refused it \u2014 nothing was posted. Check your connection and try again.');
+      onClose();
+    }
     catch (e) { setErr((e && e.message) || 'Couldn\u2019t post \u2014 check your connection and try again.'); setBusy(false); }
   };
   return (
@@ -113,9 +125,10 @@ function AnnounceCareModal({ onClose }) {
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Practical care is on. <b>Members already using the app are told nothing</b> — it simply appears — so the people who most need it are the least likely to find it. Post this, edit it, or say not now.</p>
         <textarea value={text} onChange={e => setText(e.target.value)} rows={8} aria-label="What to post" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, fontFamily: 'var(--font-ui)', lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
         {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', margin: '12px 0 0', lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
+        {!target ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--ink-2)', margin: '12px 0 0', lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>Your church has no chat room yet, so there is nowhere to post this. Make one under Groups first.</span></div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={() => { if (!busy) onClose(); }} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.5 : 1 }}>Not now</button>
-          <button onClick={post} disabled={busy || !text.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !text.trim()) ? 0.55 : 1 }}><Icon name="send" size={15} color="var(--on-clay)" /> {busy ? 'Posting\u2026' : 'Post to the church'}</button>
+          <button onClick={post} disabled={busy || !text.trim() || !target} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !text.trim() || !target) ? 0.55 : 1 }}><Icon name="send" size={15} color="var(--on-clay)" /> {busy ? 'Posting\u2026' : 'Post to the church'}</button>
         </div>
       </div>
     </div>
