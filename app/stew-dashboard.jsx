@@ -4109,6 +4109,27 @@ function DashMembers() {
   const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !isBlocked(m.pubkey)) : [];
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
   const admitMember = (pk) => window.Steward.setAdmitted([...admittedList, pk]);
+  // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
+  // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
+  // eighteen round trips for a single decision.
+  //
+  // It still goes through a confirm that NAMES everyone, because only a steward at an unlocked console admits
+  // anyone (decided 2026-08-18) and a bulk button that hid the names would keep the letter of that rule while
+  // losing the point of it. Anyone who has not set a name is called out separately — "Anonymous" is exactly
+  // the row a steward would want to look at twice.
+  const [confirmAdmitAll, setConfirmAdmitAll] = React.useState(false);
+  const [admitAllBusy, setAdmitAllBusy] = React.useState(false);
+  const [admitAllErr, setAdmitAllErr] = React.useState('');
+  const admitAll = async () => {
+    setAdmitAllBusy(true); setAdmitAllErr('');
+    const pks = pendingJoins.map(m => m.pubkey).filter(Boolean);
+    try {
+      const r = await Promise.resolve(window.Steward.setAdmitted([...new Set([...admittedList, ...pks])]));
+      if (r === false) throw new Error('Every relay rejected it. Check your connection and try again.');
+      setConfirmAdmitAll(false);
+    } catch (e) { setAdmitAllErr((e && e.message) || 'Couldn\u2019t admit them \u2014 nobody was let in. Try again.'); }
+    finally { setAdmitAllBusy(false); }
+  };
   const [copied, setCopied] = React.useState('');
   const [showInactive, setShowInactive] = React.useState(false);
   const [showBlocked, setShowBlocked] = React.useState(false);
@@ -4322,10 +4343,21 @@ function DashMembers() {
             {q ? <button onClick={() => setQ('')} title="Clear the search" style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} /></button> : null}
           </div>
         ) : null}
+        {confirmAdmitAll ? (() => {
+          const named = pendingJoins.filter(m => m.name);
+          const anon = pendingJoins.length - named.length;
+          const list = named.map(m => m.name).join(', ');
+          return <SkConfirm icon="check" title={'Admit ' + pendingJoins.length + ' ' + (pendingJoins.length === 1 ? 'person' : 'people') + '?'} confirmLabel={'Admit all ' + pendingJoins.length}
+            body={'They get everything a member gets \u2014 the directory, chat, the calendar, and any group they join. You can remove someone afterwards, but they will have seen the church in the meantime.\n\n'
+              + (list ? list + '.' : '')
+              + (anon ? (list ? '\n\n' : '') + anon + (anon === 1 ? ' person has' : ' people have') + ' not set a name yet \u2014 you will be admitting them without knowing who they are.' : '')}
+            busy={admitAllBusy} err={admitAllErr} onConfirm={admitAll} onCancel={() => { if (!admitAllBusy) { setConfirmAdmitAll(false); setAdmitAllErr(''); } }} />;
+        })() : null}
         {pendingJoins.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="qr" size={15} color="currentColor" /> Requests to join · {pendingJoins.length}
-              {pendingJoins.length > 4 ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>scroll for the rest</span> : null}</div>
+              {pendingJoins.length > 4 ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>scroll for the rest</span> : null}
+              {pendingJoins.length > 1 ? <button onClick={() => { setAdmitAllErr(''); setConfirmAdmitAll(true); }} className="sk-btn sk-btn--ghost" style={{ marginLeft: pendingJoins.length > 4 ? 10 : 'auto', padding: '5px 10px', fontSize: 12 }}>Admit all {pendingJoins.length}</button> : null}</div>
             {/* The list scrolls INSIDE the panel. It used to grow without limit, so a church with a queue of
                 requests had the whole page pushed down — the members list, the safeguarding note and everything
                 below it were shoved off-screen behind a wall of Approve buttons. ~4 rows visible, rest scroll. */}
@@ -4512,7 +4544,7 @@ function DashCheckin() {
     <Panel title="Kids check-in" action={
       <button onClick={() => setPicking(true)} disabled={!minors.length || !sgKey} title={!sgKey ? 'The register’s key hasn’t reached this console yet — a check-in written now would not be saved.' : ''} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (minors.length && sgKey) ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext, and the only people who can open them are you and anyone you have given <b>Safeguarding</b> to.</DismissibleNote>
+      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>This is a <b>door operation</b>, done by a leader on this device — parents do nothing in their own app, and nothing about check-in appears there. Say so when you announce it, or they will go looking. Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext, and the only people who can open them are you and anyone you have given <b>Safeguarding</b> to.</DismissibleNote>
       {!minors.length ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>
       ) : (
@@ -5140,7 +5172,8 @@ function DashMediaPanel({ church }) {
 // Self-hosted media (Tier 2) — the church uploads its OWN audio/video, stored on its relay, members-only.
 // Lives under Resources (content authoring), not Settings. Backup hosts auto-fill from the church's relays.
 // Edit an uploaded sermon's name + details (re-publishes the same doc; the file/blob is untouched).
-function SermonEditModal({ sermon, onSave, onClose }) {
+// Also used BEFORE an upload, to name the file — `upload` swaps the wording and the button. See onFile.
+function SermonEditModal({ sermon, onSave, onClose, upload }) {
   const [title, setTitle] = React.useState(sermon.title || '');
   const [desc, setDesc] = React.useState(sermon.desc || '');
   const [busy, setBusy] = React.useState(false);
@@ -5159,9 +5192,10 @@ function SermonEditModal({ sermon, onSave, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Edit ' + (isVideo ? 'video' : 'audio') + ' details'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Edit {isVideo ? 'video' : 'audio'} details</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{upload ? 'Name this ' + (isVideo ? 'video' : 'recording') : 'Edit ' + (isVideo ? 'video' : 'audio') + ' details'}</div>
         </div>
-        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Rename it and add details{isVideo ? ' — members see the description under the video in Watch' : ''}. This only changes the label — the file itself stays as uploaded.</p>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>{upload ? 'This is what members see in the list. ' + (upload.name || '') + ' \u00b7 ' + upload.sizeText + ' \u2014 nothing is uploaded until you press Upload.' : 'Rename it and add details.'}</p>
+        {upload && upload.seenBefore ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--ink-2)', background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, var(--line))', borderRadius: 10, padding: '9px 11px', marginBottom: 14, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--gold)" /><span>You already uploaded this file from this console. Uploading it again adds a <b>second copy</b> to everyone&rsquo;s list.</span></div> : null}
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. Sunday sermon — the Prodigal Son" aria-label="Title" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Details <span style={{ textTransform: 'none', fontWeight: 500 }}>· optional</span></div>
@@ -5169,7 +5203,7 @@ function SermonEditModal({ sermon, onSave, onClose }) {
         {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', marginBottom: 12, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name={upload ? 'arrowUp' : 'check'} size={15} color="var(--on-clay)" /> {busy ? (upload ? 'Uploading…' : 'Saving…') : (upload ? 'Upload' : 'Save')}</button>
         </div>
       </div>
     </div>
@@ -5213,16 +5247,37 @@ function DashSermons() {
   const [editing, setEditing] = React.useState(null);
   const [notify, setNotify] = React.useState(true);   // feature the new upload on members' Today + push
   const [pendingDelete, setPendingDelete] = React.useState(null);
+  const [pendingUpload, setPendingUpload] = React.useState(null);   // a chosen file awaiting its title — see askThenUpload
+  const uploadedSigs = React.useRef(new Set());   // name|size|lastModified of what this console has already sent — never published
   const [pendingHevc, setPendingHevc] = React.useState(null);   // an HEVC video awaiting "upload anyway?" confirmation
   const [pendingBigEnc, setPendingBigEnc] = React.useState(null);   // a large ENCRYPTED video awaiting "upload anyway?" (OOM risk on low-end phones)
   const ENC_VIDEO_WARN = 50 * 1048576;   // encrypted media downloads whole + decrypts in RAM (~2-3× its size); above this a 2GB phone can OOM before it plays
+  // NAME IT BEFORE IT GOES. An upload used to be published under its FILE NAME, so members opened Watch and
+  // found "sermon-the-good-shepherd" — two of them read it as a broken entry rather than a sermon. The title
+  // is the only thing anyone sees in the list, and the one moment the steward has the sermon in mind is the
+  // moment they pick the file.
+  //
+  // The same modal fixes the second half of that report: choosing a file started a silent background upload
+  // with its only feedback below the fold, so a steward who saw nothing happen picked the file AGAIN and
+  // double-posted it. A modal standing in front of you cannot be mistaken for nothing having happened.
+  //
+  // TWO GUARDS, because one cannot cover both cases. The exact one is the sha256 in doUpload. It cannot see an
+  // ENCRYPTED repeat: media is sealed with a fresh nonce, so the same sermon encrypts to different bytes and a
+  // different sha every time. The file's own identity can see it, costs nothing, and never leaves this console
+  // — publishing a plaintext hash beside encrypted media would hand a seized relay a way to confirm exactly
+  // which recording it holds.
+  const askThenUpload = (f) => setPendingUpload({
+    file: f, name: f.name, sizeText: fmtSize(f.size), mime: f.type || '',
+    seenBefore: uploadedSigs.current.has(f.name + '|' + f.size + '|' + f.lastModified),
+    title: f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^./, c => c.toUpperCase()),
+  });
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
     if (await probeHevcVideo(f)) { setPendingHevc(f); return; }   // warn before uploading a format web browsers can't play
     if (encOn && String(f.type || '').startsWith('video') && f.size > ENC_VIDEO_WARN) { setPendingBigEnc(f); return; }   // #18 interim: guard the real OOM path
-    doUpload(f);
+    askThenUpload(f);
   };
-  const doUpload = async (f) => {
+  const doUpload = async (f, fields) => {
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
     setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     let ok = false;
@@ -5230,7 +5285,15 @@ function DashSermons() {
       const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
       const mirrors = mirrorHosts.split(',').map(s => s.trim()).filter(Boolean);
       const b = await window.Steward.uploadBlob(f, encFn, mirrors);
-      const pub = await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
+      // The blob store is content-addressed and deduped itself; it was the DOC that was minted twice, under a
+      // fresh id each time, leaving one recording listed twice in every member's app.
+      const dupe = sermons.find(x => x && x.sha256 && x.sha256 === b.sha256);
+      if (dupe) {
+        setUpMsg('Already published as \u201c' + (dupe.title || 'a sermon') + '\u201d \u2014 nothing added. Rename that one if you meant to change it.');
+        setUpBusy(false); setTimeout(() => setUpMsg(''), 6000); return;
+      }
+      uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);
+      const pub = await window.Steward.publishSermon({ title: (fields && fields.title) || f.name.replace(/\.[^.]+$/, ''), desc: (fields && fields.desc) || undefined, sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
       if (notify && pub && window.Steward.pinSermon) { try { await window.Steward.pinSermon(pub); } catch (e) {} }   // feature on members' Today → "New video / New audio clip" card + push
       const backups = (b.hosts || []).length - 1;
       setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? ' · members notified' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
@@ -5241,12 +5304,13 @@ function DashSermons() {
   const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   return (
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
+      {pendingUpload ? <SermonEditModal upload={pendingUpload} sermon={{ title: pendingUpload.title, mime: pendingUpload.mime }} onSave={(fields) => doUpload(pendingUpload.file, fields)} onClose={() => setPendingUpload(null)} /> : null}
       {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
       {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { window.Steward.removeSermon(pendingDelete); setPendingDelete(null); }} onCancel={() => setPendingDelete(null)} /> : null}
-      {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); doUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
-      {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); doUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
+      {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); askThenUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
+      {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); askThenUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
       <Panel title="Self-hosted sermons">
-        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Audio appears in members’ <b>Listen</b> tab, video in <b>Watch</b>. Great over a thin connection.</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Both land in members’ <b>Watch &amp; Listen</b> tab — audio under Listen, video under Watch. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />

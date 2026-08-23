@@ -90,6 +90,7 @@ function SermonRow({ s, loading, onClick }) {
       <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 15%, var(--surface))' }}><Icon name={isVideo ? 'play' : 'headphones'} size={20} color="var(--clay)" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{s.title}</div>
+        {s.desc ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{s.desc}</div> : null}
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[isVideo ? 'Video' : 'Audio', sz, s.ts ? fmtDate(s.ts * 1000) : null, 'members only', s.enc ? 'encrypted' : null].filter(Boolean).join(' · ')}</div>
       </div>
       {loading
@@ -171,11 +172,15 @@ function WatchView({ ctx }) {
   const ch = data.channel || null;
   const ytVideos = data.videos || [];
   const hasChurch = sermons.length > 0;
-  // U7: audio lives in a "Watch" tab, so a listener wouldn't look here. When a church has both, split the group
-  // into a "Listen" (audio) and a "Watch" (video) sub-head so audio is findable; homogeneous groups need no split.
+  // U7: audio lives in a "Watch" tab, so a listener wouldn't look here. Split the group into a "Listen"
+  // (audio) and a "Watch" (video) sub-head so audio is findable.
+  //
+  // This used to be gated on the church having BOTH — "homogeneous groups need no split" — which quietly
+  // excluded the only case that was ever reported: a church with audio sermons and no video got no "Listen"
+  // label anywhere, under a tab called Watch. The sub-head is cheap and it is the word the listener is
+  // looking for, so it is now unconditional. The tab itself reads "Watch & Listen".
   const audioSermons = sermons.filter(s => !String(s.mime || '').startsWith('video'));
   const videoSermons = sermons.filter(s => String(s.mime || '').startsWith('video'));
-  const bothTypes = audioSermons.length > 0 && videoSermons.length > 0;
   const hasYT = ytVideos.length > 0;
 
   if (!hasChurch && !hasYT) {
@@ -183,8 +188,8 @@ function WatchView({ ctx }) {
       <div style={{ animation: 'trinityFade .4s ease both' }}>
         <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--ink-3)' }}>
           <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="play" size={26} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>Nothing to watch yet</div>
-          <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>Your church’s sermons and videos will appear here.</p>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>Nothing here yet</div>
+          <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>Your church’s sermons — to watch or to listen to — will appear here.</p>
         </div>
       </div>
     );
@@ -201,7 +206,7 @@ function WatchView({ ctx }) {
           <SectionLabel>From {chName}</SectionLabel>
           {audioSermons.length ? (
             <React.Fragment>
-              {bothTypes ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="headphones" size={13} color="var(--ink-3)" /> Listen</div> : null}
+              {<div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="headphones" size={13} color="var(--ink-3)" /> Listen</div>}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: (videoSermons.length || hasYT) ? 22 : 0 }}>
                 {audioSermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
               </div>
@@ -209,7 +214,7 @@ function WatchView({ ctx }) {
           ) : null}
           {videoSermons.length ? (
             <React.Fragment>
-              {bothTypes ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="play" size={13} color="var(--ink-3)" /> Watch</div> : null}
+              {<div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="play" size={13} color="var(--ink-3)" /> Watch</div>}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: hasYT ? 28 : 0 }}>
                 {videoSermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
               </div>

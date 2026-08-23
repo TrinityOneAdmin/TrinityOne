@@ -197,13 +197,20 @@ function CareAvailRow({ a, ctx, myPub }) {
 // ── "Ask for help": a member privately asks the care team, via a short form that mirrors the need categories.
 // It publishes a sealed request (care-team only) — not a public need. The care team approves it into a need or
 // opens a chat. Lives at the top of the Care tab.
+// A request can name several kinds of help — one situation, one request. Older requests carry only `type`,
+// so read `types` and fall back; never show the first kind alone when the asker chose three.
+function careTypeLabel(r) {
+  const ts = (Array.isArray(r && r.types) && r.types.length ? r.types : [r && r.type]).filter(Boolean);
+  const names = ts.map(t => CARE_TYPE_LABEL[t]).filter(Boolean);
+  return names.length ? names.join(' \u00b7 ') : 'Help';
+}
 const CARE_WHEN = [['once', 'Just once'], ['ongoing', 'For a while'], ['unsure', 'Not sure yet']];
 const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No rush']];
 
 function MyRequestRow({ r, onCancel, onMessage }) {
   const [busy, setBusy] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);   // Withdraw deletes the request AND its care-team thread — ask first
-  const label = CARE_TYPE_LABEL[r.type] || 'Help';
+  const label = careTypeLabel(r);
   const st = r.status || 'open';
   // "Declined" must not read like help is coming. Someone who worked up the courage to ask, and is told the
   // team "has this in hand", waits — and loses the chance to ask someone else. Say it's closed, and make the
@@ -265,7 +272,7 @@ function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{CARE_TYPE_LABEL[r.type] || 'Help'} · for {who}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{careTypeLabel(r)} · for {who}</div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[when, urg].filter(Boolean).join(' · ') || 'Asked for help'}</div>
         </div>
       </div>
@@ -308,7 +315,7 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Set up help" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Set up help</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 0' }}>Opens a need for <b style={{ color: 'var(--ink)' }}>{CARE_TYPE_LABEL[req.type] || 'help'}</b> the church can sign up for. Pick the dates — you can refine it later in the console.</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 0' }}>Opens a need for <b style={{ color: 'var(--ink)' }}>{careTypeLabel(req)}</b> the church can sign up for. Pick the dates — you can refine it later in the console.</p>
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}><div style={lbl}>From</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
           <div style={{ flex: 1 }}><div style={lbl}>To</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
@@ -414,7 +421,7 @@ function careSentWording(res) {
 function AskForHelpForm({ ctx, onClose, onSent }) {
   const [forSelf, setForSelf] = React.useState(true);
   const [forName, setForName] = React.useState('');
-  const [type, setType] = React.useState('');
+  const [types, setTypes] = React.useState([]);
   const [when, setWhen] = React.useState('');
   const [urgency, setUrgency] = React.useState('');
   const [note, setNote] = React.useState('');
@@ -424,10 +431,10 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   const chip = (active) => ({ padding: '8px 13px', borderRadius: 999, border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', color: active ? 'var(--clay-deep, #b4462f)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 });
   const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' };
   const submit = async () => {
-    if (!type) { setErr('Pick what would help.'); return; }
+    if (!types.length) { setErr('Pick what would help.'); return; }
     setBusy(true); setErr('');
     let ok = null;
-    try { ok = await window.Fellowship.publishCareRequest({ type, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
+    try { ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
     setBusy(false);
     if (ok) onSent(ok); else setErr('Couldn’t send — check your connection and try again.');
   };
@@ -447,9 +454,12 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
         </div>
         {!forSelf ? <input value={forName} onChange={e => setForName(e.target.value)} placeholder="Their name (optional)" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} /> : null}
 
-        <div style={lbl}>What would help?</div>
+        <div style={lbl}>What would help? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600, color: 'var(--ink-3)' }}>Pick as many as you need</span></div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {TYPES.map(t => <button key={t} onClick={() => setType(t)} style={chip(type === t)}><Icon name={CARE_TYPE_ICON[t]} size={14} color="currentColor" /> {CARE_TYPE_LABEL[t]}</button>)}
+          {TYPES.map(t => {
+            const on = types.indexOf(t) >= 0;
+            return <button key={t} role="checkbox" aria-checked={on} onClick={() => setTypes(on ? types.filter(x => x !== t) : [...types, t])} style={chip(on)}><Icon name={on ? 'check' : CARE_TYPE_ICON[t]} size={14} color="currentColor" /> {CARE_TYPE_LABEL[t]}</button>;
+          })}
         </div>
 
         <div style={lbl}>When?</div>

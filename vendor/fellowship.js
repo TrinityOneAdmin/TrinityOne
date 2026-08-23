@@ -9796,9 +9796,12 @@
       const team = await _fetchCareTeam(cp);
       const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
       const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
+      const types = (Array.isArray(fields.types) ? fields.types : [fields.type]).map((t) => String(t || "").trim()).filter(Boolean);
+      const uniq = [...new Set(types)];
       const body = {
         v: 1,
-        type: String(fields.type || "other"),
+        type: uniq[0] || "other",
+        types: uniq.length ? uniq : ["other"],
         forSelf: fields.forSelf !== false,
         forName: String(fields.forName || "").trim(),
         when: String(fields.when || "").trim(),

@@ -1438,6 +1438,20 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
             padding: '5px 13px', borderRadius: 999, fontSize: 12.5, fontWeight: 700 }}>
             <Icon name="shield" size={13} /> {named ? 'TrinityOne member' : 'Anonymous member'}</div>
+          {/* ADA CHOSE THIS BY ACCIDENT AND FOUND IT ONLY BY HUNTING. "Continue without a name" stays exactly
+              as it is — anonymity is a real option and some people need it — but the state it leaves you in was
+              a single word on this screen with nothing to press. This says what the church sees and fixes it in
+              one tap. It is not a nag: a member who means to stay anonymous simply never presses it. */}
+          {!named ? (
+            <button onClick={() => setEdit(true)} style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', width: '100%', maxWidth: 340, marginLeft: 'auto', marginRight: 'auto', cursor: 'pointer', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', borderRadius: 14, padding: '11px 13px', fontFamily: 'var(--font-ui)' }}>
+              <div style={{ width: 34, height: 34, borderRadius: 11, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pen" size={16} color="currentColor" /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>Add your name</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.4 }}>You appear as <b>Anonymous</b> to everyone in your church — in the directory, in chat, and on every rota.</div>
+              </div>
+              <Icon name="chevR" size={17} color="var(--clay)" />
+            </button>
+          ) : null}
           {/* THE YOUNG PERSON'S OWN SCREEN, AND ONLY THEIRS. A 15-year-old in the 2026-08-19 simulation saw
               most of her church marked "Restricted" with nothing anywhere explaining it, and concluded the
               app might simply be broken. This says what her account is, in her own app, on her own device.
@@ -1455,13 +1469,10 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
               </div>
             </div>
           ) : null}
-          {!named ? (
-            <div style={{ marginTop: 16 }}>
-              <button onClick={() => setEdit(true)} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 22px',
-                borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Add a name</button>
-              <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 22px 0', lineHeight: 1.5 }}>Optional. A name helps your church recognise you — you’ll still share no personal data.</p>
-            </div>
-          ) : (
+          {/* The bare "Add a name" button that used to sit here has moved UP, under the word Anonymous. It said
+              "Optional. A name helps your church recognise you", which is an invitation, not a description of
+              where you already stand — and it sat far enough below the badge that Ada never joined the two. */}
+          {!named ? null : (
             <button onClick={() => setEdit(true)} style={{ marginTop: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)',
               padding: '10px 20px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>Edit name & mark</button>
           )}
@@ -1639,7 +1650,7 @@ function FamilySheet({ open, onClose, ctx }) {
               <Icon name="shield" size={20} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
               <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{(kids.length === 0 || kids.some(k => !k.viaSteward))
                 ? 'You set up the account and keep its recovery words. Once your steward confirms the link, the account is marked as a child — they’ll only see child-safe groups, and only you and cleared leaders can message them privately.'
-                : 'Your steward linked you as this child’s parent. You can message them privately and collect them at check-in — they only see child-safe groups, protected by the church.'}</div>
+                : 'Your steward linked you as this child’s parent. You can message them privately, and they only see child-safe groups. If your church runs check-in, a leader signs children in and out at the door on the church’s own device — there is nothing for you to do in the app.'}</div>
             </div>
             {kids.length ? kids.map(k => (
               <div key={k.child} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 10 }}>

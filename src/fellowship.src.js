@@ -3440,8 +3440,18 @@ window.Fellowship = {
     const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
     // always seal to the church key (the owner can always triage) + ourselves; plus the published care team.
     const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
+    // ONE SITUATION IS ONE REQUEST. Verity needed a lift to the hospital and someone to do her shop; the form
+    // held a single kind, so tapping Rides then Errands kept only Errands and she sent two requests for one
+    // afternoon. The care team triaged them as two people in need.
+    //
+    // `types` is the truth. `type` stays, and stays FIRST, because it is what every existing reader keys off —
+    // the row label, the icon, the need the care team opens — including builds already on phones that have
+    // never heard of `types`. Dropping it would show an older app "other" for a request whose note it can read.
+    const types = (Array.isArray(fields.types) ? fields.types : [fields.type])
+      .map(t => String(t || '').trim()).filter(Boolean);
+    const uniq = [...new Set(types)];
     const body = {
-      v: 1, type: String(fields.type || 'other'),
+      v: 1, type: uniq[0] || 'other', types: uniq.length ? uniq : ['other'],
       forSelf: fields.forSelf !== false, forName: String(fields.forName || '').trim(),
       when: String(fields.when || '').trim(), urgency: String(fields.urgency || '').trim(),
       note: String(fields.note || '').trim(), by: pub, at: Math.floor(Date.now() / 1000),
