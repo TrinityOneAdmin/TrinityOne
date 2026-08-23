@@ -1970,6 +1970,40 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
+  // SOMEONE ASKING FOR HELP IS A PERSON WAITING, exactly like the two banners either side of this one.
+  // The Overview flagged waiting JOIN requests and waiting STEWARD requests and said nothing about a member
+  // asking for care — so Miriam read "18 people are waiting to join" and went to Members, while two requests
+  // for help sat three clicks away, unmentioned.
+  //
+  // That silence is most of why the care loop never closed. A request is not something anyone can volunteer
+  // for until a steward converts it into a need; nothing chased the steward, so Verity asked for a lift and a
+  // shop, Callum and Desmond were both standing by, and Callum watched "No open needs right now" for fifteen
+  // minutes across three reloads.
+  //
+  // Gated on the capability, not just the module: Care is `stewCapState('care')`, and the steward-request
+  // banner beside this one carries the scar from getting that wrong — a delegate followed its directions to an
+  // owner-only page and found "no such page exists". A delegate without care is not shown a door that is shut.
+  const _ovConn = window.useStewardConn ? window.useStewardConn() : 0;   // re-subscribe after a relay restart, else a request raised meanwhile never appears
+  const careOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;
+  const careAllowed = !!(careOn && stewCapState('care').allowed);
+  const [openCareReqs, setOpenCareReqs] = React.useState(0);
+  React.useEffect(() => {
+    if (!careAllowed || !(window.StewardMeals && window.StewardMeals.subscribeCareRequests)) { setOpenCareReqs(0); return; }
+    let u = null;
+    try { u = window.StewardMeals.subscribeCareRequests(list => setOpenCareReqs((list || []).filter(r => r && r.status === 'open').length)); } catch (e) {}
+    return () => { try { u && u(); } catch (e) {} };
+  }, [careAllowed, _ovConn]);
+  const careReqBanner = openCareReqs ? (
+    <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
+      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={21} color="currentColor" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--clay-ink)' }}>{openCareReqs} {openCareReqs === 1 ? 'person has' : 'people have'} asked for help</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Nobody can offer until you open it as a need — set it up in Care.</div>
+      </div>
+      <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Open <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
+    </button>
+  ) : null;
+
   // people asking to become a steward — surfaced big too, so a request never just sits unseen in Settings
   const stewardReqs = window.usePendingStewards ? window.usePendingStewards() : [];
   // Approving a steward is owner-only, and this banner renders for whoever is on Overview — including a
@@ -2050,7 +2084,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{stewardReqBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -2058,6 +2092,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       {pendingBanner}
+      {careReqBanner}
       {stewardReqBanner}
       {stat}
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
