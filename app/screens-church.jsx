@@ -285,7 +285,7 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
                         {c.verified ? <Icon name="check" size={14} stroke={3} color="var(--sage)" /> : null}
                       </div>
                       {c.tagline ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 13.5, color: 'var(--ink-2)', fontStyle: 'italic', lineHeight: 1.35, marginTop: 1 }}>“{c.tagline}”</div> : null}
-                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> members</React.Fragment>}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> {c.members === 1 ? 'member' : 'members'}</React.Fragment>}</div>
                     </div>
                   </div>
                   {/* LEAVING IS NOT A TOGGLE. This was two taps of the SAME small button — Leave, then Confirm

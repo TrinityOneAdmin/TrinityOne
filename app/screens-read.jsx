@@ -116,7 +116,9 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
       <div style={{ display: 'flex', gap: 11, marginBottom: 20 }}>
         {HL_COLORS.map(c => (
-          <button key={c.id} onClick={() => onColor(curColor === c.v ? null : c.v)} style={{
+          <button key={c.id} onClick={() => onColor(curColor === c.v ? null : c.v)}
+            aria-label={(curColor === c.v ? 'Remove ' : 'Highlight ') + c.id}
+            title={(curColor === c.v ? 'Remove ' : 'Highlight ') + c.id} style={{
             width: 44, height: 44, borderRadius: 999, background: c.v, cursor: 'pointer',
             border: curColor === c.v ? '2.5px solid var(--ink)' : '2px solid var(--line)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -663,7 +665,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
                   </div>
                 </div>
               ) : (
-                <button onClick={() => { setComposing(true); setCVerse(String((sel || 1))); }} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '11px', borderRadius: 12, border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14 }}><Icon name="plus" size={16} color="var(--clay)" /> New note</button>
+                <button onClick={() => { setComposing(true); setCVerse(String((loc && loc.verse) || 1)); }} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '11px', borderRadius: 12, border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14 }}><Icon name="plus" size={16} color="var(--clay)" /> New note</button>
               )}
             {myNotes.length ? myNotes.map(n => (
               <div key={n.ref} onClick={() => { onClose(); ctx.gotoRef && (() => { const l = window.Bible.parseRef(n.ref); if (l) ctx.gotoRef(l.book, l.chap, l.verse); })(); }} style={{ marginBottom: 12, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer' }}>

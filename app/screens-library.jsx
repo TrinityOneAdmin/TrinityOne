@@ -746,9 +746,15 @@ function InstalledBrowser({ ctx, category, force }) {
   rows.sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
 
   const CAT_LABEL = { bibles: 'Bible', dictionaries: 'Dictionary', commentaries: 'Commentary', devotionals: 'Devotional' };
-  const remove = (r) => {
+  // AWAIT IT. removeModule is `async`, so this tested a PROMISE — always truthy — and the success toast
+  // fired even when the removal returned false. A commentary that is not in `modules` cannot be removed at
+  // all, and the app said "Removed" anyway. Same family as every other control in this programme that
+  // reported success over nothing happening.
+  const remove = async (r) => {
     if (r.abbr === active) { ctx.toast('Switch to another Bible before removing this one'); return; }
-    if (window.Bible.removeModule(r.abbr)) { ctx.toast(`Removed ${r.abbr || r.name}`); force(x => x + 1); }
+    let ok = false;
+    try { ok = await window.Bible.removeModule(r.abbr); } catch (e) { ok = false; }
+    if (ok) { ctx.toast(`Removed ${r.abbr || r.name}`); force(x => x + 1); }
     else ctx.toast(`Couldn't remove ${r.name}`);
   };
 

@@ -348,9 +348,18 @@ function svEventRsvpRow({ e, rsvps, ctx }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       {isSeries ? <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>every time</span> : null}
       <div style={{ flex: 1 }} />
+      {/* SAY THE ANSWER IN WORDS. It existed only as a button fill colour, so three members across three
+          rounds could not tell what they had chosen — before tapping, after tapping, or after a reload.
+          Priyanka: "Going / Maybe / Can't read exactly the same in words." */}
+      {rsvps[e.id] ? <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', marginRight: 2 }}>
+        {rsvps[e.id] === 'going' ? 'You’re going' : rsvps[e.id] === 'maybe' ? 'You said maybe' : 'You can’t make it'}
+      </span> : null}
       {[['going', 'Going'], ['maybe', 'Maybe'], ['no', 'Can’t']].map(([v, lbl]) => {
         const on = rsvps[e.id] === v; const c = v === 'going' ? 'var(--sage)' : v === 'maybe' ? 'var(--gold)' : 'var(--ink-3)';
-        return <button key={v} onClick={() => ctx.setRsvp(e.id, v)} style={{ padding: '7px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
+        return <button key={v} onClick={() => ctx.setRsvp(e.id, v)} aria-pressed={on}
+          aria-label={lbl + (on ? ' — your answer' : '')}
+          title={on ? 'Your answer: ' + lbl : 'Answer ' + lbl}
+          style={{ padding: '7px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
       })}
     </div>
   );

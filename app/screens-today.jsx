@@ -655,7 +655,7 @@ function CareCard({ ctx, embedded }) {
         <CareSection id="need" icon="heart" title="If you need help" sub="Ask your care team, or reach someone who’s offered">
           <AskForHelp ctx={ctx} />
           <CareAvailability ctx={ctx} part="others" />
-          {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>Nobody has listed themselves as available yet — asking your care team above reaches them directly.</div> : null}
+          {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>Nobody else has listed themselves as available yet — asking your care team above reaches them directly.</div> : null}
         </CareSection>
         <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={live.length}>
           <CareAvailability ctx={ctx} part="mine" />
@@ -664,11 +664,19 @@ function CareCard({ ctx, embedded }) {
       </React.Fragment>
     );
   }
-  if (!live.length) return null;   // Today-card variant (currently unused): nothing to show with no needs
+  // TODAY VARIANT. It used to return null on `!live.length`, which hid it in exactly the moment somebody
+  // needs it: nobody has asked yet, and the person reading is the one who wants to ask. Verity, 71, with a
+  // broken wrist, hunted through Community and the You page and found Care only inside "Serving & events" —
+  // "Serving to me means ME doing something for the church, not the church doing something for me. If I'd
+  // needed help badly I'd have telephoned Miriam." Two more members never found it at all.
+  //
+  // So the card shows the ask first and any open needs under it. Still hidden entirely for a church that has
+  // not switched care on (the `!s.enabled` guard above) — owner's decision, 2026-08-23.
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       <SectionLabel>Practical care</SectionLabel>
-      {needsBlock}
+      <AskForHelp ctx={ctx} />
+      {live.length ? needsBlock : null}
     </div>
   );
 }
@@ -1148,7 +1156,26 @@ function TodayScreen({ ctx }) {
       </div>
       )}
 
-      {/* Practical care / meal trains now lives in its own tab inside Serving & events (not on Today) */}
+      {/* WAITING FOR APPROVAL, SAID ON THE FIRST SCREEN. The waiting page itself is praised by every member
+          who reaches it — the problem is that it lives on one tab out of five, and six people across four
+          rounds looked at Today first and saw a normal, working app. Bridget, 74: "On my home screen the
+          church's name sits at the top with no sign at all that I'm still waiting, so at a glance I'd have
+          believed I was already in." Eunice put the tablet down and assumed she had done it wrong. */}
+      {ctx.joinState && ctx.joinState.isPending ? (
+        <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Waiting to be let in</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+            Your request has been sent{ctx.church && ctx.church.name ? ' to ' + ctx.church.name : ''}. A steward usually lets people in within a day — you don’t need to do anything else.
+          </div>
+          <button onClick={() => ctx.go && ctx.go('chat')} style={{ marginTop: 10, padding: '7px 12px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>
+            Check again
+          </button>
+        </div>
+      ) : null}
+
+      {/* Practical care: back on Today, gated on the church having switched it on. Three members failed to
+          find it inside Serving & events and all three read Today first; the full tab still exists. */}
+      <CareCard ctx={ctx} />
 
       {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages. */}
       {ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {
