@@ -14427,6 +14427,7 @@ zoo`.split("\n");
   var BLOCKED_D = "trinityone/blocked:";
   var MINORS_D = "trinityone/minors:";
   var APPROVED_D = "trinityone/approved:";
+  var _clearedTrail = { map: {}, list: [], loaded: false };
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
   var NAMEKEY_D = "trinityone/namekey:";
@@ -17781,6 +17782,7 @@ zoo`.split("\n");
       let minors = [], approved = [], nophoto = [], guardians = {};
       let tMinors = 0, tApproved = 0, tNophoto = 0, tGuardians = 0;
       let sawMinors = false, sawEose = false;
+      let cleared = {};
       const isLoaded = () => sawMinors && sawEose;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
@@ -17796,17 +17798,20 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
             tApproved = e.created_at;
             try {
-              approved = JSON.parse(e.content).pubkeys || [];
+              const _a2 = JSON.parse(e.content);
+              approved = _a2.pubkeys || [];
+              cleared = _a2.cleared || {};
+              _clearedTrail = { map: cleared, list: approved.slice(), loaded: true };
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -17817,7 +17822,7 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() });
           } else if (d === GUARDIANS_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
@@ -17827,7 +17832,7 @@ zoo`.split("\n");
             } catch {
               guardians = {};
             }
-            onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() });
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -17838,7 +17843,7 @@ zoo`.split("\n");
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
           sawEose = true;
-          onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() });
+          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded() });
         }
       });
       return () => {
@@ -18190,11 +18195,25 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
-    setApproved(pubkeys) {
+    // `opts.note` — whatever the steward wants on the record for a NEW clearance (a DBS certificate number, the
+    // date they saw it, "references checked by the wardens"). Free text, because a church's own practice is the
+    // thing being recorded and no field we invent will fit every church. It lives in the church's own document,
+    // which is owner-only to read; say so where it is typed, because a reference number is personal data about a
+    // volunteer and a steward should choose knowingly what goes in.
+    setApproved(pubkeys, opts) {
       _requireTrustedView("cleared-adults list");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      const prior = _clearedTrail.map || {};
+      if (!_clearedTrail.loaded && list.some((p) => !prior[p])) {
+        return Promise.reject(new Error("The clearance record hasn\u2019t loaded yet \u2014 nothing was changed. Try again in a moment."));
+      }
+      const wasApproved = new Set(_clearedTrail.list || []);
+      const cleared = {};
+      for (const p of list) {
+        cleared[p] = prior[p] || (wasApproved.has(p) ? { by: "", at: 0, note: "" } : { by: pub, at: now(), note: String(opts && opts.note || "").slice(0, 300) });
+      }
+      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }, sk));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),

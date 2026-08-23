@@ -33,7 +33,7 @@ const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'u
 // belongs on this list, so a future reader can judge an addition rather than guess.
 const GOVERNING = [
   ['setMinors(pubkeys)', 'who is a child — without it the relay lets a minor post in, and read, an adults-only room'],
-  ['setApproved(pubkeys)', 'who is cleared for youth — without it the relay cannot tell a vetted adult from any other'],
+  ['setApproved(pubkeys, opts)', 'who is cleared for youth — without it the relay cannot tell a vetted adult from any other'],
   ['setGuardians(links)', 'the child→parent map — without it a parent is refused their own child'],
   ['publishGroup(group)', 'carries `childsafe` and the leaders list — without it the relay cannot tell an adults-only room from a youth one'],
   // ADDED 2026-08-18, demonstrated by a red-team insider. A banned member, whose ban reached only ONE of the

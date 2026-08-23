@@ -4063,13 +4063,23 @@ function DashMembers() {
   // Miriam cleared a six-year-old by mis-tapping an unnamed button; while the child mark stood the relay
   // still protected everyone, and the danger arrived the moment a steward corrected the mark and left the
   // clearance behind. Measured before the fix: the six-year-old could then privately message another child.
+  // One place to say a clearance write did NOT happen. The toggle has already moved by the time this runs, so
+  // saying nothing leaves a steward believing the opposite of the truth about who may work with children.
+  const _clearFailed = (pk, e) => {
+    try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'youth clearance',
+      message: (e && e.message) || ('Couldn\u2019t save the clearance for ' + (nameByPub[pk] || 'that person') + ' — nothing was changed.') } })); } catch (e2) {}
+  };
   const toggleMinor = (pk) => {
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
     const r = window.Steward.setMinors(next);
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
-      try { window.Steward.setApproved(nextApproved); } catch (e) {}
+      // setApproved REJECTS rather than fabricate a clearance date when the record has not loaded, so a
+      // `try { } catch` around it caught nothing — a promise does not throw where this stands. Withdrawing a
+      // clearance that then fails silently is the worst of the three outcomes here: the child mark lands, the
+      // steward sees the row change, and the person stays cleared.
+      Promise.resolve(window.Steward.setApproved(nextApproved)).catch((e) => _clearFailed(pk, e));
     }
     _reseal(next, nextApproved, [pk]); return r;
   };
@@ -4083,7 +4093,8 @@ function DashMembers() {
       return null;
     }
     const next = approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk];
-    const r = window.Steward.setApproved(next); _reseal(sg.minors || [], next, [pk]); return r;
+    const r = Promise.resolve(window.Steward.setApproved(next)).catch((e) => { _clearFailed(pk, e); return false; });
+    _reseal(sg.minors || [], next, [pk]); return r;
   };
   // safeguarding v2: parent↔child links — pending parent requests + the confirmed map
   const guardReqs = window.useStewardGuardianRequests ? window.useStewardGuardianRequests() : [];
@@ -4095,6 +4106,25 @@ function DashMembers() {
   // ourselves from the signer's pubkey, plus the npub — not the names carried in the request's content.
   const npubByPub = {}; members.forEach(m => { if (m.npub) npubByPub[m.pubkey] = m.npub; });
   const idOf = (pk) => npubByPub[pk] ? shortNpub(npubByPub[pk]) : ((pk || '').slice(0, 16) + '…');
+  // Declared HERE, after nameByPub, not up with the other safeguarding state: this runs during RENDER,
+  // so a `const` declared further down is still in its temporal dead zone and reading it throws. It did —
+  // the whole Members screen fell to the error boundary, which is the failure this project cares most
+  // about (looks installed, shows nothing). Found by opening the page, not by reading it.
+  // WHO IS CLEARED, IN ONE PLACE. Miriam: "with a hundred members I'd be lost." The only way to answer that
+  // question was to scroll the whole membership a row at a time, and the search box matches NAMES — so it
+  // could not even narrow to the people the question is about.
+  //
+  // It shows the trail, not just the names, because the question a church is actually asked is "who cleared
+  // this person, and when". A clearance granted before the record existed shows honestly as "no record" rather
+  // than borrowing today's date.
+  const clearedList = (sg.approved || []).map(pk => ({ pk, name: nameByPub[pk] || '', rec: (sg.cleared || {})[pk] || null }))
+    .sort((a, b) => (a.name || 'zz').localeCompare(b.name || 'zz'));
+  const [showCleared, setShowCleared] = React.useState(false);
+  const _clDate = (rec) => {
+    if (!rec || !rec.at) return 'no record of when';
+    try { return new Date(rec.at * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+    catch (e) { return 'no record of when'; }
+  };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = (r) => {
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
@@ -4440,6 +4470,30 @@ function DashMembers() {
               </div>
             ))}
             </div>
+          </div>
+        ) : null}
+        {clearedList.length ? (
+          <div style={{ marginBottom: 10, flexShrink: 0, borderRadius: 12, border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', overflow: 'hidden' }}>
+            <button onClick={() => setShowCleared(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '11px 13px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+              <Icon name="shield" size={16} color="var(--sage)" />
+              <span style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--ink)' }}>Cleared for youth work · {clearedList.length}</span>
+              <span style={{ marginLeft: 'auto', display: 'flex' }}><Icon name={showCleared ? 'chevU' : 'chevD'} size={15} color="var(--ink-3)" /></span>
+            </button>
+            {showCleared ? (
+              <div className="no-scrollbar" style={{ maxHeight: 220, overflowY: 'auto', padding: '0 13px 11px' }}>
+                {clearedList.map(c => (
+                  <div key={c.pk} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--sage) 18%, var(--line))' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{c.name || shortNpub(c.pk)}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
+                        Cleared {_clDate(c.rec)}{c.rec && c.rec.note ? ' · ' + c.rec.note : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, paddingTop: 9 }}>Clearances granted before this record existed show as <b>no record of when</b> — they are not back-dated.</div>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>
