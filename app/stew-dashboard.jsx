@@ -4069,10 +4069,11 @@ function DashMembers() {
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
     const r = window.Steward.setMinors(next);
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
-      // `listKnown` is the one thing this console knows and the key holder does not: whether the cleared list
-      // has actually been READ yet. Without it an empty list means either "nobody is cleared" or "we have not
-      // looked", and those want opposite answers — record today, or record nothing.
-      try { window.Steward.setApproved(nextApproved, { listKnown: !!sg.loaded }); } catch (e) {}
+      // Whether the CLEARED list has actually been read — not whether the list of children has. Asking the
+      // wrong document broke the exact case this record was written for: a brand-new church clearing its first
+      // volunteer has no children marked, so the answer was always "we have not looked", and a clearance
+      // granted that minute was recorded as "no record of when".
+      try { window.Steward.setApproved(nextApproved, { listKnown: !!sg.clearedKnown }); } catch (e) {}
     }
     _reseal(next, nextApproved, [pk]); return r;
   };
@@ -4089,7 +4090,7 @@ function DashMembers() {
     // ONLY TELL THE MEMBER'S PHONE ONCE THE CHURCH'S OWN DOCUMENT SAYS SO. The first version resealed straight
     // away, so a write that failed still put "your church has cleared you to work with young people" on the
     // volunteer's screen while the church document said nothing and the relay still refused them.
-    const r = Promise.resolve(window.Steward.setApproved(next, { listKnown: !!sg.loaded }))
+    const r = Promise.resolve(window.Steward.setApproved(next, { listKnown: !!sg.clearedKnown }))
       .then((ok) => { if (ok !== false) _reseal(sg.minors || [], next, [pk]); return ok; })
       .catch(() => false);
     return r;

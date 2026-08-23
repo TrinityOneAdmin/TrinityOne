@@ -136,6 +136,85 @@ test('a failed write does not put a clearance badge on the volunteer’s phone',
   // cleared, while the church document said nothing and the relay went on refusing them.
   const i = STEWD.indexOf('const toggleApproved');
   const fn = STEWD.slice(i, STEWD.indexOf('\n  const guardReqs', i));
-  assert.match(fn, /ok !== false.*_reseal|then\(\(ok\)/s, 'the member is told before the church document says so');
+  // THIS ASSERTION USED TO BE UNFAILABLE. Its second alternative, `then((ok)`, matched whether or not the
+  // guard was there, so putting the original defect straight back left all eight tests green — in the very
+  // test written to stop me doing that. Assert the guard itself, and nothing that merely resembles it.
+  assert.match(fn, /if \(ok !== false\) _reseal\(/,
+    'a write that never landed can still put a clearance badge on the volunteer’s phone');
   assert.match(fn, /listKnown/, 'the write is not told whether this console has read the list');
+});
+
+const ROOT = stripComments(readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8'));
+
+test('one church’s cached lists cannot vouch for another church', () => {
+  // The console keeps its own copy of every list. It was keyed by a counter that only moves on a church
+  // SWITCH — and restoring a key does not move it. So after a restore the screen repainted the previous
+  // church's cleared adults, marked as loaded, while the key underneath was a different church; one press of
+  // "Clear for youth" then wrote those people into the wrong church's record with today's date, and the relay
+  // let them contact children in a church that had never cleared them.
+  assert.match(ROOT, /const key = method \+ '\|' \+ idv \+ '\|' \+ _who/,
+    'the cached lists are still not tied to the church they came from');
+  // The "has this loaded?" helper builds the same key by hand; if it drifts it silently answers no for
+  // everything, and its callers use it to decide whether a pending-members list can be trusted.
+  const i = ROOT.indexOf('window.stewardStreamLoaded =');
+  assert.match(ROOT.slice(i, i + 320), /actingChurch \|\| S0\.churchPub/,
+    'the loaded-check no longer builds the same key as the cache it reads');
+});
+
+test('the clearance list is asked about ITSELF, not about the list of children', () => {
+  // A brand-new church clears its first volunteer before marking any child. Asking the minors document
+  // whether we had looked meant the answer was always no, and a clearance granted that minute was written
+  // as "no record of when".
+  const STEWSRC = stripComments(readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8'));
+  assert.match(STEWSRC, /const clearedKnown = \(\) => sawApproved \|\| \(sawEose && _isRelayAuthed\(\)\)/,
+    'nothing asks whether the CLEARED list itself has been read');
+  assert.equal(/listKnown: !!sg\.loaded/.test(STEWD), false,
+    'the console still answers from the list of children');
+  assert.match(STEWD, /listKnown: !!sg\.clearedKnown/, 'the console does not pass the clearance signal');
+});
+
+// ── an older console republishing the plain list must not erase the record ─────────────────────────
+// This path had NO executed coverage. It is the one that matters when a church has two stewards and one of
+// them has a stale browser tab: the old bundle writes the list with no record attached, and treating that as
+// "the record is empty" wiped every clearance date — and the wipe then echoed back as the truth.
+function runApprovedHandler(events) {
+  const body = grab(STEWARD, 'subscribeSafeguard(onLists)');
+  const CP = '1'.repeat(64);
+  let out = null;
+  const scope = {
+    pub: CP,
+    pool: { subscribeMany: (_r, _f, h) => { for (const e of events) h.onevent(e); h.oneose(); return { close() {} }; } },
+    relays: () => ['wss://x'],
+    _byChurch: () => true,
+    _authFuture: () => false,
+    _isRelayAuthed: () => true,
+    _applyNoPhotoList: () => {},
+    _clearedTrail: { cp: '', map: {}, list: [], loaded: false },
+    MINORS_D: 'trinityone/minors:', APPROVED_D: 'trinityone/approved:',
+    NOPHOTO_D: 'trinityone/nophoto:', GUARDIANS_D: 'trinityone/guardians:',
+    NET: 'trinityone',
+  };
+  const names = Object.keys(scope);
+  const fn = new Function(...names, 'return ({ ' + body + ' });')(...names.map(n => scope[n]));
+  fn.subscribeSafeguard((lists) => { out = lists; });
+  return out;
+}
+const ev = (d, content, at) => ({ tags: [['d', d]], content: JSON.stringify(content), created_at: at, pubkey: '1'.repeat(64) });
+
+test('an older console republishing the plain list does not erase the record', () => {
+  const A = 'a'.repeat(64), CP = '1'.repeat(64);
+  const modern = ev('trinityone/approved:' + CP, { pubkeys: [A], cleared: { [A]: { by: CP, at: 555 } } }, 100);
+  const legacy = ev('trinityone/approved:' + CP, { pubkeys: [A] }, 200);   // no record attached
+  const out = runApprovedHandler([modern, legacy]);
+  assert.ok(out, 'the handler never reported anything');
+  assert.deepEqual(out.approved, [A], 'the list itself was lost');
+  assert.equal(out.cleared[A] && out.cleared[A].at, 555,
+    'a write from an older console erased the clearance date');
+});
+
+test('the clearance list being absent is only trusted when the relay actually answered', () => {
+  // EOSE alone is not evidence — it also fires on a client timeout and on a dropped socket. Believing it then
+  // would stamp today's date onto people cleared years ago.
+  const out = runApprovedHandler([]);
+  assert.equal(out.clearedKnown, true, 'an authenticated relay saying "that is everything" was not believed');
 });
