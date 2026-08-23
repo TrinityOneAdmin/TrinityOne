@@ -57,7 +57,7 @@ const WHOLE_LIST_WRITERS = [
   ['setBlocked', 'every banned member is silently unbanned'],
   ['setNoPhoto', 'photo suppression is lifted for every child'],
   ['setMinors', 'every other child stops being a minor — the relay stops blocking adult↔minor DMs'],
-  ['setApproved', 'every youth-cleared adult loses clearance', 'setApproved(pubkeys, opts)'],
+  ['setApproved', 'every youth-cleared adult loses clearance', 'setApproved(pubkeys)'],
   ['setGuardians', 'every parent↔child link is dropped', 'setGuardians(links)'],
   ['setAdmitted', 'the whole congregation returns to "waiting for approval"', 'setAdmitted(pubkeys)'],
   ['setStewards', 'every delegated steward is revoked', 'setStewards(pubkeys, caps, names)'],   // caps: what each steward may do
