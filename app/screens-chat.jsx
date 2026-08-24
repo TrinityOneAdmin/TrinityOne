@@ -284,6 +284,10 @@ function ChatScreen({ ctx }) {
   const givingOn = false;   // Giving HIDDEN for the pilot — not surfaced yet (restore: !!(ctx.church && ctx.church.giving) && !(ctx.safeguard && ctx.safeguard.isMinor))
   const idParam = new URLSearchParams(location.search).get('identity'); // main|recovery|restore|invite
   const [nostr, setNostr] = useC(!!idParam);
+  // The last few private conversations, shown in the list where conversations live — see the section below.
+  // Same source the private inbox uses, so the two can never disagree about what exists.
+  const [dmThreads, setDmThreads] = useC([]);
+  useCE(() => { const F = window.Fellowship; if (!F || !F.subscribeDMs) return; return F.subscribeDMs(setDmThreads); }, [ctx.church && ctx.church.npub, ctx.connTick]);
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
   const [view, setView] = useC(givingOn && chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
@@ -619,6 +623,37 @@ function ChatScreen({ ctx }) {
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
+
+      {/* PRIVATE CONVERSATIONS BELONG IN THE LIST OF CONVERSATIONS. There has always been a way to them — a
+          paper-plane button in the header, with an unread dot — and it works. But in one afternoon TWO members
+          who had just had the most useful exchange of their day both concluded the conversation was gone:
+          "my whole conversation with Verity doesn't appear in the Chat list. Only Whole Church and Prayer are
+          there. To find it again I have to go People → Verity → Message."
+          Neither was looking for a button. They were looking for the thread, in the place threads live. The
+          header button stays; this puts the last few where they were already looking. */}
+      {dmThreads.length ? (
+        <React.Fragment>
+          <SectionLabel>Private messages</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
+            {dmThreads.slice(0, 3).map(c => {
+              const F = window.Fellowship;
+              const d = (F && F.displayFor) ? F.displayFor(c.peer) : { handle: '' };
+              const nm = (d && (d.name || d.handle)) || 'Someone in your church';
+              return (
+                <button key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', cursor: 'pointer', padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)' }}>
+                  <UserAvatar av={d && d.av} name={nm} size={38} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.preview || 'Private message'}</div>
+                  </div>
+                  {c.lastTs ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{relTime(c.lastTs)}</span> : null}
+                </button>
+              );
+            })}
+            {dmThreads.length > 3 ? <button onClick={() => ctx.openDMInbox()} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', padding: '2px 2px', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>All private messages ({dmThreads.length})</button> : null}
+          </div>
+        </React.Fragment>
+      ) : null}
 
       {teamGroups.length ? (
         <React.Fragment>

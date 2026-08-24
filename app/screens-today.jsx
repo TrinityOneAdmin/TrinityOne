@@ -301,14 +301,20 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
   const localToday = () => { const x = new Date(); return x.getFullYear() + '-' + _pad(x.getMonth() + 1) + '-' + _pad(x.getDate()); };
   const dayRange = (a, b) => { const out = []; try { const [y1, m1, d1] = a.split('-').map(Number); const [y2, m2, d2] = b.split('-').map(Number); let t = Date.UTC(y1, m1 - 1, d1); const end = Date.UTC(y2, m2 - 1, d2); for (let i = 0; i < 90 && t <= end; i++) { out.push(new Date(t).toISOString().slice(0, 10)); t += 86400000; } } catch (e) {} return out; };
   const today = localToday();
-  const [start, setStart] = React.useState(today);
-  const [end, setEnd] = React.useState(today);
+  // DO NOT GUESS THE DAY. These started on today, so a request whose own words say "Hospital appointment
+  // Thursday" was set up for today, the steward left the box alone, and the volunteer was booked to drive her
+  // on the Sunday. She could not correct it afterwards either.
+  // Nothing here can know which day she means — the day is in her sentence, in English. So it must not
+  // pretend to know. Empty makes the steward look at it, which is the whole of the fix.
+  const [start, setStart] = React.useState('');
+  const [end, setEnd] = React.useState('');
   const [notes, setNotes] = React.useState(req.note || '');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const submit = async () => {
+    if (!start) { setErr('Pick the day this is needed — check what they asked for.'); return; }
     setBusy(true); setErr('');
-    const dates = dayRange(start, end < start ? start : end);
+    const dates = dayRange(start, (!end || end < start) ? start : end);
     let ok = null;
     try { ok = await window.Fellowship.approveCareRequest(req, { dates, notes }); } catch (e2) { setErr((e2 && e2.message) || 'Couldn’t set up the need.'); setBusy(false); return; }
     setBusy(false);
@@ -655,6 +661,16 @@ function CareCard({ ctx, embedded }) {
   const amCareTeam = s.visibility !== 'team' || onCareRoster;
   let live = (care.needs || []).filter(n => !n.endDate || n.endDate >= today);
   if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && (n.recipient || '').toLowerCase() === myPub);
+  // AND NEVER OFFER SOMEONE THEIR OWN NEED. Verity found her own name, twice, under "Someone in the church
+  // could use a hand — sign up for a day". The list was filtered by date alone; the recipient was consulted
+  // only on the team-only setting, so on the default whole-church setting the person who asked was invited to
+  // help herself. Same shape as the availability list that said "Nobody has listed themselves" to somebody who
+  // just had. A list that means "who needs YOUR help" must exclude the person reading it.
+  //
+  // Only for the volunteer view — the care team still sees everything, including their own, because triage is
+  // a different job from signing up.
+  const forMe = (n) => !!myPub && (n.recipient || '').toLowerCase() === myPub;
+  if (!amCareTeam) live = live.filter(n => !forMe(n));
   // the open-needs block — or, in the embedded Care tab, a gentle empty state (availability still shows above it)
   const needsBlock = live.length ? (
     <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>

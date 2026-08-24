@@ -161,7 +161,12 @@ function makeSub(getObj, method, makeInit) {
         entry.listeners.delete(setV);
         if (!entry.listeners.size) { try { entry.unsub && entry.unsub(); } catch (e) {} delete _subShared[skey]; }
       };
-    }, [idv, conn]);   // re-subscribe on identity change OR reconnect
+    }, [idv, conn, _who]);   // re-subscribe on identity change, reconnect, OR once the church becomes known
+    // `_who` belongs in that list because it is part of the key. Without it, a list that starts loading in the
+    // moment before the church key is ready is filed under a blank church and never re-filed — and the
+    // "has this loaded?" check, which looks under the REAL church, then answers no for ever. Measured on the
+    // live console: the member list reported as never loaded while twenty-five members were on the screen.
+    // That answer gates the waiting-to-join queue, so a church's join requests would quietly read as none.
     return v;
   };
 }
