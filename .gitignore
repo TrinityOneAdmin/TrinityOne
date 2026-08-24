@@ -74,6 +74,8 @@ relay/
 !relay/deploy/
 !relay/deploy/**
 relay/rejected.log
+# dev rigs: long-running experiments driven by hand, never part of a release
+scripts/.age-rig.mjs
 scripts/.boot-*.mjs
 scripts/.sim-*.json
 

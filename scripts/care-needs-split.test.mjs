@@ -53,3 +53,26 @@ test('finished needs drop out, and a signed-out reader is offered nothing of the
   assert.deepEqual(anon.mine, [], 'somebody with no key was handed a need as their own');
   assert.equal(anon.others.length, 2, 'a reader with no key should still see what the church needs');
 });
+
+// ── and that the answer actually REACHES THE SCREEN ────────────────────────────────────────────────
+// The tests above prove the function. They do not prove the fix: an audit showed that deleting BOTH renders
+// of the member's own-needs block left all of them green — which silently reproduces the original
+// catastrophe, a recipient's screen emptied of the controls they need and a banner still pointing there.
+//
+// Two disciplines, or this fools itself the way its predecessors did:
+//   · read the file through stripComments — this project has been beaten by an assertion that a COMMENT
+//     satisfied, over a safeguarding bug, with 935 tests green
+//   · count USES, not mentions: after deleting both renders the declaration `const mineBlock =` still
+//     contains the word, so "the file mentions mineBlock" proves nothing at all
+import { stripComments } from './test-slice.mjs';
+
+test('the member’s own needs are rendered, in both variants of the screen', () => {
+  const code = stripComments(SRC);
+  assert.match(code, /const mineBlock = mineNeeds\.length \?/, 'the block is no longer built from the split');
+  const uses = (code.match(/\{mineBlock\}/g) || []).length;
+  assert.equal(uses, 2,
+    `the own-needs block is rendered ${uses} time(s), expected 2 — the Care tab and the Today card. ` +
+    'Deleting these is invisible to every other test and empties a recipient’s screen.');
+  // …and the volunteering block must still be there beside it, or this fix has eaten the other half.
+  assert.match(code, /\{live\.length \? needsBlock : null\}/, 'the volunteering list is gone from Today');
+});

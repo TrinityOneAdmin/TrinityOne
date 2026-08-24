@@ -1801,7 +1801,8 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
       if (i === -1) return [...prev, m].sort((a, b) => (a.ts || 0) - (b.ts || 0));
       const next = prev.slice(); next[i] = m; return next;
     }));
-  }, [peer]);
+  }, [peer, ctx.connTick]);   // …and re-subscribe on reconnect: an open conversation used to freeze on a
+  // dropped socket exactly like the list did, which is worse — it is the screen a member is reading.
   useCE(() => { if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, open]);
   if (!peer) return null;
   const allowDM = !ctx || !ctx.canDMPeer || ctx.canDMPeer(peer);   // safeguarding: a child↔non-cleared-adult DM is blocked (the relay rejects it too)
@@ -1899,9 +1900,12 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
 
 // ── direct-message inbox (conversation list) ──
 function DMInbox({ open, onClose, ctx, docked }) {
-  const [convos, setConvos] = useC([]);
   const FS = window.Fellowship;
-  useCE(() => { if (!open || !FS || !FS.subscribeDMs) return; return FS.subscribeDMs(setConvos); }, [open]);
+  // THE SAME FEED THE CHAT LIST AND THE DOT USE. This opened its own subscription — a third replay of up to
+  // 2000 encrypted messages — and, worse, its deps were `[open]`, so it never recovered from a dropped socket
+  // either: the inbox a member opened to check their messages could be frozen at whatever it held when the
+  // connection last dropped, with no sign of it.
+  const convos = ctx.dmThreads || [];
   useCE(() => { if (convos.length && FS && FS.requestProfiles) FS.requestProfiles(convos.map(c => c.peer)); }, [convos]);
   return (
     <Overlay open={open} onClose={onClose} docked={docked}>
