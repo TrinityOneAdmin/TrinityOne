@@ -1385,15 +1385,58 @@ function App() {
   const chatNewestTs = useAR(0);
   const dmNewestTs = useAR(0);
   const dmInboxRef = useAR(false); dmInboxRef.current = dmInbox;
+  const dmPeerRef = useAR(null);   // which conversation is OPEN — the inbox had this, a single chat did not
+  const dmThreadsRef = useAR([]);  // latest feed, readable from the read-markers without re-creating them
   const chatSeenKey = activeChurch ? 'trinityone.chatTabSeen.' + activeChurch : null;
   const dmSeenKey = () => { const me = window.Fellowship && window.Fellowship.myPubkey; return me ? 'trinityone.dmSeen.' + me : null; };
   const markChatSeen = () => {
     if (chatSeenKey) { try { localStorage.setItem(chatSeenKey, String(chatNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
     setChatUnread(false);
   };
-  // DMs clear when you open the DM inbox — NOT when you open Community — so the paper-plane dot survives until read
+  // READ MEANS ONE CONVERSATION, NOT ALL OF THEM.
+  //
+  // There used to be a single "seen" time for the whole inbox, stamped with the newest incoming message
+  // across every thread. Once opening a conversation began stamping it, opening a chat with ALICE marked
+  // BOB's unread message as seen and cleared the dot — and Bob's message had never been on screen. There is
+  // no per-thread marker anywhere, so nothing would ever surface it again. That is worse than the dot it was
+  // meant to fix: a lit dot is a nuisance, a silently swallowed "can you collect my prescription" is not.
+  //
+  // So: one time per correspondent. The dot lights when ANY conversation holds something newer than ITS OWN
+  // mark, and opening a conversation marks only that one.
+  //
+  // MIGRATION. The old single value becomes a FLOOR for every conversation, so nothing already stamped comes
+  // back as unread on the day a member upgrades. Note what that does and does not say: already STAMPED, not
+  // already READ. A message swallowed by the old bug was stamped without ever being shown, and stays
+  // swallowed — nothing on the device records the difference. Those messages are lost today regardless, and
+  // without the floor every member's dot would light with nothing new to find.
+  const dmSeenPeerKey = (peer) => { const me = window.Fellowship && window.Fellowship.myPubkey; return (me && peer) ? 'trinityone.dmSeen.' + me + '.' + peer : null; };
+  const dmSeenFloor = () => { const dk = dmSeenKey(); if (!dk) return 0; try { return Number(localStorage.getItem(dk) || 0); } catch { return 0; } };
+  const dmSeenFor = (peer) => {
+    const pk = dmSeenPeerKey(peer); let v = 0;
+    if (pk) { try { v = Number(localStorage.getItem(pk) || 0); } catch { v = 0; } }
+    return Math.max(v, dmSeenFloor());
+  };
+  // Mark ONE conversation read, at the time of its newest incoming message — not at "now", which would also
+  // swallow anything that arrives in the same second.
+  const markDmSeenFor = (peer, ts) => {
+    const pk = dmSeenPeerKey(peer); if (!pk) return;
+    try { localStorage.setItem(pk, String(ts || Math.floor(Date.now() / 1000))); } catch {}
+    setDmUnread(dmThreadsRef.current.some(c => c && c.peer !== peer && !(c.preview || '').startsWith('You: ') && (c.lastTs || 0) > dmSeenFor(c.peer)));
+  };
+  // Opening the INBOX still marks everything read — deliberately, and this is the one decision the plan had
+  // to make. The inbox SHOWS every conversation's latest line as it opens, so "you have seen these" is true
+  // there in a way it is not when opening a single chat. Stamping nothing instead would bring back the
+  // original complaint: a dot that survives looking straight at the messages.
   const markDmSeen = () => {
-    const dk = dmSeenKey(); if (dk) { try { localStorage.setItem(dk, String(dmNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
+    // Stamp each conversation at ITS OWN newest message, and never touch the old inbox-wide value again.
+    // The old code fell back to `now` when the feed had not delivered yet — so opening the inbox in the first
+    // seconds after launch stamped the present moment over everything, and any message older than that was
+    // swallowed for good. The floor is a migration artefact and nothing more; writing to it can only lose
+    // messages. Found by a test, not by reading.
+    for (const c of (dmThreadsRef.current || [])) {
+      const pk = dmSeenPeerKey(c && c.peer);
+      if (pk && c && c.lastTs) { try { localStorage.setItem(pk, String(c.lastTs)); } catch {} }
+    }
     setDmUnread(false);
   };
   useAE(() => {
@@ -1420,25 +1463,49 @@ function App() {
   }, [activeChurch, idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
   // ── DM unread dot: incoming direct messages also light the Community tab. "Seen" = newest incoming
   // DM ts when you last opened Community (keyed by my pubkey, since DMs aren't church-scoped). ──
+  const [dmThreads, setDmThreads] = useA([]);   // shared with the Chat list — see below
   useAE(() => {
     const F = window.Fellowship;
     dmNewestTs.current = 0; setDmUnread(false);
     if (!F || !F.subscribeDMs) return;
-    const getSeen = () => { const dk = dmSeenKey(); if (!dk) return 0; try { return Number(localStorage.getItem(dk) || 0); } catch { return 0; } };
     const off = F.subscribeDMs((convos) => {
+      // …and hand the same list to the Chat screen and the inbox, so there is ONE feed rather than three.
+      //
+      // STICKY. Re-subscribing starts from an empty map, so during the replay this callback fires with
+      // PARTIAL lists — and on every foreground the Private messages section would visibly shrink and
+      // reorder, which is "my conversation has gone", the exact thing that section was added to stop. Keep
+      // what we have until the replay has at least as much as before. (The church-group list solves this the
+      // same way; its comment calls it "don't blank on a reconnect's EOSE".)
+      setDmThreads(prev => { const next = ((convos || []).length >= (prev || []).length ? (convos || []) : prev); dmThreadsRef.current = next || []; return next; });
       // newest INCOMING message across all conversations (skip ones where I sent last → "You: ")
       let newest = 0;
       for (const c of (convos || [])) {
         if (c && c.lastTs > newest && !(c.preview || '').startsWith('You: ')) newest = c.lastTs;
       }
-      if (newest > dmNewestTs.current) {
-        dmNewestTs.current = newest;
-        if (dmInboxRef.current) markDmSeen();                    // looking at the DM inbox → already seen
-        else if (newest > getSeen()) setDmUnread(true);          // unread DM → light the paper-plane dot
+      if (newest > dmNewestTs.current) dmNewestTs.current = newest;
+      // PER CONVERSATION, both ways. A message arriving while the INBOX is open counts as seen — it is on
+      // screen. A message arriving while THAT PERSON'S conversation is open counts as seen too, which the old
+      // code had no way to express: it checked the inbox and nothing else, so reading a chat live re-lit the
+      // very dot this is meant to clear. Everything else lights the dot for its own conversation only.
+      for (const c of (convos || [])) {
+        if (!c || !c.peer || (c.preview || '').startsWith('You: ')) continue;
+        const open = dmInboxRef.current || dmPeerRef.current === c.peer;
+        if (open && (c.lastTs || 0) > dmSeenFor(c.peer)) markDmSeenFor(c.peer, c.lastTs);
       }
+      setDmUnread((convos || []).some(c => c && c.peer && !(c.preview || '').startsWith('You: ')
+        && (c.lastTs || 0) > dmSeenFor(c.peer)));
     });
     return () => { try { off && off(); } catch {} };
-  }, [idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // RECOVERS LIKE EVERYTHING ELSE. This was `[idTick]` — identity only — while every reconnect signal in the
+  // app (foreground, online, a returning socket, native resume, the 90s beat) arrives as `connTick`. So after
+  // one dropped socket this feed was dead for the session: no new conversations, no previews, no unread dot.
+  // The comment that used to sit here claimed subscribeDMs "re-fetches on its own reconnect handling"; the
+  // thirty-line comment on subscribeDMs says the opposite, from a measurement on a real device.
+  // `activeChurch` belongs here too: the subscription reads the church's relay list once, at subscribe time,
+  // so without it a member who switches church keeps listening to the relays of the one they left.
+  // The cost is real and deliberate: two filters of 1000, so up to 2000 encrypted messages replayed and
+  // decrypted on every FOREGROUND, not merely every dropped socket. A stale inbox is the worse outcome.
+  }, [idTick, connTick, activeChurch]);   // eslint-disable-line react-hooks/exhaustive-deps
   // opening Community clears the dot + records what we've now seen
   useAE(() => { if (tab === 'chat') markChatSeen(); }, [tab]);   // eslint-disable-line react-hooks/exhaustive-deps
   useAE(() => {
@@ -1522,8 +1589,16 @@ function App() {
     // and reopen it, which is why the same room reads "stale" to someone sitting still and "fine" to someone
     // wandering. See FINDINGS-2026-08-16 item 2.
     connTick,
-    openDM: (peer) => { setGroup(null); setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(peer); }, openDMInbox: () => { setGroup(null); setOpenServing(false); setPeople(false); setDmPeer(null); setDmInbox(true); markDmSeen(); }, openPeople: () => { setGroup(null); setOpenServing(false); setDmInbox(false); setDmPeer(null); setPeople(true); },
+    // OPENING A CONVERSATION IS READING IT. The dot used to clear only when the paper-plane INBOX was opened,
+    // which was fine while that was the only way in. It is not any more: the Chat list now lists recent
+    // conversations directly, and that is deliberately the route for people who never found the paper plane —
+    // so the dot would have stayed lit for exactly the members the list was added for. (The same hole existed
+    // via People → their name → Message, and this closes that too.)
+    openDM: (peer) => { setGroup(null); setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(peer); dmPeerRef.current = peer;
+      const c = (dmThreadsRef.current || []).find(x => x && x.peer === peer);
+      markDmSeenFor(peer, c && c.lastTs); }, openDMInbox: () => { setGroup(null); setOpenServing(false); setPeople(false); setDmPeer(null); setDmInbox(true); markDmSeen(); }, openPeople: () => { setGroup(null); setOpenServing(false); setDmInbox(false); setDmPeer(null); setPeople(true); },
     dmUnread,   // drives the dot on the Community "Direct messages" (paper-plane) button
+    dmThreads,  // the same feed, so the Chat list does not open a second one
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
     readView, setReadView,
@@ -1805,7 +1880,7 @@ function App() {
       [module, () => setModule(null)], [journalEditor, () => setJournalEditor(null)], [journal, () => setJournal(null)],
       [eventOv, () => setEventOv(null)], [openServing, () => setOpenServing(false)], [openDevo, () => setOpenDevo(null)], [plan, () => setPlan(null)],
       [devo, () => setDevo(false)], [shareSheet, () => setShareSheet(null)], [share, () => setShare(null)],
-      [dmPeer, () => setDmPeer(null)], [dmInbox, () => setDmInbox(false)], [people, () => setPeople(false)], [group, () => setGroup(null)],
+      [dmPeer, () => { setDmPeer(null); dmPeerRef.current = null; }], [dmInbox, () => setDmInbox(false)], [people, () => setPeople(false)], [group, () => setGroup(null)],
     ];
     for (const [open, close] of layers) { if (open) { close(); return true; } }
     return false;
@@ -1875,7 +1950,7 @@ function App() {
                       {group ? <ChatRoom group={group} open={true} onClose={() => setGroup(null)} ctx={ctx} docked />
                        : openServing ? <ServingScreen open={true} docked onClose={() => setOpenServing(false)} ctx={ctx} />
                        : people ? <PeopleScreen open={true} docked onClose={() => setPeople(false)} ctx={ctx} />
-                       : dmPeer ? <DMThread peer={dmPeer} open={true} docked onClose={() => setDmPeer(null)} ctx={ctx} />
+                       : dmPeer ? <DMThread peer={dmPeer} open={true} docked onClose={() => { setDmPeer(null); dmPeerRef.current = null; }} ctx={ctx} />
                        : dmInbox ? <DMInbox open={true} docked onClose={() => setDmInbox(false)} ctx={ctx} />
                        : (
                         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>
@@ -1949,7 +2024,7 @@ function App() {
             {WALLET_ENABLED && window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
             <ChatRoom group={group} open={!!group && !desktop} onClose={() => setGroup(null)} ctx={ctx} />
             <DMInbox open={dmInbox && !desktop} onClose={() => setDmInbox(false)} ctx={ctx} />
-            <DMThread peer={dmPeer} open={!!dmPeer && !desktop} onClose={() => setDmPeer(null)} ctx={ctx} />
+            <DMThread peer={dmPeer} open={!!dmPeer && !desktop} onClose={() => { setDmPeer(null); dmPeerRef.current = null; }} ctx={ctx} />
             <PeopleScreen open={people && !desktop} onClose={() => setPeople(false)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}

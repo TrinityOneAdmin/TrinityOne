@@ -427,8 +427,14 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
   const localToday = () => { const x = new Date(); return x.getFullYear() + '-' + _pad(x.getMonth() + 1) + '-' + _pad(x.getDate()); };
   const dayRange = (a, b) => { const out = []; try { const [y1, m1, d1] = a.split('-').map(Number); const [y2, m2, d2] = b.split('-').map(Number); let t = Date.UTC(y1, m1 - 1, d1); const end = Date.UTC(y2, m2 - 1, d2); for (let i = 0; i < 90 && t <= end; i++) { out.push(new Date(t).toISOString().slice(0, 10)); t += 86400000; } } catch (x) {} return out; };
   const today = localToday();
-  const [start, setStart] = React.useState(today);
-  const [end, setEnd] = React.useState(today);
+  // DO NOT GUESS THE DAY — and this is the sheet a steward actually uses; the member app has its own copy,
+  // and fixing only that one would have left the real path exactly as it was.
+  // These started on today, so a request whose own words say "Hospital appointment Thursday" was set up for
+  // today, the vicar left the box alone, and the volunteer was booked to drive her on the Sunday. She could
+  // not correct it afterwards. Nothing here can know which day is meant — the day is in the asker's sentence,
+  // in English — so it must not pretend to. Empty makes the steward read what they asked for.
+  const [start, setStart] = React.useState('');
+  const [end, setEnd] = React.useState('');
   const [notes, setNotes] = React.useState(req.note || '');
   const [busy, setBusy] = React.useState(false);
   // A NEED WITH NO DAYS CANNOT BE SIGNED UP FOR, so this sheet must not be able to open one. dayRange()
@@ -438,8 +444,13 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
   // This is the path that produced the one in the simulation of 2026-08-19 (R3-5): the main need form has
   // always refused an empty day list, but a steward converting a member's request into a need comes through
   // HERE, and here there was no guard at all.
-  const dates = dayRange(start, end < start ? start : end);
+  const dates = start ? dayRange(start, (!end || end < start) ? start : end) : [];
   const submit = async () => {
+    // This sheet ALREADY refuses a need with no days, and says so on screen — see the line below the date
+    // boxes. That guard was written when the boxes were pre-filled, so it could never fire; now that the day
+    // has to be chosen it is the thing that catches an empty one. Nothing new is needed here, and a second
+    // message would only say the same thing twice.
+    if (!dates.length) return;
     setBusy(true);
     let ok = null; try { ok = await window.StewardMeals.approveCareRequest(req, { dates, notes, who }); } catch (x) {}
     setBusy(false); if (ok) onDone();

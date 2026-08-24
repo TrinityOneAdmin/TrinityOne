@@ -101,7 +101,7 @@ function NotifRow({ n, ic, onClick }) {
           <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{n.group}</span>
           <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, flexShrink: 0 }}>{n.time}</span>
         </div>
-        <p style={{ margin: '3px 0 0', fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.4, textWrap: 'pretty' }}>
+        <p style={{ margin: '3px 0 0', fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.4, textWrap: 'pretty', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
           <b style={{ color: 'var(--ink)', fontWeight: 700 }}>{n.who}</b> {n.text}
         </p>
       </div>
