@@ -25,13 +25,18 @@ test('you are not invited to help with your own request', () => {
   // The list was filtered by date only; the recipient check ran solely on the team-only setting.
   // Slice to a real boundary, not a byte count: an explanatory comment pushed the code out of a 700-char
   // window and the assertion failed on window size, which is a mistake this file's neighbours have made twice.
-  const i = TODAY.indexOf('let live =');
+  const i = TODAY.indexOf('const _split = splitCareNeeds');
   const block = TODAY.slice(i, TODAY.indexOf('return ', i));
-  // A first draft matched `n.recipient`, which the neighbouring team-only line already contained — so it
-  // passed against the very code that had the bug. Assert the exclusion itself.
-  assert.match(block, /const forMe = \(n\) =>/, 'nothing works out whether a need is for the person reading');
-  assert.match(block, /if \(!amCareTeam\) live = live\.filter\(n => !forMe\(n\)\)/,
-    'a member is still shown needs raised for themselves');
+  // TWO drafts of this were worthless. The first matched `n.recipient`, which the neighbouring line already
+  // contained. The second asserted the exact line I had written — and that line was WRONG: it was gated on a
+  // name that reads "is on the care team" but means "can see everything", so it never ran on the default
+  // setting and emptied the recipient's screen on the other one. A source-text assertion cannot catch a
+  // predicate whose name lies about what it does.
+  // The behaviour is now proved by RUNNING it — see scripts/care-needs-split.test.mjs, which lifts the real
+  // function and puts four people through it. All this one checks is that the screen still uses it.
+  assert.match(block, /splitCareNeeds\(\{ needs: care\.needs/, 'the screen no longer uses the shared rule');
+  assert.equal(/const amCareTeam/.test(TODAY), false,
+    'the misleading name is back — it reads as a team test and is not one');
 });
 
 test('a long notice does not fill the notifications list as one block', () => {
@@ -65,7 +70,10 @@ test('private conversations appear in the list of conversations', () => {
   const i = CHAT.indexOf('function ChatScreen');
   const fn = CHAT.slice(i, CHAT.indexOf('\nfunction ', i + 10));
   assert.match(fn, /<SectionLabel>Private messages<\/SectionLabel>/, 'the Chat list still hides private threads');
-  assert.match(fn, /subscribeDMs\(setDmThreads\)/, 'the section is not fed from the same place the inbox uses');
+  // It must NOT open its own subscription: the app already holds one permanently for the unread dot, and a
+  // second meant replaying and decrypting up to a thousand messages twice over, again on every foregrounding.
+  assert.equal(/subscribeDMs/.test(fn), false, 'the Chat list opens a second private-message subscription');
+  assert.match(fn, /ctx\.dmThreads/, 'the section is not fed from the feed the app already holds');
   assert.match(fn, /ctx\.openDM\(c\.peer\)/, 'the rows do not open the conversation');
   // It must show enough to recognise: whose it is and what was last said.
   assert.match(fn, /c\.preview/, 'the row shows no hint of what the conversation was about');

@@ -204,6 +204,29 @@ function careExtraKinds(r) {
   const ts = (Array.isArray(r && r.types) ? r.types : []).filter(Boolean);
   return ts.slice(1).map(t => CARE_TYPE_LABEL[t]).filter(Boolean);
 }
+// WHO SEES WHICH NEEDS. Pulled out as a plain function on purpose: the previous version of this decision was
+// one line reading `if (!amCareTeam)`, and `amCareTeam` does not mean "is on the care team" — it means
+// `visibility !== 'team' || onCareRoster`, i.e. "can see everything". So on the DEFAULT whole-church setting
+// it was true for every member and the line never ran; and on the team-only setting it combined with the line
+// above to leave a recipient with an EMPTY screen, taking away the one place they mark days as covered while
+// a banner still told them to go there. A test that asserted the line passed, because the line was exactly
+// what I wrote — source text cannot catch a predicate whose name lies. This one is executed by its test.
+//
+// Two lists, because they are two different jobs:
+//   mine   — needs raised FOR me. I must see these: the skip-day controls ("I'm covered on Tuesday") live
+//            on them, and the Today banner deep-links here. Never hidden from me.
+//   others — needs I could volunteer for. Never includes my own, which is what invited Verity to help herself.
+// The care team sees everyone's under `others` for triage; that is `onCareRoster`, the real roster test.
+function splitCareNeeds({ needs, today, visibility, onCareRoster, myPub }) {
+  const me = String(myPub || '').toLowerCase();
+  const recipOf = (n) => String((n && n.recipient) || '').toLowerCase();
+  let visible = (needs || []).filter(n => !n.endDate || n.endDate >= today);
+  // team-only churches: a member who is not on the roster sees only what concerns them (pre-existing rule)
+  if (visibility === 'team' && !onCareRoster) visible = visible.filter(n => !!recipOf(n) && recipOf(n) === me);
+  const mine = me ? visible.filter(n => recipOf(n) === me) : [];
+  const others = visible.filter(n => !me || recipOf(n) !== me);
+  return { mine, others };
+}
 function careTypeLabel(r) {
   const ts = (Array.isArray(r && r.types) && r.types.length ? r.types : [r && r.type]).filter(Boolean);
   const names = ts.map(t => CARE_TYPE_LABEL[t]).filter(Boolean);
@@ -658,9 +681,12 @@ function CareCard({ ctx, embedded }) {
     const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId);
     return !!(roster && (roster.people || []).some(p => p && (p.pub || '').toLowerCase() === myPub));
   })();
-  const amCareTeam = s.visibility !== 'team' || onCareRoster;
-  let live = (care.needs || []).filter(n => !n.endDate || n.endDate >= today);
-  if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && (n.recipient || '').toLowerCase() === myPub);
+  // See splitCareNeeds. `mine` is what the church has arranged FOR me — I keep that whatever the setting,
+  // because the skip-day controls live on it and the Today banner points here. `live` is what I could
+  // volunteer for, which is everyone else's.
+  const _split = splitCareNeeds({ needs: care.needs, today, visibility: s.visibility, onCareRoster, myPub });
+  const mineNeeds = _split.mine;
+  let live = _split.others;
   // AND NEVER OFFER SOMEONE THEIR OWN NEED. Verity found her own name, twice, under "Someone in the church
   // could use a hand — sign up for a day". The list was filtered by date alone; the recipient was consulted
   // only on the team-only setting, so on the default whole-church setting the person who asked was invited to
@@ -669,9 +695,18 @@ function CareCard({ ctx, embedded }) {
   //
   // Only for the volunteer view — the care team still sees everything, including their own, because triage is
   // a different job from signing up.
-  const forMe = (n) => !!myPub && (n.recipient || '').toLowerCase() === myPub;
-  if (!amCareTeam) live = live.filter(n => !forMe(n));
   // the open-needs block — or, in the embedded Care tab, a gentle empty state (availability still shows above it)
+  // WHAT THE CHURCH HAS ARRANGED FOR YOU. Its own block, above the volunteering one — the complaint was never
+  // that Verity could see her need, it was that it sat under "Someone in the church could use a hand. Sign up
+  // for a day", with her own name on it, inviting her to help herself.
+  const mineBlock = mineNeeds.length ? (
+    <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', boxShadow: 'var(--shadow)', marginBottom: 12 }}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Your church is arranging this for you. Tick off any day you’re already covered, so nobody turns up twice.</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {mineNeeds.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
+      </div>
+    </div>
+  ) : null;
   const needsBlock = live.length ? (
     <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
@@ -709,6 +744,7 @@ function CareCard({ ctx, embedded }) {
         </CareSection>
         <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={live.length}>
           <CareAvailability ctx={ctx} part="mine" />
+          {mineBlock}
           {needsBlock}
         </CareSection>
       </React.Fragment>
@@ -726,6 +762,7 @@ function CareCard({ ctx, embedded }) {
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       <SectionLabel>Practical care</SectionLabel>
       <AskForHelp ctx={ctx} />
+      {mineBlock}
       {live.length ? needsBlock : null}
     </div>
   );

@@ -286,8 +286,13 @@ function ChatScreen({ ctx }) {
   const [nostr, setNostr] = useC(!!idParam);
   // The last few private conversations, shown in the list where conversations live — see the section below.
   // Same source the private inbox uses, so the two can never disagree about what exists.
-  const [dmThreads, setDmThreads] = useC([]);
-  useCE(() => { const F = window.Fellowship; if (!F || !F.subscribeDMs) return; return F.subscribeDMs(setDmThreads); }, [ctx.church && ctx.church.npub, ctx.connTick]);
+  // ONE FEED, NOT A SECOND ONE. This opened its own subscribeDMs, which meant the app held TWO live private-
+  // message subscriptions whenever Community was on screen and three with the inbox open — each replaying up
+  // to a thousand encrypted messages and decrypting them, again on every foregrounding. subscribeDMs' own
+  // comment calls the unbounded version a serious cost and the limit "a deliberate TRADE"; doubling it on the
+  // thin connections this product is built for is not a trade anyone made.
+  // app.jsx already holds one permanently to drive the unread dot, so read that instead.
+  const dmThreads = ctx.dmThreads || [];
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
   const [view, setView] = useC(givingOn && chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();

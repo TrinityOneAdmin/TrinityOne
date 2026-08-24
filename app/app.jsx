@@ -1420,12 +1420,17 @@ function App() {
   }, [activeChurch, idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
   // ── DM unread dot: incoming direct messages also light the Community tab. "Seen" = newest incoming
   // DM ts when you last opened Community (keyed by my pubkey, since DMs aren't church-scoped). ──
+  const [dmThreads, setDmThreads] = useA([]);   // shared with the Chat list — see below
   useAE(() => {
     const F = window.Fellowship;
     dmNewestTs.current = 0; setDmUnread(false);
     if (!F || !F.subscribeDMs) return;
     const getSeen = () => { const dk = dmSeenKey(); if (!dk) return 0; try { return Number(localStorage.getItem(dk) || 0); } catch { return 0; } };
     const off = F.subscribeDMs((convos) => {
+      // …and hand the same list to the Chat screen, which used to open a SECOND subscription for it. One feed,
+      // one replay, one decrypt pass. Deps stay `[idTick]`: this is re-created on identity change, and
+      // subscribeDMs re-fetches on its own reconnect handling.
+      setDmThreads(convos || []);
       // newest INCOMING message across all conversations (skip ones where I sent last → "You: ")
       let newest = 0;
       for (const c of (convos || [])) {
@@ -1522,8 +1527,14 @@ function App() {
     // and reopen it, which is why the same room reads "stale" to someone sitting still and "fine" to someone
     // wandering. See FINDINGS-2026-08-16 item 2.
     connTick,
-    openDM: (peer) => { setGroup(null); setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(peer); }, openDMInbox: () => { setGroup(null); setOpenServing(false); setPeople(false); setDmPeer(null); setDmInbox(true); markDmSeen(); }, openPeople: () => { setGroup(null); setOpenServing(false); setDmInbox(false); setDmPeer(null); setPeople(true); },
+    // OPENING A CONVERSATION IS READING IT. The dot used to clear only when the paper-plane INBOX was opened,
+    // which was fine while that was the only way in. It is not any more: the Chat list now lists recent
+    // conversations directly, and that is deliberately the route for people who never found the paper plane —
+    // so the dot would have stayed lit for exactly the members the list was added for. (The same hole existed
+    // via People → their name → Message, and this closes that too.)
+    openDM: (peer) => { setGroup(null); setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(peer); markDmSeen(); }, openDMInbox: () => { setGroup(null); setOpenServing(false); setPeople(false); setDmPeer(null); setDmInbox(true); markDmSeen(); }, openPeople: () => { setGroup(null); setOpenServing(false); setDmInbox(false); setDmPeer(null); setPeople(true); },
     dmUnread,   // drives the dot on the Community "Direct messages" (paper-plane) button
+    dmThreads,  // the same feed, so the Chat list does not open a second one
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
     readView, setReadView,
