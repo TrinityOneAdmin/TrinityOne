@@ -1376,7 +1376,29 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     const t = setTimeout(() => setSettled(true), 6000);
     return () => clearTimeout(t);
   }, [connected]);
-  const bubbles = React.useMemo(() => visibleMsgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
+  // WHICH DAY. A room showed a clock time and never a date, so three days of conversation read as jumbled:
+  // "1:31 PM, then 8:57 PM, then 3:18 PM" looks backwards until you know the first two were Friday and the
+  // rest Saturday. Checked against the relay — the order was perfect all along, and a member reported the
+  // app as broken because nothing on screen told her where one day ended.
+  const _dayOf = (ts) => { try { return new Date((ts || 0) * 1000).toDateString(); } catch (e) { return ''; } };
+  const _dayLabel = (ts) => {
+    const d = _dayOf(ts); if (!d) return '';
+    const today = new Date().toDateString();
+    const yest = new Date(Date.now() - 86400000).toDateString();
+    if (d === today) return 'Today';
+    if (d === yest) return 'Yesterday';
+    try { return new Date(ts * 1000).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }); }
+    catch (e) { return d; }
+  };
+  const bubbles = React.useMemo(() => visibleMsgs.map((m, _i) => <React.Fragment key={'w' + m.id}>
+    {(_i === 0 || _dayOf(m._ts) !== _dayOf(visibleMsgs[_i - 1] && visibleMsgs[_i - 1]._ts)) ? (
+      <div className="dayDivider" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '14px 2px 10px' }}>
+        <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.3px', color: 'var(--ink-3)', textTransform: 'uppercase' }}>{_dayLabel(m._ts)}</span>
+        <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+      </div>
+    ) : null}
+    <Bubble key={m.id} m={m} ctx={ctx}
     summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
     pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
     live={!!window.Fellowship}
@@ -1384,7 +1406,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
     onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
-    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />),
+    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />
+  </React.Fragment>),
     [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
