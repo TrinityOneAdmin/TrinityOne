@@ -84,3 +84,12 @@ reference/sim/
 relay-backup-*.tgz
 relay2/
 welcome-sim.html
+
+# Simulation tooling — deliberately NOT tracked (owner, 2026-08-25).
+# It drives the app from outside; nothing in the product depends on it, and it kept
+# dragging test DATA in behind it — scripts/.sim-churches.json held 36 private keys
+# in a public repo. Drivers live on the dev box; findings live in reference/sim/.
+scripts/sim*.mjs
+scripts/netsim-*.mjs
+scripts/.sim-*.json
+!scripts/sim-round4-fixes.test.mjs
