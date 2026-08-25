@@ -1399,7 +1399,24 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, urls);
   }
   // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
-  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'content'))) {
+  // EVERY CAPABILITY GATE BELOW ASKS 'any', NOT A SPECIFIC ROLE — pre-push audit, 2026-08-25.
+  // note() re-derives restrictions from HISTORICAL documents on every rehydrate. Asking for the author's
+  // CURRENT specific capability meant that narrowing a delegate — the feature's own everyday operation —
+  // silently dropped the restrictions on everything they had already built, at the next rehydrate. An
+  // invite-only room fell back to the `GROUP_VIS !== 'invite' -> true` default, approval-to-join reverted to
+  // open-join, a team-only rota went church-wide, and a delegated treasurer's entries stopped raising
+  // FINANCE_SEQ, re-opening historical sequence numbers in an append-only book. Nothing on screen changed.
+  // canRead already asks 'any' for exactly this reason; these were its missed siblings, and only canRead was
+  // ever tested. See scripts/caps-narrowing-keeps-restrictions.test.mjs.
+  //
+  // WIDENING IS SAFE HERE, AND ONLY HERE, because note() is strictly downstream of accept(): the live EVENT
+  // handler calls accept(evt) first and rejects there, and accept() independently enforces every one of
+  // these capabilities. A narrowed steward still cannot PUBLISH a new group, roster, join policy, admitted
+  // list, rota setting or journal entry. What 'any' still refuses is a NON-steward's document — the
+  // load-bearing defence on the peer-resync path, where accept() never runs. Do not narrow these back
+  // without reading that test; and do not "fix" this by making replay differ from live ingest, because a
+  // gate that disagrees with itself across paths is the whole defect.
+  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
     if (!idOwnerOk(GROUP_CHURCH.get(id), e, id)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
     if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); return; }
@@ -1425,12 +1442,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     BLOCKED_BY.set(e.pubkey, set); if (!_hydrating) rebuildBlocked();   // rebuildBlocked() rebuilds MEMBERS (drops the blocked)
   }
-  else if (d.startsWith(JOINPOLICY_D) && CHURCH_PUBS.has(cp = d.slice(JOINPOLICY_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members'))) {   // a church's join policy
+  else if (d.startsWith(JOINPOLICY_D) && CHURCH_PUBS.has(cp = d.slice(JOINPOLICY_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any'))) {   // a church's join policy
     let approval = false; if (!removed) { try { approval = !!JSON.parse(e.content).approval; } catch {} }
     if (approval) REQUIRE_APPROVAL.add(cp); else REQUIRE_APPROVAL.delete(cp);
     if (!_hydrating) rebuildMembers();
   }
-  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members'))) {   // a church's approved-members allowlist
+  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any'))) {   // a church's approved-members allowlist
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     ADMITTED_BY.set(cp, set); if (!_hydrating) rebuildMembers();
   }
@@ -1464,7 +1481,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     }
     STEWARDS_BY.set(e.pubkey, set); STEWARD_CAPS.set(e.pubkey, caps);
   }
-  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'content'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
+  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
     { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e, id)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
@@ -1473,7 +1490,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
     const fcp = finCp(e);
-    if (fcp && (e.pubkey === fcp || stewardCan(e.pubkey, fcp, 'finance'))) {
+    if (fcp && (e.pubkey === fcp || stewardCan(e.pubkey, fcp, 'any'))) {
       const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
       if (Number.isInteger(seq)) FINANCE_SEQ.set(fcp, Math.max(FINANCE_SEQ.get(fcp) || 0, seq));   // accepted entries are contiguous, so max == last-contiguous (rebuild-safe)
     }
@@ -1482,13 +1499,13 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // The CARE module's settings, so the care capability — this asked for 'finance' because yesterday's
     // sweep classified the line by its neighbour rather than by the document it governs. accept() has always
     // asked for 'care' here, so a care steward's write was taken and then ignored.
-    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'care') ? cp : '');
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'any') ? cp : '');
     if (!owner) return;
     if (removed) { MEALS_ADMIN_GROUP.delete(owner); MEALS_OPEN_MEMBER.delete(owner); return; }
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
   }
   else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
-    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'content') ? cp : '');
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'any') ? cp : '');
     if (!owner) return;
     const ts = e.created_at || 0, held = ROTA_VIS.get(owner);
     if (held && held.ts > ts) return;                  // an older copy must never overwrite a newer decision
