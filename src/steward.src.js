@@ -517,7 +517,18 @@ function ownRelay() {
   // so a phone-installed steward (or one restored via handoff) reaches the church's data.
   if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
   // Suite "Console only" mode (launcher ?host=off): this box isn't the church's relay — run on the community pool.
-  try { if (lsGet('trinityone.hostoff') === '1') return CANONICAL_RELAY; } catch (e) {}
+  // WHERE THE CHURCH LIVES IS A FACT, NOT A MODE. The Suite used to ask at every launch — "full suite" or
+  // "console only" — and the answer wrote a hidden marker that stuck for ever. Two doors into the same
+  // console, pointed at different stores, and nothing on screen said which. Same key, two churches: a name
+  // and a congregation in one, blank in the other; invitations that sent members to different places, so one
+  // congregation became two halves that could not see each other; and a shared "setup finished" marker, so
+  // the second door never offered to set anything up — it just showed a working console over an empty church.
+  //
+  // Nobody is asked any more. This box either holds this church or it does not, and it can be asked — see
+  // _refreshBoxHostsUs. Until it answers, the box stays IN the list, because the two mistakes are not equal:
+  // an extra relay holding nothing costs one dead connection; dropping the one that holds the church loses
+  // the church.
+  if (_boxHostsUs === false) return CANONICAL_RELAY;
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return CANONICAL_RELAY;
   // a static CDN host (GitHub Pages etc.) has no relay on its origin → publish to the shared pool
@@ -526,7 +537,32 @@ function ownRelay() {
 }
 // Stick/clear the Suite "Console only" flag from the launcher: ?host=off sets it (church runs on community
 // relays), ?host=on or the full-suite ?relayapp=1 clears it (church self-hosts on this box).
-try { const _sp = new URLSearchParams(location.search); const _h = _sp.get('host'); if (_h === 'off') lsSet('trinityone.hostoff', '1'); else if (_h === 'on' || _sp.get('relayapp') === '1') lsSet('trinityone.hostoff', ''); } catch (e) {}
+// Does the relay on this origin hold OUR church? null = not asked yet (treated as yes — see ownRelay).
+// Answered by the relay's own /config, which lists the churches it serves. Token-gated, and the console
+// already holds that token for this box. Cached per church so a restart paints correctly before the answer.
+let _boxHostsUs = null;
+function _boxHostsKey() { return 'trinityone.steward.boxhosts.' + (pub || ''); }
+function _loadBoxHosts() {
+  try { const c = lsGet(_boxHostsKey()); _boxHostsUs = (c === '0') ? false : (c === '1') ? true : null; } catch (e) { _boxHostsUs = null; }
+}
+async function _refreshBoxHostsUs() {
+  try {
+    // NOT just loopback. A self-hosted church is very often reached through a tunnel, so its own relay has a
+    // public address and is not 127.0.0.1 at all — the first version of this asked only on loopback and so
+    // told a tunnelled church that it lived on the community relays, which was flatly untrue. The real
+    // question is "is the relay on this origin something other than the community pool?".
+    if (!pub || ownRelay() === CANONICAL_RELAY) return;
+    const tok = await localAdminToken(); if (!tok) return;
+    const r = await fetch('/config', { cache: 'no-store', headers: _authHdr(tok) });
+    if (!r.ok) return;                                  // cannot tell → leave the box in the list
+    const j = await r.json();
+    const list = (j && (j.churches || j.current || [])) || [];
+    const mine = npubEncode(pub);
+    const hosted = list.some(c => c && (c.npub === mine || String(c.npub || '') === mine));
+    _boxHostsUs = hosted;
+    try { lsSet(_boxHostsKey(), hosted ? '1' : '0'); } catch (e) {}
+  } catch (e) { /* unreachable, or not a Suite box → leave the box in the list */ }
+}
 function extraRelays() {
   try { const a = JSON.parse(lsGet(RELAYS_LS) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; } catch { return []; }
 }
@@ -978,6 +1014,8 @@ function setKey(mnemonic) {
   window.Steward.pubkey = pub;
   window.Steward.npub = npubEncode(pub);
   window.Steward.churchPub = pub;
+  // …and find out whether this computer actually holds this church, now that we know which church it is.
+  try { _loadBoxHosts(); _refreshBoxHostsUs(); } catch (e) {}
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
   // NO RELAY-LIST PUBLISH ON UNLOCK. This used to fire publishRelayList() here, deferred and
@@ -5776,6 +5814,19 @@ window.Steward = {
   // The console is same-origin with its own relay on loopback; these hit it directly, authing with the token
   // the Suite discloses to a genuine same-machine request (/local-token). All no-ops off the Suite. ----
   isSelfHosted() { return ownIsLoopback(); },
+  // Where does this church's data actually live? 'this-computer' | 'community' | 'unknown' (not asked yet).
+  // The console shows this permanently, so a divergence can never be silent again.
+  whereChurchLives() {
+    // The strongest signal is the plainest one: THIS CONSOLE WAS SERVED BY THAT RELAY. If you are reading the
+    // console at some address other than the community pool, the relay at that address is your church's —
+    // that is why it is serving you the console at all. The /config check is a refinement on top, for the one
+    // case the origin cannot tell you: a box that serves the console but does not actually hold your church.
+    // (It needs the local admin token, which the console only has on this machine — a tunnelled church gets
+    // 401 and no answer, which is exactly why the origin, not the token, is the primary signal.)
+    if (ownRelay() === CANONICAL_RELAY) return 'community';
+    if (_boxHostsUs === false) return 'community';
+    return ownIsLoopback() ? 'this-computer' : 'own-relay';
+  },
   async tunnelState() {
     if (!ownIsLoopback()) return { supported: false, running: false };
     const tok = await localAdminToken(); if (!tok) return { supported: false, running: false };

@@ -578,7 +578,9 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [relayAddr, setRelayAddr] = React.useState('');
   const [addrMsg, setAddrMsg] = React.useState('');
   // The desktop "church-in-a-box" build serves the console from its OWN relay, so there is nothing to add.
-  const isRelayApp = (() => { try { return new URLSearchParams(location.search).get('relayapp') === '1'; } catch (e) { return false; } })();
+  // Was: "did they come through the full-suite door?" — a question about the LAUNCHER. Now: "does this
+  // computer actually hold this church?" — a question about the church. See whereChurchLives.
+  const isRelayApp = !!(window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted());
   const addOwnRelay = () => {
     const u = (relayAddr || '').trim(); if (!u) return;
     // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
@@ -1326,6 +1328,24 @@ function StewDashboard({ initial = 'overview' }) {
             <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Key on this device</div><div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{(window.Steward.hasPinLock && window.Steward.hasPinLock()) ? 'Stored locally · locked' : <React.Fragment>Stored locally · <span onClick={() => openSettings('security', 'pin')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>lock with a PIN</span></React.Fragment>}</div></div>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} />
           </div>
+          {/* WHERE THIS CHURCH'S RECORDS ACTUALLY LIVE, said permanently and in plain words.
+              The Suite used to let a steward choose this at launch, invisibly and stickily, and two doors into
+              this same console pointed at different stores — same key, two churches, and nothing on screen to
+              tell you which one you were looking at. The choice is gone; this line is what replaces it, so a
+              divergence can never be silent again. */}
+          {(() => {
+            const w = (window.Steward && window.Steward.whereChurchLives) ? window.Steward.whereChurchLives() : 'unknown';
+            const said = w === 'this-computer' ? 'this computer, and the community relays'
+              : w === 'own-relay' ? 'your church’s own relay, and the community relays'
+              : w === 'community' ? 'the community relays'
+              : 'checking…';
+            return (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', marginTop: 8 }}>
+                <Icon name="cloud" size={15} color="var(--ink-3)" />
+                <div style={{ fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.4 }}>Your church lives on:<br /><b style={{ color: 'var(--ink)' }}>{said}</b></div>
+              </div>
+            );
+          })()}
           {/* In the desktop Suite (served from loopback), this box IS the relay — give a one-click door back to the
               relay panel / launcher so stewards don't have to dig through Settings. Hidden on the hosted web console (a8). */}
           {typeof location !== 'undefined' && ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname) && (
@@ -1661,7 +1681,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
 // go-public succeeds (a wrapper component couldn't — its children are built before the state changes). Off the
 // Suite (web console, phone APK, community relays) selfHosted is false and the whole thing is a no-op.
 function useGoPublicGate() {
-  const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';
+  const isRelayApp = !!(window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted());
   const selfHosted = isRelayApp && window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted();
   const [pub, setPub] = React.useState(selfHosted ? null : { skip: true });   // null=checking · false=not public · {wss,name}=public
   const [busy, setBusy] = React.useState(false);
@@ -2949,7 +2969,7 @@ window.NewTeamModal = NewTeamModal;
 // Its own card, not a footer inside Relays. Running a relay box is a separate decision from managing the
 // relays a church already publishes to, and buried under the relay list it read like a footnote to it.
 function DashRunRelayCard() {
-  const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';
+  const isRelayApp = !!(window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted());
   if (isRelayApp) return (
     <Panel title="This computer is your relay">
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>It’s running as part of this app — your church uses it automatically. The control panel has the advanced relay settings (make it reachable from anywhere, software updates, storage).</div>

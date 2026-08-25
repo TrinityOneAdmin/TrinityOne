@@ -14725,21 +14725,42 @@ zoo`.split("\n");
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function ownRelay() {
     if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
-    try {
-      if (lsGet("trinityone.hostoff") === "1") return CANONICAL_RELAY;
-    } catch (e) {
-    }
+    if (_boxHostsUs === false) return CANONICAL_RELAY;
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.host) return CANONICAL_RELAY;
     if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
     return (l.protocol === "https:" ? "wss://" : "ws://") + l.host + "/relay";
   }
-  try {
-    const _sp = new URLSearchParams(location.search);
-    const _h = _sp.get("host");
-    if (_h === "off") lsSet("trinityone.hostoff", "1");
-    else if (_h === "on" || _sp.get("relayapp") === "1") lsSet("trinityone.hostoff", "");
-  } catch (e) {
+  var _boxHostsUs = null;
+  function _boxHostsKey() {
+    return "trinityone.steward.boxhosts." + (pub || "");
+  }
+  function _loadBoxHosts() {
+    try {
+      const c = lsGet(_boxHostsKey());
+      _boxHostsUs = c === "0" ? false : c === "1" ? true : null;
+    } catch (e) {
+      _boxHostsUs = null;
+    }
+  }
+  async function _refreshBoxHostsUs() {
+    try {
+      if (!pub || ownRelay() === CANONICAL_RELAY) return;
+      const tok = await localAdminToken();
+      if (!tok) return;
+      const r = await fetch("/config", { cache: "no-store", headers: _authHdr(tok) });
+      if (!r.ok) return;
+      const j = await r.json();
+      const list = j && (j.churches || j.current || []) || [];
+      const mine = npubEncode(pub);
+      const hosted = list.some((c) => c && (c.npub === mine || String(c.npub || "") === mine));
+      _boxHostsUs = hosted;
+      try {
+        lsSet(_boxHostsKey(), hosted ? "1" : "0");
+      } catch (e) {
+      }
+    } catch (e) {
+    }
   }
   function extraRelays() {
     try {
@@ -15218,6 +15239,11 @@ zoo`.split("\n");
     window.Steward.pubkey = pub;
     window.Steward.npub = npubEncode(pub);
     window.Steward.churchPub = pub;
+    try {
+      _loadBoxHosts();
+      _refreshBoxHostsUs();
+    } catch (e) {
+    }
     window.Steward.activePub = pub;
     window.Steward.hasKey = true;
   }
@@ -20237,6 +20263,13 @@ zoo`.split("\n");
     // the Suite discloses to a genuine same-machine request (/local-token). All no-ops off the Suite. ----
     isSelfHosted() {
       return ownIsLoopback();
+    },
+    // Where does this church's data actually live? 'this-computer' | 'community' | 'unknown' (not asked yet).
+    // The console shows this permanently, so a divergence can never be silent again.
+    whereChurchLives() {
+      if (ownRelay() === CANONICAL_RELAY) return "community";
+      if (_boxHostsUs === false) return "community";
+      return ownIsLoopback() ? "this-computer" : "own-relay";
     },
     async tunnelState() {
       if (!ownIsLoopback()) return { supported: false, running: false };
