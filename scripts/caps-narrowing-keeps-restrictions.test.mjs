@@ -56,7 +56,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8999;                       // unique across scripts/*.test.mjs and *.probe.mjs
+const PORT = 8995;                       // unique across scripts/*.test.mjs — 8999 collides with console-publish-honesty.test.mjs, and the runner runs files in parallel
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const NET = 'trinityone';
 const STEWARDS_D = 'trinityone/stewards:', GROUP_D = 'trinityone/group:', MEMBER_D = 'trinityone/member:';
@@ -231,12 +231,112 @@ test('the same holds when the maps rebuild live, with no restart at all', async 
 });
 
 // ── 5. The guard that must survive the fix ───────────────────────────────────────────────────────────────
-test('a NON-steward cannot have their group definition honoured, however tolerant the gate becomes', async () => {
-  // The fix widens these gates to 'any'. This is what 'any' must still refuse. It matters most on the
-  // peer-resync path, where accept() never runs and note()'s author check is one of only two defences.
+test("a non-steward's group definition is refused at the door (accept), on the live publish path", async () => {
+  // HONESTY NOTE — this test does NOT cover what its first draft claimed, and the claim was the dangerous
+  // part. It asserted "a NON-steward cannot have their group definition honoured, however tolerant the
+  // ingest gate becomes", implying it guarded note()'s author check. It does not. It measures accept()
+  // refusing the PUBLISH, one layer earlier. Proven, not assumed: with the author check inside note()'s
+  // GROUP_D branch deleted outright, this test still passed. It would pass with the thing it named as its
+  // subject removed entirely — a vacuous guard, written by the same hand as the fix, which is exactly where
+  // this project has been caught before.
+  //
+  // What it legitimately pins is still worth having: the live write path refuses a stranger's group doc.
+  //
+  // THE REAL GAP, stated plainly rather than papered over: the forgery defence that matters is on the
+  // PEER-RESYNC path (syncChurchFromPeer and the negentropy fetch), where accept() never runs and note()'s
+  // author check is one of only two defences. Nothing here reaches that path — a publish cannot, by
+  // construction. Covering it needs two relays, one trusted as a peer by the other, and a forged document
+  // planted on the peer. That is real work and it is NOT done. Until it is, the widening to 'any' rests on
+  // reading the code rather than on a test.
   const forgedGid = forger.pub.slice(0, 16) + '-fake1';
   const forged = finalizeEvent({ kind: 30078, created_at: ++ts, tags: [['d', GROUP_D + forgedGid], ['t', NET], ['church', cp]],
     content: JSON.stringify({ name: 'Not a real room', kind: 'group', visibility: 'open', members: [] }) }, forger.sk);
   const res = await publishAs(forged);
   assert.equal(res.ok, false, 'a non-steward had a group definition accepted for a church they do not steward');
+});
+
+// ── 6. THE REAL FORGERY GUARD — driven where accept() never runs ─────────────────────────────────────────
+test('a non-steward cannot flip an invite-only room open by planting a document the relay replays', async () => {
+  // The test above measures accept(). THIS one measures note()'s author check, by putting a validly-signed
+  // document into the store with the relay stopped and then letting it rehydrate — which is exactly the
+  // shape of the peer-resync path, where accept() never runs at all.
+  //
+  // It is written so it can fail in a useful direction: the forged document REPLACES the existing
+  // invite-only room's definition with visibility 'open'. If the author check is bypassed, GROUP_VIS flips
+  // and mallory reads the private message. If the check holds, nothing derives and the room stays shut.
+  // (A forged NEW group would have been useless: an underived group and an 'open' one are indistinguishable,
+  // because unset visibility falls through to the same permissive default. That is how the first attempt at
+  // this test managed to prove nothing.)
+  assert.equal((await publishAs(roster({ [deborah.pub]: ['content'] }))).ok, true);
+  assert.equal((await publishAs(groupDoc())).ok, true, 're-establish the invite-only room');
+  await sleep(200);
+
+  relay.kill('SIGKILL'); await sleep(500);
+
+  const { openStore } = await import('./event-store.mjs');
+  const store = openStore(join(dataDir, 'relay.sqlite'), { maxEvents: 5000 });
+  const forged = finalizeEvent({ kind: 30078, created_at: ++ts, tags: [['d', GROUP_D + gid], ['t', NET], ['church', cp]],
+    content: JSON.stringify({ name: 'Elders', kind: 'group', visibility: 'open', members: [] }) }, forger.sk);
+  store.put(forged);
+  if (store.close) store.close();
+
+  await bootRelay(); await sleep(500);
+
+  const after = await readAs(mallory, { kinds: [1], '#t': [gid] });
+  assert.equal(after.length, 0,
+    'a NON-steward planted a group definition and the relay honoured it on replay — the private room was flipped open by someone with no role in the church');
+});
+
+// ── 7. THE FINANCE JOURNAL — the worst of the three gates nothing was driving ────────────────────────────
+test("a narrowed treasurer's entries still hold the journal's place, so history cannot be rewritten", async () => {
+  // FIN_JOURNAL was widened with the rest but had no test. Its failure is the quietest and the worst: if a
+  // narrowed treasurer's entries stop raising FINANCE_SEQ, the relay forgets how far the book has been
+  // written and re-accepts a sequence number that is already used. Because dedup is per (author, kind, d),
+  // the replacement does not overwrite — it COEXISTS. That is a fork in an append-only ledger, and the read
+  // path's whole retention argument for finance rests on it being impossible.
+  assert.equal((await publishAs(roster({ [deborah.pub]: ['finance'] }))).ok, true);
+  const entry = (signer, seq) => finalizeEvent({ kind: 30078, created_at: ++ts,
+    tags: [['d', 'finance/journal:' + seq], ['t', NET], ['church', cp]],
+    content: JSON.stringify({ seq, memo: 'gift day ' + seq }) }, signer.sk);
+  assert.equal((await publishAs(entry(deborah, 1))).ok, true, 'the treasurer writes entry 1');
+  assert.equal((await publishAs(entry(deborah, 2))).ok, true, 'and entry 2');
+  await sleep(150);
+
+  assert.equal((await publishAs(roster({ [deborah.pub]: ['content'] }))).ok, true, 'narrow away from finance');
+  await rehydrateByRestart();
+
+  // THE ASSERTION HAS TO BE SEQ 1, NOT SEQ 2, and the first draft got this wrong in a way that made the test
+  // vacuous — caught only by sabotaging the gate and finding it still passed. Attempting seq 2 is refused
+  // EITHER WAY: with the fix because the book stands at 2, and with the bug because the counter reset to 0 so
+  // the relay demands 1. Same answer, opposite reasons, nothing measured. Seq 1 separates them: with the
+  // counter intact it is already-used and must be refused; with the counter lost it is 'next' and sails in,
+  // coexisting with the treasurer's real entry 1 because dedup is per author.
+  const rewrite = await publishAs(entry(church, 1));
+  assert.equal(rewrite.ok, false,
+    'a sequence number already written was accepted again after the treasurer was narrowed — the append-only book has forked');
+  // and the book must still know where it actually stands
+  assert.equal((await publishAs(entry(church, 3))).ok, true, 'the next genuine entry must still be accepted');
+});
+
+// ── 8. ROTA VISIBILITY — the third untested gate ─────────────────────────────────────────────────────────
+test('a rota narrowed to serving teams is not served church-wide after its author is narrowed', async () => {
+  // ROTA_SETTINGS was widened with the rest and had no test either — the builder for it was written and
+  // never called, which is its own small lesson about trusting a green.
+  const ROTA_D = 'trinityone/rota:';
+  assert.equal((await publishAs(roster({ [deborah.pub]: ['content'] }))).ok, true);
+  assert.equal((await publishAs(rotaSettings(deborah, 'team'))).ok, true, 'steward sets rota to serving-teams-only');
+  const rota = finalizeEvent({ kind: 30078, created_at: ++ts, tags: [['d', ROTA_D + 'svc-advent'], ['t', NET], ['church', cp]],
+    content: JSON.stringify({ service: 'svc-advent', published: true, assign: {} }) }, deborah.sk);
+  assert.equal((await publishAs(rota)).ok, true);
+  await sleep(200);
+
+  const before = await readAs(mallory, { kinds: [30078], '#d': [ROTA_D + 'svc-advent'] });
+  assert.equal(before.length, 0, 'PRECONDITION: a member not on a serving team must not see a team-only rota');
+
+  assert.equal((await publishAs(roster({ [deborah.pub]: ['finance'] }))).ok, true, 'narrow away from content');
+  await rehydrateByRestart();
+
+  const after = await readAs(mallory, { kinds: [30078], '#d': [ROTA_D + 'svc-advent'] });
+  assert.equal(after.length, 0,
+    'the rota went church-wide after its author was narrowed, while the console still says "Serving teams"');
 });
