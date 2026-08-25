@@ -4,12 +4,12 @@ Run before pushing to the PUBLIC repository and cutting a Windows installer. Own
 *"I feel anxious that we've been fixing things that, in reality are not issues, and perhaps creating more
 issues in the process."*
 
-**VERDICT: DO NOT PUSH AS-IS.** One critical privacy regression, reproduced twice by the auditor and twice
+**VERDICT WHEN WRITTEN: DO NOT PUSH AS-IS. NOW RESOLVED — the critical is fixed in `1a793dd`.** One critical privacy regression, reproduced twice by the auditor and twice
 again independently by me against the real `main` gateway.
 
 ---
 
-## CRITICAL — narrowing a steward's tickboxes opens the church's private rooms at the next relay restart
+## CRITICAL — FIXED in `1a793dd` — narrowing a steward's tickboxes opens the church's private rooms at the next relay restart
 
 ### What a church experiences
 A steward set up the church's groups, teams and rota. Later the church uses the new "who can do what" editor
@@ -67,7 +67,14 @@ roster is in force when the old documents replay. It makes the drop deterministi
 `caps`**, so the steward keeps full power and the narrowing case is never exercised. It passes 11/11.
 `relay-steward-caps.test.mjs` never restarts the relay at all. The suite is green over this, all 1622 of it.
 
-### What a fix must be true of — NOT a fix, none was written
+### RESOLVED, 2026-08-25, commit `1a793dd`
+All SEVEN gates widened to `'any'`, not the four listed above — my own enumeration missed FIN_JOURNAL,
+MEALS_SETTINGS and ROTA_SETTINGS, and a second reader caught it. Fixing off my list would have been another
+half-fix. `scripts/caps-narrowing-keeps-restrictions.test.mjs` drives both failure directions, a live
+`/config` rehydrate as well as a restart, and a forgery guard; sabotage-verified (bug back → 4 of 6 fail).
+Full suite 1632, 0 failures.
+
+### What the fix had to be true of — recorded before it was written
 The ingest gates must agree with the read path's tolerant `'any'` semantics, or the difference must be a
 conscious decision carrying a test that **restarts the relay after a NARROWING**. That is the state no test
 drives, and it is where the whole defect lives.

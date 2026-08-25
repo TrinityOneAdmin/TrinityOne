@@ -61,7 +61,21 @@ test('respondServing ANSWERS its caller — false when it refuses, true when it 
   const body = fnBody(stripComments(APP), 'respondServing: (item, verdict, swapTo) =>', 'respondServing');
   assert.match(body, /if\s*\(!reqId\)\s*\{[^}]*return false;/,
     'the no-request branch returns nothing, so every caller reads undefined and assumes it worked');
-  assert.match(body, /return true;/, 'the send path never reports success, so callers can never distinguish it');
+  // THIS ASSERTION USED TO READ `assert.match(body, /return true;/)`, AND THAT WAS THE BUG DEFENDING ITSELF.
+  // Pre-push audit, 2026-08-25: the send path fires the publish WITHOUT awaiting it and returns true before
+  // any I/O, and the helper underneath swallows a failed publish (`try { await _publishAny(...) } catch {}`).
+  // So a member on a published rota taps "I'm away" with no signal, is told "Taken off — thanks for letting
+  // us know", and the church receives nothing. They do not turn up on Sunday. That is the exact scenario the
+  // commit this file guards was named for — and pinning the literal `return true;` meant an honest fix, one
+  // that reported the real outcome, would FAIL this test. A test that forbids the correct answer is worse
+  // than no test.
+  // What is still required is that the send path ANSWERS its caller at all — silence is what makes a caller
+  // assume success. Any explicit answer satisfies it, so the honest fix is now free to land.
+  // The underlying defect is NOT fixed here; it is deliberately queued behind the owner's first hand-test,
+  // because it is a four-file async change to a member-facing send path. See
+  // reference/AUDIT-2026-08-25-PRE-PUSH.md and fix-the-control-not-the-label.
+  assert.match(body, /return\s+(true|ok|sent|!!|await|Boolean\()/,
+    'the send path answers its caller with nothing, so every caller reads undefined and assumes it worked');
 });
 
 test('NO control talks to respondServing directly — they all go through the helper', () => {
