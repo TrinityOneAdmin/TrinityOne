@@ -38,3 +38,19 @@ test('C6 — the private-message sibling is covered by name', () => {
   const el = dm.slice(dm.lastIndexOf('<p ', i), i);
   assert.match(el, /whiteSpace: 'pre-wrap'/, 'a private message still arrives with its line breaks collapsed');
 });
+
+
+// ── the CONSOLE has its own message bubbles, and they were missed twice ────────────────────────────
+// This was confirmed during round 4's verification pass and then not fixed — it was not among the three
+// chosen, and that was not said out loud. The very next round, a vicar setting up a church for the first
+// time posted her opening notice and read it back as one run-on paragraph. A notice sheet is MADE of
+// separate lines; it was the first thing she complained about.
+const STEWD = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
+
+test('C6 — the console keeps line breaks too, in both its message bubbles', () => {
+  const bubbles = STEWD.split('\n').filter(l => l.includes('title="Tap to react"'));
+  assert.equal(bubbles.length, 2, `expected the group-chat and private-message bubbles, found ${bubbles.length}`);
+  const collapsing = bubbles.filter(l => !/whiteSpace: 'pre-wrap'/.test(l));
+  assert.deepEqual(collapsing.map(l => l.trim().slice(0, 60)), [],
+    'a console message bubble still collapses what the steward typed');
+});

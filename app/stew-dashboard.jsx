@@ -2547,7 +2547,7 @@ function GroupChatModal({ group, onClose }) {
                 <span style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{nameFor(m.by)}</span>
               </div> : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
-                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
+                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
                 <div style={{ position: 'relative', flexShrink: 0 }}>
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
                   {menuFor === m.id ? (
@@ -6642,7 +6642,7 @@ function StewDmWindow({ peer, offset, onClose }) {
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
             {msgs.map(m => (
               <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
-                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
+                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
                 {m.reactions && m.reactions.length ? (
                   <div style={{ display: 'flex', gap: 3, marginTop: 2, flexWrap: 'wrap' }}>
                     {Object.entries(m.reactions.reduce((a, e) => (a[e] = (a[e] || 0) + 1, a), {})).map(([emo, n]) => (
