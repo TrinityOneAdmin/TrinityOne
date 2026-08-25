@@ -1,4 +1,109 @@
-# Handoff — TrinityOne, 2026-07-26
+# Handoff — TrinityOne, 2026-08-25
+
+Read this before touching anything. It is written by the previous session and is deliberately weighted
+towards **what that session got wrong**, because the single most useful thing you can do is distrust its
+conclusions and re-verify them. Everything below §"EARLIER HANDOFFS" is history kept for provenance; the
+current state is here at the top.
+
+---
+
+## STANDING RULE FROM THE OWNER, 2026-08-25 — BACKWARDS COMPATIBILITY FROM THE PILOT ONWARDS
+
+> *"once we begin the pilot, we will need to make sure everything we build is backwards compatible."*
+
+From the moment a real congregation has data in TrinityOne, **a change that cannot read yesterday's documents
+is a change that loses someone's church.** This is not a style preference; it is the difference between an
+upgrade and a data-loss incident, and this project has already had a near-miss of exactly that shape (replaying
+a write gate over an import deleted an entire finance journal and everyone who had left — see
+`accept-is-not-a-retention-rule`).
+
+What it means in practice, for whoever picks this up:
+
+  · **Documents already published must keep being readable.** Members' phones hold them, relays store them,
+    and a church that upgrades cannot re-publish its history. If a field's meaning changes, the OLD shape must
+    still parse — add, do not repurpose.
+  · **The relay is the hard case.** It rehydrates its whole corpus on every self-update. Any change to how a
+    document is INGESTED is retroactive by definition: it re-runs against every document a church has ever
+    published. Today's critical was exactly this and nothing in the test suite noticed.
+  · **A steward's console and a member's phone update at different times, if ever.** Assume a mixed fleet
+    permanently. A new field must degrade to something sensible on an old client, and an old client's document
+    must not be discarded by a new one.
+  · **Relay-to-relay too.** Churches sync from peers running other versions.
+  · **The test that proves it is a rehydrate/replay test**, not a fresh-install test. A feature verified only
+    on an empty church has not been verified for a real one.
+
+Nothing in the pilot is allowed to require a coordinated upgrade, because there is no mechanism to coordinate
+one and no way to reach a congregation whose app has stopped working.
+
+---
+
+## STATE AT THE END OF 2026-08-25
+
+**Pushed and public.** `main` is at `3d49159` on github.com/TrinityOneAdmin/TrinityOne (91 commits went up
+this evening; the repo is PUBLIC). Tag `relay-v0.8.0-rc1` cut as a **prerelease** — installers build, but no
+deployed relay is told anything, because GitHub's `releases/latest` ignores prereleases.
+
+**a8 (app.trinityone.church) was deliberately NOT updated.** It runs `d395b75` (19 Aug 10:39), which PREDATES
+the capability work (`10059bf`, 19:57 the same day) — so the critical below was never live anywhere. Leaving
+it on the older build was the owner's decision while they were away; do not update it without asking.
+
+**Promoting the release is the act that reaches churches.** Cutting `relay-v0.8.0` WITHOUT the `-rc1` suffix
+is what tells every deployed relay an upgrade exists. Nothing done on 08-25 reaches a church. That step is the
+owner's and is still outstanding, pending their own hand-test of the Windows installer.
+
+### What was fixed today, and how far to trust it
+
+**CRITICAL, fixed in `1a793dd`: narrowing a steward silently opened what they had already built.** `note()`
+re-derived document restrictions from HISTORICAL documents against the author's CURRENT capability, so
+narrowing a delegate dropped the restrictions on everything they had authored at the next rehydrate: invite
+rooms became readable AND postable church-wide, approval-to-join reverted to open-join, team-only rotas went
+church-wide, and a delegated treasurer's entries stopped raising the finance sequence counter (which re-opens
+historical sequence numbers in an append-only book — the replacement COEXISTS rather than overwrites, because
+dedup is per author). `canRead` was already tolerant for exactly this reason; `note()` was its missed sibling.
+All seven gates now ask `'any'`. Safe only because `note()` is strictly downstream of `accept()`, which
+independently enforces every one of those capabilities — verified before the edit, not after.
+
+**Tests: `scripts/caps-narrowing-keeps-restrictions.test.mjs`.** Suite is 1635, 0 failures.
+
+**THREE OF THIS SESSION'S OWN TESTS WERE VACUOUS AND WERE CAUGHT BY SABOTAGE, NOT BY BEING GREEN.** Take this
+as the operating lesson:
+  · a "live rehydrate" case provoked with a `/status` poll, which triggers no rehydrate at all
+  · a forgery guard that published over a live socket, where `accept()` refuses first, so it measured the door
+    and not the gate — it passed with the gate DELETED
+  · a finance case that attempted sequence 2, which is refused with AND without the fix, for opposite reasons
+Every one looked correct and passed. **Sabotage every test you write here; a green means nothing on its own.**
+
+### Open, in priority order
+1. **Owner's hand-test** of the Windows prerelease installer — the baseline everything else waits on.
+2. **The serving/care send-path defect.** "I'm away", `fillCareSlot`, `clearCareSlot`, `setCareAvail`,
+   `clearCareAvail` all report success over a failed publish. Deliberately deferred until after the baseline —
+   it is a four-file async change to a member-facing path. The test that PINNED the bug (`return true;`) was
+   unpinned in `a0609d1`, so an honest fix can now land.
+3. **ROSTER and MEALS narrowing tests** — two of the seven gates still have no test (fail-closed shapes).
+4. **Round 5 findings** — `reference/SIM-ROUND-5-FINDINGS-2026-08-25.md`, 24 items. Anything not marked
+   CONFIRMED has not been verified by a human.
+5. **The 36 burned keys.** `scripts/.sim-churches.json` held 36 plaintext private keys and is in PUBLIC
+   history (commit `2661177`). Removing the file forward does NOT unpublish them. Treat all 36 as burned. A
+   history rewrite is the owner's call and has not been made.
+6. **Full revocation** (removing a steward entirely, or an explicit empty caps list) still drops derivation of
+   everything they built, same shape as the fixed bug. Pre-existing, present in production today, undocumented
+   until now.
+
+### The rig lies. Do not trust it without checking.
+  · `sim-actor tap` reported success while hitting a COVERED element — twice manufactured findings that were
+    later withdrawn. Fixed 08-25 to refuse and say what is painted on top; **the sim scripts are no longer in
+    git** (owner's call), so they live only on the dev box at `scripts/sim-*.mjs` with a backup in the session
+    scratchpad. If they are missing, restore from `git show b85622a:scripts/sim-actor.mjs` etc.
+  · `sim-actor send` still reports success when the composer merely EMPTIES — the same false signal the app
+    itself gives. NOT yet fixed. Four agents blamed the enter key for lost messages on this basis; the claim
+    did not reproduce and is unverified.
+  · The steward console ran the whole round at **780×437** (the box has an 800×600 virtual display), which
+    fabricated a "the vicar cannot staff her care team" finding that was later withdrawn. Give it a real
+    viewport with `Emulation.setDeviceMetricsOverride` before believing any console finding.
+
+---
+
+## EARLIER HANDOFFS
 
 Read this before touching anything. It is written by the previous session and is deliberately weighted
 towards **what that session got wrong**, because the single most useful thing you can do is distrust its
