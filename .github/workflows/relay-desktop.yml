@@ -161,3 +161,12 @@ jobs:
         with:
           files: dist-installers/*
           fail_on_unmatched_files: false
+          # PRERELEASE FOR -rc AND -branch- TAGS, and this is not cosmetic. Every deployed relay decides
+          # whether an update exists by reading releases/latest/download/suite-latest.json (gateway.mjs,
+          # /suite-update). GitHub's "latest" IGNORES prereleases — so without this flag, pushing a tag to
+          # get yourself an installer to test also tells every church's server that an upgrade is waiting,
+          # for a build nobody has run yet. Cut an -rc tag, test the installer, then publish the clean
+          # relay-vX.Y.Z tag when you actually mean it.
+          # NB the whole ref is "relay-v0.8.0", which already contains a hyphen — so this must match the
+          # suffix explicitly rather than asking whether a hyphen is present anywhere.
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-branch-') }}
