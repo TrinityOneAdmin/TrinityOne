@@ -1826,11 +1826,18 @@ function App() {
       setServReplies(m => ({ ...m, [reqId]: verdict }));
       return true;
     },
+    // PRESSING THE ANSWER YOU ALREADY GAVE WITHDRAWS IT — deliberately, and worth keeping: there has to be
+    // some way to say "actually, ignore me". But the common press is a CONFIRMATION, not a withdrawal.
+    // Priyanka: "It already said You're going. I tapped Going to confirm — and it wiped my answer." She then
+    // had to work out for herself that pressing it again put it back. Losing an answer is a fine thing to
+    // allow and a terrible thing to do silently, so say what happened.
     setRsvp: (eventId, verdict) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-      const next = myRsvps[eventId] === verdict ? null : verdict;
+      const cleared = myRsvps[eventId] === verdict;
+      const next = cleared ? null : verdict;
       if (window.Fellowship && window.Fellowship.setEventRsvp) window.Fellowship.setEventRsvp(np, eventId, next || 'none');
       setMyRsvps(m => ({ ...m, [eventId]: next }));
+      if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
     },
     // RETURN the promise. This dropped it, so even a handler that awaited could not learn that the church
     // had refused the write — which is how a pending member's "I'm away" became a success toast over nothing.

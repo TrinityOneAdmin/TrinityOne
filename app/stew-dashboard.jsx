@@ -5322,7 +5322,13 @@ function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
   const [sermonsLoaded, setSermonsLoaded] = React.useState(false);   // has the subscription answered? see doUpload's dupe check
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
-  const [encOn, setEncOn] = React.useState(false);
+  // FOLLOW THE CHURCH'S OWN SETTING. This box started OFF regardless, on a page that promises "members only"
+  // — and a church is encrypted unless its steward decides otherwise. Miriam: "it is off by default, which
+  // surprised me." She was right to be surprised: one tick box quietly disagreeing with the church's own
+  // choice is how a recording meant for members ends up readable by whoever holds the disk.
+  const _encChurch = window.useStewardChurch ? window.useStewardChurch() : {};
+  const _churchEnc = !!(_encChurch && _encChurch.features && _encChurch.features.encryptComms !== false);
+  const [encOn, setEncOn] = React.useState(_churchEnc);
   const autoBackups = React.useMemo(() => { try { return (window.Steward.mediaHosts ? window.Steward.mediaHosts() : []).slice(1); } catch { return []; } }, []);
   const [mirrorHosts, setMirrorHosts] = React.useState(autoBackups.join(', '));   // auto-filled from the church's other relays; editable
   const [pinnedId, setPinnedId] = React.useState(null);   // the currently-featured sermon (pushed to members' Today)
