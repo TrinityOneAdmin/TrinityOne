@@ -15701,6 +15701,64 @@ zoo`.split("\n");
     }
     return evt;
   }
+  var S_OUTBOX_MAX = 200;
+  var _sOutKey = () => "trinityone.steward.outbox:" + (pub || "");
+  var _sOutbox = [];
+  var _sOutPlain = /* @__PURE__ */ new Map();
+  var _sFlushing = false;
+  function _sOutLoad() {
+    try {
+      _sOutbox = JSON.parse(lsGet(_sOutKey()) || "[]") || [];
+    } catch (e) {
+      _sOutbox = [];
+    }
+  }
+  function _sOutSave() {
+    try {
+      lsSet(_sOutKey(), JSON.stringify(_sOutbox.slice(-S_OUTBOX_MAX)));
+    } catch (e) {
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("steward-outbox"));
+    } catch (e) {
+    }
+  }
+  async function _sOutFlush() {
+    if (_sFlushing || !sk) return;
+    _sOutLoad();
+    if (!_sOutbox.length) return;
+    _sFlushing = true;
+    try {
+      for (const item of [..._sOutbox]) {
+        const r = await publish(item.evt);
+        if (r) {
+          _sOutbox = _sOutbox.filter((o) => o.evt.id !== item.evt.id);
+          _sOutPlain.delete(item.evt.id);
+          _sOutSave();
+        } else {
+          item.tries = (item.tries || 0) + 1;
+          item.lastTry = now();
+          if (item.tries >= 8) item.failed = true;
+          _sOutSave();
+        }
+      }
+    } finally {
+      _sFlushing = false;
+    }
+  }
+  try {
+    window.addEventListener("steward-relay-returned", () => {
+      setTimeout(() => {
+        _sOutFlush().catch(() => {
+        });
+      }, 3e3);
+    });
+    setInterval(() => {
+      _sOutFlush().catch(() => {
+      });
+    }, 45e3);
+  } catch (e) {
+  }
   async function _publishToRelays(evt, urls) {
     await _waitForRegistration();
     const live = _connectedRelays();
@@ -17494,7 +17552,45 @@ zoo`.split("\n");
         return null;
       }
       const evt = finalizeEvent2({ kind: 4, created_at: now(), tags: [["p", peerHex], ["t", NET]], content: enc }, sk);
-      return publish(evt);
+      _sOutLoad();
+      _sOutbox.push({ evt, peer: peerHex, at: now(), tries: 0 });
+      _sOutPlain.set(evt.id, content);
+      _sOutSave();
+      const r = await publish(evt);
+      if (r) {
+        _sOutbox = _sOutbox.filter((o) => o.evt.id !== evt.id);
+        _sOutPlain.delete(evt.id);
+        _sOutSave();
+      }
+      return r ? evt : { ...evt, _queued: true };
+    },
+    // What is still waiting to reach this member, so a thread can say so instead of looking delivered.
+    outboxForPeer(peerHex) {
+      _sOutLoad();
+      return _sOutbox.filter((o) => o.peer === peerHex).map((o) => ({
+        ...o.evt,
+        _pending: !o.failed,
+        _failed: !!o.failed,
+        _tries: o.tries || 0,
+        plain: _sOutPlain.get(o.evt.id) || ""
+      }));
+    },
+    retryQueuedDM(id) {
+      _sOutLoad();
+      const i3 = _sOutbox.find((o) => o.evt.id === id);
+      if (i3) {
+        i3.failed = false;
+        i3.tries = 0;
+        _sOutSave();
+        _sOutFlush();
+      }
+      return !!i3;
+    },
+    dropQueuedDM(id) {
+      _sOutLoad();
+      _sOutbox = _sOutbox.filter((o) => o.evt.id !== id);
+      _sOutPlain.delete(id);
+      _sOutSave();
     },
     // the 1:1 thread with one member (decrypts both directions; carries kind-7 reactions per message)
     subscribeDMThread(peerHex, onMsgs) {

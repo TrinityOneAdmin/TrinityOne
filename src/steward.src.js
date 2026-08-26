@@ -1651,6 +1651,57 @@ async function publish(evt) {
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
   return evt;
 }
+
+// ── the console's outbox ─────────────────────────────────────────────────────────────────────────────────
+// A STEWARD'S PRIVATE REPLY MUST SURVIVE A BAD MOMENT. The member app got this yesterday; the console had no
+// outbox AT ALL — not "sendDM does not use it", the mechanism did not exist — so a vicar answering a
+// parishioner through a stalled connection lost the words silently, exactly as six members did in round 6.
+// It also gates the "Contact your church" route: a way IN to a console that drops its replies is worse than
+// no way in, because the member is then certain they were ignored.
+//
+// DELIBERATELY NARROW — kind-4 only. Those are messages a human typed and cannot retype. The church's
+// DOCUMENTS are republished from live state by the code that owns them, and queueing a stale copy of a roster
+// or a key would be far more dangerous than losing it. This must never grow into a general write queue.
+//
+// SCOPED PER CHURCH, learned the hard way today: a console that changes which church it runs must not carry
+// the previous church's undelivered messages into the new one. The PLAINTEXT lives in memory only — the
+// queued item holds ciphertext that was going to a relay anyway, so a seized laptop gains nothing it would
+// not have had, while a "waiting to send" bubble can still show the words while the app is open.
+const S_OUTBOX_MAX = 200;
+const _sOutKey = () => 'trinityone.steward.outbox:' + (pub || '');
+let _sOutbox = [];
+const _sOutPlain = new Map();
+let _sFlushing = false;
+function _sOutLoad() { try { _sOutbox = JSON.parse(lsGet(_sOutKey()) || '[]') || []; } catch (e) { _sOutbox = []; } }
+function _sOutSave() {
+  try { lsSet(_sOutKey(), JSON.stringify(_sOutbox.slice(-S_OUTBOX_MAX))); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('steward-outbox')); } catch (e) {}
+}
+async function _sOutFlush() {
+  if (_sFlushing || !sk) return;
+  _sOutLoad();
+  if (!_sOutbox.length) return;
+  _sFlushing = true;
+  try {
+    for (const item of [..._sOutbox]) {
+      const r = await publish(item.evt);
+      if (r) { _sOutbox = _sOutbox.filter(o => o.evt.id !== item.evt.id); _sOutPlain.delete(item.evt.id); _sOutSave(); }
+      else {
+        // publish() answers false for "every relay rejected" without saying whether that was a refusal or an
+        // outage, so tries are counted and a message is eventually given up on rather than retried for ever.
+        // Giving up is VISIBLE — it moves to a failed state the steward can see and retry — never a discard.
+        item.tries = (item.tries || 0) + 1;
+        item.lastTry = now();
+        if (item.tries >= 8) item.failed = true;
+        _sOutSave();
+      }
+    }
+  } finally { _sFlushing = false; }
+}
+try {
+  window.addEventListener('steward-relay-returned', () => { setTimeout(() => { _sOutFlush().catch(() => {}); }, 3000); });
+  setInterval(() => { _sOutFlush().catch(() => {}); }, 45000);
+} catch (e) {}
 // TARGETED PUBLISH, for the safeguarding write path only. The shared publish() above resolves on
 // Promise.any — success as soon as ONE relay accepts — which is right for a chat message and wrong for a
 // child's safeguarding record: the console reported "saved" while two of three relays held nothing, and the
@@ -3332,8 +3383,25 @@ window.Steward = {
     if (!sk || !peerHex) return null;
     let enc = ''; try { enc = await nip04encrypt(sk, peerHex, content); } catch { return null; }
     const evt = finalizeEvent({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }, sk);
-    return publish(evt);
+    // QUEUE FIRST, THEN ATTEMPT — the same rule the member app follows. If the publish fails the words are
+    // still here, and the retry sends this exact event with its original id, so nothing duplicates.
+    _sOutLoad();
+    _sOutbox.push({ evt, peer: peerHex, at: now(), tries: 0 });
+    _sOutPlain.set(evt.id, content);
+    _sOutSave();
+    const r = await publish(evt);
+    if (r) { _sOutbox = _sOutbox.filter(o => o.evt.id !== evt.id); _sOutPlain.delete(evt.id); _sOutSave(); }
+    return r ? evt : { ...evt, _queued: true };
   },
+  // What is still waiting to reach this member, so a thread can say so instead of looking delivered.
+  outboxForPeer(peerHex) {
+    _sOutLoad();
+    return _sOutbox.filter(o => o.peer === peerHex).map(o => ({
+      ...o.evt, _pending: !o.failed, _failed: !!o.failed, _tries: o.tries || 0, plain: _sOutPlain.get(o.evt.id) || '',
+    }));
+  },
+  retryQueuedDM(id) { _sOutLoad(); const i = _sOutbox.find(o => o.evt.id === id); if (i) { i.failed = false; i.tries = 0; _sOutSave(); _sOutFlush(); } return !!i; },
+  dropQueuedDM(id) { _sOutLoad(); _sOutbox = _sOutbox.filter(o => o.evt.id !== id); _sOutPlain.delete(id); _sOutSave(); },
   // the 1:1 thread with one member (decrypts both directions; carries kind-7 reactions per message)
   subscribeDMThread(peerHex, onMsgs) {
     const byId = new Map();
