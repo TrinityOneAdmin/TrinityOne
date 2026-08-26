@@ -3711,12 +3711,30 @@ window.Fellowship = {
     // people is the harm itself. `_sgSelf.known` is the difference between "the church says they are not a
     // child" and "we have not heard yet" — and we do not guess. Refusing costs a child one retry; guessing
     // wrong hands their words to someone the church declined to clear.
-    const childish = _sgSelf.cp === cp && _sgSelf.isMinor;
-    if (_sgSelf.cp === cp && !_sgSelf.known && !childish) {
-      // we are connected to this church but its clearance for us has not arrived — do not assume adult
-      return { error: 'unknown-clearance' };
+    // WHAT DOES THIS CHURCH SAY THIS PERSON IS? Three answers, and the third is not the second.
+    //
+    //   • a child      — seal to the cleared people, or refuse
+    //   • an adult     — the ordinary care team, exactly as before
+    //   • WE HAVE NOT HEARD — and the first version of this treated that as "adult". It guarded only the case
+    //     where the cache already named THIS church, so a member of two congregations, or anyone in the moment
+    //     after switching church, walked straight past it and had their request sealed to the whole care rota.
+    //     The commit said "IT NEVER GUESSES"; it guessed, in the one place a guess costs the most.
+    let childish = _sgSelf.cp === cp && _sgSelf.isMinor;
+    const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+    let audience = null;
+    if (!sure) {
+      // …AND REFUSING IS NOT FREE EITHER. The signal for "we know" is this member's own sealed clearance, and a
+      // church that has never used safeguarding has published none — for anybody. Refusing on its absence
+      // alone would have blocked every ordinary adult in every such church from asking for help at all, which
+      // is a far larger harm than the one being prevented. So ask a second question with a real answer: does
+      // this church have anyone cleared? If it does, safeguarding is in use here and we must not guess. If it
+      // has cleared nobody, there is no child audience to get wrong, and the relay is the backstop either way
+      // — it refuses to serve a child's request to an uncleared reader whatever this phone sealed.
+      audience = await _fetchChildCareAudience(cp);
+      if (audience === null) return { error: 'unknown-clearance' };     // could not even ask
+      if (audience.length) return { error: 'unknown-clearance' };       // this church uses safeguarding — do not guess
     }
-    const team = childish ? await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
+    const team = childish ? (audience !== null ? audience : await _fetchChildCareAudience(cp)) : await _fetchCareTeam(cp);
     if (childish && team === null) return { error: 'unknown-audience' };   // could not establish — never a wide fallback
     if (childish && (!team || !team.length)) return { error: 'no-one-cleared' };
     const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
@@ -3749,7 +3767,9 @@ window.Fellowship = {
     // The caller must be able to tell the member the truth about who has this. `narrowed` = we could not
     // establish the team, so only the church leader holds a key to it; teamCount 0 with narrowed false = the
     // church has genuinely named nobody. Either way "Sent to your care team" is not a true sentence.
-    return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team) };
+    // …and WHO it went to, which for a child is not the care team. Saying "Sent to your care team" to a young
+    // person is both wrong and unsettling: it names a group of people they did not choose to tell.
+    return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };
   },
   // Subscribe to care requests. A member receives their OWN (the relay serves the author); the care team gets
   // all. cb(list) with [{ id, from, at, sealed, ...body }] newest-first; entries we can decrypt carry the body.

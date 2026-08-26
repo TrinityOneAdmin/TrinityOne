@@ -261,10 +261,43 @@ test('if we have not heard whether the sender is a child, we do not assume they 
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],
     sgSelf: { cp: churchPub, isMinor: false, known: false },
+    childAudience: [clearedPub],           // this church HAS cleared people, so it is using safeguarding
   });
   const res = await fn(FIELDS);
   assert.equal(published.length, 0, 'an unknown clearance was treated as "adult"');
   assert.equal(res && res.error, 'unknown-clearance');
+});
+
+test('A CACHE FROM A DIFFERENT CHURCH IS NOT AN ANSWER ABOUT THIS ONE', async () => {
+  // The hole in the first version, found by audit 2026-08-26. The guard only fired when the cached answer
+  // already named THIS church — so a member of two congregations, or anyone in the moments after switching
+  // church, walked straight past it and was treated as an adult. The commit's own message said "IT NEVER
+  // GUESSES". It guessed, in the one place a guess costs the most.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],
+    sgSelf: { cp: 'f'.repeat(64), isMinor: false, known: true },   // a confident answer, about somewhere else
+    childAudience: [clearedPub],
+  });
+  const res = await fn(FIELDS);
+  assert.equal(published.length, 0,
+    'what another church said about this person was used to seal their request here — to the whole care rota');
+  assert.equal(res && res.error, 'unknown-clearance');
+});
+
+test('…but a church that uses no safeguarding at all does not lock its adults out', async () => {
+  // AND REFUSING IS NOT FREE. The signal for "we know" is the member's own sealed clearance, and a church
+  // that has never used safeguarding has published none — for anybody. Refusing on that alone would have
+  // blocked every ordinary adult in every such church from asking for help, which is a far larger harm than
+  // the one being prevented. Nobody cleared means no child audience to get wrong.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],
+    sgSelf: { cp: churchPub, isMinor: false, known: false },
+    childAudience: [],                      // this church has cleared nobody
+  });
+  const res = await fn(FIELDS);
+  assert.ok(res && !res.error, 'an ordinary adult cannot ask for help at all: ' + JSON.stringify(res));
+  assert.equal(published.length, 1);
+  assert.ok(canOpen(published[0], anneSk, annePub), 'and it did not even reach the care team');
 });
 
 test('an ADULT’s request is untouched by any of this', async () => {
@@ -277,32 +310,17 @@ test('an ADULT’s request is untouched by any of this', async () => {
   assert.ok(canOpen(published[0], joyceSk, joycePub));
 });
 
-test('the RELAY refuses to serve a child’s request to an uncleared reader', () => {
-  // The seal is the real protection, but it is chosen on one phone at one moment. The relay is the boundary,
-  // and it must ask the same question of the REQUEST that it has always asked of the follow-up thread.
-  const GW = stripComments(readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8'));
-  const at = GW.indexOf("if (d.startsWith(CAREREQ_D)) {   ");
-  assert.notEqual(at, -1, 're-anchor: the care-request read branch has moved');
-  const branch = GW.slice(at, GW.indexOf('\n    }', at));
-  assert.match(branch, /MINORS\.has\(e\.pubkey\)[\s\S]{0,80}safeguardAllows\(e\.pubkey, authed\)/,
-    'a child’s disclosure is served to anyone with a care-team seat — the follow-up thread has been gated ' +
-    'since the day it was written, and the opening message was not');
-  const guardAt = branch.indexOf('safeguardAllows');
-  const returnAt = branch.indexOf('return (authed');
-  assert.ok(guardAt !== -1 && returnAt !== -1 && guardAt < returnAt,
-    'the safeguarding check sits after the return that grants access, so it never runs');
-});
-
-test('…and the RESOLUTION of a child’s request, which names them, is gated too', () => {
-  // "Handled" for a child's request tells an uncleared reader that that child asked for help, which is most
-  // of what the gate above exists to withhold.
-  const GW = stripComments(readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8'));
-  const at = GW.indexOf('if (d.startsWith(CAREREQSTATUS_D)) {   ');
-  assert.notEqual(at, -1, 're-anchor: the resolution read branch has moved');
-  const branch = GW.slice(at, GW.indexOf('\n    }', at));
-  assert.match(branch, /MINORS\.has\(pHex\)[\s\S]{0,80}safeguardAllows\(pHex, authed\)/,
-    'the resolution of a child’s request is served to the whole care team');
-});
+// ── THE RELAY'S OWN BEHAVIOUR LIVES IN scripts/relay-child-carereq.test.mjs ──────────────────────────────
+// Two tests used to sit here that matched the SHAPE OF THE SOURCE TEXT of the relay's read gate. An auditor
+// beat both with a one-token change that left every matched token in place — `!safeguardAllows(...)` became
+// `void safeguardAllows(...)` — and the whole file stayed green while the relay served a child's disclosure
+// to an uncleared care steward. Worse, the thing they pinned was wrong anyway: the gate was a veto in front
+// of the care-team rule rather than a grant, so the cleared adults this file proves the seal reaches were
+// people the relay would never have handed the message to.
+//
+// Neither fact is visible from the text. Both are obvious to a running relay, so that is where they are
+// asked now — spawned on a real port, over a real socket. This file keeps to what it can prove honestly:
+// who the ASKER'S PHONE wraps a key for.
 
 test('the screen does not offer a child a form that goes nowhere', () => {
   const TODAY = stripComments(readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8'));

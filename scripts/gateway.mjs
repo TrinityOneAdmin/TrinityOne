@@ -1039,6 +1039,24 @@ const approvedIn = (pub, cp) => {
   if (minorOf(pub, cp)) return false;
   const s = APPROVED_BY.get(cp); return !!(s && s.has(pub));
 };
+// WHO MAY SEE A CHILD'S REQUEST FOR HELP — the church's cleared-adults list, a steward given the safeguarding
+// job, and the church's own console. Deliberately its own predicate rather than safeguardAllows(), for two
+// reasons that both matter:
+//
+//   1. IT GRANTS, IT DOES NOT MERELY PERMIT. The first version of this gate ran safeguardAllows() as a veto in
+//      front of the ordinary care-team rule, which meant a reader had to be cleared AND hold a care role. So
+//      the very people the child's phone encrypts to — a cleared youth worker, the safeguarding steward —
+//      held a key to a message the relay would never hand them, and the request sat unread until somebody
+//      opened the church console. A child who wrote "I don't want to go home tonight" could wait a week.
+//
+//   2. NO GUARDIANS. safeguardAllows() lets a linked parent through, and for a private message that is the
+//      whole point — a parent reaching their own child. A request for help is the opposite case: a child may
+//      be asking BECAUSE of something at home, and a confidential route that the family can read is not a
+//      confidential route. This is the one place the two questions genuinely differ.
+//
+// Scoped to ONE church, like every safeguarding rule here. Whether someone is a child is a judgement only
+// their own church makes, and a request names the church it was made in.
+const childCareReader = (other, cp) => other === cp || networkOf(other, cp) || approvedIn(other, cp) || stewardCan(other, cp, 'safeguarding');
 const guardianLinkedIn = (a, b, cp) => { const m = GUARDIANS_BY.get(cp); if (!m) return false; const ga = m.get(a); if (ga && ga.has(b)) return true; const gb = m.get(b); return !!(gb && gb.has(a)); };
 // The churches whose safeguarding policy governs `pub`: ONLY churches that both list them as a minor AND
 // that they have actually joined.
@@ -1890,7 +1908,18 @@ function accept(e) {
     if (d.startsWith(SAFE_D)) { const cp = d.slice(SAFE_D.length); return CHURCH_PUBS.has(cp) && churchWriter(e.pubkey, cp); }
     // the care team's RESOLUTION of a request (approved / declined / handled) — d=carereqstatus:<id>. Only the
     // church / a steward / a care-team admin may resolve a request; never the requester (they withdraw instead).
-    if (d.startsWith(CAREREQSTATUS_D)) { const cp = namedChurch(e); return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'care') || careAdmin(e.pubkey, cp)); }
+    // …and WRITING one, which the read gate above does not cover. Measured during the audit of 2026-08-26: an
+    // uncleared care steward, who cannot read a child's request at all, could still publish "declined" over
+    // it — these are replace-in-place documents, so the child's own app would then show their plea for help
+    // refused by somebody their church never cleared to touch children's matters. Blind, but request ids
+    // travel through screens and logs. Same predicate as the read side.
+    if (d.startsWith(CAREREQSTATUS_D)) {
+      const cp = namedChurch(e);
+      if (!cp) return false;
+      const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
+      if (pHex && minorOf(pHex, cp)) return childCareReader(e.pubkey, cp);
+      return e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'care') || careAdmin(e.pubkey, cp);
+    }
     // a private "ask for help" request (d=carereq:<id>, content sealed to the care team). Any member — MINORS
     // INCLUDED, since a child in trouble must be able to reach the care team, and it's sealed + care-team-only —
     // may open one. Must name a configured church; then falls through to the member rule so the per-member doc
@@ -2071,7 +2100,13 @@ function canRead(e, authed) {
       // Same rule as the thread, deliberately: one answer to "who may deal with this child", used everywhere.
       // That is the church's cleared-adults list, a steward given the safeguarding job, a linked guardian, and
       // the church's own console — which stays open because the office must be a child's route of last resort.
-      if (MINORS.has(e.pubkey) && authed !== e.pubkey && !safeguardAllows(e.pubkey, authed)) return false;
+      //
+      // MINORS.has() was the relay-wide union, and using it here opened a hole of its own: a young person
+      // marked as a child by church A, who also attends co-tenant church B, had their request in church B
+      // served to NOBODY — not even B's console — because safeguardAllows demanded clearance from A. Their
+      // phone said "sent", and nobody was ever coming. Ask the scoped question of the church the request was
+      // actually made in.
+      if (minorOf(e.pubkey, cp)) return authed === e.pubkey || childCareReader(authed, cp);
       return (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp));
     }
     if (d.startsWith(CAREREQSTATUS_D)) {   // a request's resolution — the care team AND the p-tagged requester (so the asker sees "approved"/"handled")
@@ -2081,16 +2116,18 @@ function canRead(e, authed) {
       // …and the same for the RESOLUTION, which names the asker in a p-tag. Serving "handled" for a child's
       // request to an uncleared care-team member tells them that child asked for help, which is most of what
       // the gate above exists to withhold.
-      if (pHex && MINORS.has(pHex) && authed !== pHex && !safeguardAllows(pHex, authed)) return false;
+      if (pHex && minorOf(pHex, cp)) return authed === pHex || childCareReader(authed, cp);
       return (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp) || (!!pHex && authed === pHex));
     }
     if (d.startsWith(CARECHAT_D)) {   // a request thread message — the care team + the p-tagged asker + the author
       const cp = owningChurch(e, d);
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
       if (!authed || !cp) return false;
-      // SAFEGUARDING: if the asker is a minor, only the child + adults CLEARED to contact them (or the child's
-      // own church/steward/guardian) may read the thread — a care-team roster seat alone is not clearance.
-      if (pHex && MINORS.has(pHex) && authed !== pHex && !safeguardAllows(pHex, authed)) return false;
+      // SAFEGUARDING: if the asker is a minor, the thread is the cleared people's and the child's. Same shape
+      // as the request above, and for the same reason: this used to VETO on top of the care-team rule, so a
+      // cleared adult with no care role could not read the reply thread of a conversation they were the only
+      // person entitled to have. Replying privately "still worked" only for people who were both.
+      if (pHex && minorOf(pHex, cp)) return authed === pHex || childCareReader(authed, cp);
       return (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp) || (!!pHex && authed === pHex));
     }
     // ── kind-30078 read policy: DEFAULT-DENY ──────────────────────────────────────────────────────

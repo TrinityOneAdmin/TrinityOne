@@ -10030,11 +10030,15 @@
         }
       }
       if (!sk || !cp) return null;
-      const childish = _sgSelf.cp === cp && _sgSelf.isMinor;
-      if (_sgSelf.cp === cp && !_sgSelf.known && !childish) {
-        return { error: "unknown-clearance" };
+      let childish = _sgSelf.cp === cp && _sgSelf.isMinor;
+      const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+      let audience = null;
+      if (!sure) {
+        audience = await _fetchChildCareAudience(cp);
+        if (audience === null) return { error: "unknown-clearance" };
+        if (audience.length) return { error: "unknown-clearance" };
       }
-      const team = childish ? await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
+      const team = childish ? audience !== null ? audience : await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
       if (childish && team === null) return { error: "unknown-audience" };
       if (childish && (!team || !team.length)) return { error: "no-one-cleared" };
       const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
@@ -10076,7 +10080,7 @@
         console.warn("[fellowship] care request publish failed", e);
         return null;
       }
-      return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team) };
+      return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };
     },
     // Subscribe to care requests. A member receives their OWN (the relay serves the author); the care team gets
     // all. cb(list) with [{ id, from, at, sealed, ...body }] newest-first; entries we can decrypt carry the body.

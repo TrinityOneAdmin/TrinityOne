@@ -290,7 +290,7 @@ function MyRequestRow({ r, onCancel, onMessage }) {
 
 // ── Care-team Requests (care-admins only): incoming ask-for-help requests to triage → Approve into a need,
 // Message the person, or Decline. Visible only to a member on the care-team roster.
-function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }) {
+function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMessage }) {
   const [busy, setBusy] = React.useState('');
   const who = r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone');
   const when = ({ once: 'Just once', ongoing: 'For a while', unsure: 'Not sure yet' })[r.when] || '';
@@ -307,7 +307,12 @@ function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }
       {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device isn’t on the care team’s key list.</div>
         : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap', padding: '2px 0 4px' }}>{r.note}</div> : null}
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-        {!r.sealed ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
+        {/* NOT FOR A CHILD. "Set up help" publishes a NEED — which the whole congregation reads, signs up to,
+            and which carries the person's name. That is the route by which a private disclosure becomes a
+            notice-board item, so the control is absent rather than disabled: a greyed button invites a tap and
+            reads as a fault. `child` is passed from the caller, and `onApprove` is null there as well, so a
+            future edit that forgets one of the two still does not publish a child's words. */}
+        {!r.sealed && !child ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
         {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
         <button onClick={async () => { setBusy('d'); try { await onDecline(); } catch (e) {} setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Close — not needed'}</button>
       </div>
@@ -431,20 +436,48 @@ function CareRequests({ ctx }) {
   const myPub = (care.myPub || '').toLowerCase();
   const s = care.settings || {};
   const isCareAdmin = (() => { const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId); return !!(roster && (roster.people || []).some(p => (p.pub || '').toLowerCase() === myPub)); })();
+  // A CLEARED ADULT MUST HAVE SOMEWHERE TO SEE THIS. The console had a children's queue and this screen — the
+  // OTHER copy of the same triage, the one on a phone — did not; and this screen only ever opened for a care
+  // admin. After the relay was corrected so that clearance GRANTS access, a cleared youth worker who is not on
+  // the care rota began receiving children's requests with no screen anywhere that would show them one. That
+  // is the same "sent and nobody comes" failure, moved up a layer.
+  const isCleared = !!(ctx.safeguard && ctx.safeguard.cleared);
   const [reqs, setReqs] = React.useState([]);
   const [approving, setApproving] = React.useState(null);
   const [chatting, setChatting] = React.useState(null);
   React.useEffect(() => {
-    if (!isCareAdmin || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
+    if (!(isCareAdmin || isCleared) || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
     try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open')), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
-  }, [isCareAdmin, ctx.church && ctx.church.npub]);
-  if (!isCareAdmin || !reqs.length) return null;
+  }, [isCareAdmin, isCleared, ctx.church && ctx.church.npub]);
+  if (!(isCareAdmin || isCleared) || !reqs.length) return null;
+  // WHICH OF THESE CAME FROM A YOUNG PERSON. A care admin is served the church's list of children and can
+  // simply look. A cleared adult who is NOT a care admin is not served that list — and does not need it: the
+  // relay serves them a child's request and nothing else, so everything they are holding is one. Reading the
+  // absence of the list as "no children here" is what would put a child's disclosure in the ordinary queue,
+  // beside the button that publishes it to the whole congregation.
+  const _kids = new Set(((ctx.safeguard && ctx.safeguard.minors) || []).map(x => String(x || '').toLowerCase()));
+  const fromChild = (r) => (isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true);
+  const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
+  const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
   return (
     <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 10px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="heart" size={15} color="var(--clay)" /> REQUESTS FOR HELP · {reqs.length}</div>
-      {reqs.map(r => <CareRequestCard key={r.id} r={r} ctx={ctx} onApprove={() => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />)}
+      {childReqs.length ? (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 8px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="shield" size={15} color="var(--clay)" /> FROM A YOUNG PERSON · {childReqs.length} · CONFIDENTIAL</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px', padding: '9px 12px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
+            You are seeing this because your church has cleared you to work with young people. Reply privately below. There is no “set up help” here on purpose — that publishes a need the whole church reads and signs up to. Follow your church’s safeguarding policy.
+          </div>
+          {childReqs.map(r => row(r, true))}
+        </div>
+      ) : null}
+      {adultReqs.length ? (
+        <React.Fragment>
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 10px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="heart" size={15} color="var(--clay)" /> REQUESTS FOR HELP · {adultReqs.length}</div>
+      {adultReqs.map(r => row(r, false))}
+        </React.Fragment>
+      ) : null}
       {approving ? <ApproveNeedSheet req={approving} ctx={ctx} onClose={() => setApproving(null)} onDone={() => { setApproving(null); ctx.toast && ctx.toast('Opened as a need'); }} /> : null}
       {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
     </div>
@@ -466,6 +499,10 @@ const CARE_SEND_REFUSAL = {
   'unknown-clearance': 'We couldn’t check your account with your church yet. Try again in a moment, or speak to a leader in person.',
 };
 function careSentWording(res) {
+  // A YOUNG PERSON DID NOT WRITE TO THE CARE TEAM. Their request goes to the adults their church has cleared,
+  // and telling them otherwise names a group of people they did not choose to tell — unsettling in itself, and
+  // untrue. Kept deliberately vague about WHO: a child does not need a roster, they need to know it arrived.
+  if (res && res.toChildAudience) return 'Sent \u2014 someone at your church who can help will see this';
   if (res && res.narrowed) return 'Sent to your church leader \u2014 we couldn\u2019t reach the care team list';
   if (res && !res.teamCount) return 'Sent to your church leader \u2014 no care team is set up yet';
   return 'Sent to your care team';
