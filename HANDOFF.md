@@ -37,6 +37,59 @@ one and no way to reach a congregation whose app has stopped working.
 
 ---
 
+## STATE AT 2026-08-26 — READ THIS FIRST
+
+**14 commits sit on local `main`, unpushed.** Everything below is committed; nothing is in a working tree.
+Suite: **1667 tests, 0 failures**. Nothing has been promoted to any church, and a8 still runs `d395b75`,
+which predates all of it.
+
+### What was fixed today, and how far to trust each
+| | |
+|---|---|
+| Private messages destroyed on a failed send | FIXED both apps — queued, retried, shown as pending |
+| The console had NO outbox at all | FIXED — kind-4 only, deliberately narrow |
+| A room encrypted with no key (round 6's Prayer) | FIXED + wired + healing existing rooms |
+| Messaging a child needed only *some* capability | FIXED — needs the safeguarding role |
+| A church's notices signed "Member" | FIXED — church name + signer, from a church-signed document |
+| No way for a member to reach the church | FIXED — pinned row in People |
+| Console had nowhere to set who signs | FIXED — a panel under Delegated stewards |
+
+### THE OPERATING LESSON OF THE DAY, and it cost hours
+**An agent report, a sim finding or another model's audit is a LEAD, never a fact.** Of five items I put on a
+pilot-blocker list, THREE were wrong — I had taken sim reports at face value:
+- *"the churchwarden cannot build a rota"* — rota building works; she was on the MEMBER app
+- *"an RSVP cannot be undone"* — it can; one answer per series is documented and deliberate
+- *"setup services never reach the rota"* — the wizard makes EVENTS, the rota reads SERVICES; vocabulary
+- and a fourth, *"30 seconds of blank screen"*, was twenty headless browsers through one free tunnel.
+  Measured after: 0.002s local, 0.30s tunnelled.
+Owner, in capitals: **"NEVER TAKE A REPORT AT FACE VALUE."** Establish WHICH SURFACE the reporter was on
+before anything else. See the memory of the same name.
+
+### AND MY OWN WORK NEEDED AUDITING JUST AS BADLY
+An adversarial audit of the day found: a reconciler I built, tested and never wired to anything (the commit
+read as though it were fixed); a "fail closed" guard that was dead code because `querySync` never rejects; a
+by-line that could publish an EMPTY steward roster over a real one; and **all four of my new test files
+vacuous** — every one beatable by a one-line change. A second audit then beat two of the rewrites.
+Owner's standing instruction: **run an auditor behind every fix, while you move to the next.**
+
+### STILL OPEN, in order
+1. **A stalled connection never repairs itself.** Verified: `new SimplePool()` with no keepalive in both apps;
+   a half-dead socket never fires a close event. Nothing is lost now, but nothing delivers until restart.
+   THIS IS THE LAST REAL BLOCKER.
+2. The relay declares `voice:` as church-write-only but has no branch enforcing it — inert today because two
+   client-side checks catch it, but the write door is open.
+3. Three helpers under the child gate (`guardianLinkedIn`, `minorGoverningChurches`, `networkOf`) are stubbed
+   in tests and have none of their own.
+4. A care-scoped steward can no longer see a child's Ask for help, and nothing tells them — the relay does not
+   serve it, so the console cannot know it exists. Needs an owner decision, not a fix.
+5. No loading indicator at all while the app boots — small, but it is what four testers stared at.
+6. The prefilled "ask a steward" buttons and the broadcast reply valve, from the identity design.
+
+### THE OWNER HAS STILL NOT USED IT
+Their words: *"I will use it once all these have passed."* Everything above is agents and this session.
+
+---
+
 ## STATE AT THE END OF 2026-08-25
 
 **Pushed and public.** `main` is at `3d49159` on github.com/TrinityOneAdmin/TrinityOne (91 commits went up
