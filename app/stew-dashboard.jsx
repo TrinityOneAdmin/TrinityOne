@@ -518,6 +518,16 @@ function KeyDistributor() {
     // seal silently no-ops — the whole mechanism present and doing nothing, which is the failure mode this
     // codebase specialises in.
     if (window.Steward && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(memberPubs, stewardRoster);
+    // …and any ENCRYPTED ROOM THAT HAS NO KEY AT ALL, which the block above cannot help with: it publishes
+    // reuseOnly, and reuseOnly refuses to mint by design, so a room whose key was never published in the first
+    // place stays unusable for ever. Round 6: St Aidan's Prayer room was flagged encrypted with no envelope
+    // anywhere, every member's message to it was refused by their own phone, and a woman's prayer request
+    // about her seriously ill mother died there. Nothing on the vicar's screen said a thing.
+    // This both prevents that and HEALS rooms already broken, including by older versions. It is safe to run
+    // on every roster change because it refuses to act unless it is authenticated, asks the relay rather than
+    // trusting local state, treats a failed query as unknown rather than absent, and never re-keys a room that
+    // already holds encrypted messages.
+    if (window.Steward && window.Steward.ensureGroupKeys) window.Steward.ensureGroupKeys(groups, memberPubs);
     // `blockedList` IS a dependency — notBlocked closes over it. Without it, unblocking someone re-ran
     // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
     // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
