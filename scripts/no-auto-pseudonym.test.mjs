@@ -88,7 +88,15 @@ test('displayFor reports whether a name was CHOSEN, and never returns a blank la
   assert.match(body, /named:\s*!!chosen/,
     'displayFor no longer reports `named`. Without it callers go back to inferring "has a name" from ' +
     '`name === handle`, which only worked while the fallback was itself a name.');
-  assert.match(body, /chosen \|\| UNNAMED/, 'the label can now be blank — an author-less row reads as broken, not unnamed');
+  // The label must never be blank — an author-less row reads as broken rather than as unnamed. This asserted
+  // the literal `chosen || UNNAMED` until 2026-08-26, when the church by-line work gave the church its own
+  // fallback ("Your church") so a vicar's notice would stop arriving signed "Member". The intent is unchanged
+  // and is what is checked now: every path through the label ends in a non-empty string. Pinning the spelling
+  // rather than the property is how a correct change gets reported as a regression.
+  assert.match(body, /const handle = chosen \|\|/,
+    'the label no longer falls back to anything — an author-less row would render blank');
+  assert.match(body, /UNNAMED/,
+    'the ordinary unnamed-member fallback is gone from the label');
   assert.match(code(FELLOW_SRC), /const UNNAMED = 'Member'/, 'the unnamed label is gone or renamed');
 });
 

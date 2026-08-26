@@ -14579,6 +14579,20 @@ zoo`.split("\n");
   var PIN_D = "trinityone/pin:";
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
+  var _selfVoice = (() => {
+    try {
+      return JSON.parse(lsGet("trinityone.steward.voice") || "null");
+    } catch (e) {
+      return null;
+    }
+  })();
+  var _publicVoices = (() => {
+    try {
+      return JSON.parse(lsGet("trinityone.steward.voices") || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  })();
   var _skeys = {};
   var GROUP_RING_MAX = 12;
   var _srev = {};
@@ -18770,6 +18784,13 @@ zoo`.split("\n");
       if (Object.keys(next).length) doc.caps = next;
       if (Object.keys(nextNames).length) doc.names = nextNames;
       if (Object.keys(nextAt).length) doc.at = nextAt;
+      if (_selfVoice && _selfVoice.name) doc.self = { ..._selfVoice, churchName: lastProfile.name || "" };
+      const pubNames = {};
+      for (const p2 of list) {
+        const v = _publicVoices[p2];
+        if (v && v.name) pubNames[p2] = v;
+      }
+      if (Object.keys(pubNames).length) doc.public = pubNames;
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
@@ -18779,6 +18800,39 @@ zoo`.split("\n");
     },
     stewardLabels() {
       return { ..._stewardNames };
+    },
+    // The by-line this console writes under, and the delegated stewards the owner has chosen to name publicly.
+    voice() {
+      return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } };
+    },
+    // REPUBLISHING THE ROSTER TO CHANGE A NAME MUST NOT CHANGE WHO IS ON IT. My first version rebuilt the list
+    // from _stewardCaps, which holds only stewards who have capabilities recorded — so setting a by-line would
+    // have quietly REMOVED every unscoped steward. A Remove button hidden inside a name change.
+    // _careRoster is the roster as the relay last reported it, and _careRosterKnown is the "we have actually
+    // been told" flag. Publishing before we have heard would write an empty roster over a real one, so both
+    // setters fail closed and say why.
+    _voiceSave() {
+      if (!_careRosterKnown) return Promise.resolve(null);
+      return this.setStewards([..._careRoster].filter(Boolean));
+    },
+    setVoice(name, office) {
+      _selfVoice = name && String(name).trim() ? { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) } : null;
+      try {
+        lsSet("trinityone.steward.voice", JSON.stringify(_selfVoice || null));
+      } catch (e) {
+      }
+      return this._voiceSave();
+    },
+    setPublicVoice(pubkey, name, office) {
+      const p2 = toPubHex(pubkey) || pubkey;
+      if (!p2) return Promise.resolve(null);
+      if (name && String(name).trim()) _publicVoices[p2] = { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) };
+      else delete _publicVoices[p2];
+      try {
+        lsSet("trinityone.steward.voices", JSON.stringify(_publicVoices));
+      } catch (e) {
+      }
+      return this._voiceSave();
     },
     stewardSince() {
       return { ..._stewardSince };

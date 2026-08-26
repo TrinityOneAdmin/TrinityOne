@@ -45,7 +45,10 @@ function loadSetStewards(existingCaps, existingNames) {
   const fn = lift('setStewards(pubkeys, caps, names) {', 'setStewards', {
     _requireTrustedView: () => {}, sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
     _stewardCaps: existingCaps, _stewardNames: existingNames, _stewardSince: {},
-    now: () => 1787150000, STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
+    now: () => 1787150000, _selfVoice: null, _publicVoices: {}, lastProfile: {},   // the console's public by-line rides this same roster (2026-08-26). Empty here deliberately:
+    // these cases assert that the owner's PRIVATE labels are stored and carried forward, and a church that has
+    // named nobody publicly must still write exactly the shape it always did.
+    STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
     finalizeEvent: (t) => t, publish: (e) => { published.push(e); return Promise.resolve(e); },
   });
   return { fn, published };

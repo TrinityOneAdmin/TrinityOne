@@ -42,6 +42,7 @@ function loadSetStewards(existingCaps) {
     sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
     _stewardCaps: existingCaps, _stewardNames: {}, _stewardSince: {},
     now: () => 1787150000,
+    _selfVoice: null, _publicVoices: {}, lastProfile: {},   // the console's by-line rides this roster (2026-08-26); empty here, so these cases still assert the plain shape
     STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
     finalizeEvent: (t) => t, finalizeEvent2: (t) => t,   // the bundler renames it; accept both
     publish: (e) => { published.push(e); return Promise.resolve(e); },

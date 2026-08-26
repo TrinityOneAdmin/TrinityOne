@@ -378,6 +378,10 @@ const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request t
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
 const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
+// The name this console signs with, and the delegated stewards the owner has chosen to show members.
+// Kept locally so the setup survives a reload before the roster round-trips, and republished with the roster.
+let _selfVoice = (() => { try { return JSON.parse(lsGet('trinityone.steward.voice') || 'null'); } catch (e) { return null; } })();
+const _publicVoices = (() => { try { return JSON.parse(lsGet('trinityone.steward.voices') || '{}') || {}; } catch (e) { return {}; } })();
 const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
 const GROUP_RING_MAX = 12;   // bound the envelope, and match the care key's ring exactly (see _careKeyRing).
 // 32 was too many now that every envelope carries the ring sealed PER RECIPIENT: a large church multiplied
@@ -4743,12 +4747,46 @@ window.Steward = {
     if (Object.keys(next).length) doc.caps = next;
     if (Object.keys(nextNames).length) doc.names = nextNames;
     if (Object.keys(nextAt).length) doc.at = nextAt;
+    // WHO SIGNS WHAT THE CHURCH SENDS. Carried forward on every roster edit for the same reason `caps` and
+    // `names` are: every existing caller passes pubkeys alone, and dropping these on an unrelated edit would
+    // put "Member" back under the vicar's notices — which is the defect this exists to close. `self` is the
+    // person at THIS console; `public` is the delegated stewards the owner chose to name to members. Note the
+    // difference from `names` above: those are the owner's PRIVATE labels for telling stewards apart, and
+    // publishing them to the congregation without asking would be a disclosure nobody consented to.
+    if (_selfVoice && _selfVoice.name) doc.self = { ..._selfVoice, churchName: lastProfile.name || '' };
+    const pubNames = {};
+    for (const p2 of list) { const v = _publicVoices[p2]; if (v && v.name) pubNames[p2] = v; }
+    if (Object.keys(pubNames).length) doc.public = pubNames;
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).
   stewardCaps() { return { ..._stewardCaps }; },
   stewardLabels() { return { ..._stewardNames }; },
+  // The by-line this console writes under, and the delegated stewards the owner has chosen to name publicly.
+  voice() { return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } }; },
+  // REPUBLISHING THE ROSTER TO CHANGE A NAME MUST NOT CHANGE WHO IS ON IT. My first version rebuilt the list
+  // from _stewardCaps, which holds only stewards who have capabilities recorded — so setting a by-line would
+  // have quietly REMOVED every unscoped steward. A Remove button hidden inside a name change.
+  // _careRoster is the roster as the relay last reported it, and _careRosterKnown is the "we have actually
+  // been told" flag. Publishing before we have heard would write an empty roster over a real one, so both
+  // setters fail closed and say why.
+  _voiceSave() {
+    if (!_careRosterKnown) return Promise.resolve(null);   // never publish a roster we have not read
+    return this.setStewards([..._careRoster].filter(Boolean));
+  },
+  setVoice(name, office) {
+    _selfVoice = (name && String(name).trim()) ? { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) } : null;
+    try { lsSet('trinityone.steward.voice', JSON.stringify(_selfVoice || null)); } catch (e) {}
+    return this._voiceSave();
+  },
+  setPublicVoice(pubkey, name, office) {
+    const p2 = toPubHex(pubkey) || pubkey; if (!p2) return Promise.resolve(null);
+    if (name && String(name).trim()) _publicVoices[p2] = { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) };
+    else delete _publicVoices[p2];
+    try { lsSet('trinityone.steward.voices', JSON.stringify(_publicVoices)); } catch (e) {}
+    return this._voiceSave();
+  },
   stewardSince() { return { ..._stewardSince }; },
   stewardCapNames() { return STEWARD_CAPS.slice(); },
   // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are

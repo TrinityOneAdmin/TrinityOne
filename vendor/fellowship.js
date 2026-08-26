@@ -6558,16 +6558,31 @@
     } catch {
     }
   };
+  var _churchVoices = /* @__PURE__ */ new Map();
   function _absorbRoster(cp, d, e) {
     if (d !== "trinityone/stewards:" + cp || e.pubkey !== cp) return false;
-    let pks = [];
+    let pks = [], self = null, pub2 = null;
     try {
-      pks = JSON.parse(e.content).pubkeys || [];
+      const c = JSON.parse(e.content);
+      pks = c.pubkeys || [];
+      self = c.self || null;
+      pub2 = c.public || null;
     } catch {
     }
     _churchRoster.set(cp, new Set(pks));
+    _churchVoices.set(cp, { self: self || null, public: pub2 || {} });
     _fireTrust();
     return true;
+  }
+  function churchVoiceFor(pubkey) {
+    const pk = String(pubkey || "").toLowerCase();
+    for (const [cp, v] of _churchVoices) {
+      if (!v) continue;
+      if (String(cp).toLowerCase() === pk) return { isChurch: true, ...v.self || {} };
+      const named = v.public && (v.public[pubkey] || v.public[pk]);
+      if (named && named.name) return { isChurch: false, ...named };
+    }
+    return null;
   }
   function _churchVoice(cp, doc) {
     const by = doc && doc._by;
@@ -7363,9 +7378,23 @@
     const base = profile(pubkey);
     const p = profiles[pubkey];
     const av = _avSuppressPhoto(pubkey, p && p.av || { kind: "symbol", color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] });
-    const chosen = p && p.name || "";
-    const handle = chosen || UNNAMED;
-    return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: p && p.nip05 || "" };
+    const voice = churchVoiceFor(pubkey);
+    const chosen = p && p.name || voice && voice.isChurch && (voice.churchName || "") || voice && voice.name || "";
+    const handle = chosen || (voice && voice.isChurch ? "Your church" : UNNAMED);
+    return {
+      pubkey,
+      handle,
+      name: handle,
+      named: !!chosen,
+      color: av.color || base.color,
+      av,
+      picture: p && p.picture,
+      nip05: p && p.nip05 || "",
+      // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
+      signedBy: voice && voice.name ? voice.name : "",
+      signedRole: voice && voice.office ? voice.office : "",
+      isChurch: !!(voice && voice.isChurch)
+    };
   }
   async function deriveFromIdentity() {
     const wasKeyless = !sk;

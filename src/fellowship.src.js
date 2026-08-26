@@ -845,11 +845,35 @@ const _groupLeaders = new Map();   // groupId -> Set(empowered member pubkeys), 
 const _groupPolicy = new Map();
 const _fireTrust = () => { try { window.dispatchEvent(new CustomEvent('trinity-church-trust')); } catch {} };   // re-evaluate dependent reads when trust changes
 // returns true (and updates the roster) if this event IS the church's signed steward roster
+// WHO IS SPEAKING WHEN THE CHURCH SPEAKS. cp -> { self:{name,office}, public:{ pub -> {name,office} } }.
+// Round 6: a vicar's notices to her whole congregation were signed "Member", because nothing ever connected
+// the church's key to a human name. Grace called a noticeboard "where the vicar's letter is signed by nobody"
+// the thing that cost her trust; Luke could not find "anyone labelled leader or steward" to ask about music.
+// The names ride the church-signed steward roster — the church key is the only author trusted for it (the
+// check above), so a forged name is not possible, and the relay passes unknown keys through untouched, which
+// is why this is backwards compatible with churches whose roster predates it.
+const _churchVoices = new Map();
 function _absorbRoster(cp, d, e) {
   if (d !== 'trinityone/stewards:' + cp || e.pubkey !== cp) return false;   // only trust it from the CHURCH key
-  let pks = []; try { pks = (JSON.parse(e.content).pubkeys) || []; } catch {}
-  _churchRoster.set(cp, new Set(pks)); _fireTrust();
+  let pks = [], self = null, pub2 = null;
+  try { const c = JSON.parse(e.content); pks = c.pubkeys || []; self = c.self || null; pub2 = c.public || null; } catch {}
+  _churchRoster.set(cp, new Set(pks));
+  _churchVoices.set(cp, { self: self || null, public: pub2 || {} });
+  _fireTrust();
   return true;
+}
+// The by-line for a church-authored message: the church's own key signs as the church and is signed by
+// whoever runs the console; a delegated steward signs as themselves, and is named only if the church chose to
+// show them. Returns null for an ordinary member, who is named the ordinary way.
+function churchVoiceFor(pubkey) {
+  const pk = String(pubkey || '').toLowerCase();
+  for (const [cp, v] of _churchVoices) {
+    if (!v) continue;
+    if (String(cp).toLowerCase() === pk) return { isChurch: true, ...(v.self || {}) };
+    const named = v.public && (v.public[pubkey] || v.public[pk]);
+    if (named && named.name) return { isChurch: false, ...named };
+  }
+  return null;
 }
 // is a stored church-content doc from a trusted voice? (`_by` = author; missing on legacy cache = trust it)
 function _churchVoice(cp, doc) { const by = doc && doc._by; return by === undefined || by === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(by)); }
@@ -1540,9 +1564,15 @@ function displayFor(pubkey) {
   // `named` is the honest question — "has this person chosen a name?" — and it must not be inferred from
   // `name === handle`, which is what callers used to do and which only held while the fallback was itself a
   // name. handle/name stay populated (never blank: an author-less chat row reads as broken, not as unnamed).
-  const chosen = (p && p.name) || '';
-  const handle = chosen || UNNAMED;
-  return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '' };
+  // A CHURCH IS NOT AN UNNAMED MEMBER. Before this, a notice from the church key fell through to "Member"
+  // because the church publishes its profile on a different subscription that never reaches this map. The
+  // church's name is the honest answer, and the person who wrote it goes underneath (`office`).
+  const voice = churchVoiceFor(pubkey);
+  const chosen = (p && p.name) || (voice && voice.isChurch && (voice.churchName || '')) || (voice && voice.name) || '';
+  const handle = chosen || (voice && voice.isChurch ? 'Your church' : UNNAMED);
+  return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '',
+    // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
+    signedBy: (voice && voice.name) ? voice.name : '', signedRole: (voice && voice.office) ? voice.office : '', isChurch: !!(voice && voice.isChurch) };
 }
 
 async function deriveFromIdentity() {
