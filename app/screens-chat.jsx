@@ -1826,10 +1826,43 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
     }));
   }, [peer, ctx.connTick]);   // …and re-subscribe on reconnect: an open conversation used to freeze on a
   // dropped socket exactly like the list did, which is worse — it is the screen a member is reading.
+  // THE SAME PENDING TREATMENT THE GROUP ROOM HAS HAD ALL ALONG. Mirrors the outboxFor block above: queued
+  // messages render as "Waiting to send", permanently-refused ones as failed with a retry. Without this the
+  // queue added in sendDM would exist and the member would still watch their words disappear — the fix has
+  // to reach the screen or it has fixed nothing they can see.
+  const [dmQueued, setDmQueued] = useC([]);
+  useCE(() => {
+    const F = window.Fellowship; if (!F || !F.onOutbox || !F.outboxForPeer || !peer) return;
+    const refresh = () => setDmQueued(F.outboxForPeer(peer).map(e => ({
+      id: e.id, mine: true, ts: e.created_at, pubkey: e.pubkey,
+      // the sender can read their own pending message — the conversation key is symmetric — so show the real
+      // words rather than the ciphertext. Round 6: a queued GROUP message rendered as a wall of base64 and
+      // stayed that way all evening, which reads as corruption rather than as waiting.
+      content: (F.dmPlaintextOf && F.dmPlaintextOf(e.id)) || '',
+      _pending: !e._failed, _failed: !!e._failed, _reason: e._reason || '',
+    })));
+    refresh();
+    return F.onOutbox(refresh);
+  }, [peer]);
+  const shownMsgs = React.useMemo(() => {
+    const have = new Set(msgs.map(m => m.id));
+    return [...msgs, ...dmQueued.filter(q => !have.has(q.id))];
+  }, [msgs, dmQueued]);   // eslint-disable-line
   useCE(() => { if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, open]);
   if (!peer) return null;
   const allowDM = !ctx || !ctx.canDMPeer || ctx.canDMPeer(peer);   // safeguarding: a child↔non-cleared-adult DM is blocked (the relay rejects it too)
-  const send = () => { if (!draft.trim() || !FS || !allowDM) return; FS.sendDM(peer, draft.trim(), dmReply); setDraft(''); setDmReply(null); };
+  // Clearing the composer is safe now — sendDM queues the message BEFORE attempting it, so the words survive
+  // a failed send and appear as a pending bubble. What still needs saying is a PERMANENT refusal: the relay
+  // will never accept a message between a child and an adult who is not cleared for youth work, and telling
+  // that member "no signal" is a lie they would wait on for ever. dmFailWording was written for exactly this
+  // and, until now, nothing in the DM thread ever called it.
+  const send = () => {
+    if (!draft.trim() || !FS || !allowDM) return;
+    Promise.resolve(FS.sendDM(peer, draft.trim(), dmReply))
+      .then(evt => { if (evt && evt._refused && ctx && ctx.toast) ctx.toast(dmFailWording(evt)); })
+      .catch(() => {});   // a plain failure is already queued and shown as pending; no toast needed
+    setDraft(''); setDmReply(null);
+  };
   const msgById = {}; msgs.forEach(m => { msgById[m.id] = m; });
   const react = (m, emoji) => { if (FS && FS.reactDM) FS.reactDM(peer, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   return (
@@ -1849,7 +1882,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
             <Icon name="lock" size={13} /> Only you two can read these messages</span>
         </div>
-        {msgs.map(m => (
+        {shownMsgs.map(m => (
           <DMSwipe key={m.id} mine={m.mine} onReply={() => setDmReply(m)}>
             {/* the message this one answers, shown the same way a group room shows it */}
             {m.replyTo && msgById[m.replyTo] ? (

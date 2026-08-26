@@ -7476,6 +7476,7 @@
   var OUTBOX_KEY = "trinityone.outbox";
   var OUTBOX_FAILED_KEY = "trinityone.outbox.failed";
   var OUTBOX_MAX = 200;
+  var _dmPlain = /* @__PURE__ */ new Map();
   var _outbox = [];
   var _outboxFailed = [];
   var _outboxSubs = /* @__PURE__ */ new Set();
@@ -8541,6 +8542,19 @@
         ..._outboxFailed.filter((o) => o.groupId === groupId).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "" }))
       ];
     },
+    // The DM thread's equivalent of outboxFor(groupId). A private conversation is keyed by the PEER, not by a
+    // group id, so without this the queue exists and the member still stares at an empty thread — the same
+    // silence with extra steps. Same shape as outboxFor so the screen can share one rendering path.
+    outboxForPeer(peerPub) {
+      const p = toPub(peerPub) || peerPub;
+      return [
+        ..._outbox.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+        ..._outboxFailed.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "" }))
+      ];
+    },
+    dmPlaintextOf(id) {
+      return _dmPlain.get(id) || "";
+    },
     outboxCount() {
       return _outbox.length;
     },
@@ -8608,9 +8622,15 @@
         return null;
       }
       const evt = finalizeEvent2({ kind: 4, created_at: Math.floor(Date.now() / 1e3), tags: [["p", peerPub]], content: ciphertext }, sk);
+      _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+      _dmPlain.set(evt.id, content);
+      _outboxSave();
       try {
         await _publishBounded(window.Fellowship.relays, evt);
         evt._delivered = true;
+        _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+        _dmPlain.delete(evt.id);
+        _outboxSave();
       } catch (e) {
         console.warn("[fellowship] DM publish failed", e);
         evt._delivered = false;

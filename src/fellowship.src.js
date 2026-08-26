@@ -1647,6 +1647,14 @@ window.addEventListener('trinity-identity-lock', () => { deriveFromIdentity().ca
 const OUTBOX_KEY = 'trinityone.outbox';
 const OUTBOX_FAILED_KEY = 'trinityone.outbox.failed';   // gave-up messages, persisted (see below)
 const OUTBOX_MAX = 200;            // a bounded queue: past this the oldest is dropped rather than growing forever
+// The plaintext of a queued private message, IN MEMORY ONLY, keyed by event id. Never persisted.
+// The queued item itself carries only NIP-04 ciphertext (see the note in sendDM), which is right for a phone
+// that may be seized — but it means a "waiting to send" bubble would have nothing readable to show, and round
+// 6 proved what that looks like: a queued group message rendered as a wall of base64 and stayed that way all
+// evening, which a member reads as corruption rather than as waiting. So the words live here for as long as
+// the app is open, and die with a reload. A member who reloads sees the bubble still waiting, without its
+// text — the message is not lost, and nothing readable was ever written to disk.
+const _dmPlain = new Map();
 let _outbox = [];
 let _outboxFailed = [];   // gave up on these — surfaced to the member rather than discarded
 const _outboxSubs = new Set();
@@ -2608,6 +2616,14 @@ window.Fellowship = {
     ..._outbox.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
     ..._outboxFailed.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
   ]; },
+  // The DM thread's equivalent of outboxFor(groupId). A private conversation is keyed by the PEER, not by a
+  // group id, so without this the queue exists and the member still stares at an empty thread — the same
+  // silence with extra steps. Same shape as outboxFor so the screen can share one rendering path.
+  outboxForPeer(peerPub) { const p = toPub(peerPub) || peerPub; return [
+    ..._outbox.filter(o => o.peer === p).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
+  ]; },
+  dmPlaintextOf(id) { return _dmPlain.get(id) || ''; },
   outboxCount() { return _outbox.length; },
   onOutbox(fn) { _outboxSubs.add(fn); return () => _outboxSubs.delete(fn); },
   flushOutbox() { return _outboxFlush(); },
@@ -2644,7 +2660,24 @@ window.Fellowship = {
     const body = window.Fellowship._dmWrap(content, replyTo);
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, body); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; }   // bounded so offline sets _delivered=false within 12s, not never
+    // QUEUE FIRST, THEN ATTEMPT — the same rule as a group message (see the E1 note on the other
+    // _outbox.push), and it took until simulation round 6 to apply it here. A DM had no queue at all: the
+    // caller cleared the composer, this function computed _delivered, and NOBODY READ IT. Six phones in a
+    // congregation of twenty hit a socket that could hear but not speak, and every private message they wrote
+    // simply ceased to exist — five letters from one member, including a condolence note to a man four months
+    // widowed; four from a 16-year-old to her own father. None of them was told. That state shipped on
+    // 10 June 2026, the day direct messages were built, and a commit on 20 July titled "stop losing messages"
+    // claimed in its own text to have fixed sendDM while touching only the group composer.
+    //
+    // WHAT MAKES THIS SAFE ON A SEIZED PHONE, which is the reason it was not done casually: the queued
+    // content is ALREADY the NIP-04 ciphertext, encrypted to the pair. Nothing is written to disk that was not
+    // going to be written to a relay, and the plaintext never leaves memory. The sender can still read their
+    // own pending message because the conversation key is symmetric, so a "waiting to send" bubble can show
+    // the real words without ever persisting them.
+    _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+    _dmPlain.set(evt.id, content);
+    _outboxSave();
+    try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; _outbox = _outbox.filter(o => o.evt.id !== evt.id); _dmPlain.delete(evt.id); _outboxSave(); }   // bounded so offline sets _delivered=false within 12s, not never
     catch (e) {
       console.warn('[fellowship] DM publish failed', e);
       evt._delivered = false;   // E1: same as publishMessage — the caller must be able to tell
