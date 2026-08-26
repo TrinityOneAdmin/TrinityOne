@@ -1063,7 +1063,18 @@ function safeguardAllows(minorPub, other) {
   if (!cps.length) return true;
   for (const cp of cps) {
     if (approvedIn(other, cp) || guardianLinkedIn(minorPub, other, cp)) continue;
-    if (other === cp || stewardCan(other, cp, 'any') || networkOf(other, cp)) continue;   // the child's OWN church may always reach them
+    // THE SAFEGUARDING ROLE, NOT MERELY SOME ROLE. This read `stewardCan(other, cp, 'any')` until 2026-08-26,
+    // so a delegated steward holding ANY single capability could privately message any child in the
+    // congregation — a treasurer given nothing but Finance, a volunteer given nothing but Groups & rotas.
+    // Nobody had to be checked, cleared, or linked to a parent; one unrelated tickbox was enough, and no test
+    // existed in either direction. The capabilities exist so a church can hand out one job without handing
+    // out the others, and the protection of children is the last place to make an exception.
+    // What stays open is deliberate and each has a reason: the church's own key, because the office must be a
+    // child's route of last resort and the console holder is the accountable adult; a linked guardian,
+    // because a parent reaching their own child is the point; and the network key, which is the church's own
+    // infrastructure. A gate that is too tight is its own harm — it pushes a worried child onto channels the
+    // church cannot see at all.
+    if (other === cp || stewardCan(other, cp, 'safeguarding') || networkOf(other, cp)) continue;
     return false;
   }
   return true;
