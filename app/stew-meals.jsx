@@ -484,11 +484,20 @@ function StewCareRequests() {
   const [approving, setApproving] = React.useState(null);
   const [chatting, setChatting] = React.useState(null);
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub]);
+  // A YOUNG PERSON'S REQUEST IS NOT ORDINARY CARE, AND MUST NOT SIT IN THE SAME LIST.
+  // Owner, 2026-08-26: children's care must be "separate to other standard care requests".
+  //
+  // The relay already refuses to serve one of these to anybody the church has not cleared, and the child's
+  // phone seals it to nobody else — so a request appearing here at all means this console is entitled to it.
+  // What is left is the console's own honesty: shown among a dozen meal trains and lifts it reads as one more
+  // errand, and the control beside it — "Set up help" — publishes a NEED, which the whole congregation reads
+  // and signs up to. That is how a child's private disclosure becomes a notice board item with their name on.
+  const _sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const _minors = new Set((_sg.minors || []).map(x => String(x || '').toLowerCase()));
+  const isChild = (r) => _minors.has(String(r && r.from || '').toLowerCase());
+  const childReqs = reqs.filter(isChild), adultReqs = reqs.filter(r => !isChild(r));
   if (!reqs.length) return null;
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>REQUESTS FOR HELP · {reqs.length}</div>
-      {reqs.map(r => (
+  const renderRow = (r, child) => (
         <div key={r.id} style={{ padding: 14, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 32%, var(--line))', marginBottom: 9 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
@@ -496,12 +505,29 @@ function StewCareRequests() {
           </div>
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
-            {!r.sealed ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
+            {!r.sealed && !child ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: mealsTypeLabel(r) })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
             <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>
           </div>
         </div>
-      ))}
+      );
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {childReqs.length ? (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>FROM A YOUNG PERSON · {childReqs.length} · CONFIDENTIAL</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px', padding: '9px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
+            Only people on your <b>cleared list</b> can see these, and nobody on the care rota sees them unless they are cleared too. Reply privately below. There is no “set up help” here on purpose: that publishes a need the whole church reads and signs up to, which is not somewhere a young person’s request belongs. Handle it under your safeguarding policy.
+          </div>
+          {childReqs.map(r => renderRow(r, true))}
+        </div>
+      ) : null}
+      {adultReqs.length ? (
+        <div>
+          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>REQUESTS FOR HELP · {adultReqs.length}</div>
+          {adultReqs.map(r => renderRow(r, false))}
+        </div>
+      ) : null}
       {approving ? <StewApproveSheet req={approving} who={approving.forSelf ? (nameOf(approving.from) || 'A member') : (approving.forName || 'A member')} onClose={() => setApproving(null)} onDone={() => setApproving(null)} /> : null}
       {chatting ? <StewCareChat reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
     </div>

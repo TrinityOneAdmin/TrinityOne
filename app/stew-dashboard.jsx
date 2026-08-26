@@ -4516,7 +4516,16 @@ function DashMembers() {
             ) : null}
           </div>
         ) : null}
-        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>
+        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. <b>Your cleared list is also who can receive a request for help from a young person</b> — being on the care rota is not enough, and if nobody is cleared, no child in your church can ask for help through the app. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>
+        {/* THE STATE NOBODY WOULD OTHERWISE SEE. A church that has marked children and cleared nobody has, without
+            meaning to, closed the only route a young person has to ask for help here — and the person who could
+            fix it in ten seconds is looking at this screen. Not dismissible: it is a description of the church's
+            current state, not an introduction, and it disappears the moment it stops being true. */}
+        {minorsSet.size && !approvedSet.size ? (
+          <div role="status" style={{ marginBottom: 10, flexShrink: 0, padding: '11px 13px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, var(--line))', fontSize: 13, lineHeight: 1.5, color: 'var(--ink)' }}>
+            <b>No one is cleared to help a young person.</b> You have {minorsSet.size === 1 ? 'a child' : minorsSet.size + ' children'} marked and nobody on your cleared list, so a young person tapping “Ask for help” is told to speak to a leader in person instead. Clear an adult below to open that route.
+          </div>
+        ) : null}
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {activeM.map(m => memberRow(m, false))}
           {activeM.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>{ql ? 'No members match “' + q + '”.' : 'No active members in the last ' + INACTIVE_DAYS + ' days.'}</div> : null}
