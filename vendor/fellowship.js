@@ -7554,9 +7554,56 @@
   var _flushing = false;
   var PUBLISH_TIMEOUT_MS = 12e3;
   var _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
+  var _wedge = /* @__PURE__ */ new Map();
+  var WEDGE_FAILS = 3;
+  var WEDGE_WINDOW_MS = 6e4;
+  var WEDGE_COOLDOWN_MS = 3e5;
+  function _noteSendResult(url, ok) {
+    const now2 = Date.now();
+    let w = _wedge.get(url);
+    if (ok) {
+      if (w) {
+        w.fails = 0;
+        w.firstAt = 0;
+      }
+      return;
+    }
+    try {
+      if (pool.listConnectionStatus().get(url) !== true) return;
+    } catch (e) {
+      return;
+    }
+    try {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    } catch (e) {
+    }
+    if (!w) {
+      w = { fails: 0, firstAt: 0, lastRecovery: 0 };
+      _wedge.set(url, w);
+    }
+    if (!w.fails) w.firstAt = now2;
+    w.fails += 1;
+    if (w.fails < WEDGE_FAILS || now2 - w.firstAt < WEDGE_WINDOW_MS) return;
+    if (now2 - (w.lastRecovery || 0) < WEDGE_COOLDOWN_MS) return;
+    w.lastRecovery = now2;
+    w.fails = 0;
+    w.firstAt = 0;
+    try {
+      console.warn("[fellowship] uplink stalled on " + url + " \u2014 reconnecting");
+    } catch (e) {
+    }
+    try {
+      reconnectAll();
+    } catch (e) {
+    }
+  }
   function _publishAny(relays, evt) {
     return Promise.allSettled(pool.publish(relays, evt)).then((rs) => {
       const good = rs.some((r) => r.status === "fulfilled" && !_PUB_FAILED.test(String(r.value == null ? "" : r.value)));
+      try {
+        (relays || []).forEach((u) => _noteSendResult(u, good));
+      } catch (e) {
+      }
       if (!good) {
         const why = (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
         throw new Error(String(why));
@@ -7611,6 +7658,11 @@
     }
   }
   if (typeof window !== "undefined") {
+    window.addEventListener("trinity-relay-returned", () => {
+      setTimeout(() => {
+        _outboxFlush();
+      }, 3e3);
+    });
     window.addEventListener("online", () => {
       _outboxFlush();
     });

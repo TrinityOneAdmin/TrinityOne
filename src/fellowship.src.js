@@ -1726,9 +1726,48 @@ const PUBLISH_TIMEOUT_MS = 12000;
 // This is a drop-in for `_publishAny(a, b)` that REJECTS unless at least one relay genuinely
 // accepted, so every existing try/catch keeps its meaning instead of 29 call sites needing new logic.
 const _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
+// ── a socket that hears but will not speak ───────────────────────────────────────────────────────────────
+// SIMULATION ROUND 6: six phones in a congregation of twenty reached a moment after which nothing they
+// published ever arrived, while everything sent TO them kept arriving. Measured on the relay's own store —
+// one member's last document landed at 19:45:31 while others' kept storing until 19:56:04. Their messages are
+// safe now (they queue), but they still would not have been DELIVERED until the app was restarted, because
+// nothing ever hangs up on a socket that has stopped accepting writes: it never fires a close event, so
+// relaysHealthy() truthfully reports it live and the whole safety net stays disarmed.
+//
+// THE SIGNAL IS DELIBERATELY ONE-SIDED. Only a FAILED SEND counts, and only while the pool says that relay is
+// connected — a timeout to a relay that is not connected is ordinary offline, which the existing beat handles.
+// A success resets the count and NOTHING ELSE DOES: incoming events, EOSEs and a cleared composer are not
+// evidence the uplink works, and treating them as such is exactly why this went unnoticed for a session.
+//
+// AND THE OPPOSITE MISTAKE WOULD BE WORSE THAN THE BUG. A church on a genuinely thin pipe — which is who this
+// product is for — must never be hung up on for merely being slow. Four fences: an acknowledgement inside the
+// 12s bound always counts as success; three failures must span at least a minute of real time; one recovery
+// per relay per five minutes; and nothing fires while the page is hidden, because a backgrounded WebView
+// defers everything and would manufacture failures out of nothing.
+const _wedge = new Map();   // relay url -> { fails, firstAt, lastRecovery }
+const WEDGE_FAILS = 3, WEDGE_WINDOW_MS = 60000, WEDGE_COOLDOWN_MS = 300000;
+function _noteSendResult(url, ok) {
+  const now2 = Date.now();
+  let w = _wedge.get(url);
+  if (ok) { if (w) { w.fails = 0; w.firstAt = 0; } return; }
+  try { if (pool.listConnectionStatus().get(url) !== true) return; } catch (e) { return; }   // not connected = ordinary offline
+  try { if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return; } catch (e) {}
+  if (!w) { w = { fails: 0, firstAt: 0, lastRecovery: 0 }; _wedge.set(url, w); }
+  if (!w.fails) w.firstAt = now2;
+  w.fails += 1;
+  if (w.fails < WEDGE_FAILS || (now2 - w.firstAt) < WEDGE_WINDOW_MS) return;
+  if (now2 - (w.lastRecovery || 0) < WEDGE_COOLDOWN_MS) return;
+  w.lastRecovery = now2; w.fails = 0; w.firstAt = 0;
+  // reconnectAll(), not a targeted close: it is the only path that clears the shared-subscription registry,
+  // and without that a re-subscriber joins a dead entry and the screen stays frozen — a trap this codebase
+  // has already paid for once.
+  try { console.warn('[fellowship] uplink stalled on ' + url + ' — reconnecting'); } catch (e) {}
+  try { reconnectAll(); } catch (e) {}
+}
 function _publishAny(relays, evt) {
   return Promise.allSettled(pool.publish(relays, evt)).then((rs) => {
     const good = rs.some(r => r.status === 'fulfilled' && !_PUB_FAILED.test(String(r.value == null ? '' : r.value)));
+    try { (relays || []).forEach((u) => _noteSendResult(u, good)); } catch (e) {}
     if (!good) {
       const why = (rs.find(r => r.status === 'fulfilled') || {}).value
         || ((rs.find(r => r.status === 'rejected') || {}).reason || {}).message || 'no relay accepted this';
@@ -1802,6 +1841,9 @@ async function _outboxFlush() {
   } finally { _flushing = false; }
 }
 if (typeof window !== 'undefined') {
+  // …and when a socket comes BACK, which after a stall is the moment everything queued can finally go. Delayed
+  // so the new connection has authenticated first; _flushing serialises it against the tick.
+  window.addEventListener('trinity-relay-returned', () => { setTimeout(() => { _outboxFlush(); }, 3000); });
   window.addEventListener('online', () => { _outboxFlush(); });   // NB: navigator.onLine lies on native, but the EVENT still fires on a real transition
   // Backoff (audit 2026-07-24): this fired every 45s forever. A member in a low-coverage area with a queued
   // message woke the radio every 45 seconds for hours — continuous battery drain for exactly the audience least
