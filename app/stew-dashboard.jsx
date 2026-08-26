@@ -4908,6 +4908,50 @@ function DashNetworksPanel() {
   );
 }
 
+// WHO SIGNS WHAT THIS CHURCH SENDS. One fact, set once, shown back on every composer — rather than a choice
+// repeated on every message, which is a choice somebody eventually gets wrong. Round 6: a vicar's welcome to
+// her whole congregation arrived attributed to "Member", and a member called the noticeboard "signed by
+// nobody". Deliberately NOT a "send as" selector: there is one right answer per screen, a churchwarden will
+// not audit a dropdown before every send, and a console cannot honestly offer to sign as somebody whose key
+// it does not hold. The console always speaks for the church; a personal note comes from your own account.
+function VoiceSetup() {
+  const v = (window.Steward && window.Steward.voice && window.Steward.voice()) || { self: null };
+  const [name, setName] = React.useState((v.self && v.self.name) || '');
+  const [office, setOffice] = React.useState((v.self && v.self.office) || '');
+  const [state, setState] = React.useState('');
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
+  const churchName = (church && church.name) || 'Your church';
+  const save = async () => {
+    setState('saving');
+    // setVoice refuses if the steward roster has not been read back yet — publishing then would write an
+    // empty roster over a real one. Say so plainly rather than showing a tick over nothing.
+    try { const r = await window.Steward.setVoice(name, office); setState(r ? 'saved' : 'notyet'); }
+    catch (e) { setState('failed'); }
+  };
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>
+        Members see this under every notice and message sent from this console, like the name at the bottom of
+        a parish letter. <b>If someone else helps run the church, don’t share this console</b> — add them below
+        and they’ll write under their own name.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 9 }}>
+        <input value={name} onChange={e => { setName(e.target.value); setState(''); }} placeholder="Rev Ada Nwachukwu" aria-label="Your name"
+          style={{ flex: '1 1 180px', minWidth: 0, padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14 }} />
+        <input value={office} onChange={e => { setOffice(e.target.value); setState(''); }} placeholder="Vicar" aria-label="Your role"
+          style={{ flex: '0 1 120px', minWidth: 0, padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14 }} />
+        <button onClick={save} className="sk-btn sk-btn--clay" style={{ padding: '9px 16px' }}>Save</button>
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>
+        Members will see: <b style={{ color: 'var(--ink-2)' }}>{churchName}{name ? ' \u00b7 ' + name : ''}{name && office ? ', ' + office : ''}</b>
+        {!name ? <span> — without a name, messages arrive from the church alone.</span> : null}
+      </div>
+      {state === 'saved' ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 7 }}>Saved — members will see this from now on.</div> : null}
+      {state === 'notyet' ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 7 }}>Not saved yet — still reading your steward list. Try again in a moment.</div> : null}
+      {state === 'failed' ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 7 }}>Couldn’t save that — check the connection and try again.</div> : null}
+    </div>
+  );
+}
 // Delegated stewards — the OWNER (this church key) names co-stewards by promoting members. The relay grants
 // those keys day-to-day church powers (NOT roster/blocklist/relay-policy) and revocation is instant. The
 // roster is owner-signed via Steward.setStewards; see STEWARD-ROSTER-DESIGN.md. Phase 2a: owner-side control.
@@ -5088,6 +5132,8 @@ function DashStewardsPanel({ church }) {
   };
   return (
     <Panel title="Delegated stewards">
+      <VoiceSetup />
+      <div style={{ height: 1, background: 'var(--line)', margin: '4px 0 16px' }} />
       <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Give a trusted member steward powers <b style={{ color: 'var(--ink)' }}>without sharing the church key</b>. They help run {church.name || 'the church'} — post, create groups, manage members — under their own key. You stay the owner: stewards can’t add other stewards, ban people, or change relay settings. <b style={{ color: 'var(--ink)' }}>Remove anyone anytime</b> and it takes effect immediately.</div>
       {pending.length ? <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', marginBottom: 7 }}>Requests to steward · {pending.length}</div>
