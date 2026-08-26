@@ -7555,39 +7555,60 @@
   var PUBLISH_TIMEOUT_MS = 12e3;
   var _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
   var _wedge = /* @__PURE__ */ new Map();
-  var WEDGE_FAILS = 3;
+  var WEDGE_SILENCES = 3;
   var WEDGE_WINDOW_MS = 6e4;
   var WEDGE_COOLDOWN_MS = 3e5;
-  function _noteSendResult(url, ok) {
+  var WEDGE_ACK_MS = 11e3;
+  var _wedgeLastRecovery = 0;
+  function _poolSaysConnected(url) {
+    try {
+      const st = pool.listConnectionStatus();
+      if (st.get(url) === true) return true;
+      try {
+        return st.get(normalizeURL2(url)) === true;
+      } catch (e) {
+        return false;
+      }
+    } catch (e) {
+      return false;
+    }
+  }
+  function _wedgeKey(url) {
+    try {
+      return normalizeURL2(url);
+    } catch (e) {
+      return url;
+    }
+  }
+  function _noteSendResult(url, outcome) {
     const now2 = Date.now();
-    let w = _wedge.get(url);
-    if (ok) {
+    const key = _wedgeKey(url);
+    let w = _wedge.get(key);
+    if (outcome !== "silent") {
       if (w) {
-        w.fails = 0;
+        w.silences = 0;
         w.firstAt = 0;
       }
       return;
     }
-    try {
-      if (pool.listConnectionStatus().get(url) !== true) return;
-    } catch (e) {
-      return;
-    }
+    if (!_poolSaysConnected(url)) return;
     try {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     } catch (e) {
     }
     if (!w) {
-      w = { fails: 0, firstAt: 0, lastRecovery: 0 };
-      _wedge.set(url, w);
+      w = { silences: 0, firstAt: 0 };
+      _wedge.set(key, w);
     }
-    if (!w.fails) w.firstAt = now2;
-    w.fails += 1;
-    if (w.fails < WEDGE_FAILS || now2 - w.firstAt < WEDGE_WINDOW_MS) return;
-    if (now2 - (w.lastRecovery || 0) < WEDGE_COOLDOWN_MS) return;
-    w.lastRecovery = now2;
-    w.fails = 0;
-    w.firstAt = 0;
+    if (!w.silences) w.firstAt = now2;
+    w.silences += 1;
+    if (w.silences < WEDGE_SILENCES || now2 - w.firstAt < WEDGE_WINDOW_MS) return;
+    if (now2 - _wedgeLastRecovery < WEDGE_COOLDOWN_MS) return;
+    _wedgeLastRecovery = now2;
+    for (const v of _wedge.values()) {
+      v.silences = 0;
+      v.firstAt = 0;
+    }
     try {
       console.warn("[fellowship] uplink stalled on " + url + " \u2014 reconnecting");
     } catch (e) {
@@ -7597,13 +7618,36 @@
     } catch (e) {
     }
   }
+  var _PUB_SILENT = /(timed out|timeout)/i;
+  function _classify(r) {
+    if (r.status === "fulfilled") {
+      const v = String(r.value == null ? "" : r.value);
+      return _PUB_FAILED.test(v) ? _PUB_SILENT.test(v) ? "silent" : "spoke" : "ok";
+    }
+    const why = String(r.reason && r.reason.message || r.reason || "");
+    return _PUB_SILENT.test(why) ? "silent" : "spoke";
+  }
   function _publishAny(relays, evt) {
-    return Promise.allSettled(pool.publish(relays, evt)).then((rs) => {
-      const good = rs.some((r) => r.status === "fulfilled" && !_PUB_FAILED.test(String(r.value == null ? "" : r.value)));
-      try {
-        (relays || []).forEach((u) => _noteSendResult(u, good));
-      } catch (e) {
+    const targets = Array.isArray(relays) ? relays : [];
+    try {
+      for (const u of targets) {
+        const r = pool.relays && pool.relays.get(u);
+        if (r && r.publishTimeout < WEDGE_ACK_MS) r.publishTimeout = WEDGE_ACK_MS;
       }
+    } catch (e) {
+    }
+    return Promise.allSettled(pool.publish(targets, evt)).then((rs) => {
+      let good = false;
+      rs.forEach((r, i3) => {
+        const out = _classify(r);
+        if (out === "ok") good = true;
+        if (targets[i3]) {
+          try {
+            _noteSendResult(targets[i3], out);
+          } catch (e) {
+          }
+        }
+      });
       if (!good) {
         const why = (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
         throw new Error(String(why));

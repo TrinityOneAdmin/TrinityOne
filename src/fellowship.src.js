@@ -1734,40 +1734,93 @@ const _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-
 // nothing ever hangs up on a socket that has stopped accepting writes: it never fires a close event, so
 // relaysHealthy() truthfully reports it live and the whole safety net stays disarmed.
 //
-// THE SIGNAL IS DELIBERATELY ONE-SIDED. Only a FAILED SEND counts, and only while the pool says that relay is
-// connected — a timeout to a relay that is not connected is ordinary offline, which the existing beat handles.
-// A success resets the count and NOTHING ELSE DOES: incoming events, EOSEs and a cleared composer are not
-// evidence the uplink works, and treating them as such is exactly why this went unnoticed for a session.
+// THE SIGNAL IS SILENCE, NOT FAILURE. The first version of this counted every failed send, and that was wrong
+// in a way an audit caught the same day: a relay that ANSWERS "rate-limited", "blocked" or "error: storage
+// unavailable" is a relay whose uplink demonstrably works — bytes went up and came back. Counting a refusal
+// as evidence of a dead pipe meant a relay with a full disk, or a congregation locked out by a config change,
+// would have every phone tearing down and rebuilding every subscription every five minutes, on exactly the
+// thin pipe this is meant to protect. So the three outcomes are told apart: ACCEPTED and SPOKE both prove the
+// uplink and reset the count; only SILENCE — the acknowledgement that never came — counts against a relay.
 //
-// AND THE OPPOSITE MISTAKE WOULD BE WORSE THAN THE BUG. A church on a genuinely thin pipe — which is who this
-// product is for — must never be hung up on for merely being slow. Four fences: an acknowledgement inside the
-// 12s bound always counts as success; three failures must span at least a minute of real time; one recovery
-// per relay per five minutes; and nothing fires while the page is hidden, because a backgrounded WebView
-// defers everything and would manufacture failures out of nothing.
-const _wedge = new Map();   // relay url -> { fails, firstAt, lastRecovery }
-const WEDGE_FAILS = 3, WEDGE_WINDOW_MS = 60000, WEDGE_COOLDOWN_MS = 300000;
-function _noteSendResult(url, ok) {
+// AND THE OPPOSITE MISTAKE WOULD STILL BE WORSE THAN THE BUG. A church on a genuinely thin pipe must never be
+// hung up on for merely being slow. Five fences: an acknowledgement inside WEDGE_ACK_MS counts as success;
+// three silences must span at least a minute of real time; ONE recovery every five minutes across the whole
+// pool, because the remedy is global even though the evidence is per relay; nothing fires while the page is
+// hidden, because a backgrounded WebView defers everything and would manufacture silences out of nothing; and
+// a relay the pool does not report as connected is ordinary offline, which the existing beat already handles.
+//
+// GIVE A SLOW RELAY TIME TO SAY YES. The vendored library waits 4.4s for an acknowledgement and then reports
+// failure — but a late OK is not a refusal, and the event has usually been stored by then. The console raised
+// this for its own publishes after simulation round 6 showed a vicar a red "Couldn't save" over three groups
+// that saved perfectly well; the member app was left at 4.4s, so a church whose relay answers in six seconds
+// has EVERY publish recorded as failed, retried from the outbox, and — before this — read as a stalled
+// uplink. 11s, deliberately just under PUBLISH_TIMEOUT_MS (12s): the inner timeout must settle first, or the
+// outer bound wins the race and no per-relay outcome is ever recorded at all.
+const _wedge = new Map();   // normalised relay url -> { silences, firstAt }
+const WEDGE_SILENCES = 3, WEDGE_WINDOW_MS = 60000, WEDGE_COOLDOWN_MS = 300000, WEDGE_ACK_MS = 11000;
+let _wedgeLastRecovery = 0;   // GLOBAL: reconnectAll() rebuilds every socket, so two relays stalling together
+                              // must not trigger two teardowns. The pilot's default set is two addresses to
+                              // ONE box, so that is the LIKELIEST stall, not an exotic one.
+// The pool keys its connection map by normalizeURL(); the relay list is stored exactly as it was typed,
+// scanned or published. `wss://church.example/relay/` therefore misses the map entirely and reads as
+// undefined. relaysHealthy() carries a long comment about this exact trap — and the first version of this
+// function, twenty lines away, looked the URL up raw and so was SILENTLY DEAD for every church that typed a
+// trailing slash or a bare hostname. Ask both ways, exactly as relaysHealthy does.
+function _poolSaysConnected(url) {
+  try {
+    const st = pool.listConnectionStatus();
+    if (st.get(url) === true) return true;
+    try { return st.get(normalizeURL(url)) === true; } catch (e) { return false; }
+  } catch (e) { return false; }
+}
+function _wedgeKey(url) { try { return normalizeURL(url); } catch (e) { return url; } }
+// outcome: 'ok' (relay accepted) | 'spoke' (relay answered, refusing) | 'silent' (no answer came)
+function _noteSendResult(url, outcome) {
   const now2 = Date.now();
-  let w = _wedge.get(url);
-  if (ok) { if (w) { w.fails = 0; w.firstAt = 0; } return; }
-  try { if (pool.listConnectionStatus().get(url) !== true) return; } catch (e) { return; }   // not connected = ordinary offline
+  const key = _wedgeKey(url);
+  let w = _wedge.get(key);
+  if (outcome !== 'silent') { if (w) { w.silences = 0; w.firstAt = 0; } return; }
+  if (!_poolSaysConnected(url)) return;                                   // not connected = ordinary offline
   try { if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return; } catch (e) {}
-  if (!w) { w = { fails: 0, firstAt: 0, lastRecovery: 0 }; _wedge.set(url, w); }
-  if (!w.fails) w.firstAt = now2;
-  w.fails += 1;
-  if (w.fails < WEDGE_FAILS || (now2 - w.firstAt) < WEDGE_WINDOW_MS) return;
-  if (now2 - (w.lastRecovery || 0) < WEDGE_COOLDOWN_MS) return;
-  w.lastRecovery = now2; w.fails = 0; w.firstAt = 0;
+  if (!w) { w = { silences: 0, firstAt: 0 }; _wedge.set(key, w); }
+  if (!w.silences) w.firstAt = now2;
+  w.silences += 1;
+  if (w.silences < WEDGE_SILENCES || (now2 - w.firstAt) < WEDGE_WINDOW_MS) return;
+  if (now2 - _wedgeLastRecovery < WEDGE_COOLDOWN_MS) return;
+  _wedgeLastRecovery = now2;
+  for (const v of _wedge.values()) { v.silences = 0; v.firstAt = 0; }     // the remedy is global; so is the reset
   // reconnectAll(), not a targeted close: it is the only path that clears the shared-subscription registry,
   // and without that a re-subscriber joins a dead entry and the screen stays frozen — a trap this codebase
   // has already paid for once.
   try { console.warn('[fellowship] uplink stalled on ' + url + ' — reconnecting'); } catch (e) {}
   try { reconnectAll(); } catch (e) {}
 }
+// SILENCE, as the vendored library reports it: a publish whose acknowledgement never arrived. Everything else
+// with a reason attached is the relay talking. `connection failure` is neither — the socket never opened, and
+// _poolSaysConnected already declines to treat that as a stall.
+const _PUB_SILENT = /(timed out|timeout)/i;
+function _classify(r) {
+  if (r.status === 'fulfilled') {
+    const v = String(r.value == null ? '' : r.value);
+    return _PUB_FAILED.test(v) ? (_PUB_SILENT.test(v) ? 'silent' : 'spoke') : 'ok';
+  }
+  const why = String((r.reason && r.reason.message) || r.reason || '');
+  return _PUB_SILENT.test(why) ? 'silent' : 'spoke';
+}
 function _publishAny(relays, evt) {
-  return Promise.allSettled(pool.publish(relays, evt)).then((rs) => {
-    const good = rs.some(r => r.status === 'fulfilled' && !_PUB_FAILED.test(String(r.value == null ? '' : r.value)));
-    try { (relays || []).forEach((u) => _noteSendResult(u, good)); } catch (e) {}
+  const targets = Array.isArray(relays) ? relays : [];
+  try { for (const u of targets) { const r = pool.relays && pool.relays.get(u); if (r && r.publishTimeout < WEDGE_ACK_MS) r.publishTimeout = WEDGE_ACK_MS; } } catch (e) {}
+  return Promise.allSettled(pool.publish(targets, evt)).then((rs) => {
+    // PER RELAY, NOT PER PUBLISH. pool.publish returns one promise per relay in the order given, and
+    // allSettled preserves it. The first version judged the whole set at once, so a church running its own
+    // relay alongside the shared fallback had the fallback's success reset the wedged relay's count for ever:
+    // everything quietly landed on one relay only, the redundancy was halved, and nothing said so.
+    let good = false;
+    rs.forEach((r, i) => {
+      const out = _classify(r);
+      if (out === 'ok') good = true;
+      if (targets[i]) { try { _noteSendResult(targets[i], out); } catch (e) {} }
+    });
     if (!good) {
       const why = (rs.find(r => r.status === 'fulfilled') || {}).value
         || ((rs.find(r => r.status === 'rejected') || {}).reason || {}).message || 'no relay accepted this';

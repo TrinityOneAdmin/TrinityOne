@@ -19,23 +19,43 @@ import { generateSecretKey, finalizeEvent } from 'nostr-tools/pure';
 
 const B = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
-function realPublishAny(pool) {
-  const at = B.indexOf('function _publishAny(');
-  assert.notEqual(at, -1, '_publishAny is gone from the shipped bundle — publishes can silently succeed offline again');
+const lift = (name) => {
+  const at = B.indexOf('function ' + name + '(');
+  assert.notEqual(at, -1, name + ' is gone from the shipped bundle');
   let d = 0, end = -1;
   for (let i = B.indexOf('{', at); i < B.length; i++) { const c = B[i]; if (c === '{') d++; else if (c === '}' && --d === 0) { end = i + 1; break; } }
+  return B.slice(at, end);
+};
+
+// _publishAny now also SORTS each relay's answer — accepted, refused-but-talking, or silent — so the stalled-
+// uplink detector can tell a dead pipe from a relay that is merely saying no. _classify comes along for the
+// ride because it is part of the same decision; _noteSendResult is recorded rather than run, since hanging up
+// on sockets is a different file's subject. What that recording buys us is the check at the bottom of this
+// file: against a genuinely dead endpoint, the classifier must NOT report a stall.
+function realPublishAny(pool, seen) {
   const m = B.match(/_PUB_FAILED = (\/\^\([^;]*?\/i);/);
   assert.ok(m, 'the failure-string pattern is gone');
-  return new Function('pool', '_PUB_FAILED', B.slice(at, end) + '; return _publishAny;')(pool, new RegExp(m[1].slice(1, -2), 'i'));
+  const sm = B.match(/_PUB_SILENT = (\/[^;]*?\/i);/);
+  assert.ok(sm, 'the silence pattern is gone — a refusal and a dead pipe are being conflated again');
+  const src = lift('_classify') + '\n' + lift('_publishAny') + '; return _publishAny;';
+  return new Function('pool', '_PUB_FAILED', '_PUB_SILENT', '_noteSendResult', src)(
+    pool, new RegExp(m[1].slice(1, -2), 'i'), new RegExp(sm[1].slice(1, -2), 'i'),
+    (url, outcome) => { if (seen) seen.push(outcome); });
 }
 
 const evt = () => finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'probe' }, generateSecretKey());
 
 test('a refused connection is a FAILURE, not a success', { timeout: 30000 }, async () => {
   const pool = new SimplePool();
-  const pub = realPublishAny(pool);
+  const seen = [];
+  const pub = realPublishAny(pool, seen);
   await assert.rejects(() => pub(['wss://127.0.0.1:9/relay'], evt()), /connection failure/i,
     'a dead relay reported success — every "message sent" in the app would be a lie offline');
+  // …and a door slammed in our face is not a stalled uplink. A stall is SILENCE. Classifying a refused
+  // connection as silence would have an offline phone tearing down and rebuilding every socket in a loop —
+  // measured here against a real closed port, not asserted from the shape of the code.
+  assert.ok(!seen.includes('silent'),
+    'a refused connection is being read as a stalled uplink: ' + JSON.stringify(seen));
   try { pool.close(['wss://127.0.0.1:9/relay']); } catch {}
 });
 
