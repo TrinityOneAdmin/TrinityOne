@@ -6558,19 +6558,26 @@
     } catch {
     }
   };
+  var VOICE_D = "trinityone/voice:";
   var _churchVoices = /* @__PURE__ */ new Map();
   function _absorbRoster(cp, d, e) {
     if (d !== "trinityone/stewards:" + cp || e.pubkey !== cp) return false;
-    let pks = [], self = null, pub2 = null;
+    let pks = [];
     try {
-      const c = JSON.parse(e.content);
-      pks = c.pubkeys || [];
-      self = c.self || null;
-      pub2 = c.public || null;
+      pks = JSON.parse(e.content).pubkeys || [];
     } catch {
     }
     _churchRoster.set(cp, new Set(pks));
-    _churchVoices.set(cp, { self: self || null, public: pub2 || {} });
+    _fireTrust();
+    return true;
+  }
+  function _absorbVoice(cp, d, e) {
+    if (d !== VOICE_D + cp || e.pubkey !== cp) return false;
+    try {
+      const c = JSON.parse(e.content);
+      _churchVoices.set(cp, { self: c.self || null, public: c.public || {} });
+    } catch {
+    }
     _fireTrust();
     return true;
   }
@@ -6990,7 +6997,11 @@
       }
     } catch {
     }
-    for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);
+    for (const e of hub.buf.values()) {
+      const dt = _dtag(e);
+      _absorbRoster(cp, dt, e);
+      _absorbVoice(cp, dt, e);
+    }
     for (const e of hub.buf.values()) {
       const d0 = _dtag(e);
       if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e);
@@ -7056,6 +7067,8 @@
             } catch (x) {
             }
           }
+        }
+        if (_absorbVoice(cp, d, e)) {
         }
         if (_absorbRoster(cp, d, e)) {
           for (const e2 of hub.buf.values()) {

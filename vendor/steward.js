@@ -14574,6 +14574,7 @@ zoo`.split("\n");
       return "";
     }
   };
+  var VOICE_D = "trinityone/voice:";
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
   var PIN_D = "trinityone/pin:";
@@ -18781,13 +18782,6 @@ zoo`.split("\n");
       if (Object.keys(next).length) doc.caps = next;
       if (Object.keys(nextNames).length) doc.names = nextNames;
       if (Object.keys(nextAt).length) doc.at = nextAt;
-      if (_selfVoice && _selfVoice.name) doc.self = { ..._selfVoice, churchName: lastProfile.name || "" };
-      const pubNames = {};
-      for (const p2 of list) {
-        const v = _publicVoices[p2];
-        if (v && v.name) pubNames[p2] = v;
-      }
-      if (Object.keys(pubNames).length) doc.public = pubNames;
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
@@ -18808,9 +18802,12 @@ zoo`.split("\n");
     // _careRoster is the roster as the relay last reported it, and _careRosterKnown is the "we have actually
     // been told" flag. Publishing before we have heard would write an empty roster over a real one, so both
     // setters fail closed and say why.
+    // Publishes ONLY the by-line document. It touches no roster, no capabilities and no membership, so the
+    // worst a bug here can do is mis-name a message — never remove somebody's authority.
     _voiceSave() {
-      if (!_careRosterKnown) return Promise.resolve(null);
-      return this.setStewards([..._careRoster].filter(Boolean));
+      if (!sk) return Promise.resolve(null);
+      const doc = { self: _selfVoice && _selfVoice.name ? { ..._selfVoice, churchName: lastProfile.name || "" } : null, public: { ..._publicVoices } };
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
     setVoice(name, office) {
       _selfVoice = name && String(name).trim() ? { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) } : null;

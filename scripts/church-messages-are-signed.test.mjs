@@ -46,22 +46,26 @@ test('the console can publish who signs its messages', () => {
   assert.match(ST_V, /setPublicVoice/, 'a delegated steward can never be named to members');
 });
 
-test('changing a name never rewrites who is on the roster', () => {
-  // The dangerous half. The by-line lives in the steward roster, so saving it republishes that roster — and a
-  // republish built from the wrong source would silently REMOVE stewards. Publishing before the relay has
-  // been heard from would write an empty roster over a real one.
-  const save = (() => { const i = ST_V.indexOf('_voiceSave'); return i < 0 ? '' : ST_V.slice(i, i + 400); })();
+test('saving a name cannot touch the steward roster at all', () => {
+  // THE HAZARD THIS DESIGN REMOVES RATHER THAN GUARDS. For one afternoon the by-line rode the steward roster,
+  // so saving a name republished it — and a console that had not truly read that roster would have written an
+  // EMPTY one over a real one, stripping every delegated steward of their authority while the panel said
+  // "Saved". The authentication check cannot prevent that: it records that we SIGNED the challenge, not that
+  // the relay ACCEPTED it. So the by-line now lives in its own document. A name is cosmetic, a roster is
+  // authority, and one must never be able to damage the other.
+  const save = (() => { const i = ST_V.indexOf('_voiceSave'); return i < 0 ? '' : ST_V.slice(i, i + 500); })();
   assert.ok(save, 'no single place saves the by-line, so each setter can drift from the other');
-  assert.match(save, /_careRosterKnown/,
-    'the by-line can be published before the roster has been read — writing an empty roster over a real one');
-  assert.match(save, /_careRoster/,
-    'the republished roster is rebuilt from somewhere other than the roster itself');
+  assert.doesNotMatch(save, /setStewards/,
+    'saving a by-line republishes the steward roster — a name change that can remove people');
+  assert.match(save, /VOICE_D|voice:/,
+    'the by-line is not written to its own document');
 });
 
 test('the owner\'s private labels for stewards are not published to the congregation', () => {
-  // `names` is what the owner types to tell stewards apart. Publishing those to members would disclose
-  // something nobody consented to; `public` is the opt-in the owner ticks per steward.
+  // `names` is what an owner types to tell their stewards apart. Publishing those to members would disclose
+  // something nobody consented to. The public by-line is a separate, opt-in field in a separate document.
   const setr = (() => { const i = ST_V.indexOf('setStewards'); return i < 0 ? '' : ST_V.slice(i, i + 1800); })();
-  assert.match(setr, /doc\.public\s*=/, 'there is no separate opt-in field for names members may see');
   assert.match(setr, /doc\.names\s*=/, 'the private labels have stopped being carried forward');
+  assert.doesNotMatch(setr, /doc\.public\s*=/,
+    'the roster is publishing member-visible names again — that belongs in the voice document');
 });

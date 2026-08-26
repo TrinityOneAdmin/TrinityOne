@@ -373,6 +373,13 @@ const FINKEY_D = CAP_KEYS.finance.d;
 // test for "am I the owner".
 const churchSkHeld = () => !actingChurch && !!churchSk && !!churchPub;
 const _legacyBookKeyHex = () => { try { return churchSkHeld() ? _hex(nip44ck(churchSk, churchPub)) : ''; } catch (e) { return ''; } };
+// The by-line lives in its OWN church-signed document, deliberately NOT in the steward roster.
+// It rode the roster for one afternoon and that was a mistake: saving a name republished the roster, so a
+// console that had not truly read it — the authentication check records that we SIGNED the challenge, not that
+// the relay ACCEPTED it — would have written an EMPTY roster over a real one and stripped every delegated
+// steward of their authority, while the panel said "Saved". Guarding that is possible; not touching the
+// roster at all is better. A name change should not be able to remove anybody, no matter what else is wrong.
+const VOICE_D = 'trinityone/voice:';
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
@@ -4758,16 +4765,7 @@ window.Steward = {
     if (Object.keys(next).length) doc.caps = next;
     if (Object.keys(nextNames).length) doc.names = nextNames;
     if (Object.keys(nextAt).length) doc.at = nextAt;
-    // WHO SIGNS WHAT THE CHURCH SENDS. Carried forward on every roster edit for the same reason `caps` and
-    // `names` are: every existing caller passes pubkeys alone, and dropping these on an unrelated edit would
-    // put "Member" back under the vicar's notices — which is the defect this exists to close. `self` is the
-    // person at THIS console; `public` is the delegated stewards the owner chose to name to members. Note the
-    // difference from `names` above: those are the owner's PRIVATE labels for telling stewards apart, and
-    // publishing them to the congregation without asking would be a disclosure nobody consented to.
-    if (_selfVoice && _selfVoice.name) doc.self = { ..._selfVoice, churchName: lastProfile.name || '' };
-    const pubNames = {};
-    for (const p2 of list) { const v = _publicVoices[p2]; if (v && v.name) pubNames[p2] = v; }
-    if (Object.keys(pubNames).length) doc.public = pubNames;
+
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
@@ -4782,9 +4780,12 @@ window.Steward = {
   // _careRoster is the roster as the relay last reported it, and _careRosterKnown is the "we have actually
   // been told" flag. Publishing before we have heard would write an empty roster over a real one, so both
   // setters fail closed and say why.
+  // Publishes ONLY the by-line document. It touches no roster, no capabilities and no membership, so the
+  // worst a bug here can do is mis-name a message — never remove somebody's authority.
   _voiceSave() {
-    if (!_careRosterKnown) return Promise.resolve(null);   // never publish a roster we have not read
-    return this.setStewards([..._careRoster].filter(Boolean));
+    if (!sk) return Promise.resolve(null);
+    const doc = { self: (_selfVoice && _selfVoice.name) ? { ..._selfVoice, churchName: lastProfile.name || '' } : null, public: { ..._publicVoices } };
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
   },
   setVoice(name, office) {
     _selfVoice = (name && String(name).trim()) ? { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) } : null;

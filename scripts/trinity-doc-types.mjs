@@ -72,6 +72,7 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/joinpolicy:':   { write: 'steward',   read: 'public',  scope: 'suffix', note: 'THE ONE PUBLIC DOC — a not-yet-member must read it before joining' },
   'trinityone/admitted:':     { write: 'steward',   read: 'members', scope: 'suffix' },
   'trinityone/blocked:':      { write: 'leader',    read: 'members', scope: 'suffix', note: 'owner-only: banning is not delegated' },
+  'trinityone/voice:':        { write: 'church',    read: 'members', scope: 'suffix', note: 'who signs what the church sends — a display by-line only. Church-signed so it cannot be forged; readable by members because it is what they see under a notice. Deliberately NOT part of the steward roster: a name is cosmetic, a roster is authority, and a bug in one must never damage the other.' },
   'trinityone/stewards:':     { write: 'church',    read: 'members', scope: 'suffix', note: 'owner-only — this is what grants steward authority' },
   'trinityone/stewardreq:':   { write: 'member',    read: 'members', scope: 'tag',    note: 'capped: anti-flood' },
   'trinityone/reseat:':       { write: 'steward',   read: 'members', scope: 'suffix', note: 'moves a member\'s seat onto a new key' },
@@ -240,6 +241,10 @@ export const D = Object.freeze({
   JOINPOLICY:     k('trinityone/joinpolicy:'),
   ADMITTED:       k('trinityone/admitted:'),
   RESEAT:         k('trinityone/reseat:'),
+  // Who signs what the church sends — a display by-line, church-signed. Deliberately its OWN document rather
+  // than a field on the roster: a name is cosmetic, a roster is authority, and a bug in one must never be able
+  // to damage the other.
+  VOICE:          k('trinityone/voice:'),
   STEWARDS:       k('trinityone/stewards:'),
   STEWARDREQ:     k('trinityone/stewardreq:'),
   MEALS_SETTINGS: k('trinityone/meals-settings'),

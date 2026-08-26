@@ -852,13 +852,21 @@ const _fireTrust = () => { try { window.dispatchEvent(new CustomEvent('trinity-c
 // The names ride the church-signed steward roster — the church key is the only author trusted for it (the
 // check above), so a forged name is not possible, and the relay passes unknown keys through untouched, which
 // is why this is backwards compatible with churches whose roster predates it.
+const VOICE_D = 'trinityone/voice:';
 const _churchVoices = new Map();
 function _absorbRoster(cp, d, e) {
   if (d !== 'trinityone/stewards:' + cp || e.pubkey !== cp) return false;   // only trust it from the CHURCH key
-  let pks = [], self = null, pub2 = null;
-  try { const c = JSON.parse(e.content); pks = c.pubkeys || []; self = c.self || null; pub2 = c.public || null; } catch {}
+  let pks = []; try { pks = (JSON.parse(e.content).pubkeys) || []; } catch {}
   _churchRoster.set(cp, new Set(pks));
-  _churchVoices.set(cp, { self: self || null, public: pub2 || {} });
+  _fireTrust();
+  return true;
+}
+// The by-line arrives in its OWN church-signed document, not the roster. Keeping them apart is deliberate:
+// a name is cosmetic, a roster is authority, and one should never be able to damage the other. Same author
+// check — only the church key may say who speaks for the church.
+function _absorbVoice(cp, d, e) {
+  if (d !== VOICE_D + cp || e.pubkey !== cp) return false;
+  try { const c = JSON.parse(e.content); _churchVoices.set(cp, { self: c.self || null, public: c.public || {} }); } catch {}
   _fireTrust();
   return true;
 }
@@ -1314,7 +1322,7 @@ function _docsHub(cp) {
   // absorb hub-level docs from the persisted corpus BEFORE any feature registers: the steward roster
   // (so _churchVoice trusts steward-authored docs immediately) and group-key envelopes (so encrypted
   // groups decrypt) — both are in-memory only, and the since-cursor means they won't re-arrive.
-  for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
+  for (const e of hub.buf.values()) { const dt = _dtag(e); _absorbRoster(cp, dt, e); _absorbVoice(cp, dt, e); }   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
   for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
@@ -1357,6 +1365,7 @@ function _docsHubOpen(hub) {
         _recoverOwnName(cp, e);   // our own doc carries the copy that restores us after a locked boot
         if (_openSealedName(cp, e.pubkey, e.content)) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } })); } catch (x) {} }
       }
+      if (_absorbVoice(cp, d, e)) { /* who speaks for the church — cosmetic, never authority */ }
       if (_absorbRoster(cp, d, e)) {
         // SECURITY-AUDIT-2026-07-06 L7 (availability): a steward-authored group-key envelope that arrived on the
         // LIVE path BEFORE this roster was rejected by _ingestGroupKey (author not yet trusted) and — unlike the
