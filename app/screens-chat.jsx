@@ -1903,6 +1903,23 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                   defect ships. */}
               <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{m.content}</p>
             </div>
+            {/* THE STATE THE COMMIT CLAIMED AND DID NOT SHIP. c2aacf7 queued a failed private message and
+                computed _pending/_failed for it — and then drew neither, so a message still waiting to send
+                looked exactly like one that had arrived. That is worse than the bug it replaced: the words are
+                safe now, but the member is told they went. Mirrors the group bubble's footer above; the two
+                should be read together and changed together. Owner's decision, 2026-08-26: "queue and retry,
+                but show it." */}
+            {m.mine && (m._failed || m._pending) ? (m._failed ? (
+              <span style={{ fontSize: 11, color: 'var(--clay-ink)', margin: '3px 4px 0', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <Icon name="bolt" size={11} color="currentColor" />Couldn’t send{m._reason ? ' — ' + m._reason : ''}
+                <button onClick={() => window.Fellowship.requeue(m.id)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer' }}>Try again</button>
+                <button onClick={() => window.Fellowship.dropQueued(m.id)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--ink-3)', fontWeight: 700, cursor: 'pointer' }}>Discard</button>
+              </span>
+            ) : (
+              <span style={{ fontSize: 11, color: 'var(--clay-ink)', margin: '3px 4px 0', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="clock" size={11} color="currentColor" />Waiting to send
+              </span>
+            )) : null}
             {m.reactions && m.reactions.length ? (
               <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>
                 {Object.entries(m.reactions.reduce((a, e) => (a[e] = (a[e] || 0) + 1, a), {})).map(([emo, n]) => (

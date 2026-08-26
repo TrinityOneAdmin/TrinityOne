@@ -1734,6 +1734,7 @@ async function _outboxFlush() {
       try {
         await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
         _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
+        _dmPlain.delete(item.evt.id);   // delivered by RETRY — the first-attempt path clears its own; this one was leaking for the session
         _outboxSave();
       } catch (e) {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
@@ -2628,7 +2629,7 @@ window.Fellowship = {
   onOutbox(fn) { _outboxSubs.add(fn); return () => _outboxSubs.delete(fn); },
   flushOutbox() { return _outboxFlush(); },
   // give up on one queued message (the member chose to discard it)
-  dropQueued(id) { _outbox = _outbox.filter(o => o.evt.id !== id); _outboxFailed = _outboxFailed.filter(o => o.evt.id !== id); _outboxSave(); },
+  dropQueued(id) { _outbox = _outbox.filter(o => o.evt.id !== id); _outboxFailed = _outboxFailed.filter(o => o.evt.id !== id); _dmPlain.delete(id); _outboxSave(); },
   // retry something we gave up on, at the member's request
   requeue(id) { const f = _outboxFailed.find(o => o.evt.id === id); if (!f) return false; _outboxFailed = _outboxFailed.filter(o => o.evt.id !== id); f.tries = 0; f.failed = false; _outbox.push(f); _outboxSave(); _outboxFlush(); return true; },
 

@@ -7542,6 +7542,7 @@
         try {
           await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
           _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
+          _dmPlain.delete(item.evt.id);
           _outboxSave();
         } catch (e) {
           const errs = e && e.errors ? e.errors : [e];
@@ -8569,6 +8570,7 @@
     dropQueued(id) {
       _outbox = _outbox.filter((o) => o.evt.id !== id);
       _outboxFailed = _outboxFailed.filter((o) => o.evt.id !== id);
+      _dmPlain.delete(id);
       _outboxSave();
     },
     // retry something we gave up on, at the member's request

@@ -96,6 +96,30 @@ test('the shipped bundle can hand a queued private message back to the screen th
     'nothing exposes a peer\'s queued messages, so a DM thread cannot show that anything is waiting');
 });
 
+test('the queued message records WHICH conversation it belongs to, and the thread reads that field', () => {
+  // THE SABOTAGE THIS FILE FAILED TO CATCH. An independent review broke the fix with one character —
+  // `peer: peerPub` -> `peer: null` — and all three original tests still passed: the queue still filled,
+  // outboxForPeer still existed, and the member watched an empty thread exactly as before. `peer` is the only
+  // thing connecting the queue to the screen, so it has to be pinned on both sides.
+  assert.match(VENDOR, /_outbox\.push\(\{[^}]*peer:\s*peerPub/,
+    'the queued DM does not record its peer, so no conversation can ever find it again');
+  assert.match(VENDOR, /outboxForPeer[\s\S]{0,240}o\.peer\s*===/,
+    'outboxForPeer does not filter on the peer field, so it cannot return one conversation\'s messages');
+});
+
+test('the DM thread actually DRAWS the waiting state, not merely computes it', () => {
+  // The first version of this fix computed _pending/_failed and rendered neither, so a message still waiting
+  // to send looked identical to one that had arrived — worse than the defect it replaced, because the words
+  // were safe and the member was told they had gone. Asserting the data exists is not enough; assert the
+  // screen reads it.
+  const CHAT = readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8');
+  const dm = CHAT.slice(CHAT.indexOf('function DMThread'));
+  assert.ok(dm.includes('_pending'), 'the DM thread never reads _pending — a queued message renders as delivered');
+  assert.ok(dm.includes('Waiting to send'), 'the DM thread has no waiting indicator');
+  assert.ok(dm.includes('_failed') && dm.includes('requeue'),
+    'a permanently refused DM is invisible and unactionable — no failed state, no way to retry or discard');
+});
+
 test('a private message survives a socket that hears but never speaks, and arrives when it recovers', async () => {
   // The end-to-end proof, against the real wedge. Sign a kind-4 exactly as the app does, hold it in a queue,
   // fail to send it, then let the socket recover and confirm it arrives WITH ITS ORIGINAL ID — a retry that
