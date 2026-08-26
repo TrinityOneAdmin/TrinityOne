@@ -122,3 +122,32 @@ test('stewardCan answers the capability question it was asked', () => {
   assert.equal(fn('unscoped', CHURCH, 'safeguarding'), true,
     'the no-capabilities-recorded compat default has changed — if that was intended, update this assertion');
 });
+
+// ── the scope I failed to disclose ───────────────────────────────────────────────────────────────────────
+// safeguardAllows does NOT only gate direct messages. It also gates writing into a minor's care-request
+// thread (gateway.mjs:1892) and reading it (gateway.mjs:2060). So tightening it from "any capability" to
+// "safeguarding" also tightened who may see and answer a young person's Ask for help — and the commit that
+// made the change said nothing about that. An audit found it.
+//
+// THE TIGHTENING IS RIGHT, and the relay's own comments are why: "a care-team roster seat is NOT youth
+// clearance, so without this a non-cleared care-admin could use the sealed thread to route around the
+// minor-to-adult gate". If a care SEAT is not clearance, a care CAPABILITY is not either. This test exists so
+// that stays a decision rather than a side effect, and so the next person changing the child gate learns from
+// a failing test that they are also changing who can answer a child asking for help.
+test('a care-scoped steward cannot read or answer a CHILD\'s request for help', () => {
+  const gate = make({ caps: { careLead: ['care'] } });
+  assert.equal(gate(CHILD, 'careLead'), false,
+    'the care lead can open a child\'s care thread without safeguarding clearance — routing around the child gate');
+  const safeguarder = make({ caps: { hannah: ['safeguarding'] } });
+  assert.equal(safeguarder(CHILD, 'hannah'), true,
+    'the safeguarding lead cannot answer a child asking for help');
+});
+
+test('an ADULT\'s request for help is untouched by any of this', () => {
+  // The gate only engages for a minor. A church whose care lead is scoped to Care alone must go on running
+  // ordinary care exactly as before — the change must not quietly shrink their job.
+  const noMinors = lift('safeguardAllows', { minorGoverningChurches: () => [],
+    approvedIn: () => false, guardianLinkedIn: () => false, networkOf: () => false, stewardCan: () => false });
+  assert.equal(noMinors('a'.repeat(64), 'careLead'), true,
+    'an adult who asked for help can no longer be answered — the safeguarding gate is firing on everybody');
+});
