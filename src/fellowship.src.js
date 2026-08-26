@@ -546,6 +546,21 @@ function profile(pub) {
 }
 
 const pool = new SimplePool();
+// EVERY RELAY THE POOL OPENS STARTS PATIENT. The loop in _publishAny can only raise the give-up on a relay
+// object that already exists, and the pool creates that object INSIDE the publish it is about to make — so
+// the first send to each relay, and the first after every reconnectAll() (which deletes them), ran at the
+// library's 4.4s and recorded a false silence on any slow link. That is the busiest moment there is, right
+// after a recovery, and it seeded the next count. Raising it as each relay is born covers what the loop
+// cannot reach; the loop stays as the belt to this braces, in case a library change renames this method.
+try {
+  const _ensure = pool.ensureRelay.bind(pool);
+  pool.ensureRelay = function (url, params) {
+    return Promise.resolve(_ensure(url, params)).then((r) => {
+      try { if (r && r.publishTimeout < 11000) r.publishTimeout = 11000; } catch (e) {}
+      return r;
+    });
+  };
+} catch (e) {}
 
 // NOTICE WHEN A SOCKET COMES BACK — because nothing in this file ever did, and every recovery path depended
 // on somebody else noticing first.
@@ -1807,9 +1822,30 @@ function _classify(r) {
   const why = String((r.reason && r.reason.message) || r.reason || '');
   return _PUB_SILENT.test(why) ? 'silent' : 'spoke';
 }
+// TWO SPELLINGS OF ONE RELAY ARE ONE RELAY. The pool rejects the second with "duplicate url" — a rejection
+// with no timeout in it, so _classify reads it as the relay TALKING, and 'spoke' resets the very count the
+// real entry just raised. A church whose published relay list carries `…/relay` and `…/relay/` (nothing in
+// this app normalises those lists — addRelay appends raw, churchRelays() unions raw strings) would therefore
+// have the stall detector permanently blind for exactly the relay it matters for, with nothing to show for
+// it. Collapse them here, keeping the first spelling, so each real relay is asked once and judged once.
+function _dedupeRelays(list) {
+  const seen = new Set(), out = [];
+  for (const u of (Array.isArray(list) ? list : [])) {
+    const k = _wedgeKey(u);
+    if (seen.has(k)) continue;
+    seen.add(k); out.push(u);
+  }
+  return out;
+}
 function _publishAny(relays, evt) {
-  const targets = Array.isArray(relays) ? relays : [];
-  try { for (const u of targets) { const r = pool.relays && pool.relays.get(u); if (r && r.publishTimeout < WEDGE_ACK_MS) r.publishTimeout = WEDGE_ACK_MS; } } catch (e) {}
+  const targets = _dedupeRelays(relays);
+  // …AND LOOK THE RELAY UP THE WAY THE POOL FILES IT. pool.relays is keyed by the normalised address, exactly
+  // like the connection map. The first version of this line used the raw one — the same trap fixed twenty
+  // lines above, missed here — so for a church that typed `wss://church.example` (which normalises to a
+  // trailing slash), or any other natural spelling, the raise never landed: every publish kept the library's
+  // 4.4s give-up, a relay answering in six seconds was recorded as silence, and the detector — now working —
+  // would hang up on a perfectly healthy relay every five minutes for ever. Worse than the bug it treats.
+  try { for (const u of targets) { const r = pool.relays && pool.relays.get(_wedgeKey(u)); if (r && r.publishTimeout < WEDGE_ACK_MS) r.publishTimeout = WEDGE_ACK_MS; } } catch (e) {}
   return Promise.allSettled(pool.publish(targets, evt)).then((rs) => {
     // PER RELAY, NOT PER PUBLISH. pool.publish returns one promise per relay in the order given, and
     // allSettled preserves it. The first version judged the whole set at once, so a church running its own

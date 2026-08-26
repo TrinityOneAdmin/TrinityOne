@@ -6321,6 +6321,19 @@
     return { pubkey: pub2, handle: "", color: COLORS[(h >>> 8) % COLORS.length] };
   }
   var pool = new SimplePool();
+  try {
+    const _ensure = pool.ensureRelay.bind(pool);
+    pool.ensureRelay = function(url, params) {
+      return Promise.resolve(_ensure(url, params)).then((r) => {
+        try {
+          if (r && r.publishTimeout < 11e3) r.publishTimeout = 11e3;
+        } catch (e) {
+        }
+        return r;
+      });
+    };
+  } catch (e) {
+  }
   var _liveRelay = /* @__PURE__ */ new Map();
   pool.onRelayConnectionSuccess = (url) => {
     try {
@@ -7627,11 +7640,21 @@
     const why = String(r.reason && r.reason.message || r.reason || "");
     return _PUB_SILENT.test(why) ? "silent" : "spoke";
   }
+  function _dedupeRelays(list) {
+    const seen = /* @__PURE__ */ new Set(), out = [];
+    for (const u of Array.isArray(list) ? list : []) {
+      const k = _wedgeKey(u);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(u);
+    }
+    return out;
+  }
   function _publishAny(relays, evt) {
-    const targets = Array.isArray(relays) ? relays : [];
+    const targets = _dedupeRelays(relays);
     try {
       for (const u of targets) {
-        const r = pool.relays && pool.relays.get(u);
+        const r = pool.relays && pool.relays.get(_wedgeKey(u));
         if (r && r.publishTimeout < WEDGE_ACK_MS) r.publishTimeout = WEDGE_ACK_MS;
       }
     } catch (e) {

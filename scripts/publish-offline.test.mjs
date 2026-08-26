@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SimplePool } from 'nostr-tools/pool';
 import { generateSecretKey, finalizeEvent } from 'nostr-tools/pure';
+import { normalizeURL } from 'nostr-tools/utils';
 
 const B = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
@@ -37,10 +38,13 @@ function realPublishAny(pool, seen) {
   assert.ok(m, 'the failure-string pattern is gone');
   const sm = B.match(/_PUB_SILENT = (\/[^;]*?\/i);/);
   assert.ok(sm, 'the silence pattern is gone — a refusal and a dead pipe are being conflated again');
-  const src = lift('_classify') + '\n' + lift('_publishAny') + '; return _publishAny;';
-  return new Function('pool', '_PUB_FAILED', '_PUB_SILENT', '_noteSendResult', src)(
+  // _wedgeKey/_dedupeRelays come along because _publishAny collapses two spellings of one relay before it
+  // publishes: the pool refuses the duplicate with "duplicate url", and that refusal used to read as the relay
+  // TALKING, wiping the stall count for the relay that had just gone quiet.
+  const src = [lift('_wedgeKey'), lift('_dedupeRelays'), lift('_classify'), lift('_publishAny')].join('\n') + '; return _publishAny;';
+  return new Function('pool', '_PUB_FAILED', '_PUB_SILENT', '_noteSendResult', 'normalizeURL2', 'WEDGE_ACK_MS', src)(
     pool, new RegExp(m[1].slice(1, -2), 'i'), new RegExp(sm[1].slice(1, -2), 'i'),
-    (url, outcome) => { if (seen) seen.push(outcome); });
+    (url, outcome) => { if (seen) seen.push(outcome); }, normalizeURL, 11000);
 }
 
 const evt = () => finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'probe' }, generateSecretKey());
