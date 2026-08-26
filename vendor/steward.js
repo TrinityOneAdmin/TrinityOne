@@ -17725,13 +17725,10 @@ zoo`.split("\n");
       for (const g of groups || []) {
         if (!g || !g.id || !g.encrypted) continue;
         if ((_skeys[g.id] || []).length) continue;
-        let envelopes, sealed;
-        try {
-          envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
-          sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
-        } catch (e) {
-          continue;
-        }
+        const canary = await pool.querySync(relays(), [{ kinds: [30078], "#d": [GROUP_D + g.id], limit: 1 }]);
+        if (!Array.isArray(canary) || !canary.length) continue;
+        const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
+        const sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
         if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
         if (envelopes.length) continue;
         if (sealed.some((e) => (e.tags || []).some((t) => t[0] === "enc" && t[1] === "1"))) {

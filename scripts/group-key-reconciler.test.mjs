@@ -58,11 +58,19 @@ test('it asks the relay directly rather than trusting a local flag', () => {
     'the reconciler decides from local state — a dropped frame would read as a missing key and trigger a mint');
 });
 
-test('a failed query is treated as unknown, never as absent', () => {
-  // The difference between "the relay says there is no key" and "we could not ask" is the difference between
-  // a repair and a data-loss incident.
-  assert.match(fn, /catch\s*\([^)]*\)\s*\{\s*continue;/,
-    'a query error does not stop the reconciler — it would fall through and mint over a key it simply failed to read');
+test('an empty answer must be PROVEN, not assumed', () => {
+  // This test used to assert a `catch { continue; }` and passed happily over a guard that could never fire:
+  // querySync NEVER REJECTS — it resolves with whatever arrived — so an unreachable relay, a dropped frame and
+  // a genuinely absent document are one and the same empty array. The authentication check is no help either,
+  // because it records that we SIGNED the challenge, not that the relay ACCEPTED it, and this is an auth-gated
+  // read. Rejected auth -> everything reads empty -> mint a second key -> every message ever sealed in that
+  // room is permanently unreadable. A green test over a guard that cannot fire is worse than no test.
+  // The canary is the group's own definition document: we are looking at this group because we read that
+  // document, so if it does not come back, our reads are broken and nothing we read may be believed.
+  assert.match(fn, /canary/,
+    'nothing proves the reads are working, so an empty answer from a broken connection reads as "no key exists"');
+  assert.match(fn, /!canary\.length\) continue/,
+    'the canary is fetched but not acted on — an unreadable group still falls through to minting');
 });
 
 test('a room with sealed traffic is never silently re-keyed', () => {

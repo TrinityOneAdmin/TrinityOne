@@ -3502,11 +3502,22 @@ window.Steward = {
       // (3) ASK THE RELAY DIRECTLY rather than trusting a local stream flag. A missed subscription frame and a
       // genuinely absent envelope look identical from in here, and one of them must never lead to a mint.
       // A FAILED query is not an answer: on any error we leave the room alone.
-      let envelopes, sealed;
-      try {
-        envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#d': [GROUPKEY_D + g.id], limit: 1 }]);
-        sealed = await pool.querySync(relays(), [{ kinds: [1], '#t': [g.id], limit: 20 }]);
-      } catch (e) { continue; }                       // (4) fail closed — unknown is not "absent"
+      // (4) PROVE OUR READS WORK BEFORE BELIEVING AN EMPTY ANSWER. This is the guard the first version only
+      // appeared to have. `querySync` NEVER REJECTS — it resolves with whatever arrived when the subscription
+      // closed — so an unreachable relay, a dropped frame, and a genuinely absent document all come back as
+      // the same empty array, and the `catch` that was here could never fire. Worse, the authentication check
+      // above records only that we SIGNED the challenge, not that the relay ACCEPTED it (see the note on
+      // _isRelayAuthed), and this roster is an auth-gated read — so a rejected AUTH returns empty too.
+      // Together that meant: rejected auth -> both queries empty -> mint a second key -> every message ever
+      // sealed in that room becomes permanently unreadable. That is the 2026-07-24 care-key incident exactly.
+      //
+      // The canary is the group's OWN definition document. We are looking at this group because we read that
+      // document, so it demonstrably exists. If it does not come back, our reads are not working and NOTHING
+      // we read can be trusted — including the emptiness we were about to act on.
+      const canary = await pool.querySync(relays(), [{ kinds: [30078], '#d': [GROUP_D + g.id], limit: 1 }]);
+      if (!Array.isArray(canary) || !canary.length) continue;   // reads are not working — conclude nothing
+      const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#d': [GROUPKEY_D + g.id], limit: 1 }]);
+      const sealed = await pool.querySync(relays(), [{ kinds: [1], '#t': [g.id], limit: 20 }]);
       if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
       if (envelopes.length) continue;                 // the envelope exists; we simply have not ingested it yet
       // (5) A room with sealed traffic MUST already have a key we have not been handed. Minting now would make
