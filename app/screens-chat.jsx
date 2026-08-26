@@ -941,7 +941,16 @@ function Row({ me, m, children, ctx, mod }) {
       ) : null}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
         <UserAvatar av={avOf(d)} name={d.handle} size={22} />
+        {/* A PARISH LETTER: the church's name on the letterhead, the person's underneath. Round 6 had a vicar's
+            welcome to her whole congregation arrive attributed to "Member", which a member called a
+            noticeboard "signed by nobody". `signedBy` is only ever set from the church-signed steward roster,
+            so this line cannot be forged by an ordinary member. */}
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{d.handle}</span>
+        {d.signedBy ? (
+          <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 500 }}>
+            · {d.signedBy}{d.signedRole ? ', ' + d.signedRole : ''}
+          </span>
+        ) : null}
         {d.nip05 ? (() => {
           const h = String(d.nip05).split('@')[0];                                           // the @nicename (NIP-05 local part)
           const dup = d.handle && d.handle.toLowerCase().replace(/[^a-z0-9]+/g, '') === h.toLowerCase();   // name already IS the handle — don't repeat it
@@ -2098,6 +2107,28 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 2px 10px', fontSize: 12.5, color: 'var(--ink-3)' }}>
               <div style={{ width: 13, height: 13, borderRadius: 999, border: '2px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .9s linear infinite' }} />
               Still loading people — more may appear.
+            </div>
+          ) : null}
+          {/* CONTACT YOUR CHURCH — the row six testers came to this screen looking for. The vicar is not in the
+              directory and that is deliberate: a steward console is not a member account. But the app sends
+              people here constantly — "ask a steward to link your child", "your leader adds you to a team" —
+              and in round 6 a father could not get his 16-year-old safeguarded, a willing volunteer could not
+              ask to be put on a rota, and a 78-year-old could not thank her vicar for the welcome, because
+              there was nobody to ask. This is the church itself, reachable. The permission has existed all
+              along (anyone may message the church); nothing ever offered it. */}
+          {(FS && FS.churchPub) && !q ? (
+            <div onClick={() => ctx.openDM && ctx.openDM(FS.churchPub)} role="button" tabIndex={0}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ctx.openDM && ctx.openDM(FS.churchPub); } }}
+              style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', marginBottom: 8, cursor: 'pointer',
+                borderRadius: 14, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
+              <UserAvatar av={{ kind: 'symbol', color: 'var(--clay)', symbol: 'chalice' }} name={(ctx.church && ctx.church.name) || 'Your church'} size={34} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {(ctx.church && ctx.church.name) || 'Your church'}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Contact your church</div>
+              </div>
+              <Icon name="chevR" size={16} color="var(--ink-3)" />
             </div>
           ) : null}
           {list.map(m => {
