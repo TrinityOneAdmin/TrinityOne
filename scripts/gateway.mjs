@@ -408,6 +408,7 @@ const ADMITTED_D = D.ADMITTED;   // church-signed allowlist of approved members 
 // Church key or a CURRENT steward may write it (see accept()): an unlisted d-tag falls to the generic member
 // rule, and "any member may rewrite it" here would mean any member could seize another member's identity.
 const RESEAT_D = D.RESEAT;
+const VOICE_D = D.VOICE;      // the by-line under a church notice — d=voice:<churchpub>, church-signed. Cosmetic, never authority.
 const STEWARDS_D = D.STEWARDS;   // church-signed steward roster — d=stewards:<churchpub>, content {pubkeys:[…]}; delegates day-to-day church powers to those keys (revocable: owner re-signs without them). Owner-only to edit. See STEWARD-ROSTER-DESIGN.md.
 const STEWARDREQ_D = D.STEWARDREQ; // a would-be steward's REQUEST to a church — d=stewardreq:<churchpub>, authored by the requester (openly writable, like a join). The owner reviews + approves it into the roster (owner-only).
 // Meal trains / practical-care module (optional, per-church). care: needs are church/steward/care-team-admin authored;
@@ -1608,6 +1609,22 @@ function accept(e) {
     // Steward authority is ADDITIVE (see STEWARD-ROSTER-DESIGN.md): isLeader (the church/network key) always
     // passes exactly as before; a rostered steward of the relevant church ALSO passes for DELEGATED ops.
     // OWNER-ONLY ops never consult the roster — so they stay church-key-only automatically.
+    // THE BY-LINE UNDER A CHURCH NOTICE — d=voice:<churchpub>. Owner-only, exactly like the roster beneath it.
+    //
+    // This branch was MISSING when the feature shipped (2026-08-25). The registry declared write:'church' and
+    // the member app already refuses a voice document not signed by the church key, so no forged name could
+    // ever have been DISPLAYED. What the relay did instead was worse in a quieter way: with no rule of its
+    // own the document fell to the member catch-all at the bottom of this block, and these documents are
+    // ADDRESSABLE — a write to an existing d-tag REPLACES it. So any member of ANY church sharing this relay
+    // could publish `voice:<some other church>` with a newer timestamp and delete that congregation's real
+    // by-lines from the store. Every notice in that church would then show no signature at all, with nothing
+    // on screen to explain it and nothing for a steward to look at. Silent, cross-tenant, and repeatable.
+    //
+    // Two things had to be true for this to go unnoticed, and both are now fixed: the branch was never
+    // written, and doc-registry.test.mjs credited EVERY registry entry as gated by the relay rather than only
+    // the ones the relay actually references. Adding the name to the registry was enough to satisfy the guard
+    // whose whole purpose is to catch a type nobody gave a rule to.
+    if (d.startsWith(VOICE_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(VOICE_D.length) === e.pubkey;
     if (d.startsWith(STEWARDS_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey;   // OWNER-ONLY: only the church key edits its own steward roster
     if (d.startsWith(BLOCKED_D)) return leaderOf(d.slice(BLOCKED_D.length));   // OWNER-ONLY, and only your OWN blocklist                                                                // OWNER-ONLY: banning is not delegated to stewards
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide

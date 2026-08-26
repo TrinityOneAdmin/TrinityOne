@@ -52,8 +52,20 @@ const literals = (src) => new Set(
 // The RELAY's vocabulary is no longer literals in gateway.mjs — the spine imports it from this registry (the
 // rec-2 wiring, 2026-07-30), so gateway.mjs contains almost no d-tag strings any more. Reading only its
 // literals would make every client type look ungated, and this file's "types with NO relay rule" check would
-// fire on all of them. The relay knows a type if it is in D, or still written inline.
-const G = new Set([...literals(GATEWAY), ...Object.values(REG_D)]);
+// fire on all of them. The relay knows a type if it is still written inline, OR if it takes the name from the
+// registry — but only for the names it ACTUALLY REFERENCES.
+//
+// `...Object.values(REG_D)` used to credit the WHOLE registry here, on the reasoning that the relay's spine
+// takes its vocabulary from D. That reasoning is one step short: adding an entry to D does not make the relay
+// use it, and this set is what "the types with NO relay rule" below subtracts from. So merely NAMING a type in
+// the registry was enough to convince the guard that the relay gated it.
+//
+// That is not hypothetical. `trinityone/voice:` — the by-line under a church notice — was declared write:'church',
+// given no branch in accept(), and shipped. It fell to the member catch-all, where any member of any church on
+// the box could replace another congregation's by-lines. This guard, written precisely to catch a type nobody
+// gave a rule to, reported green on it. Credit only what the relay names.
+const REG_USED = new Set([...GATEWAY.matchAll(/\bD\.([A-Z_0-9]+)/g)].map(m => REG_D[m[1]]).filter(Boolean));
+const G = new Set([...literals(GATEWAY), ...REG_USED]);
 const F = literals(FELLOWSHIP), S = literals(STEWARD);
 
 // Strings in the `trinityone/…` namespace that are NOT document types. Widening the scan to the whole tree
