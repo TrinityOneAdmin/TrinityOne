@@ -35,8 +35,12 @@ const lift = (name, stubs, anchor) => {
   // Wrapping it in another `function` header produces `function f(...) function f(...)`, which fails loudly;
   // that is two signature mistakes in a row on this helper, both caught by running it rather than reading it.
   const src = fnBody(GW, anchor || ('function ' + name), name);
+  // CLAIM APP IDENTIFIERS ONLY. `has: () => true` traps EVERY name the function mentions, globals included, so
+  // the lifted code could not reach String/JSON/Object and died with "needs a stub for String". Claim a name
+  // only when we are stubbing it or it is not a real global — that keeps the useful part (an unstubbed app
+  // dependency fails loudly instead of silently reading undefined) without breaking the language.
   const scope = new Proxy(stubs, {
-    has: () => true,
+    has: (t, k) => (k in t) || !(k in globalThis),
     get: (t, k) => { if (k in t) return t[k]; if (k === Symbol.unscopables) return undefined;
       throw new ReferenceError('needs a stub for ' + String(k)); },
   });

@@ -93,10 +93,17 @@ test('displayFor reports whether a name was CHOSEN, and never returns a blank la
   // fallback ("Your church") so a vicar's notice would stop arriving signed "Member". The intent is unchanged
   // and is what is checked now: every path through the label ends in a non-empty string. Pinning the spelling
   // rather than the property is how a correct change gets reported as a regression.
-  assert.match(body, /const handle = chosen \|\|/,
-    'the label no longer falls back to anything — an author-less row would render blank');
-  assert.match(body, /UNNAMED/,
-    'the ordinary unnamed-member fallback is gone from the label');
+  // I WEAKENED THIS AND CALLED IT ACCOMMODATION. The original pinned `chosen || UNNAMED`; the church by-line
+  // work legitimately changed that expression, so I replaced it with two loose greps — and an audit showed
+  // both still pass if the church's fallback becomes an empty string, which is precisely the blank
+  // author-less row the assertion exists to prevent. Pin the PROPERTY instead: every branch ends in a
+  // non-empty label. Checked by evaluating the expression, not by reading it.
+  const expr = (body.match(/const handle = ([^;]+);/) || [])[1];
+  assert.ok(expr, 'the label is no longer a single expression — re-anchor this rather than widening it');
+  const evalWith = (chosen, voice) => new Function('chosen', 'voice', 'UNNAMED', 'return ' + expr)(chosen, voice, 'Member');
+  assert.equal(evalWith('Ada', null), 'Ada', 'a chosen name is not used');
+  assert.equal(evalWith('', null), 'Member', 'an ordinary unnamed member loses their fallback label');
+  assert.ok(evalWith('', { isChurch: true }), 'a church with no name renders a BLANK label — the row reads as broken');
   assert.match(code(FELLOW_SRC), /const UNNAMED = 'Member'/, 'the unnamed label is gone or renamed');
 });
 

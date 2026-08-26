@@ -41,6 +41,7 @@ import { WebSocketServer } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { readFileSync } from 'node:fs';
 import { requireFreePort } from './test-ports.mjs';
+import { stripComments, fnBody } from './test-slice.mjs';
 
 const PORT = 8834;   // unique across scripts/*.test.mjs — 8994 collides with import-applies-policy.test.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}`;   // NOT `URL` — that shadows the global and breaks new URL()
@@ -75,17 +76,55 @@ after(() => { try { wss.close(); } catch {} });
 const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
 test('the shipped bundle queues a direct message BEFORE attempting to send it', () => {
-  // The whole defect in one property. A group message does this (the `_outbox.push` above its publish); a DM
-  // did not, so a failed send had nowhere to survive. Queue-first is what makes the difference between "the
-  // relay never answered" and "the member's words are gone".
-  const dm = VENDOR.slice(VENDOR.indexOf('sendDM'), VENDOR.indexOf('sendDM') + 2600);
-  assert.ok(dm, 'sendDM must exist in the shipped bundle');
+  // The whole defect in one property. A group message does this; a DM did not, so a failed send had nowhere
+  // to survive. Queue-first is the difference between "the relay never answered" and "the words are gone".
+  //
+  // TWO WAYS THE FIRST VERSION OF THIS TEST CHEATED, both found by audit. It took a fixed 2600 characters
+  // from `sendDM`, which measured against the bundle runs PAST the end of the function into its neighbour —
+  // the same run-into-the-next-function mistake that let another test pass with its subject deleted. And the
+  // vendor bundle keeps `//` comments, so a comment mentioning _outbox.push satisfied it. Bounded with the
+  // repo's brace-matcher, comments stripped.
+  const dm = stripComments(fnBody(VENDOR, 'async sendDM(', 'sendDM'));
   const pushAt = dm.indexOf('_outbox.push');
   const sendAt = dm.search(/_publishBounded|_publishAny/);
   assert.ok(pushAt >= 0, 'sendDM never queues the message — a failed send loses the member\'s words for good');
   assert.ok(sendAt >= 0, 'sendDM must still attempt delivery');
   assert.ok(pushAt < sendAt,
     'sendDM queues AFTER attempting to send, so a send that fails outright is never queued at all');
+});
+
+test('the retry actually re-sends a QUEUED DIRECT MESSAGE, not just group posts', () => {
+  // THE SABOTAGE THAT BEAT THE OLD FILE: add `if (!item.groupId) continue;` to the flush loop and every test
+  // stayed green while a member's private message waited for ever. It passed because the end-to-end case
+  // below drives a hand-rolled queue of its own — a mirror test, by this project's own definition — so the
+  // shipped flush was never executed at all. This lifts the real one and gives it a DM.
+  const flush = (() => {
+    const src = fnBody(VENDOR, 'async function _outboxFlush', '_outboxFlush');
+    const sent = [];
+    const scope = {
+      _flushing: false, sk: new Uint8Array(32), _dmPlain: new Map(), _outboxSave: () => {},
+      _outbox: [{ evt: { id: 'dm1' }, groupId: null, peer: 'p'.repeat(64), tries: 0, relays: ['ws://x'] }],
+      _publishBounded: async (r, e) => { sent.push(e.id); return true; },
+      window: { Fellowship: { relays: ['ws://x'] } },
+      isPermanentRefusal: () => false, isConnectionFailure: () => true, isRateLimited: () => false,
+      _outboxFailed: [], _outboxSubs: new Set(), MAX_TRIES: 50,
+    };
+    // CLAIM APP IDENTIFIERS ONLY. `has: () => true` traps EVERY name the function mentions, globals included, so
+  // the lifted code could not reach String/JSON/Object and died with "needs a stub for String". Claim a name
+  // only when we are stubbing it or it is not a real global — that keeps the useful part (an unstubbed app
+  // dependency fails loudly instead of silently reading undefined) without breaking the language.
+    const proxy = new Proxy(scope, { has: (t, k) => (k in t) || !(k in globalThis),
+      get: (t, k) => { if (k in t) return t[k]; if (k === Symbol.unscopables) return undefined;
+        throw new ReferenceError('needs a stub for ' + String(k)); },
+      set: (t, k, v) => { t[k] = v; return true; } });
+    // eslint-disable-next-line no-new-func
+    const fn = new Function('scope', `with (scope) { ${src}; return _outboxFlush; }`)(proxy);
+    return { fn, sent };
+  })();
+  return flush.fn().then(() => {
+    assert.deepEqual(flush.sent, ['dm1'],
+      'the flush skipped a queued direct message — it retries group posts only, so a private message waits for ever');
+  });
 });
 
 test('the shipped bundle can hand a queued private message back to the screen that shows it', () => {
@@ -112,7 +151,9 @@ test('the DM thread actually DRAWS the waiting state, not merely computes it', (
   // to send looked identical to one that had arrived — worse than the defect it replaced, because the words
   // were safe and the member was told they had gone. Asserting the data exists is not enough; assert the
   // screen reads it.
-  const CHAT = readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8');
+  // STRIP THE COMMENTS. The prose inside DMThread — written by these same commits — contains '_pending',
+  // '_failed' and 'Waiting to send', so this assertion was satisfiable by its own explanation.
+  const CHAT = stripComments(readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8'));
   const dm = CHAT.slice(CHAT.indexOf('function DMThread'));
   assert.ok(dm.includes('_pending'), 'the DM thread never reads _pending — a queued message renders as delivered');
   assert.ok(dm.includes('Waiting to send'), 'the DM thread has no waiting indicator');

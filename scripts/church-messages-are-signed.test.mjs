@@ -23,13 +23,40 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const FS_V = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const ST_V = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
-test('the member app resolves a by-line for the church, not "Member"', () => {
-  assert.match(FS_V, /churchVoiceFor/,
-    'nothing maps a church key to a human name, so the church still arrives as an unnamed member');
+test('the church actually resolves to its own name and signer, not to "Member"', () => {
+  // GREPPING FOR THE FUNCTION NAME PROVED NOTHING. An audit beat the first version of this test by replacing
+  // the whole body with `return null` — the name survived, every assertion passed, and the vicar's letter was
+  // signed "Member" again. So call it, with a church-signed voice document in place, and check the answer.
+  const src = fnBody(FS_V, 'function churchVoiceFor', 'churchVoiceFor');
+  const CP = 'c'.repeat(64), STEW = 's'.repeat(64);
+  const voices = new Map([[CP, { self: { name: 'Rev Ada', office: 'Vicar' }, public: { [STEW]: { name: 'Tom', office: 'Treasurer' } } }]]);
+  const scope = { _churchVoices: voices };
+  // CLAIM APP IDENTIFIERS ONLY. `has: () => true` traps EVERY name the function mentions, globals included, so
+  // the lifted code could not reach String/JSON/Object and died with "needs a stub for String". Claim a name
+  // only when we are stubbing it or it is not a real global — that keeps the useful part (an unstubbed app
+  // dependency fails loudly instead of silently reading undefined) without breaking the language.
+  const proxy = new Proxy(scope, { has: (t, k) => (k in t) || !(k in globalThis),
+    get: (t, k) => { if (k in t) return t[k]; if (k === Symbol.unscopables) return undefined;
+      throw new ReferenceError('needs a stub for ' + String(k)); } });
+  // eslint-disable-next-line no-new-func
+  const fn = new Function('scope', `with (scope) { ${src}; return churchVoiceFor; }`)(proxy);
+
+  const church = fn(CP);
+  assert.ok(church && church.isChurch, 'the church key is not recognised as the church');
+  assert.equal(church.name, 'Rev Ada', 'the church key resolves to no signer — its notices arrive unsigned');
+  assert.equal(church.office, 'Vicar', 'the signer has no role beside their name');
+
+  const named = fn(STEW);
+  assert.ok(named && !named.isChurch, 'a named steward is mistaken for the church itself');
+  assert.equal(named.name, 'Tom', 'a steward the church chose to name publicly arrives unnamed');
+
+  assert.equal(fn('m'.repeat(64)), null,
+    'an ordinary member gets a church by-line — anyone could appear to speak for the church');
 });
 
 test('the by-line is trusted only from the church key', () => {
