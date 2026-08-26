@@ -334,6 +334,49 @@ async function _fetchCareTeam(cp) {
     if (!_relayAuthedAt) return null;
     return [];
 }
+// WHO MAY HELP A CHILD. The church's cleared-adults list (its DBS / vetting list), plus a steward the church
+// gave the safeguarding job to, plus the church's own console — which stays in because the office must be a
+// child's route of last resort. This is the SAME audience the relay serves a child's request to, and that is
+// not a coincidence: sealing narrower than the relay serves is how Anne came to be signed up to drive Edith
+// to hospital and unable to read the address (see publishCareRequest). Sealing WIDER would be worse — it
+// would hand a child's disclosure, in openable form, to someone the church has not cleared.
+//
+// Returns null when the answer could not be ESTABLISHED, [] when the church genuinely has nobody. The caller
+// must treat those differently: one is "try again", the other is "this church has not set this up yet".
+async function _fetchChildCareAudience(cp) {
+  let approved = null, roster = null;
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [APPROVED_D + cp, 'trinityone/stewards:' + cp] }]);
+    let bestA = null, bestS = null;
+    for (const e of (evs || [])) {
+      if (e.pubkey !== cp) continue;                                   // both are OWNER-ONLY documents
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+      if (d === APPROVED_D + cp) { if (!bestA || e.created_at > bestA.created_at) bestA = e; }
+      else if (d === 'trinityone/stewards:' + cp) { if (!bestS || e.created_at > bestS.created_at) bestS = e; }
+    }
+    if (bestA) { try { const o = JSON.parse(bestA.content); if (Array.isArray(o.pubkeys)) approved = o.pubkeys.filter(Boolean); } catch (e) {} }
+    if (bestS) {
+      try {
+        const o = JSON.parse(bestS.content);
+        const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+        const caps = (o.caps && typeof o.caps === 'object') ? o.caps : null;
+        // No capabilities recorded for a steward means a FULL steward, which is the relay's own compatibility
+        // rule (stewardCan: `if (!caps) return true`). Mirroring it here keeps the two answers identical for a
+        // church whose roster predates capabilities; diverging would under-seal to a steward the relay serves.
+        roster = pks.filter(pk => {
+          if (!caps) return true;
+          const c = caps[pk];
+          if (!Array.isArray(c)) return true;
+          return c.some(x => String(x || '').toLowerCase() === 'safeguarding');
+        });
+      } catch (e) {}
+    }
+  } catch (e) { return null; }
+  // NOTHING FOUND is a real answer only if we were genuinely connected when we asked — querySync resolves
+  // empty on a relay that is unreachable, still connecting, or has not answered the auth challenge.
+  if (approved === null && roster === null && !_relayAuthedAt) return null;
+  return [...new Set([...(approved || []), ...(roster || [])].filter(Boolean))];
+}
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
 function _decEvt(cp, e) {
@@ -634,6 +677,7 @@ let _needAuth = true;
 // the post-auth refetch, so a boolean would still be satisfied by the pre-auth EOSE. The question that
 // actually matters is whether the relay answered us AFTER it knew who we were.
 let _relayAuthedAt = 0;
+let _sgSelf = { cp: '', isMinor: false, known: false };   // what MY OWN sealed clearance says about me — see subscribeChurchSafeguard
 pool.automaticallyAuth = () => async (authEvent) => {
   if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }
@@ -867,6 +911,7 @@ const _fireTrust = () => { try { window.dispatchEvent(new CustomEvent('trinity-c
 // The names ride the church-signed steward roster — the church key is the only author trusted for it (the
 // check above), so a forged name is not possible, and the relay passes unknown keys through untouched, which
 // is why this is backwards compatible with churches whose roster predates it.
+const APPROVED_D = 'trinityone/approved:';   // the church's cleared-adults list — who may be near children
 const VOICE_D = 'trinityone/voice:';
 const _churchVoices = new Map();
 function _absorbRoster(cp, d, e) {
@@ -3191,6 +3236,12 @@ window.Fellowship = {
       // 2026-08-04. Falls back to the church map for a STEWARD, who legitimately holds it.
       const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice()
         : (me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : []);
+      // THE ENGINE NEEDS THIS TOO, NOT JUST THE SCREEN. publishCareRequest has to seal a child's request to a
+      // narrower audience than an adult's, and a screen is not a boundary — if the decision lived only in the
+      // UI, an older build, a modified one, or a new caller would send a child's disclosure to the whole care
+      // rota and nothing would notice. `known` distinguishes "this church says they are not a child" from
+      // "their clearance has not reached this phone yet", which must never be treated the same.
+      _sgSelf = { cp: pubk, isMinor, known: !!clr };
       onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {
@@ -3224,7 +3275,7 @@ window.Fellowship = {
         // phone therefore fails OPEN to "adult" — is tracked; it needs the same treatment on both sides at
         // once, because console and member disagreeing is how the worst defect of the last round happened.
         if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
-        else if (d === 'trinityone/approved:' + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
+        else if (d === APPROVED_D + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
         else if (d === 'trinityone/guardians:' + pubk) { if (_ts < _sgTs.guardians) return; _sgTs.guardians = _ts; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
         else if (d === 'trinityone/nophoto:' + pubk) { if (_ts < _sgTs.nophoto) return; _sgTs.nophoto = _ts; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
         else if (me && d === 'trinityone/clearance:' + me) {
@@ -3618,6 +3669,16 @@ window.Fellowship = {
   // Fetch the church's care-team roster (careteam:<cp> — recipient pubkeys), wrap a one-off content key to each
   // recipient + to ourselves (so we can read our own status back), and publish a member-signed carereq:<id>.
   // The relay read-gates it to the care team; the content is NIP-44-sealed on top. Returns { id, ...body } | null.
+  // CAN A CHILD IN THIS CHURCH REACH ANYONE AT ALL? Returns null when we could not find out (offline, not yet
+  // authenticated), [] when the church has genuinely cleared nobody, and the list otherwise. The screen asks
+  // this BEFORE offering a child a form, because the alternative — a form, a send, a thank-you, and no reader
+  // — is the worst outcome this feature has. It is not a permission check: publishCareRequest asks again for
+  // itself, since a screen is not a boundary.
+  async childCareAudience(churchNpub) {
+    const cp = toPub(churchNpub) || window.Fellowship.churchPub;
+    if (!cp) return null;
+    return _fetchChildCareAudience(cp);
+  },
   async publishCareRequest(fields) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
@@ -3640,9 +3701,26 @@ window.Fellowship = {
     // list they WERE on. The seal is per-recipient and it is chosen HERE, on the asker's phone, at send
     // time; nothing later can widen it. In the church's own terms: Anne signed up to drive Edith to hospital
     // and could not see the address, the time, or the phone number.
-    const team = await _fetchCareTeam(cp);
+    // A CHILD'S REQUEST DOES NOT GO TO THE CARE ROTA. A care-team seat is a willingness to cook a meal or give
+    // a lift; it is not a vetting check. So for a child the audience is the church's cleared-adults list, a
+    // steward given the safeguarding job, and the church's own console — the same people the relay will serve
+    // it to, and the same people already allowed to message that child privately.
+    //
+    // The screen refuses to offer the form when that audience is empty, but this must hold on its own: a
+    // screen is not a boundary, and this is the one message in the product where sending it to the wrong
+    // people is the harm itself. `_sgSelf.known` is the difference between "the church says they are not a
+    // child" and "we have not heard yet" — and we do not guess. Refusing costs a child one retry; guessing
+    // wrong hands their words to someone the church declined to clear.
+    const childish = _sgSelf.cp === cp && _sgSelf.isMinor;
+    if (_sgSelf.cp === cp && !_sgSelf.known && !childish) {
+      // we are connected to this church but its clearance for us has not arrived — do not assume adult
+      return { error: 'unknown-clearance' };
+    }
+    const team = childish ? await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
+    if (childish && team === null) return { error: 'unknown-audience' };   // could not establish — never a wide fallback
+    if (childish && (!team || !team.length)) return { error: 'no-one-cleared' };
     const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
-    // always seal to the church key (the owner can always triage) + ourselves; plus the published care team.
+    // always seal to the church key (the owner can always triage) + ourselves; plus the audience above.
     const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
     // ONE SITUATION IS ONE REQUEST. Verity needed a lift to the hospital and someone to do her shop; the form
     // held a single kind, so tapping Rides then Errands kept only Errands and she sent two requests for one

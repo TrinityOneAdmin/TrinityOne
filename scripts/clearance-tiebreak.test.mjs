@@ -58,6 +58,10 @@ function memberSide() {
   let handlers = null;
   const scope = {
     toPub: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
+    // the cleared-adults d-tag, which the shipped function now takes from the file's shared constant rather
+    // than retyping the string — one spelling, so the subscription and the child-care audience cannot drift
+    APPROVED_D: 'trinityone/approved:',
+    _sgSelf: { cp: '', isMinor: false, known: false },   // the engine's cache of what MY OWN clearance says
     pubSet: (a) => new Set(a || []),
     _noPhoto: new Set(),
     _churchRoster: new Map([[church.pub, new Set([steward.pub])]]),   // the steward IS seated

@@ -6124,6 +6124,47 @@
     if (!_relayAuthedAt) return null;
     return [];
   }
+  async function _fetchChildCareAudience(cp) {
+    let approved = null, roster = null;
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [APPROVED_D + cp, "trinityone/stewards:" + cp] }]);
+      let bestA = null, bestS = null;
+      for (const e of evs || []) {
+        if (e.pubkey !== cp) continue;
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d === APPROVED_D + cp) {
+          if (!bestA || e.created_at > bestA.created_at) bestA = e;
+        } else if (d === "trinityone/stewards:" + cp) {
+          if (!bestS || e.created_at > bestS.created_at) bestS = e;
+        }
+      }
+      if (bestA) {
+        try {
+          const o = JSON.parse(bestA.content);
+          if (Array.isArray(o.pubkeys)) approved = o.pubkeys.filter(Boolean);
+        } catch (e) {
+        }
+      }
+      if (bestS) {
+        try {
+          const o = JSON.parse(bestS.content);
+          const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+          const caps = o.caps && typeof o.caps === "object" ? o.caps : null;
+          roster = pks.filter((pk) => {
+            if (!caps) return true;
+            const c = caps[pk];
+            if (!Array.isArray(c)) return true;
+            return c.some((x) => String(x || "").toLowerCase() === "safeguarding");
+          });
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+      return null;
+    }
+    if (approved === null && roster === null && !_relayAuthedAt) return null;
+    return [...new Set([...approved || [], ...roster || []].filter(Boolean))];
+  }
   function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
     const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
@@ -6350,6 +6391,7 @@
   var pub = null;
   var _needAuth = true;
   var _relayAuthedAt = 0;
+  var _sgSelf = { cp: "", isMinor: false, known: false };
   pool.automaticallyAuth = () => async (authEvent) => {
     if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
     if (!sk) {
@@ -6571,6 +6613,7 @@
     } catch {
     }
   };
+  var APPROVED_D = "trinityone/approved:";
   var VOICE_D = "trinityone/voice:";
   var _churchVoices = /* @__PURE__ */ new Map();
   function _absorbRoster(cp, d, e) {
@@ -9342,6 +9385,7 @@
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
+        _sgSelf = { cp: pubk, isMinor, known: !!clr };
         onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
@@ -9358,7 +9402,7 @@
               minors = [];
             }
             emit();
-          } else if (d === "trinityone/approved:" + pubk) {
+          } else if (d === APPROVED_D + pubk) {
             if (_ts < _sgTs.approved) return;
             _sgTs.approved = _ts;
             try {
@@ -9967,6 +10011,16 @@
     // Fetch the church's care-team roster (careteam:<cp> — recipient pubkeys), wrap a one-off content key to each
     // recipient + to ourselves (so we can read our own status back), and publish a member-signed carereq:<id>.
     // The relay read-gates it to the care team; the content is NIP-44-sealed on top. Returns { id, ...body } | null.
+    // CAN A CHILD IN THIS CHURCH REACH ANYONE AT ALL? Returns null when we could not find out (offline, not yet
+    // authenticated), [] when the church has genuinely cleared nobody, and the list otherwise. The screen asks
+    // this BEFORE offering a child a form, because the alternative — a form, a send, a thank-you, and no reader
+    // — is the worst outcome this feature has. It is not a permission check: publishCareRequest asks again for
+    // itself, since a screen is not a boundary.
+    async childCareAudience(churchNpub) {
+      const cp = toPub(churchNpub) || window.Fellowship.churchPub;
+      if (!cp) return null;
+      return _fetchChildCareAudience(cp);
+    },
     async publishCareRequest(fields) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
@@ -9976,7 +10030,13 @@
         }
       }
       if (!sk || !cp) return null;
-      const team = await _fetchCareTeam(cp);
+      const childish = _sgSelf.cp === cp && _sgSelf.isMinor;
+      if (_sgSelf.cp === cp && !_sgSelf.known && !childish) {
+        return { error: "unknown-clearance" };
+      }
+      const team = childish ? await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
+      if (childish && team === null) return { error: "unknown-audience" };
+      if (childish && (!team || !team.length)) return { error: "no-one-cleared" };
       const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
       const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
       const types = (Array.isArray(fields.types) ? fields.types : [fields.type]).map((t) => String(t || "").trim()).filter(Boolean);

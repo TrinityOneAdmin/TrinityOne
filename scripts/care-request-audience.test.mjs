@@ -48,7 +48,7 @@ const joyceSk = generateSecretKey(), joycePub = getPublicKey(joyceSk);
 // Lift the shipped method and give it the free variables it closes over. Everything here is a stub EXCEPT
 // the function under test and the real NIP-44 primitives — the seal has to be genuine or "can Anne open it?"
 // is not a real question.
-function loadPublish({ team }) {
+function loadPublish({ team, sgSelf, childAudience }) {
   const published = [];
   const body = fnBody(VENDOR, 'async publishCareRequest(fields) {', 'publishCareRequest');
   // THE BUNDLER RENAMES WHAT IT LIFTS. In vendor/fellowship.js this function's crypto helpers are no longer
@@ -61,6 +61,11 @@ function loadPublish({ team }) {
     window: { Fellowship: { churchPub, ready: Promise.resolve() } },
     sk: askerSk, pub: askerPub,
     _fetchCareTeam: async () => team,                  // null | [] | [pubkeys]
+    // A CHILD IS SEALED TO A DIFFERENT AUDIENCE, and asked a different question first. `_sgSelf` is what this
+    // phone has been told about ITSELF by its own church — `known:false` means the answer has not arrived,
+    // which is not the same as "not a child" and must never be treated as such.
+    _sgSelf: sgSelf || { cp: churchPub, isMinor: false, known: true },
+    _fetchChildCareAudience: async () => (childAudience === undefined ? [] : childAudience),
     crypto: webcrypto,
     encrypt: (plain, key) => nip44.encrypt(plain, key),
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
@@ -174,4 +179,138 @@ test('a request only the leader holds is not described as reaching the care team
     'MyRequestRow promises "your care team will be in touch" without ever checking whether anyone on that ' +
     'team holds a key to the request. In a church with no care team that sentence is false, and the member ' +
     'waits for people who cannot see it.');
+});
+
+
+// ── A CHILD'S REQUEST GOES TO THE ADULTS THE CHURCH HAS CLEARED, NOT TO THE CARE ROTA ────────────────────
+// Owner's line, 2026-08-26: "if children can ask for care, they should be restricted to Only care team, that
+// won't always be the case, so appropriate settings need to be available to the stewards to manage who can
+// care for children, separate to other standard care requests."
+//
+// A care-team seat is a willingness to cook a meal or give a lift. It is not a vetting check, and a church
+// that has not cleared someone to be near children has said something specific by not doing so. Before this,
+// a child's opening message — the disclosure itself — was wrapped for every seat on the care rota, while the
+// FOLLOW-UP thread had required youth clearance since the day it was written. The protection started one
+// message too late, and the message it missed is the one that matters.
+const clearedSk = generateSecretKey(), clearedPub = getPublicKey(clearedSk);
+
+test('a child’s request is sealed to a CLEARED adult', async () => {
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],                          // the ordinary care rota
+    sgSelf: { cp: churchPub, isMinor: true, known: true },
+    childAudience: [clearedPub],                        // …and the one adult this church has cleared
+  });
+  const res = await fn(FIELDS);
+  assert.ok(res && !res.error, 'a child could not ask for help at all: ' + JSON.stringify(res));
+  assert.equal(published.length, 1);
+  assert.ok(canOpen(published[0], clearedSk, clearedPub),
+    'the cleared adult cannot open a child’s request — the only people allowed to help cannot read it');
+});
+
+test('…and NOT to an uncleared member of the care team', async () => {
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],
+    sgSelf: { cp: churchPub, isMinor: true, known: true },
+    childAudience: [clearedPub],
+  });
+  await fn(FIELDS);
+  assert.equal(canOpen(published[0], anneSk, annePub), false,
+    'a child’s disclosure is readable by the whole care rota. Anne may be entirely trustworthy; the point is ' +
+    'that her church has not cleared her to be near children, and this is not her business.');
+  assert.equal(canOpen(published[0], joyceSk, joycePub), false, 'same for the second care-team seat');
+});
+
+test('the church’s own console can always open it', async () => {
+  // Deliberate, and the same reason the relay keeps the church key in safeguardAllows: the office must be a
+  // child's route of last resort, and the console holder is the accountable adult.
+  const { fn, published } = loadPublish({
+    team: [], sgSelf: { cp: churchPub, isMinor: true, known: true }, childAudience: [clearedPub],
+  });
+  await fn(FIELDS);
+  assert.ok(canOpen(published[0], churchSk, churchPub), 'the church itself cannot open a child’s request');
+});
+
+test('a church that has cleared NOBODY does not take the message', async () => {
+  // The worst outcome this feature has is a form, a send, a thank-you, and not one person who can read it.
+  // For a child working up to telling someone something difficult, that is worse than no feature at all.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],                          // a full care rota, and it makes no difference
+    sgSelf: { cp: churchPub, isMinor: true, known: true }, childAudience: [],
+  });
+  const res = await fn(FIELDS);
+  assert.equal(published.length, 0, 'a child’s words were published where nobody cleared can read them');
+  assert.equal(res && res.error, 'no-one-cleared', 'the app did not say WHY, so the screen cannot tell them what to do');
+});
+
+test('“we could not find out” never falls back to the care team', async () => {
+  // querySync resolves empty on a relay that is unreachable, still connecting, or has not answered the auth
+  // challenge — the same trap that caused the original defect in this file. Guessing wrong here hands a
+  // child's words to people their church declined to clear.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],
+    sgSelf: { cp: churchPub, isMinor: true, known: true }, childAudience: null,
+  });
+  const res = await fn(FIELDS);
+  assert.equal(published.length, 0, 'an unreachable relay caused a child’s request to go to the care rota');
+  assert.equal(res && res.error, 'unknown-audience');
+});
+
+test('if we have not heard whether the sender is a child, we do not assume they are an adult', async () => {
+  // A phone that has just started, or has never received its clearance, knows nothing. Refusing costs one
+  // retry; assuming adult publishes a child's disclosure to the whole rota.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],
+    sgSelf: { cp: churchPub, isMinor: false, known: false },
+  });
+  const res = await fn(FIELDS);
+  assert.equal(published.length, 0, 'an unknown clearance was treated as "adult"');
+  assert.equal(res && res.error, 'unknown-clearance');
+});
+
+test('an ADULT’s request is untouched by any of this', async () => {
+  // The whole point of the change is that the two paths are separate. A grown-up asking for a lift still goes
+  // to the care team exactly as before.
+  const { fn, published } = loadPublish({ team: [annePub, joycePub] });
+  const res = await fn(FIELDS);
+  assert.ok(res && !res.error);
+  assert.ok(canOpen(published[0], anneSk, annePub), 'the ordinary care path broke');
+  assert.ok(canOpen(published[0], joyceSk, joycePub));
+});
+
+test('the RELAY refuses to serve a child’s request to an uncleared reader', () => {
+  // The seal is the real protection, but it is chosen on one phone at one moment. The relay is the boundary,
+  // and it must ask the same question of the REQUEST that it has always asked of the follow-up thread.
+  const GW = stripComments(readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8'));
+  const at = GW.indexOf("if (d.startsWith(CAREREQ_D)) {   ");
+  assert.notEqual(at, -1, 're-anchor: the care-request read branch has moved');
+  const branch = GW.slice(at, GW.indexOf('\n    }', at));
+  assert.match(branch, /MINORS\.has\(e\.pubkey\)[\s\S]{0,80}safeguardAllows\(e\.pubkey, authed\)/,
+    'a child’s disclosure is served to anyone with a care-team seat — the follow-up thread has been gated ' +
+    'since the day it was written, and the opening message was not');
+  const guardAt = branch.indexOf('safeguardAllows');
+  const returnAt = branch.indexOf('return (authed');
+  assert.ok(guardAt !== -1 && returnAt !== -1 && guardAt < returnAt,
+    'the safeguarding check sits after the return that grants access, so it never runs');
+});
+
+test('…and the RESOLUTION of a child’s request, which names them, is gated too', () => {
+  // "Handled" for a child's request tells an uncleared reader that that child asked for help, which is most
+  // of what the gate above exists to withhold.
+  const GW = stripComments(readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8'));
+  const at = GW.indexOf('if (d.startsWith(CAREREQSTATUS_D)) {   ');
+  assert.notEqual(at, -1, 're-anchor: the resolution read branch has moved');
+  const branch = GW.slice(at, GW.indexOf('\n    }', at));
+  assert.match(branch, /MINORS\.has\(pHex\)[\s\S]{0,80}safeguardAllows\(pHex, authed\)/,
+    'the resolution of a child’s request is served to the whole care team');
+});
+
+test('the screen does not offer a child a form that goes nowhere', () => {
+  const TODAY = stripComments(readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8'));
+  assert.match(TODAY, /childCareAudience/,
+    'the card never asks whether anyone can receive a child’s request, so it offers the form regardless');
+  assert.match(TODAY, /CARE_SEND_REFUSAL/,
+    'a refusal has no wording, so the child is shown a generic failure or, worse, a thank-you');
+  // …and a refusal must not be read as a send. `if (ok)` was true for every refusal object.
+  assert.match(TODAY, /if \(ok && ok\.error\)/,
+    'the submit handler treats a refusal object as success and thanks the child for a message nobody received');
 });

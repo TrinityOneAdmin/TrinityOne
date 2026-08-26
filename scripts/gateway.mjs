@@ -2061,12 +2061,28 @@ function canRead(e, authed) {
     }
     if (d.startsWith(CAREREQ_D)) {   // a member's private ask-for-help — CARE-TEAM ONLY (mirror SAFE_D), never served to the whole church
       const cp = owningChurch(e, d);
-      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp));
+      if (!authed || !cp) return false;
+      // SAFEGUARDING: A CHILD'S DISCLOSURE IS NOT CARE-TEAM BUSINESS. The follow-up thread (CARECHAT_D, just
+      // below) has required youth clearance to read since it was written — but the REQUEST, which is the
+      // disclosure itself and the most sensitive thing a child ever sends through this app, did not. It went
+      // to every seat on the care rota. A care-team seat is a willingness to cook a meal or give a lift; it
+      // is not a vetting check, and a church that has not cleared someone to be near children has said so.
+      //
+      // Same rule as the thread, deliberately: one answer to "who may deal with this child", used everywhere.
+      // That is the church's cleared-adults list, a steward given the safeguarding job, a linked guardian, and
+      // the church's own console — which stays open because the office must be a child's route of last resort.
+      if (MINORS.has(e.pubkey) && authed !== e.pubkey && !safeguardAllows(e.pubkey, authed)) return false;
+      return (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp));
     }
     if (d.startsWith(CAREREQSTATUS_D)) {   // a request's resolution — the care team AND the p-tagged requester (so the asker sees "approved"/"handled")
       const cp = owningChurch(e, d);
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
-      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp) || (!!pHex && authed === pHex));
+      if (!authed || !cp) return false;
+      // …and the same for the RESOLUTION, which names the asker in a p-tag. Serving "handled" for a child's
+      // request to an uncleared care-team member tells them that child asked for help, which is most of what
+      // the gate above exists to withhold.
+      if (pHex && MINORS.has(pHex) && authed !== pHex && !safeguardAllows(pHex, authed)) return false;
+      return (authed === e.pubkey || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp) || (!!pHex && authed === pHex));
     }
     if (d.startsWith(CARECHAT_D)) {   // a request thread message — the care team + the p-tagged asker + the author
       const cp = owningChurch(e, d);

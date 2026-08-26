@@ -458,6 +458,13 @@ function CareRequests({ ctx }) {
 // failing — the only key holders are the church leader and the asker. "Sent to your care team" is then a
 // false sentence about the one message where being wrong matters most: the person believes several people
 // know, and nobody comes. Simulation 2026-08-19, R3-7.
+// WHY A CHILD'S REQUEST WAS NOT SENT, in words a worried young person can act on. Never "error", never a
+// code, and never anything that reads as their fault. Each one ends with something they can actually do.
+const CARE_SEND_REFUSAL = {
+  'no-one-cleared': 'Your church hasn’t set up who can help young people yet. Please speak to a leader in person — they can sort this out for you.',
+  'unknown-audience': 'We couldn’t check who can help you right now. Try again in a moment, or speak to a leader in person.',
+  'unknown-clearance': 'We couldn’t check your account with your church yet. Try again in a moment, or speak to a leader in person.',
+};
 function careSentWording(res) {
   if (res && res.narrowed) return 'Sent to your church leader \u2014 we couldn\u2019t reach the care team list';
   if (res && !res.teamCount) return 'Sent to your church leader \u2014 no care team is set up yet';
@@ -481,6 +488,10 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
     let ok = null;
     try { ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
     setBusy(false);
+    // A REFUSAL IS AN OBJECT TOO. publishCareRequest answers with a reason when it will not send a child's
+    // request — it could not tell whether the sender is a child, could not establish who may receive it, or
+    // the church has cleared nobody. `if (ok)` read every one of those as success and thanked them for it.
+    if (ok && ok.error) { setErr(CARE_SEND_REFUSAL[ok.error] || 'Couldn’t send — please try again.'); return; }
     if (ok) onSent(ok); else setErr('Couldn’t send — check your connection and try again.');
   };
   return (
@@ -537,6 +548,23 @@ function AskForHelp({ ctx }) {
   const [mine, setMine] = React.useState([]);
   const [open, setOpen] = React.useState(false);
   const [chatting, setChatting] = React.useState(null);
+  // A CHILD IS ASKED A DIFFERENT QUESTION, AND ASKED IT BEFORE THEY TYPE ANYTHING. Their request does not go
+  // to the care rota — it goes to the adults the church has cleared to be near young people — so the first
+  // thing to find out is whether that church has cleared anybody at all. undefined = still asking, null = we
+  // could not find out, [] = nobody, a list = these people.
+  //
+  // The alternative is what this replaces: a form, a send, a thank-you, and not one person who can read it.
+  // For a child working up to telling someone something difficult, that is the worst thing the app can do.
+  const isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  const [audience, setAudience] = React.useState(undefined);
+  React.useEffect(() => {
+    if (!isMinor || !ctx.church || !(window.Fellowship && window.Fellowship.childCareAudience)) { setAudience(undefined); return; }
+    let live = true;
+    window.Fellowship.childCareAudience(ctx.church.npub)
+      .then(a => { if (live) setAudience(a); })
+      .catch(() => { if (live) setAudience(null); });
+    return () => { live = false; };
+  }, [isMinor, ctx.church && ctx.church.npub]);
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
@@ -548,14 +576,30 @@ function AskForHelp({ ctx }) {
     <div style={{ marginBottom: 18 }}>
       {mine.map(r => <MyRequestRow key={r.id} r={r} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: 'Your care team' })} />)}
       {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
+      {isMinor && (audience !== undefined) && (!audience || !audience.length) ? (
+        // NO FORM. Not a disabled button either — a greyed-out control invites tapping it and reads as a fault
+        // with their phone. A plain, calm sentence, and the one thing they can actually do.
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid var(--line)', background: 'var(--surface)', fontFamily: 'var(--font-ui)' }}>
+          <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Need a hand?</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.5 }}>
+              {audience === null
+                ? 'We couldn’t check who can help you right now. Please speak to a leader at your church — or try again in a moment.'
+                : 'Your church hasn’t set up who can help young people yet. Please speak to a leader at your church — they can sort this out for you.'}
+            </div>
+          </div>
+        </div>
+      ) : (
       <button onClick={() => setOpen(true)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>Tell your care team what would help — privately.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>{isMinor ? 'Tell someone at your church what would help — privately.' : 'Tell your care team what would help — privately.'}</div>
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
+      )}
       {open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
     </div>
   );
