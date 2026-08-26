@@ -15689,6 +15689,13 @@ zoo`.split("\n");
     const live = _connectedRelays();
     const targets = urls && urls.length ? urls : live.length ? live : relays();
     if (!targets.length) return false;
+    try {
+      for (const u of targets) {
+        const r = pool.relays && pool.relays.get(u);
+        if (r && r.publishTimeout < 12e3) r.publishTimeout = 12e3;
+      }
+    } catch (e) {
+    }
     let rs = [];
     try {
       rs = await Promise.allSettled(pool.publish(targets, evt).map((p) => p.then((v) => {
@@ -17676,6 +17683,52 @@ zoo`.split("\n");
     //
     // The church key is always wrapped to itself (so the church can later add members without needing
     // the original opaque key material from disk). ----
+    // A ROOM FLAGGED ENCRYPTED WITH NO KEY IS A ROOM NOBODY CAN WRITE TO — and it is silent from every seat.
+    // SIMULATION ROUND 6, 2026-08-25: St Aidan's had four encrypted rooms and three key envelopes. Prayer had
+    // none. Every member's send there was refused by their own phone (fellowship `if (wantsEnc && !gkey)`) with
+    // a toast promising the key would arrive "in a moment". It never could. A woman's prayer request about her
+    // seriously ill mother died in that room, and nothing on the steward's screen said anything was wrong.
+    //
+    // HOW A ROOM IS BORN DEAD: the console's writes waited only 4.4s for every relay to acknowledge, so on a
+    // congested pipe a group document that WAS stored came back as `null`. Both creation paths read null as
+    // "nothing happened" and skipped the key publish AND the revert, leaving `encrypted: true` on the relay with
+    // no envelope anywhere. Nothing has ever repaired that afterwards: the background re-key passes
+    // `reuseOnly`, which by design refuses to mint, and the seal buttons only appear for rooms not yet flagged.
+    //
+    // So this reconciler both PREVENTS and HEALS, including rooms broken by older versions.
+    //
+    // THE MINT GATE IS THE WHOLE THING, and it is copied deliberately from ensureCareKeyForMembers above rather
+    // than reinvented. Minting a second key for a room that already has one permanently orphans everything
+    // sealed with the first. "The relay returned no envelope" is NOT proof that none exists — a private
+    // document reads back empty from an unauthenticated or half-connected relay too. Every guard below fails
+    // CLOSED: refusing to act leaves a visible, fixable room; acting wrongly destroys a church's history in
+    // silence.
+    async ensureGroupKeys(groups, memberPubs) {
+      const cp = actingChurch || pub;
+      if (!sk || !cp || !churchSk || !churchPub) return [];
+      if (!_isRelayAuthed()) return [];
+      const out = [];
+      for (const g of groups || []) {
+        if (!g || !g.id || !g.encrypted) continue;
+        if ((_skeys[g.id] || []).length) continue;
+        let envelopes, sealed;
+        try {
+          envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
+          sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
+        } catch (e) {
+          continue;
+        }
+        if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
+        if (envelopes.length) continue;
+        if (sealed.some((e) => (e.tags || []).some((t) => t[0] === "enc" && t[1] === "1"))) {
+          out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
+          continue;
+        }
+        const r = await this.publishGroupKey(g.id, memberPubs || []);
+        out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
+      }
+      return out;
+    },
     async publishGroupKey(groupId, memberPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const haveRing = (_skeys[groupId] || []).length > 0;

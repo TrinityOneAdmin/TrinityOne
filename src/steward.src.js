@@ -1655,6 +1655,14 @@ async function _publishToRelays(evt, urls) {
   const live = _connectedRelays();
   const targets = (urls && urls.length) ? urls : (live.length ? live : relays());
   if (!targets.length) return false;
+  // GIVE A SLOW RELAY TIME TO SAY YES. The vendored library waits 4.4s for each relay's acknowledgement
+  // (vendor publishTimeout) and then reports failure — but a late OK is not a refusal, and the EVENT has
+  // usually been stored by then. On a congested pipe that turns "saved" into "couldn't save", and the console
+  // acts on the wrong answer: simulation round 6 had a vicar shown a red "Couldn't save to the relay" over
+  // three groups that saved perfectly well, while the room that HALF-saved — encrypted, with its key publish
+  // skipped because the group publish had "failed" — got no warning at all. Nobody could ever write in it.
+  // 12s matches the member app's PUBLISH_TIMEOUT_MS. A slower true answer beats a fast false one.
+  try { for (const u of targets) { const r = pool.relays && pool.relays.get(u); if (r && r.publishTimeout < 12000) r.publishTimeout = 12000; } } catch (e) {}
   let rs = [];
   try {
     rs = await Promise.allSettled(pool.publish(targets, evt).map(p => p.then(v => {
@@ -3457,6 +3465,57 @@ window.Steward = {
   //
   // The church key is always wrapped to itself (so the church can later add members without needing
   // the original opaque key material from disk). ----
+  // A ROOM FLAGGED ENCRYPTED WITH NO KEY IS A ROOM NOBODY CAN WRITE TO — and it is silent from every seat.
+  // SIMULATION ROUND 6, 2026-08-25: St Aidan's had four encrypted rooms and three key envelopes. Prayer had
+  // none. Every member's send there was refused by their own phone (fellowship `if (wantsEnc && !gkey)`) with
+  // a toast promising the key would arrive "in a moment". It never could. A woman's prayer request about her
+  // seriously ill mother died in that room, and nothing on the steward's screen said anything was wrong.
+  //
+  // HOW A ROOM IS BORN DEAD: the console's writes waited only 4.4s for every relay to acknowledge, so on a
+  // congested pipe a group document that WAS stored came back as `null`. Both creation paths read null as
+  // "nothing happened" and skipped the key publish AND the revert, leaving `encrypted: true` on the relay with
+  // no envelope anywhere. Nothing has ever repaired that afterwards: the background re-key passes
+  // `reuseOnly`, which by design refuses to mint, and the seal buttons only appear for rooms not yet flagged.
+  //
+  // So this reconciler both PREVENTS and HEALS, including rooms broken by older versions.
+  //
+  // THE MINT GATE IS THE WHOLE THING, and it is copied deliberately from ensureCareKeyForMembers above rather
+  // than reinvented. Minting a second key for a room that already has one permanently orphans everything
+  // sealed with the first. "The relay returned no envelope" is NOT proof that none exists — a private
+  // document reads back empty from an unauthenticated or half-connected relay too. Every guard below fails
+  // CLOSED: refusing to act leaves a visible, fixable room; acting wrongly destroys a church's history in
+  // silence.
+  async ensureGroupKeys(groups, memberPubs) {
+    const cp = actingChurch || pub;
+    if (!sk || !cp || !churchSk || !churchPub) return [];
+    // (1) NEVER CONCLUDE "no key" FROM AN UNAUTHENTICATED READ. A private document reads back empty from a
+    // relay that has not authenticated us, exactly as it does when the document truly is absent.
+    if (!_isRelayAuthed()) return [];
+    const out = [];
+    for (const g of (groups || [])) {
+      if (!g || !g.id || !g.encrypted) continue;
+      if ((_skeys[g.id] || []).length) continue;      // (2) we already hold the ring — nothing is missing
+      // (3) ASK THE RELAY DIRECTLY rather than trusting a local stream flag. A missed subscription frame and a
+      // genuinely absent envelope look identical from in here, and one of them must never lead to a mint.
+      // A FAILED query is not an answer: on any error we leave the room alone.
+      let envelopes, sealed;
+      try {
+        envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#d': [GROUPKEY_D + g.id], limit: 1 }]);
+        sealed = await pool.querySync(relays(), [{ kinds: [1], '#t': [g.id], limit: 20 }]);
+      } catch (e) { continue; }                       // (4) fail closed — unknown is not "absent"
+      if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
+      if (envelopes.length) continue;                 // the envelope exists; we simply have not ingested it yet
+      // (5) A room with sealed traffic MUST already have a key we have not been handed. Minting now would make
+      // those messages permanently unreadable, so refuse and let a human decide.
+      if (sealed.some(e => (e.tags || []).some(t => t[0] === 'enc' && t[1] === '1'))) {
+        out.push({ id: g.id, name: g.name || '', state: 'needs-decision' });
+        continue;
+      }
+      const r = await this.publishGroupKey(g.id, memberPubs || []);
+      out.push({ id: g.id, name: g.name || '', state: (r === null || r === false) ? 'failed' : 'issued' });
+    }
+    return out;
+  },
   async publishGroupKey(groupId, memberPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
     const haveRing = (_skeys[groupId] || []).length > 0;
