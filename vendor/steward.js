@@ -14580,20 +14580,22 @@ zoo`.split("\n");
   var PIN_D = "trinityone/pin:";
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
-  var _selfVoice = (() => {
+  var _voiceKey = () => "trinityone.steward.voice:" + (pub || "");
+  var _voicesKey = () => "trinityone.steward.voices:" + (pub || "");
+  var _selfVoice = null;
+  var _publicVoices = {};
+  function _loadVoice() {
     try {
-      return JSON.parse(lsGet("trinityone.steward.voice") || "null");
+      _selfVoice = JSON.parse(lsGet(_voiceKey()) || "null");
     } catch (e) {
-      return null;
+      _selfVoice = null;
     }
-  })();
-  var _publicVoices = (() => {
     try {
-      return JSON.parse(lsGet("trinityone.steward.voices") || "{}") || {};
+      _publicVoices = JSON.parse(lsGet(_voicesKey()) || "{}") || {};
     } catch (e) {
-      return {};
+      _publicVoices = {};
     }
-  })();
+  }
   var _skeys = {};
   var GROUP_RING_MAX = 12;
   var _srev = {};
@@ -18794,6 +18796,7 @@ zoo`.split("\n");
     },
     // The by-line this console writes under, and the delegated stewards the owner has chosen to name publicly.
     voice() {
+      _loadVoice();
       return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } };
     },
     // REPUBLISHING THE ROSTER TO CHANGE A NAME MUST NOT CHANGE WHO IS ON IT. My first version rebuilt the list
@@ -18812,7 +18815,7 @@ zoo`.split("\n");
     setVoice(name, office) {
       _selfVoice = name && String(name).trim() ? { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) } : null;
       try {
-        lsSet("trinityone.steward.voice", JSON.stringify(_selfVoice || null));
+        lsSet(_voiceKey(), JSON.stringify(_selfVoice || null));
       } catch (e) {
       }
       return this._voiceSave();
@@ -18823,7 +18826,7 @@ zoo`.split("\n");
       if (name && String(name).trim()) _publicVoices[p2] = { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) };
       else delete _publicVoices[p2];
       try {
-        lsSet("trinityone.steward.voices", JSON.stringify(_publicVoices));
+        lsSet(_voicesKey(), JSON.stringify(_publicVoices));
       } catch (e) {
       }
       return this._voiceSave();

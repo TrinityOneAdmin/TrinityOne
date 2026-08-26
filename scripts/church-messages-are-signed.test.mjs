@@ -80,11 +80,16 @@ test('saving a name cannot touch the steward roster at all', () => {
   // "Saved". The authentication check cannot prevent that: it records that we SIGNED the challenge, not that
   // the relay ACCEPTED it. So the by-line now lives in its own document. A name is cosmetic, a roster is
   // authority, and one must never be able to damage the other.
-  const save = (() => { const i = ST_V.indexOf('_voiceSave'); return i < 0 ? '' : ST_V.slice(i, i + 500); })();
-  assert.ok(save, 'no single place saves the by-line, so each setter can drift from the other');
-  assert.doesNotMatch(save, /setStewards/,
-    'saving a by-line republishes the steward roster — a name change that can remove people');
-  assert.match(save, /VOICE_D|voice:/,
+  // CHECK EVERY SETTER, NOT A WINDOW. The first version took 500 characters from `_voiceSave`, which covered
+  // that function and the head of `setVoice` — and stopped short of `setPublicVoice`. An audit put
+  // `this.setStewards([])` into setPublicVoice, re-arming the exact "a name change publishes an empty roster"
+  // hazard, and all five tests stayed green. A window is not a boundary; bound each function and check them all.
+  for (const name of ['_voiceSave', 'setVoice', 'setPublicVoice']) {
+    const body = fnBody(ST_V, name + '(', name);
+    assert.doesNotMatch(body, /setStewards/,
+      name + ' republishes the steward roster — a name change that can strip people of their authority');
+  }
+  assert.match(fnBody(ST_V, '_voiceSave(', '_voiceSave'), /VOICE_D|voice:/,
     'the by-line is not written to its own document');
 });
 
@@ -95,4 +100,18 @@ test('the owner\'s private labels for stewards are not published to the congrega
   assert.match(setr, /doc\.names\s*=/, 'the private labels have stopped being carried forward');
   assert.doesNotMatch(setr, /doc\.public\s*=/,
     'the roster is publishing member-visible names again — that belongs in the voice document');
+});
+
+test('one church\'s by-line cannot follow a console to another church', () => {
+  // A console that changes which church it runs used to read its by-line from a single GLOBAL key, so church
+  // A's vicar sat pre-filled in church B's Save box — and saving would have signed B's notices with A's
+  // incumbent. Under the pilot's threat model that is also a disclosure: it names a person to a congregation
+  // that never asked about them. The key now carries the church, so a church that has set no by-line reads
+  // empty rather than inheriting somebody else's.
+  const load = fnBody(ST_V, 'function _loadVoice', '_loadVoice');
+  assert.doesNotMatch(load, /['"]trinityone\.steward\.voice['"]/,
+    'the by-line is read from a single global key — it will follow this console to the next church');
+  assert.match(load, /_voiceKey\(\)/, 'the by-line is not read from a church-scoped key');
+  assert.match(ST_V, /_voiceKey[\s\S]{0,120}\+\s*\(pub/,
+    'the by-line key does not include which church this console is running');
 });

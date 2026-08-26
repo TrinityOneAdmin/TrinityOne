@@ -151,3 +151,21 @@ test('an ADULT\'s request for help is untouched by any of this', () => {
   assert.equal(noMinors('a'.repeat(64), 'careLead'), true,
     'an adult who asked for help can no longer be answered — the safeguarding gate is firing on everybody');
 });
+
+// ── the helper under the gate, which stubbing hid ────────────────────────────────────────────────────────
+// A SECOND STUB BOUNDARY, FOUND THE SAME WAY AS THE FIRST. The tests above stub approvedIn, so they are blind
+// to whether it is right — and it holds the single highest-stakes line in the file. The relay's own comment
+// calls losing it "the worst shape a safeguarding bug can have": unmark a child, and a clearance left over
+// from when they were treated as an adult turns them into an adult CLEARED TO PRIVATELY MESSAGE CHILDREN.
+// An audit deleted that one line and all six tests above stayed green.
+test('a child can never be their own clearance — a stale approval must not survive being marked a minor', () => {
+  const CP = 'c'.repeat(64), KID = 'k'.repeat(64), ADULT = 'a'.repeat(64);
+  const fn = lift('approvedIn', {
+    // the child is BOTH on the cleared-worker list (stale, from before they were marked) and a minor
+    APPROVED_BY: new Map([[CP, new Set([KID, ADULT])]]),
+    minorOf: (pub) => pub === KID,
+  }, 'const approvedIn =');
+  assert.equal(fn(ADULT, CP), true, 'a genuinely cleared adult is no longer cleared');
+  assert.equal(fn(KID, CP), false,
+    'a child left on the cleared-worker list counts as cleared — they would be treated as an adult who may privately message children');
+});

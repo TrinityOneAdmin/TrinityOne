@@ -386,9 +386,20 @@ const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
 const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
 // The name this console signs with, and the delegated stewards the owner has chosen to show members.
-// Kept locally so the setup survives a reload before the roster round-trips, and republished with the roster.
-let _selfVoice = (() => { try { return JSON.parse(lsGet('trinityone.steward.voice') || 'null'); } catch (e) { return null; } })();
-const _publicVoices = (() => { try { return JSON.parse(lsGet('trinityone.steward.voices') || '{}') || {}; } catch (e) { return {}; } })();
+// Kept locally so the setup survives a reload before the document round-trips.
+//
+// KEYED PER CHURCH, and it was not. Under one global key, a console that changed which church it runs showed
+// the PREVIOUS church's vicar pre-filled in the Save box — and saving would have signed church B's notices
+// with church A's incumbent. Found by audit. `pub` is this console's church, so the key moves with it and a
+// church that has set no by-line reads empty rather than inheriting somebody else's.
+const _voiceKey = () => 'trinityone.steward.voice:' + (pub || '');
+const _voicesKey = () => 'trinityone.steward.voices:' + (pub || '');
+let _selfVoice = null;
+let _publicVoices = {};
+function _loadVoice() {
+  try { _selfVoice = JSON.parse(lsGet(_voiceKey()) || 'null'); } catch (e) { _selfVoice = null; }
+  try { _publicVoices = JSON.parse(lsGet(_voicesKey()) || '{}') || {}; } catch (e) { _publicVoices = {}; }
+}
 const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
 const GROUP_RING_MAX = 12;   // bound the envelope, and match the care key's ring exactly (see _careKeyRing).
 // 32 was too many now that every envelope carries the ring sealed PER RECIPIENT: a large church multiplied
@@ -4773,7 +4784,7 @@ window.Steward = {
   stewardCaps() { return { ..._stewardCaps }; },
   stewardLabels() { return { ..._stewardNames }; },
   // The by-line this console writes under, and the delegated stewards the owner has chosen to name publicly.
-  voice() { return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } }; },
+  voice() { _loadVoice(); return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } }; },
   // REPUBLISHING THE ROSTER TO CHANGE A NAME MUST NOT CHANGE WHO IS ON IT. My first version rebuilt the list
   // from _stewardCaps, which holds only stewards who have capabilities recorded — so setting a by-line would
   // have quietly REMOVED every unscoped steward. A Remove button hidden inside a name change.
@@ -4789,14 +4800,14 @@ window.Steward = {
   },
   setVoice(name, office) {
     _selfVoice = (name && String(name).trim()) ? { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) } : null;
-    try { lsSet('trinityone.steward.voice', JSON.stringify(_selfVoice || null)); } catch (e) {}
+    try { lsSet(_voiceKey(), JSON.stringify(_selfVoice || null)); } catch (e) {}
     return this._voiceSave();
   },
   setPublicVoice(pubkey, name, office) {
     const p2 = toPubHex(pubkey) || pubkey; if (!p2) return Promise.resolve(null);
     if (name && String(name).trim()) _publicVoices[p2] = { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) };
     else delete _publicVoices[p2];
-    try { lsSet('trinityone.steward.voices', JSON.stringify(_publicVoices)); } catch (e) {}
+    try { lsSet(_voicesKey(), JSON.stringify(_publicVoices)); } catch (e) {}
     return this._voiceSave();
   },
   stewardSince() { return { ..._stewardSince }; },
