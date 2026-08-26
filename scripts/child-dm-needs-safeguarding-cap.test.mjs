@@ -20,38 +20,101 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { stripComments } from './test-slice.mjs';
+import { stripComments, fnBody } from './test-slice.mjs';
 
 const GW = stripComments(readFileSync(new URL('./gateway.mjs', import.meta.url), 'utf8'));
-const gate = (() => {
-  const i = GW.indexOf('function safeguardAllows');
-  const j = GW.indexOf('\n}', i);
-  return i < 0 ? '' : GW.slice(i, j);
-})();
 
-test('the child-message gate exists and is bounded to itself', () => {
-  // Bounded on purpose. A fixed-length slice around a function name reaches into its neighbours, and this
-  // project has already shipped an assertion that passed because it matched the NEXT function's code.
-  assert.ok(gate && gate.includes('minorGoverningChurches'), 'safeguardAllows not found');
+// DRIVE THE GATE, DO NOT GREP IT. The first version of this file asserted the TEXT of safeguardAllows and was
+// fully vacuous: an audit beat all four of its assertions with one change in a different function — making
+// `stewardCan` return true unconditionally. Every test stayed green while a Finance-only treasurer could
+// message every child in the congregation again. The repo owns a brace-matching lifter for exactly this
+// (fnBody), and this file did not use it. Now it lifts the real function and calls it with real inputs, so an
+// assertion can only pass because the BEHAVIOUR is right.
+const lift = (name, stubs, anchor) => {
+  // fnBody returns the WHOLE function — keyword, signature and body — so it is declared and returned as-is.
+  // Wrapping it in another `function` header produces `function f(...) function f(...)`, which fails loudly;
+  // that is two signature mistakes in a row on this helper, both caught by running it rather than reading it.
+  const src = fnBody(GW, anchor || ('function ' + name), name);
+  const scope = new Proxy(stubs, {
+    has: () => true,
+    get: (t, k) => { if (k in t) return t[k]; if (k === Symbol.unscopables) return undefined;
+      throw new ReferenceError('needs a stub for ' + String(k)); },
+  });
+  // eslint-disable-next-line no-new-func
+  return new Function('scope', `with (scope) { ${src}; return ${name}; }`)(scope);
+};
+
+const CHURCH = 'c'.repeat(64), CHILD = 'k'.repeat(64);
+const make = ({ approved = [], guardians = [], caps = {} } = {}) => lift('safeguardAllows', {
+  minorGoverningChurches: () => [CHURCH],
+  approvedIn: (who) => approved.includes(who),
+  guardianLinkedIn: (minor, who) => guardians.includes(who),
+  networkOf: () => false,
+  stewardCan: (who, cp, cap) => {
+    const held = caps[who];
+    if (!held) return false;
+    return cap === 'any' ? held.length > 0 : held.includes(cap);
+  },
 });
 
-test('a steward needs the SAFEGUARDING role, not merely some role, to message a child', () => {
-  assert.doesNotMatch(gate, /stewardCan\([^)]*,\s*['"]any['"]\s*\)/,
-    'any steward with any capability may privately message a child — a Finance-only treasurer included');
-  assert.match(gate, /stewardCan\([^)]*,\s*['"]safeguarding['"]\s*\)/,
-    'the gate does not require the safeguarding capability');
+test('a steward scoped to Finance alone cannot message a child', () => {
+  // The exact hole: one unrelated tickbox used to be enough. This is the assertion the grep version could not
+  // make, and the one that would have caught the defect.
+  const gate = make({ caps: { treasurer: ['finance'] } });
+  assert.equal(gate(CHILD, 'treasurer'), false,
+    'a treasurer with no safeguarding role can privately message a child');
 });
 
-test('the routes a church actually relies on are still open', () => {
-  // A gate that is too tight is its own harm: a parent who cannot reach their own child, or a cleared youth
-  // worker who cannot answer one, would push both onto channels the church cannot see at all.
-  assert.match(gate, /approvedIn\(other, cp\)/, 'a cleared worker can no longer message a child');
-  assert.match(gate, /guardianLinkedIn\(minorPub, other, cp\)/, 'a linked parent can no longer message their own child');
-  assert.match(gate, /other === cp/, 'the church itself can no longer reach a child — their route of last resort');
+test('a steward the church gave the safeguarding role CAN', () => {
+  const gate = make({ caps: { hannah: ['safeguarding'] } });
+  assert.equal(gate(CHILD, 'hannah'), true, 'the safeguarding lead is locked out of their own job');
 });
 
-test('clearance is still required from EVERY church that governs the child', () => {
-  // One church's lax list must never open a child governed by two.
-  assert.match(gate, /for \(const cp of cps\)/, 'the gate no longer checks every governing church');
-  assert.match(gate, /return false;/, 'the gate no longer refuses anyone');
+test('the routes a church relies on stay open', () => {
+  // A gate that is too tight is its own harm — it pushes a worried child onto channels the church cannot see.
+  assert.equal(make({ approved: ['clearedWorker'] })(CHILD, 'clearedWorker'), true, 'a cleared worker is locked out');
+  assert.equal(make({ guardians: ['dad'] })(CHILD, 'dad'), true, 'a linked parent cannot reach their own child');
+  assert.equal(make({})(CHILD, CHURCH), true, 'the church itself cannot reach a child — their route of last resort');
+});
+
+test('an ordinary member is refused', () => {
+  assert.equal(make({})(CHILD, 'stranger'), false, 'anyone at all can message a child');
+});
+
+test('a child governed by two churches needs clearance from BOTH', () => {
+  // One church's lax list must never open a child governed by another's.
+  const twoChurches = lift('safeguardAllows', {
+    minorGoverningChurches: () => [CHURCH, 'other'],
+    approvedIn: (who, cp) => who === 'half' && cp === CHURCH,   // cleared by one church only
+    guardianLinkedIn: () => false, networkOf: () => false, stewardCan: () => false,
+  });
+  assert.equal(twoChurches(CHILD, 'half'), false,
+    'clearance from one church opened a child governed by two');
+});
+
+// ── the function every capability check in the relay leans on ────────────────────────────────────────────
+// THE STUB BOUNDARY, STATED HONESTLY. The tests above lift safeguardAllows and stub stewardCan, so they prove
+// safeguardAllows asks for the RIGHT capability — and are blind to whether stewardCan answers correctly. An
+// audit made that concrete: replacing stewardCan's body with `return true` left all five green while every
+// steward regained access to every child. A stub can only ever test the caller's half of a contract, so the
+// other half needs its own test, and until now it had none anywhere in the suite — despite deciding every
+// capability question the relay asks.
+test('stewardCan answers the capability question it was asked', () => {
+  // stewardCan is a const arrow, not a function declaration, so it needs its own anchor.
+  const fn = lift('stewardCan', {
+    STEWARDS_BY: new Map([[CHURCH, new Set(['scoped', 'unscoped', 'empty'])]]),
+    STEWARD_CAPS: new Map([[CHURCH, new Map([['scoped', new Set(['finance'])], ['empty', new Set()]])]]),
+  }, 'const stewardCan =');
+  assert.equal(fn('scoped', CHURCH, 'finance'), true, 'a granted capability is refused');
+  assert.equal(fn('scoped', CHURCH, 'safeguarding'), false,
+    'a capability the church never granted is honoured — this is the hole the child gate had');
+  assert.equal(fn('scoped', CHURCH, 'any'), true, "'any' should be satisfied by holding something");
+  assert.equal(fn('stranger', CHURCH, 'finance'), false, 'someone not on the roster passes a capability check');
+  assert.equal(fn('empty', CHURCH, 'any'), false, 'a steward scoped to NOTHING passes an "any" check');
+  // The migration-compat default, pinned so it is a decision rather than a surprise: a steward with no
+  // capabilities RECORDED is treated as holding all of them, so churches predating capabilities kept working.
+  // The owner has confirmed no real church predates it, so this is a candidate for deletion — but it should go
+  // deliberately, with this assertion removed alongside, not by accident.
+  assert.equal(fn('unscoped', CHURCH, 'safeguarding'), true,
+    'the no-capabilities-recorded compat default has changed — if that was intended, update this assertion');
 });
