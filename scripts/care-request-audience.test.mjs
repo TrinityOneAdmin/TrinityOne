@@ -332,3 +332,23 @@ test('the screen does not offer a child a form that goes nowhere', () => {
   assert.match(TODAY, /if \(ok && ok\.error\)/,
     'the submit handler treats a refusal object as success and thanks the child for a message nobody received');
 });
+
+
+test('the FORM does not promise a child it reaches the care team', () => {
+  // Found on a real phone against the live relay, 2026-08-27. The card above the form had been made
+  // child-aware — "Tell someone at your church" — while the form beneath it still said "This goes privately
+  // to your care team". Both were mine; I changed one and not the other, so one screen contradicted itself.
+  // For a young person it does not go to the care rota at all: it goes to the adults the church has cleared.
+  //
+  // Asserted over the whole file rather than through fnBody: AskForHelpForm is a JSX component, and the
+  // brace matcher cannot find the end of one (it trips on braces inside JSX expressions). Using it here
+  // threw rather than failing, which reads as a broken test rather than a broken app.
+  const TODAY = stripComments(readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8'));
+  assert.match(TODAY, /const _isMinor = !!\(ctx\.safeguard && ctx\.safeguard\.isMinor\)/,
+    'the ask-for-help form does not know whether a child is asking, so it cannot describe who will receive it');
+  assert.match(TODAY, /_isMinor \? 'This goes privately to the people at your church who can help young people/,
+    'the form still tells a young person their request goes to the care team — it does not, and saying so ' +
+    'names a group of people they did not choose to tell');
+  // …and the ordinary path must be untouched.
+  assert.match(TODAY, /: 'This goes privately to your care team/, 'an adult is no longer told who receives their request');
+});

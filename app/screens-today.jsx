@@ -508,6 +508,12 @@ function careSentWording(res) {
   return 'Sent to your care team';
 }
 function AskForHelpForm({ ctx, onClose, onSent }) {
+  // WHO THIS ACTUALLY REACHES DEPENDS ON WHO IS ASKING, so the sheet must not promise otherwise. A young
+  // person's request does not go to the care rota — it goes to the adults their church has cleared to work
+  // with young people. Found on a real phone, 2026-08-27: the CARD above this sheet had been made
+  // child-aware and the sheet had not, so one screen said "Tell someone at your church" and the sheet
+  // directly beneath it said "This goes privately to your care team". Both were mine; I changed one.
+  const _isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
   const [forSelf, setForSelf] = React.useState(true);
   const [forName, setForName] = React.useState('');
   const [types, setTypes] = React.useState([]);
@@ -538,7 +544,7 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
           <Icon name="heart" size={20} color="var(--clay)" />
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Ask for help</div>
         </div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 4px' }}>This goes privately to your care team — no one else sees it. Tell them what would help.</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 4px' }}>{_isMinor ? 'This goes privately to the people at your church who can help young people — no one else sees it. Tell them what would help.' : 'This goes privately to your care team — no one else sees it. Tell them what would help.'}</p>
 
         <div style={lbl}>Who's this for?</div>
         <div style={{ display: 'flex', gap: 8 }}>
