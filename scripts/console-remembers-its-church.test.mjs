@@ -7,58 +7,147 @@
 //
 // SIMULATION ROUND 9. The churchwarden was approved, reloaded, and landed back in his own empty church with
 // no sign anything had happened. His rota page said "Build your first team" while St Aidan's already had
-// four. So he built his own, in good faith, and published a rota for a Sunday that already had one — which
-// is what put two competing rotas on one service and wiped ten real people off every phone in the parish.
-// In his words: "every page refresh throws me back into my own empty church, and I have to find the switcher
-// again." The collision was the visible damage; this is the reason it happened.
+// four. So he built his own, in good faith, and published a rota for a Sunday that already had one — which is
+// what put two competing rotas on one service and wiped ten real people off every phone in the parish. In his
+// words: "every page refresh throws me back into my own empty church, and I have to find the switcher again."
+//
+// THE FIRST VERSION OF THIS FILE WAS SIX SOURCE-TEXT REGEXES, AND AN AUDITOR DEFEATED THEM ALL WITH THE BUG
+// FULLY IN PLACE — appending a never-true clause to the restore left 6/6 green, as did storing an empty
+// string instead of the church. One of them was worse than useless: it asserted the write happened BEFORE the
+// first branch, enshrining a write-before-validate defect as a requirement, so fixing it properly would have
+// turned that test red. These tests RUN the shipped functions instead.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { stripComments, fnBody } from './test-slice.mjs';
+import { fnBody, stripComments } from './test-slice.mjs';
 
-const S = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
 const V = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
-test('choosing a church writes the choice down', () => {
-  const body = stripComments(fnBody(S, 'setActiveIdentity(targetPub)', 'setActiveIdentity'));
-  assert.match(body, /localStorage\.setItem\(ACTIVE_ID_KEY/,
-    'the console still forgets which church it is running the moment the page reloads');
-  // …and it must be written for EVERY branch, including going back to your own church, or the old choice
-  // lingers and drags you back into a church you deliberately left.
-  const at = body.indexOf('ACTIVE_ID_KEY');
-  const firstBranch = body.indexOf('if (tp === churchPub)');
-  assert.ok(at !== -1 && firstBranch !== -1 && at < firstBranch,
-    'the choice is only recorded on some branches — switching back to your own church would not stick');
+const OWN = 'a'.repeat(64);        // the church this console actually HOLDS
+const ST_AIDANS = 'b'.repeat(64);  // a church it stewards for somebody else
+const OTHER = 'c'.repeat(64);      // a church it has nothing to do with
+const NETWORK = 'd'.repeat(64);
+
+// Build a live console-ish world and run the two shipped functions inside it.
+function world({ stewarded = [ST_AIDANS], stored = null, networks = [] } = {}) {
+  const store = new Map(); if (stored !== null) store.set('trinityone.steward.active-id', stored);
+  const state = { pub: OWN, sk: 'sk-own', actingChurch: '', switched: [] };
+  const scope = {
+    churchPub: OWN, churchSk: 'sk-own',
+    get pub() { return state.pub; }, set pub(v) { state.pub = v; },
+    get sk() { return state.sk; }, set sk(v) { state.sk = v; },
+    get actingChurch() { return state.actingChurch; }, set actingChurch(v) { state.actingChurch = v; },
+    stewardedChurches: new Map(stewarded.map(c => [c, { name: 'Church' }])),
+    toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(String(x || '')) ? String(x).toLowerCase() : null),
+    netKeys: () => networks.map(p => ({ pub: p, mnemonic: 'x '.repeat(11) + 'y' })),
+    privateKeyFromSeedWords: () => 'sk-net', getPublicKey: () => NETWORK,
+    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
+    ACTIVE_ID_KEY: 'trinityone.steward.active-id',
+    lastProfile: {}, _profileLoaded: false, _clearanceSent: new Set(), _careRoster: new Set(), _careRosterKnown: false,
+    window: { Steward: {}, dispatchEvent: () => {} }, console,
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    // THE BUNDLER RENAMES WHAT IT INLINES (privateKeyFromSeedWords -> …2). Returning undefined for an unknown
+    // name made the network branch throw into its own catch and bail BEFORE the line under test, so the test
+    // failed for a reason that had nothing to do with the code. Fall back to the base name, and shout about
+    // anything genuinely missing rather than quietly handing back undefined.
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      const base = String(k).replace(/\d+$/, ''); if (base in t) return t[base];
+      throw new ReferenceError('the lifted function needs a stub for `' + String(k) + '`'); },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  // setActiveIdentity, lifted and stripped of the bookkeeping tail we do not model
+  let src = fnBody(V, 'setActiveIdentity(targetPub)', 'setActiveIdentity');
+  src = src.slice(0, src.indexOf('lastProfile = {}')) + 'return true; }';
+  const setActive = new Function('scope', `with (scope) { return ({ ${src} }).setActiveIdentity; }`)(proxy);
+  scope.window.Steward.setActiveIdentity = (t) => { state.switched.push(t); return setActive.call(scope.window.Steward, t); };
+  return { state, store, setActive: scope.window.Steward.setActiveIdentity,
+    stored: () => store.get('trinityone.steward.active-id') };
+}
+
+test('switching into a stewarded church is remembered', () => {
+  const w = world();
+  w.setActive(ST_AIDANS);
+  assert.equal(w.state.actingChurch, ST_AIDANS, 'the switch itself did not happen');
+  assert.equal(w.stored(), ST_AIDANS,
+    'the console forgets which church it is running the moment the page reloads');
 });
 
-test('and the console goes back there on boot', () => {
-  const body = stripComments(fnBody(S, 'subscribeStewardedChurches(cb)', 'subscribeStewardedChurches'));
-  assert.match(body, /localStorage\.getItem\(ACTIVE_ID_KEY\)/,
-    'nothing reads the remembered church back, so writing it down achieves nothing');
-  assert.match(body, /setActiveIdentity\(want\)/, 'the remembered church is read but never entered');
+test('switching back to your OWN church clears the memory', () => {
+  // Otherwise a stale value drags you back into a church you deliberately left.
+  const w = world({ stored: ST_AIDANS });
+  w.setActive(OWN);
+  assert.equal(w.state.actingChurch, '');
+  assert.equal(w.stored(), '', 'leaving a church still leaves the console remembering it');
 });
 
-test('it refuses a church we do not steward', () => {
-  // A stale or tampered entry must not put the console into a church it has no business in. The switch
-  // itself would refuse, but failing earlier and quietly is better than relying on that.
-  const body = stripComments(fnBody(S, 'subscribeStewardedChurches(cb)', 'subscribeStewardedChurches'));
-  assert.match(body, /stewardedChurches\.has\(want\)/, 'a stale remembered church is entered without checking');
+test('A FAILED SWITCH DOES NOT OVERWRITE A GOOD MEMORY', () => {
+  // The defect the first version of this file enshrined as a requirement. The write used to be the very first
+  // statement, so a switch that then failed still destroyed the last good answer.
+  const w = world({ stored: ST_AIDANS });
+  const ok = w.setActive(OTHER);                       // a church we neither hold nor steward
+  assert.equal(ok, false, 'the console switched into a church it has nothing to do with');
+  assert.equal(w.stored(), ST_AIDANS,
+    'a switch that failed still overwrote the remembered church — the console now remembers somewhere it ' +
+    'never managed to go, and the next boot tries to enter it');
 });
 
-test('it never hijacks a church this console actually HOLDS', () => {
-  // The ordinary owner case. A vicar's own console must not be switched anywhere by this.
-  const body = stripComments(fnBody(S, 'subscribeStewardedChurches(cb)', 'subscribeStewardedChurches'));
-  assert.match(body, /!_ownedPubs\.has\(want\)/, 'an owner’s console can be redirected by a remembered value');
-  assert.match(body, /want !== churchPub/, 'the console can be told to switch to the church it already is');
+test('a network identity is not remembered, because it is never restored', () => {
+  const w = world({ stored: ST_AIDANS, networks: [NETWORK] });
+  w.setActive(NETWORK);
+  assert.equal(w.stored(), '',
+    'glancing at a network leaves a value the next boot silently ignores — the round-9 trap, one click away');
 });
 
-test('and it does not switch when already there', () => {
-  const body = stripComments(fnBody(S, 'subscribeStewardedChurches(cb)', 'subscribeStewardedChurches'));
-  assert.match(body, /actingChurch !== want/,
-    're-entering the church we are already in resets profile state and re-subscribes for nothing');
+// ── the restore half ─────────────────────────────────────────────────────────────────────────────────────
+// Lifted from subscribeStewardedChurches, which is the earliest moment the console knows what it stewards.
+function restore({ stewarded, stored, ownPubs = [OWN], acting = '' }) {
+  const body = stripComments(fnBody(V, 'subscribeStewardedChurches(cb)', 'subscribeStewardedChurches'));
+  const at = body.indexOf('const want =');
+  assert.notEqual(at, -1, 're-anchor: the restore block is gone from subscribeStewardedChurches');
+  // …to the end of its own if-statement. The bundler puts the catch on its own line, so slice to the
+  // `} catch` that closes this try and run the middle directly.
+  const block = body.slice(at, body.indexOf('} catch', at));
+  const calls = [];
+  const scope = {
+    localStorage: { getItem: () => stored },
+    ACTIVE_ID_KEY: 'k', churchPub: OWN, actingChurch: acting,
+    _ownedPubs: new Set(ownPubs),
+    stewardedChurches: new Map(stewarded.map(c => [c, {}])),
+    window: { Steward: { setActiveIdentity: (t) => calls.push(t) } }, console,
+  };
+  const proxy = new Proxy(scope, { has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => (k === Symbol.unscopables ? undefined : t[k]), set: (t, k, v) => { t[k] = v; return true; } });
+  new Function('scope', `with (scope) { ${block} }`)(proxy);
+  return calls;
+}
+
+test('on boot the console goes back to the church it was running', () => {
+  assert.deepEqual(restore({ stewarded: [ST_AIDANS], stored: ST_AIDANS }), [ST_AIDANS],
+    'the remembered church is never re-entered, so remembering it achieves nothing');
+});
+
+test('it refuses a church we no longer steward', () => {
+  assert.deepEqual(restore({ stewarded: [], stored: ST_AIDANS }), [],
+    'a stale entry drops the console into a church every read of which will be refused');
+});
+
+test('it never redirects a console that HOLDS its own church', () => {
+  assert.deepEqual(restore({ stewarded: [OWN], stored: OWN, ownPubs: [OWN] }), [],
+    'an ordinary vicar’s console can be redirected by a remembered value');
+});
+
+test('nothing remembered, nothing happens', () => {
+  assert.deepEqual(restore({ stewarded: [ST_AIDANS], stored: null }), []);
+  assert.deepEqual(restore({ stewarded: [ST_AIDANS], stored: '' }), []);
+});
+
+test('it does not re-enter the church it is already in', () => {
+  assert.deepEqual(restore({ stewarded: [ST_AIDANS], stored: ST_AIDANS, acting: ST_AIDANS }), [],
+    're-entering resets profile state and re-subscribes for nothing, on every boot');
 });
 
 test('the shipped console carries all of this', () => {
-  // The console loads app/*.jsx raw but src/steward.src.js is bundled — a fix that never got built is not a fix.
   assert.match(stripComments(V), /ACTIVE_ID_KEY/, 'vendor/steward.js was not rebuilt from source');
 });

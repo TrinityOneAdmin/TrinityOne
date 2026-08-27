@@ -7,6 +7,7 @@ import { SimplePool } from 'nostr-tools/pool';
 // The SAME normaliser the pool keys its connection map by. Comparing raw URLs against that map is why a
 // perfectly healthy socket could read as unreachable — see relaysHealthy().
 import { normalizeURL } from 'nostr-tools/utils';
+import { _absorbById, _forgetById } from './church-doc-store.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
@@ -377,45 +378,7 @@ async function _fetchChildCareAudience(cp) {
   if (approved === null && roster === null && !_relayAuthedAt) return null;
   return [...new Set([...(approved || []), ...(roster || [])].filter(Boolean))];
 }
-// ── which write wins when two people publish the same church document ────────────────────────────────────
-// LAST WRITER WINS IS NOT A RULE HERE, IT IS AN ACCIDENT OF NETWORK ORDER.
-//
-// A church document keyed by id — a service, a rota, a roster, a run sheet, an event — may legitimately be
-// written by more than one trusted author: the church key itself, and any steward it has empowered. These are
-// addressable events, so the relay keeps ONE per author; it cannot collapse two authors into one. That leaves
-// the choice to the client, and the client was not making one. `byId.set(id, …)` on arrival meant whichever
-// copy happened to land last won, so two members could hold different rotas for the same service, and the
-// same member could see a different one after a reconnect.
-//
-// SIMULATION ROUND 9, and it is not a hypothetical. The vicar published a rota for one Sunday with ten real
-// people on it, properly sealed. The churchwarden — who could not see hers, and had been told "build your
-// first team" — published a parallel rota for the same service 62 seconds later. Both were valid. The second
-// silently replaced the first on every phone in the parish. Four people had already pressed "Yes, I can
-// serve"; their acceptances were published correctly, and their phones told them "No dates scheduled for you
-// yet", because the rota that had their names in it no longer existed anywhere they could see.
-//
-// This does not decide who OUGHT to win — the app cannot know that, and both writes were authorised. What it
-// guarantees is that every member decides the same way: newest by the author's own clock, and on an exact tie
-// the lower pubkey, which is arbitrary but stable. A congregation looking at one rota and disagreeing about
-// what it says is worse than a congregation looking at the wrong one together.
-//
-// `_alt` records that a second author holds a competing copy, so a screen can say so rather than pretending
-// there is only one. Nothing reads it yet; the console half of this fix is where it will be used.
-function _absorbById(byId, id, rec) {
-  const prev = byId.get(id);
-  if (prev) {
-    const a = prev.ts || 0, b = rec.ts || 0;
-    const older = a > b || (a === b && String(prev._by || '') < String(rec._by || ''));
-    if (older) {
-      // keep what we have, but remember that somebody else published one too
-      if (rec._by && rec._by !== prev._by) prev._alt = rec._by;
-      return false;
-    }
-    if (prev._by && prev._by !== rec._by) rec._alt = prev._by;
-  }
-  byId.set(id, rec);
-  return true;
-}
+// Which write wins when two authors publish one church document — see src/church-doc-store.src.js.
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
 function _decEvt(cp, e) {
@@ -3194,6 +3157,7 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onGroups([]); return () => {}; }
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     for (const g of loadDocCache('groups', pubk)) { if (g && g.id) byId.set(g.id, g); }   // paint cached instantly
     // honour the steward's chosen order; client-roster-trust filters out forged/revoked authors (M2)
     let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
@@ -3206,9 +3170,11 @@ window.Fellowship = {
         if (!d.startsWith(GROUP_D)) return;
         const id = d.slice(GROUP_D.length);
         // AUDIT-2026-07-24 (groups): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { byId.delete(id); emit(); } return; }
+        // A DELETE IS A WRITE. It was keyed purely on the id, so a steward tidying away their own duplicate
+        // removed the copy somebody else had published too — the round-9 disaster, reproduced by the cleanup.
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); } return; }
         try {
-          const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey);
+          const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey);
           // SECURITY-AUDIT-2026-07-06 M3: we belong to an invite-only group → we legitimately need NIP-42 auth to
           // read it, so enable it. (Membership is checked against MY pubkey so an invite group I'm NOT in — whose
           // public def I can still see — does not opt me into deanonymising auth.)
@@ -3227,6 +3193,7 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onCats([]); return () => {}; }
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     for (const c of loadDocCache('categories', pubk)) { if (c && c.id) byId.set(c.id, c); }   // paint cached instantly
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = _coalesce(() => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
@@ -3238,8 +3205,8 @@ window.Fellowship = {
         if (!d.startsWith(CATEGORY_D)) return;
         const id = d.slice(CATEGORY_D.length);
         // AUDIT-2026-07-24 (categories): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { byId.delete(id); emit(); } return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); } return; }
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       onroster() { emit(); },   // re-filter once the steward roster lands (steward-authored categories)
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
@@ -3460,6 +3427,7 @@ window.Fellowship = {
     if (!pubk) { onPlans([]); return () => {}; }
     const PLAN_D = 'trinityone/plan:';
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     for (const p of loadDocCache('plans', pubk)) { if (p && p.id) byId.set(p.id, p); }   // paint cached instantly
     let timer = null;   // re-emit when the next scheduled item is due (drip release)
     let eosed = false;   // sticky: hold last-known until EOSE
@@ -3477,8 +3445,8 @@ window.Fellowship = {
         if (!d.startsWith(PLAN_D)) return;
         const id = d.slice(PLAN_D.length);
         // AUDIT-2026-07-24 (plans): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { byId.delete(id); emit(); } return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); } return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
@@ -3492,6 +3460,7 @@ window.Fellowship = {
     if (!pubk) { onDevos([]); return () => {}; }
     const DEVO_D = 'trinityone/devotional:';
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     for (const dv of loadDocCache('devos', pubk)) { if (dv && dv.id) byId.set(dv.id, dv); }   // paint cached instantly
     // honour the steward's explicit order (lower = first); unordered devotionals fall back to newest-first
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
@@ -3511,8 +3480,8 @@ window.Fellowship = {
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
         // AUDIT-2026-07-24 (devotionals): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { byId.delete(id); emit(); } return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); } return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
@@ -3525,6 +3494,8 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onItems([]); return () => {}; }
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy). See _absorbById: a delete must be able to
+                                  // put the OTHER author's rota back rather than leaving the Sunday blank.
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = _coalesce(() => { const v = [...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (!eosed && !v.length) return; onItems(v); });   // roster-trust (M2)
     return _onChurchDocs(pubk, {
@@ -3534,13 +3505,13 @@ window.Fellowship = {
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
         // AUDIT-2026-07-24 (services/rotas/rosters/rooms): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { byId.delete(id); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); } return; }
         try {
           const c = _openChurchDoc(pubk, e.content);
           // sealed, and this member has no key for it yet — keep it in the list as LOCKED so the screen can
           // say so. Dropping it here is what would turn "your key hasn't arrived" into "nothing is on".
-          if (c === null) { _absorbById(byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }
-          _absorbById(byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }); emit();
+          if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }
+          _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }); emit();
         } catch {}
       },
       onroster() { emit(); },

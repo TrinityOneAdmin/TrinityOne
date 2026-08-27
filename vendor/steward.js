@@ -6267,6 +6267,55 @@
     }
   }
 
+  // src/church-doc-store.src.js
+  function _pickWinner(vers) {
+    let best = null;
+    for (const rec of vers.values()) {
+      if (!best) {
+        best = rec;
+        continue;
+      }
+      const a = best.ts || 0, b = rec.ts || 0;
+      if (b > a || b === a && String(rec._by || "") < String(best._by || "")) best = rec;
+    }
+    return best;
+  }
+  function _reduceVersions(vers, byId, id) {
+    const win = _pickWinner(vers);
+    if (!win) {
+      byId.delete(id);
+      return null;
+    }
+    const others = [...vers.keys()].filter((k) => k !== win._by);
+    byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
+    return win;
+  }
+  function _absorbById(versions, byId, id, rec) {
+    let vers = versions.get(id);
+    if (!vers) {
+      vers = /* @__PURE__ */ new Map();
+      versions.set(id, vers);
+    }
+    const by = String(rec._by || "");
+    const had = vers.get(by);
+    if (had && (had.ts || 0) > (rec.ts || 0)) return false;
+    vers.set(by, rec);
+    const win = _reduceVersions(vers, byId, id);
+    return !!win && win._by === by;
+  }
+  function _forgetById(versions, byId, id, by, ts) {
+    const vers = versions.get(id);
+    if (!vers) return false;
+    const k = String(by || "");
+    const had = vers.get(k);
+    if (!had) return false;
+    if ((had.ts || 0) > (ts || 0)) return false;
+    vers.delete(k);
+    if (!vers.size) versions.delete(id);
+    _reduceVersions(vers, byId, id);
+    return true;
+  }
+
   // node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol2 = /* @__PURE__ */ Symbol("verified");
   var isRecord2 = (obj) => obj instanceof Object;
@@ -17685,6 +17734,7 @@ zoo`.split("\n");
     // onFunds(fundsArray) fires whenever the fund set changes; returns an unsubscribe fn.
     subscribeFunds(onFunds) {
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       const emit = () => onFunds([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
@@ -17693,12 +17743,12 @@ zoo`.split("\n");
           const id = d.slice(FUND_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            byId.delete(id);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at);
             emit();
             return;
           }
           try {
-            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -17727,6 +17777,7 @@ zoo`.split("\n");
     },
     subscribeCategories(onCats) {
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       const emit = () => onCats([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
@@ -17735,12 +17786,12 @@ zoo`.split("\n");
           const id = d.slice(CATEGORY_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            byId.delete(id);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at);
             emit();
             return;
           }
           try {
-            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -19323,6 +19374,7 @@ zoo`.split("\n");
     subscribeGroups(onGroups) {
       const CACHE_KEY = "trinityone.steward.groups." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       const emit = () => {
         const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0));
         try {
@@ -19351,12 +19403,12 @@ zoo`.split("\n");
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at);
             emit();
             return;
           }
           try {
-            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -19391,6 +19443,7 @@ zoo`.split("\n");
     subscribePlans(onPlans) {
       const CACHE_KEY = "trinityone.steward.plans." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       const emit = () => {
         const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
         try {
@@ -19415,12 +19468,12 @@ zoo`.split("\n");
           if (!d.startsWith(PLAN_D)) return;
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at);
             emit();
             return;
           }
           try {
-            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -19456,6 +19509,7 @@ zoo`.split("\n");
     subscribeDevotionals(onDevos) {
       const CACHE_KEY = "trinityone.steward.devos." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
       const emit = () => {
         const arr = [...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0));
@@ -19481,13 +19535,13 @@ zoo`.split("\n");
           if (!d.startsWith(DEVO_D)) return;
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at);
             emit();
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at });
+            _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -19508,6 +19562,7 @@ zoo`.split("\n");
     _subAddr(prefix, map, onItems) {
       const CACHE_KEY = "trinityone.steward.addr." + prefix + (pub || "");
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
@@ -19532,18 +19587,18 @@ zoo`.split("\n");
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at);
             emit();
             return;
           }
           try {
             const c = _openChurchDoc(e.content);
             if (c === null) {
-              byId.set(id, { id, _locked: true, ts: e.created_at });
+              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
               emit();
               return;
             }
-            byId.set(id, { id, ...map(c, id), ts: e.created_at });
+            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -20263,10 +20318,6 @@ zoo`.split("\n");
     // the active signing+reading identity. Subscriptions are keyed on activePub, so the dashboard re-renders.
     setActiveIdentity(targetPub) {
       const tp = toPubHex(targetPub) || targetPub || churchPub;
-      try {
-        localStorage.setItem(ACTIVE_ID_KEY, String(tp || ""));
-      } catch (e) {
-      }
       if (tp === churchPub) {
         sk = churchSk;
         pub = churchPub;
@@ -20285,6 +20336,10 @@ zoo`.split("\n");
         } catch {
           return false;
         }
+      }
+      try {
+        localStorage.setItem(ACTIVE_ID_KEY, actingChurch || "");
+      } catch (e) {
       }
       lastProfile = {};
       _profileLoaded = false;

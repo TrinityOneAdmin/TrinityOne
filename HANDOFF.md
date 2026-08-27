@@ -7,6 +7,46 @@ current state is here at the top.
 
 ---
 
+## THE FAILURE MODE THIS PROJECT KEEPS REPEATING — OWNER, 2026-08-26
+
+Read this before you change anything. The owner named it after simulation round 9, looking at six broken
+systems at once: **"these all read like rookie errors, not paying attention to the wider code when making
+changes."** He is right, and it is not one session's fault — every session here is Claude, so "an earlier
+session did it" is not a defence.
+
+The shape is always the same. **Local state is treated as the truth, and a failure to reach the relay
+degrades quietly instead of loudly.** Round 9 produced five of them in one evening:
+
+- `setEnabled` (care) writes `localStorage` BEFORE publishing and never checks. The console reads that cache,
+  so Care shows as on for ever while no member has it. Twenty phones had no Care page all evening; the care
+  coordinator ran meals, lifts and shopping out of a paper notebook.
+- `_sealChurchDoc` returns CLEARTEXT with a `console.warn` when the name key is missing — and again if
+  encryption throws. A congregation's rota went to the relay in the clear and nothing on screen said so.
+- `_subChurchAddr` did `byId.set(id, …)` with no precedence rule, so network ORDER decided which of two
+  authorised rotas a member saw. Fixed in `be1c0ed`; the same raw pattern still exists at eight other sites.
+- `createChildAccount` publishes a member join immediately with no authority check — a 12-year-old added a
+  fictional member to the congregation in two taps.
+- `RosterModal` staffs a children's team with zero clearance checks.
+
+None is a hard bug in isolation. Each is a decision made without looking at what else writes the same
+document, or what happens when the write fails.
+
+**The discipline the owner asked for, and it is not optional:** before changing anything that writes a
+document, enumerate EVERY writer and EVERY reader of that document first, and check your answer against that
+list — not against the function you happen to be editing. `grep` the d-tag, not the function name. And when a
+publish can fail, decide deliberately whether it fails loud, retries, or is refused; silent local success is
+never the answer.
+
+**And check your diagnosis before you commit it.** In the round-9 fixes I got the cause wrong twice and would
+have shipped both: "18 mis-scoped subscriptions" (wrong — `pub` becomes the church's key when a delegate
+switches in, which the console's own localStorage cache keys prove), and "the rota's empty pubkeys are the
+bug" (wrong — that is a documented off-app-volunteer feature). Both were patterns spotted in source and
+generalised without checking runtime behaviour. Ask the live app, read the cache keys, query the relay.
+
+See also [[never-take-a-report-at-face-value]] and `reference/` for the round-9 findings.
+
+---
+
 ## STANDING RULE FROM THE OWNER, 2026-08-25 — BACKWARDS COMPATIBILITY FROM THE PILOT ONWARDS
 
 > *"once we begin the pilot, we will need to make sure everything we build is backwards compatible."*

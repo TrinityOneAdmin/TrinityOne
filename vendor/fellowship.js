@@ -3497,6 +3497,55 @@
     }
   }
 
+  // src/church-doc-store.src.js
+  function _pickWinner(vers) {
+    let best = null;
+    for (const rec of vers.values()) {
+      if (!best) {
+        best = rec;
+        continue;
+      }
+      const a = best.ts || 0, b = rec.ts || 0;
+      if (b > a || b === a && String(rec._by || "") < String(best._by || "")) best = rec;
+    }
+    return best;
+  }
+  function _reduceVersions(vers, byId, id) {
+    const win = _pickWinner(vers);
+    if (!win) {
+      byId.delete(id);
+      return null;
+    }
+    const others = [...vers.keys()].filter((k) => k !== win._by);
+    byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
+    return win;
+  }
+  function _absorbById(versions, byId, id, rec) {
+    let vers = versions.get(id);
+    if (!vers) {
+      vers = /* @__PURE__ */ new Map();
+      versions.set(id, vers);
+    }
+    const by = String(rec._by || "");
+    const had = vers.get(by);
+    if (had && (had.ts || 0) > (rec.ts || 0)) return false;
+    vers.set(by, rec);
+    const win = _reduceVersions(vers, byId, id);
+    return !!win && win._by === by;
+  }
+  function _forgetById(versions, byId, id, by, ts) {
+    const vers = versions.get(id);
+    if (!vers) return false;
+    const k = String(by || "");
+    const had = vers.get(k);
+    if (!had) return false;
+    if ((had.ts || 0) > (ts || 0)) return false;
+    vers.delete(k);
+    if (!vers.size) versions.delete(id);
+    _reduceVersions(vers, byId, id);
+    return true;
+  }
+
   // node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol2 = /* @__PURE__ */ Symbol("verified");
   var isRecord2 = (obj) => obj instanceof Object;
@@ -6164,20 +6213,6 @@
     }
     if (approved === null && roster === null && !_relayAuthedAt) return null;
     return [...new Set([...approved || [], ...roster || []].filter(Boolean))];
-  }
-  function _absorbById(byId, id, rec) {
-    const prev = byId.get(id);
-    if (prev) {
-      const a = prev.ts || 0, b = rec.ts || 0;
-      const older = a > b || a === b && String(prev._by || "") < String(rec._by || "");
-      if (older) {
-        if (rec._by && rec._by !== prev._by) prev._alt = rec._by;
-        return false;
-      }
-      if (prev._by && prev._by !== rec._by) rec._alt = prev._by;
-    }
-    byId.set(id, rec);
-    return true;
   }
   function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
@@ -9277,6 +9312,7 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       for (const g of loadDocCache("groups", pubk)) {
         if (g && g.id) byId.set(g.id, g);
       }
@@ -9298,14 +9334,14 @@
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              byId.delete(id);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at);
               emit();
             }
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey });
             _noteGroupLeaders(pubk, id, c, e.pubkey);
             if (!_needAuth && pub && c.visibility === "invite" && Array.isArray(c.members) && c.members.some((p) => toPub(p) === pub)) _needAuth = true;
             emit();
@@ -9333,6 +9369,7 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       for (const c of loadDocCache("categories", pubk)) {
         if (c && c.id) byId.set(c.id, c);
       }
@@ -9354,14 +9391,14 @@
           const id = d.slice(CATEGORY_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              byId.delete(id);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at);
               emit();
             }
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -9609,6 +9646,7 @@
       }
       const PLAN_D = "trinityone/plan:";
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       for (const p of loadDocCache("plans", pubk)) {
         if (p && p.id) byId.set(p.id, p);
       }
@@ -9630,13 +9668,13 @@
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              byId.delete(id);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at);
               emit();
             }
             return;
           }
           try {
-            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -9665,6 +9703,7 @@
       }
       const DEVO_D = "trinityone/devotional:";
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       for (const dv of loadDocCache("devos", pubk)) {
         if (dv && dv.id) byId.set(dv.id, dv);
       }
@@ -9687,13 +9726,13 @@
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              byId.delete(id);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at);
               emit();
             }
             return;
           }
           try {
-            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
@@ -9721,6 +9760,7 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       let eosed = false;
       const emit = _coalesce(() => {
         const v = [...byId.values()].filter((x) => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -9737,7 +9777,7 @@
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              byId.delete(id);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at);
               emit();
             }
             return;
@@ -9745,11 +9785,11 @@
           try {
             const c = _openChurchDoc(pubk, e.content);
             if (c === null) {
-              _absorbById(byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
               emit();
               return;
             }
-            _absorbById(byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }

@@ -17,6 +17,7 @@ import { SimplePool } from 'nostr-tools/pool';
 // lookup misses and the health check silently answers about nothing. Use the library's own function rather
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
+import { _absorbById, _forgetById } from './church-doc-store.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -3458,6 +3459,7 @@ window.Steward = {
   // onFunds(fundsArray) fires whenever the fund set changes; returns an unsubscribe fn.
   subscribeFunds(onFunds) {
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => onFunds([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
@@ -3465,8 +3467,8 @@ window.Steward = {
         if (!d.startsWith(FUND_D)) return;
         const id = d.slice(FUND_D.length);
         const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-        if (deleted) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -3487,6 +3489,7 @@ window.Steward = {
   },
   subscribeCategories(onCats) {
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => onCats([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
@@ -3494,8 +3497,8 @@ window.Steward = {
         if (!d.startsWith(CATEGORY_D)) return;
         const id = d.slice(CATEGORY_D.length);
         const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-        if (deleted) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5272,6 +5275,7 @@ window.Steward = {
   subscribeGroups(onGroups) {
     const CACHE_KEY = 'trinityone.steward.groups.' + (pub || '');
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // steward-chosen order first (groups without an order fall to the end, by age)
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); };
     // paint cached groups instantly so the page doesn't flash empty before the relay answers
@@ -5282,8 +5286,12 @@ window.Steward = {
         if (d.startsWith(GROUPKEY_D)) { stewIngestKey(e); return; }   // cache the church's own group keys
         if (!d.startsWith(GROUP_D)) return;
         const id = d.slice(GROUP_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        // THE SAME RULE THE CONGREGATION'S PHONES USE. This reader had none: last arrival won, and a delete
+        // was honoured by id with no author check at all — weaker than the member app. So the phones could be
+        // made to agree with each other while the two people HOLDING THE PENS each saw a different rota, and
+        // every correction flipped the winner church-wide. Round 9's collision started here.
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5309,6 +5317,7 @@ window.Steward = {
   subscribePlans(onPlans) {
     const CACHE_KEY = 'trinityone.steward.plans.' + (pub || '');
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onPlans(arr); };
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(p => { if (p && p.id != null) byId.set(p.id, p); }); if (cached.length) onPlans(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
@@ -5316,8 +5325,8 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(PLAN_D)) return;
         const id = d.slice(PLAN_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5345,6 +5354,7 @@ window.Steward = {
   subscribeDevotionals(onDevos) {
     const CACHE_KEY = 'trinityone.steward.devos.' + (pub || '');
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // explicit steward order first (lower = earlier); the rest fall back to newest-first
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
     const emit = () => { const arr = [...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onDevos(arr); };
@@ -5355,8 +5365,8 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5368,6 +5378,7 @@ window.Steward = {
   _subAddr(prefix, map, onItems) {
     const CACHE_KEY = 'trinityone.steward.addr.' + prefix + (pub || '');
     const byId = new Map();
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // paint the last-known docs instantly so the page doesn't flash empty before the relay answers
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(it => { if (it && it.id != null) byId.set(it.id, it); }); if (cached.length) onItems(cached); } } catch {}
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onItems(arr); };
@@ -5376,12 +5387,12 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
         // _openChurchDoc, not JSON.parse: the calendar documents are sealed under the church name key now
         // (cleartext ones written before that still open — it tries plain JSON first). A null means sealed
         // with a key this console does not hold, which must not silently become an empty calendar.
-        try { const c = _openChurchDoc(e.content); if (c === null) { byId.set(id, { id, _locked: true, ts: e.created_at }); emit(); return; }
-              byId.set(id, { id, ...map(c, id), ts: e.created_at }); emit(); } catch {}
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }
+              _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5884,7 +5895,11 @@ window.Steward = {
     // approved, reloaded, saw "Build your first team" where the church already had four, and built duplicates
     // in good faith. That is what put two rotas on one Sunday. He said it plainly: "every page refresh throws
     // me back into my own empty church, and I have to find the switcher again."
-    try { localStorage.setItem(ACTIVE_ID_KEY, String(tp || '')); } catch (e) {}
+    //
+    // WRITTEN ONLY ONCE THE SWITCH HAS ACTUALLY SUCCEEDED. The first version of this wrote it as the very
+    // first statement, so a switch that then FAILED still overwrote the last good answer — and a console
+    // could be left remembering somewhere it had never managed to go. Remember where we ARE, not where we
+    // were asked to be.
     if (tp === churchPub) { sk = churchSk; pub = churchPub; actingChurch = ''; }
     else if (stewardedChurches.has(tp)) { sk = churchSk; pub = tp; actingChurch = tp; }   // delegated: OUR key signs, church's context reads
     else {
@@ -5892,6 +5907,10 @@ window.Steward = {
       if (!rec) return false;
       try { sk = privateKeyFromSeedWords(rec.mnemonic); pub = getPublicKey(sk); actingChurch = ''; } catch { return false; }
     }
+    // A NETWORK KEY IS DELIBERATELY NOT REMEMBERED — the restore only ever re-enters a stewarded church, so
+    // remembering a network would leave a stale value that the next boot silently ignores. Clearing it is the
+    // honest record: this console is running its own church again.
+    try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {}
     lastProfile = {}; _profileLoaded = false;   // don't carry one identity's profile fields — or its loaded-ness — into the other's edits
     // The just-published clearance cache is per-CHURCH and must not survive the switch either: it is keyed by
     // member pubkey alone, so a member who belongs to both churches could be skipped for the wrong one within
