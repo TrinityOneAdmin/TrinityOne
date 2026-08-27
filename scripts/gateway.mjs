@@ -999,6 +999,10 @@ function rebuildMembers() {
 const MINORS_BY = new Map();   // churchpub -> Set(minor pubkeys)
 const MINORS = new Set();
 function rebuildMinors() { MINORS.clear(); for (const s of MINORS_BY.values()) for (const p of s) MINORS.add(p); }
+// Which churches ALLOW a child to publish a photograph (features.childPhotos on the church's own kind-0).
+// DEFAULT-DENY: a church absent from this set does not allow it. That is the safe direction, and on a relay
+// that rehydrates its whole history at boot the church profile is always present before any member write.
+const CHILD_PHOTOS_OK = new Set();
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
 const APPROVED = new Set();
 function rebuildApproved() { APPROVED.clear(); for (const s of APPROVED_BY.values()) for (const p of s) APPROVED.add(p); }
@@ -1077,6 +1081,25 @@ function minorGoverningChurches(pub) {
 }
 // May `other` exchange DMs with `minorPub`? Clearance must come from EVERY church that governs the child —
 // so one church's lax list can never override another's. Returns true when the child is a minor nowhere.
+// Does this profile carry a photograph? Both shapes: av.kind==='photo' is what identity-avatar.jsx renders,
+// and a bare `picture` is what any other Nostr client would show. Block both — the point is that no viewer
+// anywhere ends up with a child's photograph, not that one renderer happens to ignore one field.
+function _profileHasPhoto(content) {
+  try {
+    const c = JSON.parse(content || '{}');
+    if (c && c.av && c.av.kind === 'photo' && c.av.photo) return true;
+    return !!(c && typeof c.picture === 'string' && c.picture.trim());
+  } catch { return false; }
+}
+// A CHILD'S PHOTOGRAPH IS NOT A UI PREFERENCE. If ANY church that governs this person as a minor has not
+// switched children's photos on, the photo does not land. Scoped exactly like safeguardAllows: a church may
+// only make this judgement about its own children.
+function childPhotoBlocked(pub) {
+  const cps = minorGoverningChurches(pub);
+  if (!cps.length) return false;
+  for (const cp of cps) if (!CHILD_PHOTOS_OK.has(cp)) return true;
+  return false;
+}
 function safeguardAllows(minorPub, other) {
   const cps = minorGoverningChurches(minorPub);
   if (!cps.length) return true;
@@ -1406,7 +1429,22 @@ function persistChurches() { try {
   const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
 } catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
-  if (!CHURCH_PUBS.size || e.kind !== 30078) return;
+  if (!CHURCH_PUBS.size) return;
+  // A CHURCH'S OWN PROFILE CARRIES ITS SAFEGUARDING SWITCHES, and until 2026-08-27 this relay never read them.
+  // `childPhotos` lived only in app/identity.jsx and app/stew-dashboard.jsx, where it decided whether to OFFER
+  // the control — so the setting was a UI preference. Measured with it switched OFF: a minor's kind-0 carrying
+  // av.kind:'photo' was accepted here and rendered, 44px and visible, by another member's STOCK app. The same
+  // shape as the child-safe-groups bug whose own comment claimed it was "the one safeguarding control that
+  // wasn't relay-enforced". It was not the only one.
+  if (e.kind === 0) {
+    if (CHURCH_PUBS.has(e.pubkey)) {
+      let allow = false;
+      try { const c = JSON.parse(e.content || '{}'); allow = !!(c && c.features && c.features.childPhotos === true); } catch {}
+      if (allow) CHILD_PHOTOS_OK.add(e.pubkey); else CHILD_PHOTOS_OK.delete(e.pubkey);
+    }
+    return;
+  }
+  if (e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
   let cp;   // the church a <cp>-keyed admin doc is for — author is the church itself OR one of its rostered stewards
   if (d.startsWith(MEMBER_D) && CHURCH_PUBS.has(d.slice(MEMBER_D.length))) {   // asked to join / joined one of our churches
@@ -1609,6 +1647,9 @@ function accept(e) {
   if (BLOCKED.has(e.pubkey) && !(isAnyChurch || isNetwork)) return false;   // a blocked member can't write anything
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
+    // …but a minor's photograph is refused whatever their membership, unless their church allows it. Placed
+    // FIRST so it cannot be fallen through: the member rule below returns true unconditionally.
+    if (childPhotoBlocked(e.pubkey) && _profileHasPhoto(e.content)) return false;
     if (isMember) return true;                                   // members/leaders: always
     if (store.query({ kinds: [0], authors: [e.pubkey], limit: 1 }).length) return true;  // a stranger updating their own
     // SECURITY-AUDIT-2026-07-06 M6: reject in O(cap) once the stranger cap is reached, instead of scanning +

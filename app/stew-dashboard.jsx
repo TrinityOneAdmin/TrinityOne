@@ -4008,6 +4008,8 @@ function DashMembers() {
   const minorsSet = new Set(sg.minors || []);
   const approvedSet = new Set(sg.approved || []);
   const nophotoSet = new Set(sg.nophoto || []);
+  // does THIS church allow children to have photographs at all? (church profile → features.childPhotos)
+  const kidPhotosAllowed = !!(church && church.features && church.features.childPhotos === true);
   const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
   // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
   // instead of the church's list of children, which the relay no longer serves to ordinary members.
@@ -4098,6 +4100,18 @@ function DashMembers() {
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
     const r = window.Steward.setMinors(next);
+    // MARKING SOMEBODY AS A CHILD MUST DEAL WITH THE PHOTOGRAPH THEY ALREADY HAVE.
+    // The relay now refuses a NEW photo from a minor whose church has children's photos off, but it cannot
+    // rewrite a kind-0 somebody already signed — and the ordinary way a church learns a member is under 18 is
+    // that they are already here, with a picture. Confirmed on the phone, 2026-08-27: an adult set a photo, a
+    // steward marked them a child, and the photograph still rendered on another member's device after a fresh
+    // unlock. So put them on the suppression list, which every client already honours (suppressPhotoAv).
+    // NOT reversed on unmarking, deliberately: this list is also how a steward suppresses a photo for ordinary
+    // moderation, and we cannot tell the two apart. Un-suppressing someone a steward deliberately blocked is
+    // the worse mistake. The "Photos are off for this member" control re-allows it in one tap.
+    if (!unmarking && !kidPhotosAllowed && !nophotoSet.has(pk)) {
+      try { window.Steward.setNoPhoto([...(sg.nophoto || []), pk]); } catch (e) {}
+    }
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
       // Whether the CLEARED list has actually been read — not whether the list of children has. Asking the
       // wrong document broke the exact case this record was written for: a brand-new church clearing its first
