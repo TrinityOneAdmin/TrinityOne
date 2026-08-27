@@ -7,6 +7,39 @@ current state is here at the top.
 
 ---
 
+## CHILDREN'S PHOTOS IS A CLIENT-SIDE CONTROL ONLY (found 2026-08-27, NOT FIXED)
+
+Measured end to end on the live relay, with the church's "Allow children's photos" switched **OFF**:
+
+    minor publishes av:{kind:'photo', photo:<data URI>}   ->  relay OK true
+    another member's STOCK app renders it                 ->  <img alt="Dorothy Vale's picture"> 38px, visible
+
+`childPhotos` appears in exactly two places — `app/identity.jsx` and `app/stew-dashboard.jsx`. **It does not
+appear in scripts/gateway.mjs at all.** The relay has never heard of it. `identity.jsx:1363` computes
+`allowPhoto` only to decide whether to OFFER the control; nothing rejects a photo on the way in, and
+`identity-avatar.jsx` renders `av.kind === 'photo'` without consulting minor status or the church setting.
+
+This is the same shape as the bug already fixed for child-safe groups, and the gateway's own comment names it:
+"Until now this flag lived ONLY in the client … so the adults-only boundary was a UI preference: a minor on a
+modified build, an old build, or any raw REQ could read and post in adult-only group chat. It was the one
+safeguarding control that wasn't relay-enforced." It is not the only one. This is another.
+
+**Vectors, honestly ranked.** The stock editor does withhold the photo control from a minor — verified on the
+OPPO, it offers only Symbol / Initial / Colour — so this is not reachable by a child tapping around a current
+build. What reaches it: an old or modified client, a direct publish by anyone holding the key, and — the case
+worth worrying about — **a member who already had a photo and is only marked as a child afterwards**. Nothing
+retracts the existing `av.kind:'photo'`, and the renderer never re-checks. That last one needs no tampering at
+all and is the ordinary way a church discovers a member is under 18. It is PARTLY tested: the console does not
+render member photos, so it was not observable there, and the phone was unavailable to finish it. Finish that
+sub-case before sizing the fix.
+
+**Where the fix belongs.** In `accept()`, beside the other safeguarding gates: refuse (or strip) a kind-0
+carrying `av.kind === 'photo'` from a pubkey in that church's MINORS list when the church has not set
+childPhotos. That needs the relay to ingest the childPhotos flag, which it currently does not. A client-side
+repair alone would repeat the mistake this project has already paid for once. Note the retention question too:
+switching the setting off, or marking an existing member as a child, should deal with photos already published
+— the relay keeps the newest kind-0 and will keep serving it.
+
 ## A FALSE ALARM I RAISED, AND EXACTLY HOW I FOOLED MYSELF (2026-08-27) — READ BEFORE RE-RAISING IT
 
 I reported that `app/identity.jsx:1485` promises a minor "private messages are limited to the adults your church
