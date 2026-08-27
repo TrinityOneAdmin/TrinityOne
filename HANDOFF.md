@@ -7,6 +7,34 @@ current state is here at the top.
 
 ---
 
+## "WHO CAN OPEN NEEDS -> ANY MEMBER" HAS NO MEMBER-FACING SURFACE (found 2026-08-27, NOT FIXED)
+
+The console's Practical care section offers "Who opens needs: Stewards + care team | Any member". Selecting
+**Any member** publishes `openedBy: "member"` and every layer beneath it honours that:
+
+- `scripts/gateway.mjs:823` keeps `MEALS_OPEN_MEMBER`, and `NEED_D` is documented "church / steward /
+  care-team admin; **or any member when openedBy='member'**" — the relay write gate opens.
+- `src/fellowship.src.js:3623` widens `careTrusted` so the member app will TRUST a need authored by a member.
+- `src/steward-meals.src.js:241` tracks `openedByMember` so a member may retract the need they opened.
+
+So the read path, the write gate and the deletion authority are all built. What is missing is the control.
+`publishNeed` — the only function that creates a need — lives in `src/steward-meals.src.js`, is called only
+from `app/stew-meals.jsx` (the console), and **does not appear in `vendor/fellowship.js` at all** (grep count:
+0). No member-facing screen reads `openedBy` either (0 occurrences across screens-today, screens-serving,
+screens-chat, identity).
+
+Verified on the device rather than only in the source: with `openedBy: "member"` published and confirmed on the
+relay, Bram's Care tab offered no way to open a need — the controls were "Ask for help", "I'm here to help" and
+the confidential lane, exactly as before the change.
+
+So a steward can switch this on, see it save, and nothing whatsoever changes for their members. The member
+app's only need-creating path is "Set up help" (`app/screens-today.jsx:359`), which hangs off approving
+somebody's care REQUEST and is not gated by this setting at all.
+
+Two honest possibilities and I cannot tell which from here: the member UI was never built, or the setting is
+meant to describe the request-approval path and is simply mislabelled. Decide which before building — if the
+answer is "never built", note the plumbing is already in place and only the control is missing.
+
 ## TWO MORE FROM THE CONFIGURATION PASS, 2026-08-27 — NOT FIXED
 
 **A. Marking someone as a child silently strips their youth clearance, and unmarking does not give it back.**
