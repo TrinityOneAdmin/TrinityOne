@@ -7,6 +7,39 @@ current state is here at the top.
 
 ---
 
+## TWO MORE FROM THE CONFIGURATION PASS, 2026-08-27 — NOT FIXED
+
+**A. Marking someone as a child silently strips their youth clearance, and unmarking does not give it back.**
+Measured. Bram was cleared for youth; a steward marked him as a child; the cleared list went from
+`{"pubkeys":["d14d2a62…"]}` to `{"pubkeys":[],"cleared":{}}`. Unmarking him as a child left it empty — the
+clearance is gone, silently, and the console says nothing about it either way. Revoking on mark is arguably
+right (the gateway comment at `approvedIn` warns loudly about stale clearance surviving on someone who is
+later unmarked, and this is the code avoiding exactly that). What is wrong is that it is invisible: a steward
+who mis-taps "Child" on an adult destroys that adult's clearance and gets no warning, no undo, and no notice
+that re-clearing is now required. At minimum say so at the moment of the tap.
+
+**B. The child's dead-end card does not refresh when the church fixes the thing it complains about.**
+`screens-today.jsx:616` fetches `childCareAudience` in an effect keyed only on
+`[isMinor, ctx.church && ctx.church.npub]`. Clearance is not in that list, so nothing re-runs when it changes.
+Measured on the phone: with nobody cleared, a minor correctly sees "Your church hasn't set up who can help
+young people yet." A steward then clears an adult — the card **keeps saying it**, and keeps the "Ask for help"
+control hidden, until the app is restarted. After a reload it is immediately correct.
+
+That is the worst possible moment for a stale screen. A young person who was told to go and speak to a leader,
+does so, the leader fixes it — and the app still tells them there is nobody. Subscribe to the clearance
+document (or re-run the effect when the church's approved list changes) rather than fetching once on mount.
+
+**Also checked and CORRECT, so nobody re-tests them:**
+- Per-group encryption holds. A message posted to a group marked `encrypted: true` is stored sealed on the
+  relay (`AtZRzsT9z28…`) with the plaintext nowhere in the event — verified reading as the CHURCH key, which
+  cannot open it either. The room also labels itself "End-to-end encrypted" to the member.
+- Care visibility "Only the care team" with no care team selected is caught by the console:
+  "⚠ No care team is selected below — with this setting no one will see open needs."
+- Setting visibility to team-only does NOT block a minor from asking for help, which is right — their request
+  goes to cleared adults, not the rota. I nearly filed the opposite: the "Ask for help" control was missing at
+  the time, but because nobody was cleared (see A), not because of the visibility setting. Isolate the variable
+  before filing; that one was one step from being another false finding.
+
 ## CHILDREN'S PHOTOS IS A CLIENT-SIDE CONTROL ONLY (found 2026-08-27, NOT FIXED)
 
 Measured end to end on the live relay, with the church's "Allow children's photos" switched **OFF**:
