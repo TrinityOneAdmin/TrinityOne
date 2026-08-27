@@ -58,6 +58,13 @@ does so, the leader fixes it — and the app still tells them there is nobody. S
 document (or re-run the effect when the church's approved list changes) rather than fetching once on mount.
 
 **Also checked and CORRECT, so nobody re-tests them:**
+- The full-name rule works in both directions. With `rules.fullName: true` published, a member typing a
+  single-word name gets **Save disabled** and a plain explanation — "ZZ DEVICE TEST asks members to use a real
+  first and last name so people can recognise you." A two-word name re-enables Save immediately. The wording
+  explains rather than scolds, which is the house standard.
+- Kids check-in is a CONSOLE feature and correctly invisible to members. `features.checkin` is read in exactly
+  one place, `app/stew-dashboard.jsx:1062`. Switching it on adds "Check-in" to the console sidebar and changes
+  nothing in the member app — which is right, not a gap.
 - Per-group encryption holds. A message posted to a group marked `encrypted: true` is stored sealed on the
   relay (`AtZRzsT9z28…`) with the plaintext nowhere in the event — verified reading as the CHURCH key, which
   cannot open it either. The room also labels itself "End-to-end encrypted" to the member.
