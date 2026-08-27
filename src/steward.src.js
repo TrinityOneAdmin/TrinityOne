@@ -5640,7 +5640,7 @@ window.Steward = {
         // recur/day/groupId/image MUST be carried: the event dialog opens from this list too, and editing
         // there re-publishes what it was handed. Omitting recur/day collapsed a weekly meeting into a single
         // dated entry; omitting groupId unlinked the event from the very group you edited it in. AUDIT 2026-07-26.
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey }); emit(); } catch {}
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

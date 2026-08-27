@@ -3605,7 +3605,7 @@ window.Fellowship = {
     if (!pubk) { cb([]); return () => {}; }
     const byId = new Map();                 // careId -> need (carries _by = author, for the trust filter)
     const versions = new Map();   // careId -> Map(author -> their copy); see src/church-doc-store.src.js
-    const _trust = (rec) => _churchVoice(pubk, rec);
+    let _trust = () => true;   // widened to careTrusted below, once it exists — see the note there
     // OWNER DECISION, 2026-08-27: care needs follow the same rule as rotas. A meal train, a lift or a
     // visit can be edited by the church, a care steward, a care-team admin — and by any member where the
     // church opens needs to members. Last arrival won, so two people tidying one meal train could leave
@@ -3621,6 +3621,16 @@ window.Fellowship = {
     // only when church-voiced, so a forged settings/roster can't widen the trust. Author-filter at emit time
     // (with re-emit as settings/roster arrive) so ordering never hides a legitimate need.
     const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === 'member' || (!!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by));
+    // THE STORE MUST TRUST EVERYONE THE SCREEN TRUSTS, OR IT THROWS THE NEED AWAY BEFORE THE SCREEN SEES IT.
+    // Migrating this reader, I handed the store `_churchVoice` — which knows only the church key and its
+    // steward roster — while `careTrusted` right above knows three kinds of author: those, a care-team ADMIN,
+    // and any member at all when the church opens needs to members. _pickWinner discards what the predicate
+    // rejects and _reduceVersions then DELETES the id, so the wider filter at emit never got its turn. Measured
+    // by an audit: a care-team admin's meal train never appeared on any phone, ever — and their correction to a
+    // church-created need ("Thursday, severe nut allergy") was discarded while every phone kept showing
+    // "Tuesday, no nuts". That is the exact scenario the migration was justified by, inverted by the migration.
+    // Care-team admin is the ordinary operating role for meal trains, so this was the pilot case.
+    _trust = (rec) => careTrusted(rec && rec._by);
     // DELETION is stricter than authorship: a church that opens needs to ANY member must not thereby let any
     // member retract someone ELSE's need. (kind-30078 is per-author, so a stranger's tombstone never replaces
     // the original on the relay — but the client keyed purely on the d-tag, so honouring it hid the need from
@@ -4125,9 +4135,18 @@ window.Fellowship = {
     // (store-backed since d6e9a5c) kept its copy — so one screen said the meeting was on and another said
     // it was gone, in the same app.
     const _gidOf = (e) => (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
+    // JUDGE EACH COPY BY ITS OWN GROUP, NOT BY WHICHEVER ONE HAPPENED TO ARRIVE. The first version built this
+    // predicate per incoming event and closed over THAT event's group tag, then used it to judge every other
+    // copy in the map — so with copies carrying different group tags, arrival order could pick different
+    // winners on different phones, which is the one guarantee this store exists to give.
+    const _evTrust = (rec) => _groupEventTrusted(cp, rec && rec._gid, rec && rec._by);
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = () => { const v = [...byId.values()].filter(x => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || '').localeCompare(b.date || '')); if (!eosed && !v.length) return; onEvents(v); };
-    const onTrust = () => emit();   // re-evaluate when the roster / group-leader lists load or change
+    // RE-CHOOSE, DO NOT MERELY RE-FILTER. Every hub-backed reader learned this one commit ago and this
+    // standalone subscription did not: filtering at emit drops a revoked steward's winning copy and leaves
+    // the church's copy unpromoted in the store, so the meeting blanks for the whole group — the very bug
+    // de6e05a was written to fix, alive here. It also strands events absorbed before the roster arrived.
+    const onTrust = () => { _reduceAll(versions, byId, _evTrust); emit(); };
     window.addEventListener('trinity-church-trust', onTrust);
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#t': groups }], {
       onevent(e) {
@@ -4136,8 +4155,8 @@ window.Fellowship = {
         const gid = (e.tags.find(t => t[0] === 't' && groups.includes(t[1])) || [])[1] || '';
         const id = d.slice('trinityone/event:'.length);
         // AUDIT-2026-07-24 (group events): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, (rec) => _groupEventTrusted(cp, _gidOf(e), rec._by)); emit(); } return; }
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, (rec) => _groupEventTrusted(cp, _gidOf(e), rec._by)); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust); emit(); } return; }
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust); emit(); } catch {}
       },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });

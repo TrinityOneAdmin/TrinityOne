@@ -9959,10 +9959,11 @@
       }
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      const _trust = (rec) => _churchVoice(pubk, rec);
+      let _trust = () => true;
       const rosterPeople = /* @__PURE__ */ new Map();
       let openedBy = "steward", adminGroupId = "", eosed = false;
       const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === "member" || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by);
+      _trust = (rec) => careTrusted(rec && rec._by);
       const tombs = /* @__PURE__ */ new Map();
       const careDelOk = (by, need) => _churchVoice(pubk, { _by: by }) || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by) || !!need && need._by === by;
       const retracted = (id, need) => {
@@ -10672,13 +10673,17 @@
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const _gidOf = (e) => (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
+      const _evTrust = (rec) => _groupEventTrusted(cp, rec && rec._gid, rec && rec._by);
       let eosed = false;
       const emit = () => {
         const v = [...byId.values()].filter((x) => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
         if (!eosed && !v.length) return;
         onEvents(v);
       };
-      const onTrust = () => emit();
+      const onTrust = () => {
+        _reduceAll(versions, byId, _evTrust);
+        emit();
+      };
       window.addEventListener("trinity-church-trust", onTrust);
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": groups }], {
         onevent(e) {
@@ -10688,14 +10693,14 @@
           const id = d.slice("trinityone/event:".length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at, (rec) => _groupEventTrusted(cp, _gidOf(e), rec._by));
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust);
               emit();
             }
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, (rec) => _groupEventTrusted(cp, _gidOf(e), rec._by));
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust);
             emit();
           } catch {
           }

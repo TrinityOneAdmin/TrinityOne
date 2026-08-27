@@ -248,9 +248,12 @@ test('EVERY reader that paints from cache seeds the store — found by sweeping,
   }
   // A sweep that finds nothing passes everything. Pin the floor so a refactor that hides every reader from
   // the regex fails loudly instead of quietly reporting success.
-  assert.ok(counted.length >= 11,
-    `the sweep only recognised ${counted.length} store-backed readers; it used to find 11, so it is now ` +
-    'blind to some and cannot be trusted to have checked them: ' + counted.join(', '));
+  // THE FLOOR MUST TRACK REALITY. It said 11 while there were 14, so three whole readers could quietly stop
+  // using the store before anything went red — and an auditor proved it by unmigrating care needs entirely
+  // with every test green. Raise it when a reader is added; it is meant to be a ratchet, not a formality.
+  assert.ok(counted.length >= 14,
+    `the sweep only recognised ${counted.length} store-backed readers; there were 14, so readers have ` +
+    'silently dropped out of the store and this test cannot be trusted to have checked them: ' + counted.join(', '));
   assert.deepEqual(problems, [],
     'a document deleted while the app was closed will stay on screen for ever in:\n  ' + problems.join('\n  '));
 });
@@ -425,4 +428,86 @@ test('one person deleting their copy does not blank the group’s meeting', () =
   m.del(WARDEN, 300);
   assert.ok(m.seen(), 'tidying a duplicate removed the meeting from the whole group');
   assert.equal(m.seen().tag, 'the church’s copy');
+});
+
+
+// ── THE READERS THE SWEEP CANNOT NAME FOR ITSELF ─────────────────────────────────────────────────────────
+// An auditor unmigrated care needs COMPLETELY — raw last-arrival-wins, no trust, no roster re-choose — and
+// all 58 tests stayed green, because the sweep's floor was set below the real count and care needs was the
+// one migrated reader with no test of its own. Name the readers that must be store-backed, so removing one
+// fails by name rather than by arithmetic.
+test('the readers that must be store-backed are, by name', () => {
+  const MUST = {
+    'src/fellowship.src.js': ['subscribeChurchGroups', 'subscribeChurchCategories', 'subscribeChurchPlans',
+      'subscribeChurchDevotionals', '_subChurchAddr', 'subscribeCareNeeds', 'subscribeGroupEvents'],
+    'src/steward.src.js': ['subscribeGroups', 'subscribePlans', 'subscribeDevotionals', 'subscribeCategories',
+      'subscribeFunds', '_subAddr', 'subscribeGroupEvents'],
+  };
+  const missing = [];
+  for (const [file, names] of Object.entries(MUST)) {
+    const text = stripComments(readFileSync(new URL('../' + file, import.meta.url), 'utf8'));
+    const lines = text.split('\n');
+    const starts = [];
+    lines.forEach((l, i) => { const m = l.match(/^  (?:async )?([A-Za-z_]\w*)\(/); if (m) starts.push([i, m[1]]); });
+    for (const want of names) {
+      const idx = starts.findIndex(([, n]) => n === want);
+      if (idx === -1) { missing.push(file + ' → ' + want + ' has gone (re-anchor this list)'); continue; }
+      const end = idx + 1 < starts.length ? starts[idx + 1][0] : lines.length;
+      const body = lines.slice(starts[idx][0], end).join('\n');
+      if (!/_absorbById\(versions\d*, byId/.test(body)) missing.push(file + ' → ' + want + ' no longer decides who wins');
+      if (/\bbyId\.(set|delete)\(id/.test(body)) missing.push(file + ' → ' + want + ' writes by id with no rule');
+    }
+  }
+  assert.deepEqual(missing, [], 'these decide by arrival order again:\n  ' + missing.join('\n  '));
+});
+
+test('CARE NEEDS: the store trusts everyone the screen trusts', () => {
+  // The regression an audit caught. The store was handed a predicate knowing only the church key and its
+  // steward roster, while the screen's own filter knows three kinds of author — those, a care-team ADMIN, and
+  // any member when the church opens needs to members. The store DELETES what it rejects, so a care-team
+  // admin's meal train never reached a single phone, and their correction to a church-created need ("Thursday,
+  // severe nut allergy") was discarded while every phone kept showing "Tuesday, no nuts".
+  const body = stripComments(fnBody(readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8'),
+    'subscribeCareNeeds(', 'subscribeCareNeeds'));
+  assert.match(body, /_trust = \(rec\) => careTrusted\(/,
+    'the care store judges authorship more narrowly than the care screen does, so needs it rejects are ' +
+    'deleted before the screen can show them — a care-team admin’s meal train reaches nobody');
+  assert.ok(!/_trust = \(rec\) => _churchVoice/.test(body),
+    'the narrow predicate is back: only the church and its stewards would have their needs shown');
+});
+
+test('GROUP EVENTS: one predicate, judging each copy by its own group', () => {
+  const body = stripComments(fnBody(readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8'),
+    'subscribeGroupEvents(', 'subscribeGroupEvents'));
+  assert.match(body, /_evTrust = \(rec\) => _groupEventTrusted\(cp, rec && rec\._gid/,
+    'the predicate judges other copies by whichever event happened to arrive, so two phones can pick ' +
+    'different winners — the one guarantee this store exists to give');
+  assert.match(body, /onTrust = \(\) => \{ _reduceAll\(versions\d*, byId, _evTrust\); emit\(\); \}/,
+    'a trust change only re-filters here, so revoking a steward blanks the group’s meeting instead of ' +
+    'promoting the church’s copy — the bug the previous commit existed to fix');
+});
+
+test('every store-backed reader records a timestamp, or its rule is meaningless', () => {
+  // The console recorded WHO wrote a group event but not WHEN, so every comparison was a tie at zero: the
+  // lower pubkey won for ever and an older copy replayed on reconnect overwrote a newer one — verbatim the
+  // defect that commit said it had fixed. Nothing checked for `ts`.
+  // Brace-MATCH the record rather than regexing it: these objects contain nested `{}` (a dayMeals map, for
+  // one), and a non-greedy match stops at the first inner brace and reports a false miss. My first version
+  // did exactly that and accused a reader that was fine.
+  const bad = [];
+  for (const file of ['src/fellowship.src.js', 'src/steward.src.js']) {
+    const text = stripComments(readFileSync(new URL('../' + file, import.meta.url), 'utf8'));
+    for (const m of text.matchAll(/_absorbById\(versions\d*, byId, [^,]+, \{/g)) {
+      const open = m.index + m[0].length - 1;
+      let d = 0, close = -1;
+      for (let i = open; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '{') d++;
+        else if (ch === '}' && --d === 0) { close = i + 1; break; }
+      }
+      const rec = text.slice(open, close);
+      if (!/\bts:/.test(rec)) bad.push(file + ': ' + rec.slice(0, 70).replace(/\s+/g, ' ') + '…');
+    }
+  }
+  assert.deepEqual(bad, [], 'these record who wrote a document but not when, so every comparison is a tie:\n  ' + bad.join('\n  '));
 });
