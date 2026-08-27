@@ -30,6 +30,15 @@ it is not a live leak, but the asking phone chose an audience it had no business
 
 It works at present only for cleared adults who happen to also sit on the care rota. That is luck, not design.
 
+**Confirmed on hardware, 2026-08-27** — this is measured, not deduced. OPPO + live a8 relay, church "ZZ DEVICE
+TEST". Dorothy (minor) asked for help; Bram (cleared for youth, NOT on the care rota) saw it under "FROM A YOUNG
+PERSON · CONFIDENTIAL" and messaged her; she read it and replied. Her reply is on the relay
+(`carechat:47f043c7…:571d20cd6605`) and the relay **serves it to Bram** — it shows in his own authenticated
+query — but his screen never displayed it, 25+ seconds later. Her phone shows it as sent. Screenshots taken.
+
+That church has `adminGroupId: ""` — no care team at all — which makes this the DEFAULT configuration rather
+than an edge case: sealing to "the care team" when no care team exists seals to nobody.
+
 **Plan to fix.**
 1. `sendCareChat` must seal to the SAME audience the request itself used, for every participant in the thread —
    not to the sender's own category. Both the child and the cleared adult write into one thread; if they choose
