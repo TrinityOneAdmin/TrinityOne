@@ -7,6 +7,33 @@ current state is here at the top.
 
 ---
 
+## AN ADULT'S REQUEST IS FILED UNDER "FROM A YOUNG PERSON" (found 2026-08-27, NOT FIXED)
+
+Surfaced by the regression run after the care-chat fix; it is NOT caused by that fix and predates it.
+
+`app/screens-today.jsx:465`:
+
+    const fromChild = (r) => (isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true);
+
+For anyone who is not a care admin, **every** request is treated as coming from a child. Measured on the
+device: Bram, a cleared adult, opened an ordinary request for himself and his own screen filed it under
+"FROM A YOUNG PERSON · 2 · CONFIDENTIAL", with the safeguarding explainer above it.
+
+The default is defensible as a fail-safe — a cleared adult who is not on the care rota is only served
+children's requests by the relay, so treating what they see as confidential is the safe way round. It stops
+being defensible when they are ALSO an ordinary member with their own requests, which is the case here and
+will be the case in any small church. `isCareAdmin` is false whenever the church has no care team
+(`adminGroupId: ""`), which is the default configuration, so this is not a corner.
+
+Two consequences beyond the wrong label: `row(r, child)` passes `onApprove = null` for anything marked as a
+child, so a cleared adult cannot action an adult's request at all; and the confidential explainer misdescribes
+what they are looking at, which is the opposite of the honesty this seam is being rebuilt for.
+
+The fix is to decide "is this from a child" from something the reader can actually establish — the requester's
+own membership of the minors list where they can read it, and otherwise the fact that the request was NOT
+addressed to the care team. Do not simply flip the default to false: that would show a cleared adult a child's
+disclosure with no confidentiality framing at all, which is the worse error.
+
 ## "WHO CAN OPEN NEEDS -> ANY MEMBER" HAS NO MEMBER-FACING SURFACE (found 2026-08-27, NOT FIXED)
 
 The console's Practical care section offers "Who opens needs: Stewards + care team | Any member". Selecting
