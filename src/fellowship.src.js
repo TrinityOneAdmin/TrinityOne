@@ -7,7 +7,7 @@ import { SimplePool } from 'nostr-tools/pool';
 // The SAME normaliser the pool keys its connection map by. Comparing raw URLs against that map is why a
 // perfectly healthy socket could read as unreachable — see relaysHealthy().
 import { normalizeURL } from 'nostr-tools/utils';
-import { _absorbById, _forgetById } from './church-doc-store.src.js';
+import { _absorbById, _forgetById, _seedFromCache } from './church-doc-store.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
@@ -3158,7 +3158,7 @@ window.Fellowship = {
     if (!pubk) { onGroups([]); return () => {}; }
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
-    for (const g of loadDocCache('groups', pubk)) { if (g && g.id) byId.set(g.id, g); }   // paint cached instantly
+    _seedFromCache(versions, byId, loadDocCache('groups', pubk));   // paint cached instantly — and seed the store, or a delete finds nothing to withdraw
     // honour the steward's chosen order; client-roster-trust filters out forged/revoked authors (M2)
     let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
     const emit = _coalesce(() => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); if (!eosed && !v.length) return; saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });

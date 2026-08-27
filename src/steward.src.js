@@ -17,7 +17,7 @@ import { SimplePool } from 'nostr-tools/pool';
 // lookup misses and the health check silently answers about nothing. Use the library's own function rather
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
-import { _absorbById, _forgetById } from './church-doc-store.src.js';
+import { _absorbById, _forgetById, _seedFromCache } from './church-doc-store.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -5380,7 +5380,7 @@ window.Steward = {
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // paint the last-known docs instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(it => { if (it && it.id != null) byId.set(it.id, it); }); if (cached.length) onItems(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onItems(cached); } } catch {}
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onItems(arr); };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {

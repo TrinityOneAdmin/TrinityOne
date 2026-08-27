@@ -48,6 +48,23 @@ export function _reduceVersions(vers, byId, id) {
   byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
   return win;
 }
+// PAINTING FROM CACHE MUST SEED THE STORE, NOT JUST THE SCREEN.
+// Both readers paint last-known documents instantly so a page does not flash empty. They wrote straight into
+// the display map — which was harmless when a delete was keyed on the id, and became a bug the moment a
+// delete had to find the author's copy: a tombstone for something painted from cache found nothing to
+// withdraw and was ignored, so a group or rota deleted while you were away stayed on screen for ever.
+//
+// A cache written before this shipped has no author recorded. Those are seeded under '' and _forgetById
+// treats an unknown author as bound by anybody's delete — which is exactly the old behaviour, so upgrading
+// does not strand old entries.
+export function _seedFromCache(versions, byId, items) {
+  for (const it of (items || [])) {
+    if (!it || it.id == null) continue;
+    let vers = versions.get(it.id); if (!vers) { vers = new Map(); versions.set(it.id, vers); }
+    vers.set(String(it._by || ''), it);
+    byId.set(it.id, it);
+  }
+}
 export function _absorbById(versions, byId, id, rec) {
   let vers = versions.get(id); if (!vers) { vers = new Map(); versions.set(id, vers); }
   const by = String(rec._by || '');
@@ -64,8 +81,11 @@ export function _absorbById(versions, byId, id, rec) {
 export function _forgetById(versions, byId, id, by, ts) {
   const vers = versions.get(id); if (!vers) return false;
   const k = String(by || '');
-  const had = vers.get(k);
+  // An entry restored from a cache written before authors were recorded is bound by anybody's delete — we
+  // cannot tell whose it was, and refusing would leave it on screen for ever.
+  const had = vers.has(k) ? vers.get(k) : (vers.size === 1 && vers.has('') ? vers.get('') : null);
   if (!had) return false;                                         // nothing of theirs to withdraw
+  if (!vers.has(k)) { vers.delete(''); if (!vers.size) versions.delete(id); _reduceVersions(vers, byId, id); return true; }
   if ((had.ts || 0) > (ts || 0)) return false;                    // a stale tombstone must not undo a newer edit
   vers.delete(k);
   if (!vers.size) versions.delete(id);

@@ -27,15 +27,16 @@ const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8')
 // Lift the whole store out of the SHIPPED bundle — the picker, the reducer, the absorber and the delete —
 // because they only make sense together and a delete is judged by the same rule as a write.
 function store(bundle) {
-  const src = ['function _pickWinner', 'function _reduceVersions', 'function _absorbById', 'function _forgetById']
+  const src = ['function _pickWinner', 'function _reduceVersions', 'function _absorbById', 'function _forgetById', 'function _seedFromCache']
     .map(n => fnBody(bundle, n, n.split(' ')[1])).join('\n');
-  const api = new Function(src + '\nreturn { _absorbById, _forgetById };')();
+  const api = new Function(src + '\nreturn { _absorbById, _forgetById, _seedFromCache };')();
   const versions = new Map(), byId = new Map();
   return {
     byId,
     put: (by, ts, tag, id) => api._absorbById(versions, byId, id || 'svc1', { id: id || 'svc1', _by: by, ts, tag }),
     del: (by, ts, id) => api._forgetById(versions, byId, id || 'svc1', by, ts),
     seen: (id) => byId.get(id || 'svc1'),
+    paint: (items) => api._seedFromCache(versions, byId, items),
   };
 }
 const CHURCH = 'a'.repeat(64), WARDEN = 'b'.repeat(64), THIRD = 'c'.repeat(64);
@@ -178,4 +179,43 @@ test('EVERY multi-author church document goes through the store — not just the
   const con = stripComments(fnBody(S, '_subAddr(prefix, map, onItems)', '_subAddr'));
   assert.ok(!/byId\.delete\(/.test(con), 'the console still honours a delete by id, with no author check');
   assert.match(con, /_absorbById\(versions\d*, byId/, 'the console still decides by arrival order');
+});
+
+
+// ── PAINTING FROM CACHE MUST SEED THE STORE, NOT JUST THE SCREEN ─────────────────────────────────────────
+// Both readers paint last-known documents instantly so a page does not flash empty. Writing them straight
+// into the display map was harmless while a delete was keyed on the id — and became a bug the moment a delete
+// had to find the author's copy. I introduced it in the fix for the collision and caught it before it shipped.
+test('a document deleted while you were away is removed, not left on screen for ever', () => {
+  const m = store(V);
+  m.paint([{ id: 'svc1', _by: CHURCH, ts: 100, tag: 'from cache' }]);
+  assert.equal(m.seen().tag, 'from cache', 'setup: the cached copy is painted');
+  m.del(CHURCH, 200);
+  assert.equal(m.seen(), undefined,
+    'a tombstone found nothing to withdraw, so a rota deleted while the app was closed stays on screen');
+});
+
+test('an OLD cache with no author recorded is still deletable by anyone', () => {
+  // Caches written before this shipped carry no author. Refusing to honour a delete for them would strand
+  // every existing install on stale documents; the old behaviour was that any delete cleared them.
+  const m = store(V);
+  m.paint([{ id: 'svc1', ts: 100, tag: 'legacy cache entry' }]);
+  m.del(WARDEN, 200);
+  assert.equal(m.seen(), undefined, 'upgrading strands people on documents their church has already deleted');
+});
+
+test('seeding from cache does not fabricate a conflict', () => {
+  const m = store(V);
+  m.paint([{ id: 'svc1', _by: CHURCH, ts: 100, tag: 'cached' }]);
+  m.put(CHURCH, 200, 'live update');
+  assert.equal(m.seen().tag, 'live update', 'the live copy did not replace its own cached self');
+  assert.equal(m.seen()._alt, undefined,
+    'one author’s cached copy and their own live copy were counted as two people publishing');
+});
+
+test('both readers seed from their cache', () => {
+  const phone = stripComments(fnBody(V, 'subscribeChurchGroups(churchNpub, onGroups)', 'subscribeChurchGroups'));
+  assert.match(phone, /_seedFromCache\(versions\d*, byId/, 'the member app paints cache into the screen only');
+  const con = stripComments(fnBody(S, '_subAddr(prefix, map, onItems)', '_subAddr'));
+  assert.match(con, /_seedFromCache\(versions\d*, byId/, 'the console paints cache into the screen only');
 });

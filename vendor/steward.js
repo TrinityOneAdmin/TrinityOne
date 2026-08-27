@@ -6290,6 +6290,18 @@
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
+  function _seedFromCache(versions, byId, items) {
+    for (const it of items || []) {
+      if (!it || it.id == null) continue;
+      let vers = versions.get(it.id);
+      if (!vers) {
+        vers = /* @__PURE__ */ new Map();
+        versions.set(it.id, vers);
+      }
+      vers.set(String(it._by || ""), it);
+      byId.set(it.id, it);
+    }
+  }
   function _absorbById(versions, byId, id, rec) {
     let vers = versions.get(id);
     if (!vers) {
@@ -6307,8 +6319,14 @@
     const vers = versions.get(id);
     if (!vers) return false;
     const k = String(by || "");
-    const had = vers.get(k);
+    const had = vers.has(k) ? vers.get(k) : vers.size === 1 && vers.has("") ? vers.get("") : null;
     if (!had) return false;
+    if (!vers.has(k)) {
+      vers.delete("");
+      if (!vers.size) versions.delete(id);
+      _reduceVersions(vers, byId, id);
+      return true;
+    }
     if ((had.ts || 0) > (ts || 0)) return false;
     vers.delete(k);
     if (!vers.size) versions.delete(id);
@@ -19566,9 +19584,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          cached.forEach((it) => {
-            if (it && it.id != null) byId.set(it.id, it);
-          });
+          _seedFromCache(versions, byId, cached);
           if (cached.length) onItems(cached);
         }
       } catch {
