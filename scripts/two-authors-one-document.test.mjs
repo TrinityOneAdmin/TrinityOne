@@ -43,6 +43,24 @@ function store(bundle) {
     paint: (items) => api._seedFromCache(versions, byId, items),
   };
 }
+
+// ONE WAY TO FIND A READER, USED BY EVERY SWEEP IN THIS FILE. Function boundaries differ by file: fellowship
+// and steward use two-space object methods, steward-meals uses `function name(` inside a module closure. Two
+// copies of this logic drifted within a single commit — the sweep learned the second shape and the by-name
+// check did not, so a reader it was meant to pin reported as "has gone".
+function readersOf(file) {
+  const text = stripComments(readFileSync(new URL('../' + file, import.meta.url), 'utf8'));
+  const lines = text.split('\n');
+  const starts = [];
+  lines.forEach((l, i) => {
+    const m = l.match(/^  (?:async )?([A-Za-z_]\w*)\(/) || l.match(/^  function ([A-Za-z_]\w*)\(/);
+    if (m) starts.push([i, m[1]]);
+  });
+  return starts.map(([ln, name], idx) => ({
+    name, body: lines.slice(ln, idx + 1 < starts.length ? starts[idx + 1][0] : lines.length).join('\n'),
+  }));
+}
+
 const CHURCH = 'a'.repeat(64), WARDEN = 'b'.repeat(64), THIRD = 'c'.repeat(64);
 
 test('the newer write wins, whichever order it arrives in', () => {
@@ -228,11 +246,21 @@ test('EVERY reader that paints from cache seeds the store — found by sweeping,
   // and it paints if it writes into the display map by any name. Neither can be disguised by renaming a
   // variable or splitting a line.
   const problems = [], counted = [];
-  for (const file of ['src/fellowship.src.js', 'src/steward.src.js']) {
+  // steward-meals.src.js is IN this list because leaving it out is how the console's own meal-train reader
+  // stayed on arrival-order for a whole commit that claimed care needs were fixed. The perimeter has to
+  // include every file that reads church documents, not the two I happened to be editing.
+  for (const file of ['src/fellowship.src.js', 'src/steward.src.js', 'src/steward-meals.src.js']) {
     const text = stripComments(readFileSync(new URL('../' + file, import.meta.url), 'utf8'));
     const lines = text.split('\n');
     const starts = [];
-    lines.forEach((l, i) => { const m = l.match(/^  (?:async )?([A-Za-z_]\w*)\(/); if (m) starts.push([i, m[1]]); });
+    // Function boundaries differ by file: fellowship and steward use two-space object methods, steward-meals
+    // uses `function name(` inside a module closure. Matching loosely merged two readers into one and produced
+    // a false accusation against a reader that was fine — the same "cries wolf" failure the timestamp sweep
+    // had. Match both real shapes, and nothing else.
+    lines.forEach((l, i) => {
+      const m = l.match(/^  (?:async )?([A-Za-z_]\w*)\(/) || l.match(/^  function ([A-Za-z_]\w*)\(/);
+      if (m) starts.push([i, m[1]]);
+    });
     starts.forEach(([ln, name], idx) => {
       const end = idx + 1 < starts.length ? starts[idx + 1][0] : lines.length;
       const body = lines.slice(ln, end).join('\n');
@@ -442,18 +470,19 @@ test('the readers that must be store-backed are, by name', () => {
       'subscribeChurchDevotionals', '_subChurchAddr', 'subscribeCareNeeds', 'subscribeGroupEvents'],
     'src/steward.src.js': ['subscribeGroups', 'subscribePlans', 'subscribeDevotionals', 'subscribeCategories',
       'subscribeFunds', '_subAddr', 'subscribeGroupEvents'],
+    // The surface the care team actually works from. Left off this list, reverting it is INVISIBLE to the
+    // sweep — which only inspects readers that already use the store, so one that stops using it simply
+    // disappears from the check. That is how the console's meal-train list stayed on arrival order through a
+    // commit that announced care needs were fixed.
+    'src/steward-meals.src.js': ['subscribeNeeds'],
   };
   const missing = [];
   for (const [file, names] of Object.entries(MUST)) {
-    const text = stripComments(readFileSync(new URL('../' + file, import.meta.url), 'utf8'));
-    const lines = text.split('\n');
-    const starts = [];
-    lines.forEach((l, i) => { const m = l.match(/^  (?:async )?([A-Za-z_]\w*)\(/); if (m) starts.push([i, m[1]]); });
+    const found = readersOf(file);
     for (const want of names) {
-      const idx = starts.findIndex(([, n]) => n === want);
-      if (idx === -1) { missing.push(file + ' → ' + want + ' has gone (re-anchor this list)'); continue; }
-      const end = idx + 1 < starts.length ? starts[idx + 1][0] : lines.length;
-      const body = lines.slice(starts[idx][0], end).join('\n');
+      const r = found.find(x => x.name === want);
+      if (!r) { missing.push(file + ' → ' + want + ' has gone (re-anchor this list)'); continue; }
+      const body = r.body;
       if (!/_absorbById\(versions\d*, byId/.test(body)) missing.push(file + ' → ' + want + ' no longer decides who wins');
       if (/\bbyId\.(set|delete)\(id/.test(body)) missing.push(file + ' → ' + want + ' writes by id with no rule');
     }
@@ -510,4 +539,59 @@ test('every store-backed reader records a timestamp, or its rule is meaningless'
     }
   }
   assert.deepEqual(bad, [], 'these record who wrote a document but not when, so every comparison is a tie:\n  ' + bad.join('\n  '));
+});
+
+
+// ── BEHAVIOUR, NOT SHAPE: the guard an auditor walked straight past ──────────────────────────────────────
+// The care-needs guard asserted the TEXT `_trust = (rec) => careTrusted(`. An auditor reintroduced the exact
+// critical — a care-team admin's meal train reaching nobody — by narrowing `careTrusted` ITSELF, three lines
+// above the pinned one, and all 52 tests stayed green. Pin what the predicate must ACCEPT.
+test('CARE NEEDS, BEHAVIOURALLY: an admin-authored need survives, whoever wrote it', () => {
+  const FEL = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+  const body = stripComments(fnBody(FEL, 'subscribeCareNeeds(', 'subscribeCareNeeds'));
+  const m = body.match(/careTrusted = \(by\) =>([^;]+);/);
+  assert.ok(m, 're-anchor: careTrusted has moved or changed shape');
+  const CHURCHKEY = 'a'.repeat(64), STEWARD = 'b'.repeat(64), ADMIN = 'c'.repeat(64), ANYONE = 'd'.repeat(64);
+  const run = (by, opened, adminOn) => new Function('by', 'pubk', '_churchVoice', 'openedBy', 'adminGroupId', 'rosterPeople',
+    'return (' + m[1] + ');')(by, CHURCHKEY,
+      (cp, rec) => rec._by === CHURCHKEY || rec._by === STEWARD, opened,
+      adminOn ? 'team1' : '', new Map([['team1', new Set([ADMIN])]]));
+  assert.ok(run(CHURCHKEY, 'steward', true), 'the church’s own need is rejected');
+  assert.ok(run(STEWARD, 'steward', true), 'a steward’s need is rejected');
+  assert.ok(run(ADMIN, 'steward', true),
+    'A CARE-TEAM ADMIN’S MEAL TRAIN IS REJECTED — the store deletes what this rejects, so it reaches no phone ' +
+    'at all. This is the exact critical of bca6660, and narrowing careTrusted is how it comes back.');
+  assert.ok(run(ANYONE, 'member', false), 'a church that opens needs to members has its members’ needs rejected');
+  assert.ok(!run(ANYONE, 'steward', false), 'a stranger’s need is accepted in a church that did NOT open needs');
+});
+
+test('and every store record is written INLINE, so the timestamp sweep can see it', () => {
+  // The timestamp test only scans records written inline at the call. An auditor hoisted one into a variable
+  // — `const rec = {...}; _absorbById(…, rec)` — dropped its timestamp, and stayed green. Require the shape
+  // the sweep can actually check, and say why, so the next person hoists deliberately and fixes the sweep.
+  const bad = [];
+  for (const file of ['src/fellowship.src.js', 'src/steward.src.js', 'src/steward-meals.src.js']) {
+    const text = stripComments(readFileSync(new URL('../' + file, import.meta.url), 'utf8'));
+    for (const m of text.matchAll(/_absorbById\(versions\d*, byId, [^,]+, ([^,){\s][^,)]*)\)/g))
+      bad.push(file + ': record hoisted into `' + m[1].trim() + '` — the timestamp sweep cannot see it');
+  }
+  assert.deepEqual(bad, [], bad.join('\n  '));
+});
+
+
+test('THE TRUST LIST ITSELF MUST RE-CHOOSE, not merely re-emit', () => {
+  // careTrusted answers from two documents that arrive in the same stream as the needs — whether members may
+  // open needs, and who is on the care-team roster. A replay runs oldest-first, so a need created before
+  // either of them is judged with an empty trust list, rejected, and DELETED. Re-emitting afterwards cannot
+  // resurrect it. An auditor reproduced the commit's own "Tuesday, no nuts" scenario this way, with the fix
+  // installed. Both handlers must re-choose; nothing else in the suite pins this.
+  const body = stripComments(fnBody(readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8'),
+    'subscribeCareNeeds(', 'subscribeCareNeeds'));
+  for (const [what, marker] of [['the church’s care settings', 'MEALS_SETTINGS_D'], ['the care-team roster', 'ROSTER_PFX']]) {
+    const line = body.split('\n').find(l => l.includes(marker) && l.includes('emit()'));
+    assert.ok(line, 're-anchor: the handler for ' + what + ' has moved');
+    assert.match(line, /_reduceAll\(versions\d*, byId, _trust\)/,
+      'when ' + what + ' arrives the reader only re-filters, so a need judged before it landed stays deleted ' +
+      '— a meal train created last week vanishes from every phone that has not done a full sync today');
+  }
 });

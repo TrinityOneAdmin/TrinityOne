@@ -35,6 +35,8 @@
 //     events tagged with ['church', cp] from those members (same delegated-content path used by
 //     stewards) — see scripts/gateway.mjs accept() carve-out.
 
+import { _absorbById } from './church-doc-store.src.js';   // one rule for who wins, shared with the app and the console
+
 (function () {
   const S = () => window.Steward;
   const NET = 'trinityone';
@@ -229,6 +231,7 @@
   function subscribeNeeds(cb) {
     if (!S() || !S().subscribeMany || !S().churchPub) { cb([]); return () => {}; }
     const byId = new Map();
+    const versions = new Map();   // needId -> Map(author -> their copy); see src/church-doc-store.src.js
     // Deletion authority (mirrors the member client): when the church opens needs to ANY member, the relay lets
     // any member author a care: doc — so a member could publish a tombstone for SOMEONE ELSE's need and, since
     // the client keyed only on the d-tag, hide it from everyone. Only the church key, or the need's own author,
@@ -257,7 +260,12 @@
             // decrypted fields back, or marks `_sealed` when this device has no care key. Carry `_sealed`
             // through so the UI can say "details hidden" and refuse to edit-save a blank over the real data.
             const opened = openNeed(JSON.parse(e.content));
-            byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, _by: e.pubkey, ts: e.created_at });
+            // THE SURFACE THE CARE TEAM ACTUALLY WORKS FROM. This decided by arrival order while every phone
+            // decided by the shared rule — so a steward could open a stale view of a meal train, edit it, and
+            // republish stale dates and dietary notes as the newest write, pushing them to the whole church.
+            // The nut-allergy mix-up, driven from the office. An audit found it after the commit that claimed
+            // "care needs now follow the same rule as rotas": true on phones, untrue here.
+            _absorbById(versions, byId, id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, _by: e.pubkey, ts: e.created_at });
             emit();
           } catch (err) {}
         },

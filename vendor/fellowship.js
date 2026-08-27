@@ -9991,6 +9991,7 @@
                 adminGroupId = String(c.adminGroupId || "");
               } catch {
               }
+              _reduceAll(versions, byId, _trust);
               emit();
             }
             return;
@@ -10007,6 +10008,7 @@
               } catch {
               }
               rosterPeople.set(team, set);
+              _reduceAll(versions, byId, _trust);
               emit();
             }
             return;

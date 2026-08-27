@@ -3646,8 +3646,16 @@ window.Fellowship = {
       emit,   // so the hub can cancel a queued emit when this handler tears down
       onevent(e, d) {
         // capture the church-signed meals config + admin-team roster so care authors can be verified
-        if (d === MEALS_SETTINGS_D) { if (_churchVoice(pubk, { _by: e.pubkey })) { try { const c = JSON.parse(e.content || '{}'); openedBy = c.openedBy === 'member' ? 'member' : 'steward'; adminGroupId = String(c.adminGroupId || ''); } catch {} emit(); } return; }
-        if (d.startsWith(ROSTER_PFX)) { if (_churchVoice(pubk, { _by: e.pubkey })) { const team = d.slice(ROSTER_PFX.length); const set = new Set(); try { (JSON.parse(e.content || '{}').people || []).forEach(p => { const h = toPub(p && p.pub); if (h) set.add(h); }); } catch {} rosterPeople.set(team, set); emit(); } return; }
+        // THESE TWO DOCUMENTS ARE THE TRUST LIST ITSELF, so they must RE-CHOOSE, not merely re-emit.
+        // careTrusted answers from `openedBy` (may members open needs?) and the care-team roster — and both
+        // arrive in this same stream. A replay runs oldest-first, so a need created on Monday is judged before
+        // a roster edited on Wednesday has landed: rejected, and the store DELETES what it rejects. Re-emitting
+        // afterwards cannot resurrect it. An audit reproduced the exact scenario this reader was migrated to
+        // prevent — the admin's "Thursday, severe nut allergy" sitting unused while every phone showed
+        // "Tuesday, no nuts" — with the fix installed. The comment below still promised "so ordering never
+        // hides a legitimate need"; that promise was true before the migration and false after it.
+        if (d === MEALS_SETTINGS_D) { if (_churchVoice(pubk, { _by: e.pubkey })) { try { const c = JSON.parse(e.content || '{}'); openedBy = c.openedBy === 'member' ? 'member' : 'steward'; adminGroupId = String(c.adminGroupId || ''); } catch {} _reduceAll(versions, byId, _trust); emit(); } return; }
+        if (d.startsWith(ROSTER_PFX)) { if (_churchVoice(pubk, { _by: e.pubkey })) { const team = d.slice(ROSTER_PFX.length); const set = new Set(); try { (JSON.parse(e.content || '{}').people || []).forEach(p => { const h = toPub(p && p.pub); if (h) set.add(h); }); } catch {} rosterPeople.set(team, set); _reduceAll(versions, byId, _trust); emit(); } return; }
         if (!d.startsWith(CARE_D)) return;
         const id = d.slice(CARE_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { const s = tombs.get(id) || new Set(); s.add(e.pubkey); tombs.set(id, s); emit(); return; }

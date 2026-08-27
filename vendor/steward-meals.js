@@ -1,4 +1,43 @@
 (() => {
+  // src/church-doc-store.src.js
+  function _pickWinner(vers, trusted) {
+    let best = null;
+    for (const rec of vers.values()) {
+      if (trusted && !trusted(rec)) continue;
+      if (!best) {
+        best = rec;
+        continue;
+      }
+      const a = best.ts || 0, b = rec.ts || 0;
+      if (b > a || b === a && String(rec._by || "") < String(best._by || "")) best = rec;
+    }
+    return best;
+  }
+  function _reduceVersions(vers, byId, id, trusted) {
+    const win = _pickWinner(vers, trusted);
+    if (!win) {
+      byId.delete(id);
+      return null;
+    }
+    const winKey = String(win._by || "");
+    const others = [...vers.keys()].filter((k) => k !== winKey);
+    byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
+    return win;
+  }
+  function _absorbById(versions, byId, id, rec, trusted) {
+    let vers = versions.get(id);
+    if (!vers) {
+      vers = /* @__PURE__ */ new Map();
+      versions.set(id, vers);
+    }
+    const by = String(rec._by || "");
+    const had = vers.get(by);
+    if (had && (had.ts || 0) > (rec.ts || 0)) return false;
+    vers.set(by, rec);
+    const win = _reduceVersions(vers, byId, id, trusted);
+    return !!win && win._by === by;
+  }
+
   // src/steward-meals.src.js
   (function() {
     const S = () => window.Steward;
@@ -173,6 +212,7 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       const tombs = /* @__PURE__ */ new Map();
       let openedByMember = false;
       const delOk = (by, need) => !openedByMember || by === S().churchPub || !!need && need._by === by;
@@ -212,7 +252,7 @@
             }
             try {
               const opened = openNeed(JSON.parse(e.content));
-              byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, _by: e.pubkey, ts: e.created_at });
+              _absorbById(versions, byId, id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, _by: e.pubkey, ts: e.created_at });
               emit();
             } catch (err) {
             }
