@@ -7,6 +7,45 @@ current state is here at the top.
 
 ---
 
+## OPEN, FROM THE ROUND-9 WORK — NOT FORGOTTEN, DELIBERATELY DEFERRED (2026-08-27)
+
+Six audits ran over the multi-author document store. These are the things they found that were NOT fixed,
+recorded here rather than left in commit messages. None was judged worth another round on that seam; the owner
+called time on it, correctly.
+
+**Real, will bite eventually**
+- **Serving requests and replies** (`subscribeRequests`/`subscribeRequestReplies` on the console,
+  `subscribeMyServingRequests` in the app) still decide by arrival order and delete by id. Concretely: a
+  DELEGATED steward withdrawing a "can you serve?" never clears it from anyone's phone — the member honours a
+  withdrawal only from the church key. A stale ask card, for ever.
+- **Sealed group events render blank in the console's group window**, and have since `c592abb` (15 Aug). The
+  console seals event documents; both group-event readers parse with bare `JSON.parse`, so a sealed event has
+  no title, date or place. Members are rescued by accident — the merged calendar dedups against the properly
+  unsealing church-calendar reader — which is luck, not design.
+- **The console does not filter by roster at all.** After `de6e05a` the phones promote the church's copy when a
+  steward is revoked; the console still shows the revoked steward's. Pinned by a failing-if-changed test.
+- **A steward's SOLE work still vanishes on revocation** — nothing to promote. Needs the church to republish.
+
+**The owner's larger ask, not yet designed**
+- 2026-08-27: *"the church's key should be primary owner of documents like rotas."* The reading side is done
+  (trusted copies only). The writing side — the church console ADOPTING a steward's document by republishing
+  it under the church key — is not built. Open questions: adopt automatically or when the page is next opened,
+  and what to offer for documents only the departed steward ever wrote.
+
+**Dormant**
+- **Check-in and finance deletes have no tombstone memory** — a delete removes everyone's copy and another
+  author's resurrects on replay. `removeCheckin` currently has no callers and Finance corrects by append-only
+  reversal, so this is armed only when someone adds a delete button. The code says so in a comment.
+- **Singleton config latches** (join policy, admitted list, message tags, pinned sermon, hidden list) have
+  newest-wins but inconsistent tie-breaks, so two phones can disagree on an exact-second tie.
+
+**Environmental, not product**
+- `scripts/event-store-import.test.mjs` fails on this dev box because a legacy `relay/relay-db.json` is
+  present and the test reads it if it exists. Moving it aside makes it pass. All three of its filters disagree
+  with a full scan on that data, which is worth its own look — it is not caused by any change this session.
+
+---
+
 ## EVERY CHANGE REQUIRES AN INDEPENDENT AUDIT — OWNER, 2026-08-27
 
 Not per stage, not per round. **Every change.** This replaces the older "after each fix, have an auditor look
