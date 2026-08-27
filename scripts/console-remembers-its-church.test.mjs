@@ -168,3 +168,56 @@ test('it does not re-enter the church it is already in', () => {
 test('the shipped console carries all of this', () => {
   assert.match(stripComments(V), /ACTIVE_ID_KEY/, 'vendor/steward.js was not rebuilt from source');
 });
+
+
+// ── THE WRITE HALF AND THE READ HALF, AGAINST ONE STORAGE ────────────────────────────────────────────────
+// An auditor killed the whole feature and left 11/11 green: make the restore read `ACTIVE_ID_KEY + "." + me`
+// while the switch still writes the bare key. Every test passed because the two halves were driven by two
+// separate harnesses that never shared a storage — so a key mismatch was invisible by construction. And this
+// is not a contrived refactor: per-identity namespacing of console storage keys is a real, known want in this
+// codebase (two console identities in one browser profile collide). Drive both halves against ONE store.
+test('END TO END: what the switch writes is what the next boot reads', () => {
+  const shared = new Map();
+
+  // half one — the real setActiveIdentity, writing into `shared`
+  const state = { pub: OWN, sk: 'sk-own', actingChurch: '' };
+  const wScope = {
+    churchPub: OWN, churchSk: 'sk-own',
+    get pub() { return state.pub; }, set pub(v) { state.pub = v; },
+    get sk() { return state.sk; }, set sk(v) { state.sk = v; },
+    get actingChurch() { return state.actingChurch; }, set actingChurch(v) { state.actingChurch = v; },
+    stewardedChurches: new Map([[ST_AIDANS, { name: 'St Aidan’s' }]]),
+    toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(String(x || '')) ? String(x).toLowerCase() : null),
+    netKeys: () => [], privateKeyFromSeedWords: () => 'sk', getPublicKey: () => NETWORK,
+    localStorage: { getItem: (k) => (shared.has(k) ? shared.get(k) : null), setItem: (k, v) => shared.set(k, String(v)) },
+    ACTIVE_ID_KEY: 'trinityone.steward.active-id',
+    lastProfile: {}, _profileLoaded: false, _clearanceSent: new Set(), _careRoster: new Set(), _careRosterKnown: false,
+    window: { Steward: {}, dispatchEvent: () => {} }, console,
+  };
+  const wrap = (t) => new Proxy(t, { has: (o, k) => (k in o) || !(String(k) in globalThis),
+    get: (o, k) => { if (k === Symbol.unscopables) return undefined; if (k in o) return o[k];
+      const b = String(k).replace(/\d+$/, ''); if (b in o) return o[b];
+      throw new ReferenceError('needs a stub for ' + String(k)); },
+    set: (o, k, v) => { o[k] = v; return true; } });
+  let wsrc = fnBody(V, 'setActiveIdentity(targetPub)', 'setActiveIdentity');
+  wsrc = wsrc.slice(0, wsrc.indexOf('lastProfile = {}')) + 'return true; }';
+  const setActive = new Function('scope', `with (scope) { return ({ ${wsrc} }).setActiveIdentity; }`)(wrap(wScope));
+  setActive.call({}, ST_AIDANS);
+
+  // half two — the real restore block, reading from THE SAME `shared`
+  const body = stripComments(fnBody(V, 'subscribeStewardedChurches(cb)', 'subscribeStewardedChurches'));
+  const at = body.indexOf('const want =');
+  const block = body.slice(at, body.indexOf('} catch', at));
+  const calls = [];
+  const rScope = {
+    localStorage: { getItem: (k) => (shared.has(k) ? shared.get(k) : null) },
+    ACTIVE_ID_KEY: 'trinityone.steward.active-id', churchPub: OWN, actingChurch: '',
+    _ownedPubs: new Set([OWN]), stewardedChurches: new Map([[ST_AIDANS, {}]]),
+    window: { Steward: { setActiveIdentity: (t) => calls.push(t) } }, console,
+  };
+  new Function('scope', `with (scope) { ${block} }`)(wrap(rScope));
+
+  assert.deepEqual(calls, [ST_AIDANS],
+    'the console wrote its remembered church under one name and looked for it under another, so a delegated ' +
+    'steward is dropped back into their own empty church on every boot — with every test still green');
+});

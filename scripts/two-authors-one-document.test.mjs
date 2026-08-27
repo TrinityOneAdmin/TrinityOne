@@ -214,30 +214,39 @@ test('seeding from cache does not fabricate a conflict', () => {
 });
 
 test('EVERY reader that paints from cache seeds the store — found by sweeping, not by naming', () => {
-  // THE TEST THAT SHOULD HAVE CAUGHT THE LAST MISS. Its predecessor named the two call sites I had fixed and
-  // was therefore green while six other readers still painted their cache straight onto the screen — so a
-  // group, reading plan, devotional or category deleted while the app was closed stayed visible for ever.
-  // Naming what you fixed proves nothing. Sweep the SOURCE for every reader that uses the store, and require
-  // each one's cache paint to go through it.
-  const SRC = { 'src/fellowship.src.js': null, 'src/steward.src.js': null };
-  for (const f of Object.keys(SRC)) SRC[f] = readFileSync(new URL('../' + f, import.meta.url), 'utf8');
-  const problems = [];
-  for (const [file, text] of Object.entries(SRC)) {
-    const lines = stripComments(text).split('\n');
-    const fnRe = /^  ([A-Za-z_]\w*)\(/;
+  // THE TEST THAT SHOULD HAVE CAUGHT THE LAST MISS, TWICE OVER. Its first version named the two call sites I
+  // had fixed and was green while six readers still painted straight onto the screen. Its second version
+  // swept, but matched glued-together literal text — an auditor restored the bug behind a one-line variable
+  // extraction (`const raw = getItem(...); const cached = JSON.parse(raw)`) and all 34 tests stayed green.
+  // That is not an evader's trick; it is the most innocent refactor there is.
+  //
+  // So: match on STRUCTURE. A reader reads a cache if it mentions the cache key or the cache helper at all,
+  // and it paints if it writes into the display map by any name. Neither can be disguised by renaming a
+  // variable or splitting a line.
+  const problems = [], counted = [];
+  for (const file of ['src/fellowship.src.js', 'src/steward.src.js']) {
+    const text = stripComments(readFileSync(new URL('../' + file, import.meta.url), 'utf8'));
+    const lines = text.split('\n');
     const starts = [];
-    lines.forEach((l, i) => { const m = l.match(fnRe); if (m) starts.push([i, m[1]]); });
+    lines.forEach((l, i) => { const m = l.match(/^  (?:async )?([A-Za-z_]\w*)\(/); if (m) starts.push([i, m[1]]); });
     starts.forEach(([ln, name], idx) => {
       const end = idx + 1 < starts.length ? starts[idx + 1][0] : lines.length;
       const body = lines.slice(ln, end).join('\n');
-      if (!/_(absorbById|forgetById)\(versions/.test(body)) return;      // not a store-backed reader
-      const paints = /loadDocCache\(|JSON\.parse\(localStorage\.getItem\(CACHE_KEY\)/.test(body);
-      if (paints && !/_seedFromCache\(versions/.test(body))
-        problems.push(file + ' → ' + name + ' paints from cache without seeding the store');
-      if (/byId\.(set|delete)\(id/.test(body))
-        problems.push(file + ' → ' + name + ' still writes by id with no rule about who wins');
+      if (!/_(absorbById|forgetById)\(/.test(body)) return;              // not a store-backed reader
+      counted.push(file + '→' + name);
+      const readsCache = /CACHE_KEY|loadDocCache\(/.test(body);
+      const paints = /\bbyId\.set\(/.test(body);                          // by ANY variable name
+      if (readsCache && paints && !/_seedFromCache\(/.test(body))
+        problems.push(file + ' → ' + name + ' paints a cache onto the screen without seeding the store');
+      if (/\bbyId\.delete\(/.test(body))
+        problems.push(file + ' → ' + name + ' still deletes by id, with no rule about whose copy it was');
     });
   }
+  // A sweep that finds nothing passes everything. Pin the floor so a refactor that hides every reader from
+  // the regex fails loudly instead of quietly reporting success.
+  assert.ok(counted.length >= 11,
+    `the sweep only recognised ${counted.length} store-backed readers; it used to find 11, so it is now ` +
+    'blind to some and cannot be trusted to have checked them: ' + counted.join(', '));
   assert.deepEqual(problems, [],
     'a document deleted while the app was closed will stay on screen for ever in:\n  ' + problems.join('\n  '));
 });
@@ -298,4 +307,19 @@ test('…and an anonymous entry on its own is still cleared by anybody’s delet
   m.paint([{ id: 'svc1', ts: 100, tag: 'legacy' }]);
   assert.equal(m.del(WARDEN, 200), true, 'upgrading strands people on documents their church already deleted');
   assert.equal(m.seen(), undefined);
+});
+
+
+test('a tie is broken toward the LOWER pubkey, and that direction is pinned', () => {
+  // The direction is arbitrary — but it must never change, and a test that only checks "both phones agree"
+  // cannot tell. Under the standing pilot rule (add, never change), a congregation running two app versions
+  // side by side would otherwise pick DIFFERENT winners for tied writes: the precise disease this store
+  // exists to cure, reintroduced by an upgrade. An auditor flipped the direction in both bundles and all 34
+  // tests stayed green.
+  const LOW = '1'.repeat(64), HIGH = 'f'.repeat(64);
+  const m = store(V); m.put(HIGH, 500, 'higher pubkey'); m.put(LOW, 500, 'lower pubkey');
+  assert.equal(m.seen().tag, 'lower pubkey',
+    'the tie-break direction has flipped — two app versions in one church will now disagree about the rota');
+  const c = store(S); c.put(HIGH, 500, 'higher pubkey'); c.put(LOW, 500, 'lower pubkey');
+  assert.equal(c.seen().tag, 'lower pubkey', 'the console breaks ties the other way from the phones');
 });
