@@ -7,6 +7,49 @@ current state is here at the top.
 
 ---
 
+## DEVICE CONFIGURATION PASS, 2026-08-27 — FINDINGS ONLY, NOTHING FIXED
+
+OPPO + live a8 relay + steward console, church "ZZ DEVICE TEST". Collected while working steward settings
+against the member app. Recorded, not acted on: a configuration round is read-only, fixes go in a separate pass.
+
+**1. The Serving screen goes blank when the tab you are on is switched off.** Reproduced: a member sits on
+Serving → Care; the steward turns Practical care off; the Care tab disappears and the pane renders **nothing**.
+Measured: no tab carries `aria-selected`, none is highlighted, and the 422 characters of body text underneath
+are the Today screen. The screen keeps `active = 'care'`, finds no matching tab and draws an empty pane. It
+recovers by itself the moment the tab comes back, so the state is stuck rather than corrupt — but a member
+looking at it has a blank app and no selected tab to tell them what to press. This is the silent-blank class.
+The fix is a fallback: if the active tab is no longer in the list, select the first one that is.
+
+**2. Switching care off HIDES, it does not delete.** Checked on purpose, because replaying a write gate over an
+import once destroyed a finance journal. The request and both chat messages were still on the relay with care
+off, and everything came back when it was switched on again. Correct behaviour; recorded so nobody re-tests it.
+
+**3. Accessibility gaps found while driving the console and app.** Each measured, none fixed:
+   - `Toggle practical care` and `Toggle giving` have **no `aria-checked`**, while `Toggle Bible`,
+     `Toggle Community`, `Toggle Library`, `Toggle Kids check-in`, `Toggle member photos`,
+     `Toggle children's photos`, `Toggle approval to join` and `Toggle require full name` all do. A screen
+     reader cannot tell whether care or giving is on.
+   - The console's care conversation is **not a dialog** — no `role="dialog"`, no `aria-modal` — and
+     **Escape does not close it**. Only clicking outside does.
+   - The app's **direct-message send button has no accessible name** (`aria-label` null). The care
+     conversation's send button does have one, so this is an inconsistency, not a house style.
+
+**4. The child-facing "care team" wording is confirmed on hardware**, exactly as the audit said: the submit
+button reads "Send to care team", the row left behind reads "Sent privately — your care team will be in touch",
+and the confidential thread's empty state reads "Anything here stays between you and the care team" — that last
+one shown to the CLEARED ADULT about a child's request.
+
+**5. CORRECTION — the child/adult DM gate was never holding, and the earlier session's note was wrong.**
+It recorded that the relay refused Bram's message to Dorothy. It did not. Three kind-4 events from him to her
+are on the relay and both real ones are readable on her phone. The earlier probe misled itself twice: it
+queried as the CHURCH key, which is not a party to a DM and so is denied by the read gate, and it de-duplicated
+by `(kind, author, d-tag)` — which collapses every DM into one, because a kind-4 has no d-tag.
+Reading the gate settles it: `safeguardAllows` passes on `approvedIn(other, cp)`, so **any approved member may
+privately message any child**. Clearance-for-youth gates care requests, not messages, and the code says so
+deliberately: "A gate that is too tight is its own harm — it pushes a worried child onto channels the church
+cannot see at all." Working as designed. Flagged only because it is a safeguarding default that churches may
+differ on, and because the false "the gate held" note should not be trusted again.
+
 ## OPEN AND SERIOUS — A CHILD'S REPLY IS SEALED TO THE WRONG PEOPLE (found 2026-08-27, NOT FIXED)
 
 Found by an independent audit of `ad24099`. Traced in code, not suspected. This is the highest-value open item
