@@ -89,8 +89,27 @@ if (existsSync(realPath)) {
     if (Array.isArray(real) && real.length) {
       const rs = openStore(freshDb(), { maxEvents: 50000 }); rs.importAll(real);
       const fs2 = [{ kinds: [0] }, { kinds: [30078], '#t': ['trinityone'] }, ...[...new Set(real.map(e => e.pubkey))].slice(0, 5).map(p => ({ authors: [p] }))];
-      let rp = 0; for (const f of fs2) if (ids(rs.query(f)) === ids(real.filter(e => matchFilter(e, f)))) rp++; else failures++;
-      ok(rp === fs2.length, `real data (${real.length} events): ${rp}/${fs2.length} filters == full-scan`);
+      // COMPARE AGAINST A DEDUPED SCAN, NOT A RAW ONE. store.query() collapses replaceable and addressable
+      // events to one copy per (kind, author, d-tag) — that is its job, and a relay that did not would serve
+      // a member every superseded draft of every rota. The raw scan returns all of them, so the two can only
+      // agree on a corpus that happens to contain no superseded copies. The synthetic corpus above is exactly
+      // that, which is why this held for a year; the first real relay dump anyone left on a box was not, and
+      // this check failed for 61 superseded documents while nothing was wrong. It cost a release gate and an
+      // hour of hunting a bug that did not exist. Dedupe the scan the same way, then compare.
+      const newestWins = (list) => {
+        const best = new Map();
+        for (const e of list) {
+          const rep = (e.kind === 0 || e.kind === 3 || (e.kind >= 10000 && e.kind < 20000)) ? e.kind + '|' + e.pubkey
+            : (e.kind >= 30000 && e.kind < 40000) ? e.kind + '|' + e.pubkey + '|' + ((e.tags.find(t => t[0] === 'd') || [])[1] || '')
+            : null;
+          if (!rep) { best.set(e.id, e); continue; }
+          const prev = best.get(rep);
+          if (!prev || e.created_at > prev.created_at || (e.created_at === prev.created_at && e.id < prev.id)) best.set(rep, e);
+        }
+        return [...best.values()];
+      };
+      let rp = 0; for (const f of fs2) if (ids(rs.query(f)) === ids(newestWins(real.filter(e => matchFilter(e, f))))) rp++; else failures++;
+      ok(rp === fs2.length, `real data (${real.length} events): ${rp}/${fs2.length} filters == deduped full-scan`);
     }
   } catch (e) { console.log('(skipped real-data check: ' + e.message + ')'); }
 }
