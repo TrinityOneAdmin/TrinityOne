@@ -5623,6 +5623,12 @@ window.Steward = {
   // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
   subscribeGroupEvents(groupId, onEvents) {
     const byId = new Map();
+    const versions = new Map();   // eventId -> Map(author -> their copy); see src/church-doc-store.src.js
+    // The same rule the group's own members get on their phones. This reader had none at all: last arrival
+    // won with no timestamp compared, so an older copy replayed on a reconnect overwrote a newer one, and a
+    // delete by id blanked an event anybody could have written. A group event has more authors than any
+    // other document here — the church, delegated stewards, and empowered members publishing from their
+    // own phones — so this is the likeliest collision in the product, not the rarest.
     const emit = () => onEvents([...byId.values()].sort((a, b) => (a.date || '').localeCompare(b.date || '')));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#t': [groupId] }], {
       onevent(e) {
@@ -5630,11 +5636,11 @@ window.Steward = {
         if (!d.startsWith(EVENT_D)) return;
         if (e.pubkey !== pub && !e.tags.some(t => (t[0] === 'p' || t[0] === 'church') && t[1] === pub)) return;   // scope to this church (+ its stewards)
         const id = d.slice(EVENT_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
         // recur/day/groupId/image MUST be carried: the event dialog opens from this list too, and editing
         // there re-publishes what it was handed. Omitting recur/day collapsed a weekly meeting into a single
         // dated entry; omitting groupId unlinked the event from the very group you edited it in. AUDIT 2026-07-26.
-        try { const c = JSON.parse(e.content); byId.set(id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '' }); emit(); } catch {}
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

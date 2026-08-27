@@ -389,3 +389,40 @@ test('KNOWN GAP: the console does not hide a revoked steward’s work, and the o
     'the console now carries the roster re-choose — wire it up properly and rewrite this test');
   assert.ok(V.includes('function _reduceAll('), 're-anchor: the member app lost its roster re-choose');
 });
+
+
+// ── GROUP EVENTS: THE LIKELIEST COLLISION IN THE PRODUCT, AND THE ONE THAT BEHAVED WORST ─────────────────
+// A group event has more authors than anything else here: the church, any delegated steward, and empowered
+// members of the group publishing from their own phones. Neither reader had any rule — no timestamp compared
+// at all, so an OLDER copy replayed on a reconnect overwrote a newer one, and a delete keyed on the id alone
+// blanked the meeting for everyone. Meanwhile the church calendar, store-backed since d6e9a5c, kept its copy:
+// one screen said the Friday meeting was on and another said it was gone, in the same app.
+test('a group event is judged by the same rule on both surfaces', () => {
+  for (const [where, bundle] of [['the member app', V], ['the console', S]]) {
+    const body = stripComments(fnBody(bundle, 'subscribeGroupEvents(', 'subscribeGroupEvents'));
+    assert.ok(!/byId\.(set|delete)\(id/.test(body), where + ' still writes group events with no rule about who wins');
+    assert.match(body, /_absorbById\(versions\d*, byId/, where + ' still lets the last copy to arrive win');
+    assert.match(body, /_forgetById\(versions\d*, byId/, where + ' still blanks a group event by id alone');
+    assert.match(body, /_by: e\.pubkey/,
+      where + ' does not record WHO wrote a group event, so every author collapses into one slot and a ' +
+      'delete can never find the copy it is meant to withdraw');
+  }
+});
+
+test('an older group event replayed on a reconnect does not overwrite a newer one', () => {
+  // There was no timestamp comparison here at all — the exact fault, reproduced.
+  const m = store(V);
+  m.put(WARDEN, 300, 'moved to 7pm');
+  m.put(CHURCH, 100, 'the original 6pm, replayed from history');
+  assert.equal(m.seen().tag, 'moved to 7pm',
+    'a reconnect rolled the group’s meeting back to an old time, and nobody touched anything');
+});
+
+test('one person deleting their copy does not blank the group’s meeting', () => {
+  const m = store(V);
+  m.put(CHURCH, 100, 'the church’s copy');
+  m.put(WARDEN, 200, 'a leader’s duplicate');
+  m.del(WARDEN, 300);
+  assert.ok(m.seen(), 'tidying a duplicate removed the meeting from the whole group');
+  assert.equal(m.seen().tag, 'the church’s copy');
+});

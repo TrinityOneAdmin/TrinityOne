@@ -4116,6 +4116,15 @@ window.Fellowship = {
     const cp = toPub(churchNpub); const groups = (groupIds || []).filter(Boolean);
     if (!cp || !groups.length) { onEvents([]); return () => {}; }
     const byId = new Map();
+    const versions = new Map();   // eventId -> Map(author -> their copy); see src/church-doc-store.src.js
+    // A GROUP EVENT HAS MORE AUTHORS THAN ANYTHING ELSE HERE — the church, any delegated steward, and
+    // empowered members of the group itself, who publish from their own phones (see addGroupEvent below).
+    // So two people writing up the same Friday meeting is likelier than for a rota, and it behaved worse:
+    // there was no timestamp comparison at all, so an OLDER copy replayed on a reconnect overwrote a newer
+    // one, and a delete keyed on the id alone blanked the meeting for the whole group. The church calendar
+    // (store-backed since d6e9a5c) kept its copy — so one screen said the meeting was on and another said
+    // it was gone, in the same app.
+    const _gidOf = (e) => (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = () => { const v = [...byId.values()].filter(x => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || '').localeCompare(b.date || '')); if (!eosed && !v.length) return; onEvents(v); };
     const onTrust = () => emit();   // re-evaluate when the roster / group-leader lists load or change
@@ -4127,8 +4136,8 @@ window.Fellowship = {
         const gid = (e.tags.find(t => t[0] === 't' && groups.includes(t[1])) || [])[1] || '';
         const id = d.slice('trinityone/event:'.length);
         // AUDIT-2026-07-24 (group events): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1], e.pubkey)) { byId.delete(id); emit(); } return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, (rec) => _groupEventTrusted(cp, _gidOf(e), rec._by)); emit(); } return; }
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, (rec) => _groupEventTrusted(cp, _gidOf(e), rec._by)); emit(); } catch {}
       },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });

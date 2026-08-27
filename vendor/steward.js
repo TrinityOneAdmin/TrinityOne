@@ -19876,6 +19876,7 @@ zoo`.split("\n");
     // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
     subscribeGroupEvents(groupId, onEvents) {
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
       const emit = () => onEvents([...byId.values()].sort((a, b) => (a.date || "").localeCompare(b.date || "")));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
@@ -19884,13 +19885,13 @@ zoo`.split("\n");
           if (e.pubkey !== pub && !e.tags.some((t) => (t[0] === "p" || t[0] === "church") && t[1] === pub)) return;
           const id = d.slice(EVENT_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at);
             emit();
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, groupId: c.groupId || groupId, image: c.image || "" });
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, groupId: c.groupId || groupId, image: c.image || "", _by: e.pubkey });
             emit();
           } catch {
           }
