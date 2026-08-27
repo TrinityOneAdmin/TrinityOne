@@ -36,6 +36,11 @@ PERSON · CONFIDENTIAL" and messaged her; she read it and replied. Her reply is 
 (`carechat:47f043c7…:571d20cd6605`) and the relay **serves it to Bram** — it shows in his own authenticated
 query — but his screen never displayed it, 25+ seconds later. Her phone shows it as sent. Screenshots taken.
 
+The words are not lost to the church: the CONSOLE reads her reply fine, because the church key is in every
+seal. So this is not data loss — it is a broken conversation. The one adult the child chose to answer sees
+nothing, and unless a steward happens to be watching the console, nobody replies. Severity sits there, not in
+destruction.
+
 That church has `adminGroupId: ""` — no care team at all — which makes this the DEFAULT configuration rather
 than an edge case: sealing to "the care team" when no care team exists seals to nobody.
 
