@@ -7,39 +7,37 @@ current state is here at the top.
 
 ---
 
-## THE APP PROMISES A CHILD A PROTECTION THAT DOES NOT EXIST (found 2026-08-27, NOT FIXED)
+## A FALSE ALARM I RAISED, AND EXACTLY HOW I FOOLED MYSELF (2026-08-27) — READ BEFORE RE-RAISING IT
 
-The most serious thing the configuration pass turned up, and it is told to the young person about themselves.
+I reported that `app/identity.jsx:1485` promises a minor "private messages are limited to the adults your church
+has checked" while the relay let any approved member through. **That was wrong. The relay enforcement is
+correct and the promise is true.** Recorded in full because the reasoning error is worth more than the finding.
 
-`app/identity.jsx:1485` shows every minor, on their own profile:
+**The refutation, measured.** Same sender, same recipient, same message, seconds apart, live relay:
 
-> Your church has set this up as a **young person's account**. Private messages are limited to the adults your
-> church has checked, and to your parent or guardian — everything else works normally.
+    Bram UNCLEARED  ->  OK false — "blocked: not a member or not permitted for this group"
+    Bram CLEARED    ->  OK true
 
-The relay does not enforce that. `safeguardAllows()` (scripts/gateway.mjs:1084) reads:
+**Mistake 1 — I inferred a function's meaning from its name.** `safeguardAllows()` reads
+`if (approvedIn(other, cp) || ...) continue;` and I read `approvedIn` as "is an approved member". It is not.
+`APPROVED_BY` is the church's **cleared-adults list** (`APPROVED_D`, commented "safeguarding: church's
+cleared-adults list — OWNER-ONLY"). Ordinary membership is `ADMITTED_BY`, a different map fed by a different
+d-tag. Two similar words, opposite meanings, and I never opened the definition.
 
-    if (approvedIn(other, cp) || guardianLinkedIn(minorPub, other, cp)) continue;
+**Mistake 2 — I read an addressable document's timestamp as an event time.** I built a damning timeline from
+the relay: minors list 17:26, DM accepted 17:43, cleared-adults list 17:44 — "he was cleared a minute AFTER".
+But `trinityone/approved:<church>` is addressable: the relay keeps exactly ONE version per (kind, author,
+d-tag), so 17:44 is when the list was last REWRITTEN, not when Bram was added to it. He was already on it at
+17:43. An addressable doc's timestamp can never tell you when an entry joined the list — earlier versions are
+gone. Anyone reconstructing a safeguarding timeline from these documents will hit this.
 
-**Any approved member of the church passes.** Being "checked" — cleared for youth work — is not required, and
-is not what the gate tests. Only non-members are blocked.
+**Consequence for the earlier session's note.** I also "corrected" the previous session's record that the DM
+gate held, and that correction was wrong too — the gate does hold. The likely story is that its send was
+refused while Bram was uncleared, and the app retried and landed once he was cleared, which is why an accepted
+event exists. The original note stands; my correction of it does not.
 
-Proven on hardware, live relay, 2026-08-27, timestamps from the relay itself:
-
-    17:41  Bram admitted to the church
-    17:43  Bram's DM to Dorothy (a minor) ACCEPTED and stored
-    17:44  Bram's youth-work clearance published
-
-So an approved-but-unchecked adult messaged a child, one minute before anyone cleared him, and the message is
-readable on her phone. She was told that could not happen.
-
-**This is a wording decision, not necessarily a gate decision, and it is the owner's call.** The gate's own
-comment argues the looser rule deliberately — "A gate that is too tight is its own harm — it pushes a worried
-child onto channels the church cannot see at all" — and that reasoning fits the project's ethos of trusting
-people rather than software. If that reasoning stands, the FIX IS THE TEXT: say what is actually true (any
-member of your church can message you; the adults your church has checked are the ones who see a request for
-help). What must not stand is the current state, where a child and their parent read a guarantee the software
-does not keep. Whichever way it goes, it needs a test that drives a real relay, because this is precisely the
-claim a test that mirrors the client would pass while the gate says otherwise.
+**What remains true.** The care-chat seal defect above is unaffected — it was measured directly, with Bram
+cleared throughout, and does not depend on any of this.
 
 ## DEVICE CONFIGURATION PASS, 2026-08-27 — FINDINGS ONLY, NOTHING FIXED
 
@@ -73,16 +71,8 @@ button reads "Send to care team", the row left behind reads "Sent privately — 
 and the confidential thread's empty state reads "Anything here stays between you and the care team" — that last
 one shown to the CLEARED ADULT about a child's request.
 
-**5. CORRECTION — the child/adult DM gate was never holding, and the earlier session's note was wrong.**
-It recorded that the relay refused Bram's message to Dorothy. It did not. Three kind-4 events from him to her
-are on the relay and both real ones are readable on her phone. The earlier probe misled itself twice: it
-queried as the CHURCH key, which is not a party to a DM and so is denied by the read gate, and it de-duplicated
-by `(kind, author, d-tag)` — which collapses every DM into one, because a kind-4 has no d-tag.
-Reading the gate settles it: `safeguardAllows` passes on `approvedIn(other, cp)`, so **any approved member may
-privately message any child**. Clearance-for-youth gates care requests, not messages, and the code says so
-deliberately: "A gate that is too tight is its own harm — it pushes a worried child onto channels the church
-cannot see at all." Working as designed. Flagged only because it is a safeguarding default that churches may
-differ on, and because the false "the gate held" note should not be trusted again.
+**5. WITHDRAWN.** This slot held a claim that the child/adult DM gate was never holding and that any approved
+member may message a child. It is false — see the false-alarm section above. The gate is enforced and correct.
 
 ## OPEN AND SERIOUS — A CHILD'S REPLY IS SEALED TO THE WRONG PEOPLE (found 2026-08-27, NOT FIXED)
 
