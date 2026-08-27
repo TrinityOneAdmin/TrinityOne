@@ -584,7 +584,15 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   );
 }
 
-function AskForHelp({ ctx }) {
+// linkOnly = the Today screen. Today shows the ask as a LINK to the Care page and opens no sheet of its own.
+// Not a style preference: Today wraps this section in `animation: trinityFade … both`, and the identity
+// transform an animation leaves behind becomes the containing block for `position: absolute`. Both sheets
+// below are absolute+inset:0 backdrops — the house pattern, correct in 48 other places — so on Today they were
+// trapped inside the card's own 122px box, drawn over the "Practical care" heading with their content cut off
+// mid-word. Measured on the OPPO, 2026-08-27: overlay 324x107 at top 429 instead of full screen.
+// The card only moved to Today in af7824b, because three members hunted for care inside "Serving & events"
+// and never found it. Keep that discoverability; open the form where its backdrop still works.
+function AskForHelp({ ctx, linkOnly }) {
   const care = ctx.care || {};
   const myPub = (care.myPub || '').toLowerCase();
   const careOn = !!(care.settings && care.settings.enabled);
@@ -617,8 +625,8 @@ function AskForHelp({ ctx }) {
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>
-      {mine.map(r => <MyRequestRow key={r.id} r={r} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: 'Your care team' })} />)}
-      {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
+      {mine.map(r => <MyRequestRow key={r.id} r={r} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: 'Your care team' }); }} />)}
+      {!linkOnly && chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
       {isMinor && (audience !== undefined) && (!audience || !audience.length) ? (
         // NO FORM. Not a disabled button either — a greyed-out control invites tapping it and reads as a fault
         // with their phone. A plain, calm sentence, and the one thing they can actually do.
@@ -634,7 +642,7 @@ function AskForHelp({ ctx }) {
           </div>
         </div>
       ) : (
-      <button onClick={() => setOpen(true)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+      <button onClick={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setOpen(true); }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
@@ -643,7 +651,7 @@ function AskForHelp({ ctx }) {
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
       )}
-      {open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
+      {!linkOnly && open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
     </div>
   );
 }
@@ -848,7 +856,7 @@ function CareCard({ ctx, embedded }) {
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       <SectionLabel>Practical care</SectionLabel>
-      <AskForHelp ctx={ctx} />
+      <AskForHelp ctx={ctx} linkOnly />
       {mineBlock}
       {live.length ? needsBlock : null}
     </div>
