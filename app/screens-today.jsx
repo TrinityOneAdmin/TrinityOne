@@ -235,6 +235,10 @@ function careTypeLabel(r) {
 const CARE_WHEN = [['once', 'Just once'], ['ongoing', 'For a while'], ['unsure', 'Not sure yet']];
 const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No rush']];
 
+// The row wraps. On a 360px phone the icon (38) plus "Message" and "Withdraw" (neither shrinks, ~200 together)
+// plus padding and gaps leave about 45px for the text, so "You asked for help · Visits" rendered one word per
+// line down a column while the buttons kept full width. Seen on the OPPO, 2026-08-27. flex-basis 150px means
+// the actions drop to their own line rather than crushing the text; on a wider screen nothing changes.
 function MyRequestRow({ r, onCancel, onMessage }) {
   const [busy, setBusy] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);   // Withdraw deletes the request AND its care-team thread — ask first
@@ -255,13 +259,13 @@ function MyRequestRow({ r, onCancel, onMessage }) {
     : 'Sent privately — your care team will be in touch.';
   const tint = st === 'open' ? 'var(--sage)' : st === 'declined' ? 'var(--ink-3)' : 'var(--sage)';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 16, background: 'color-mix(in oklab, ' + tint + ' 8%, var(--surface))', border: '1px solid color-mix(in oklab, ' + tint + ' 24%, transparent)', marginBottom: 9 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 16, background: 'color-mix(in oklab, ' + tint + ' 8%, var(--surface))', border: '1px solid color-mix(in oklab, ' + tint + ' 24%, transparent)', marginBottom: 9 }}>
       <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, ' + tint + ' 16%, var(--surface))', color: tint }}><Icon name={st === 'open' ? (CARE_TYPE_ICON[r.type] || 'heart') : 'check'} size={19} /></div>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: '1 1 150px', minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>You asked for help{r.type ? ' · ' + label : ''}{!r.forSelf && r.forName ? ' · for ' + r.forName : ''}</div>
         <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{sub}</div>
       </div>
-      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginLeft: 'auto' }}>
         {onMessage ? <button onClick={onMessage} title="Message the care team about this" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="chat" size={13} color="currentColor" /> Message</button> : null}
         {st === 'open' ? <button onClick={() => setConfirming(true)} disabled={busy} title="Withdraw this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button> : null}
       </div>

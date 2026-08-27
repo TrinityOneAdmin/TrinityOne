@@ -90,3 +90,40 @@ test('Today passes linkOnly and the Care tab does not', () => {
   assert.doesNotMatch(embedded, /<AskForHelp ctx=\{ctx\} linkOnly/,
     'the Care tab was made link-only too, which leaves nowhere for the form to open');
 });
+
+// ── The "You asked for help" row ───────────────────────────────────────────────────────────────────────────
+// Seen on the OPPO, 2026-08-27: the row rendered "You asked for help · Visits" one word per line down a narrow
+// column while "Message" and "Withdraw" kept their full width beside it. Not a text problem — an arithmetic
+// one. On a 360px screen: icon 38 + gaps 24 + padding 28 + two non-shrinking buttons ~200 leaves ~45px for the
+// text. The row has to be allowed to wrap.
+//
+// These read the style the component actually produces, not the source text, so extracting the values into a
+// variable does not slip past them.
+const { render: renderRow } = loadJsx('app/screens-today.jsx', ['MyRequestRow'], { win });
+const row = (extra = {}) => renderRow('MyRequestRow',
+  { r: { id: 'r1', status: 'open', type: 'visits', forSelf: true, recipients: 4, ...extra },
+    onCancel() {}, onMessage() {} });
+
+test('the request row may wrap, so the actions drop below the text instead of crushing it', () => {
+  const top = row();
+  assert.equal(top.props.style.flexWrap, 'wrap',
+    'the row cannot wrap, so on a 360px phone the title renders one word per line beside the buttons');
+});
+
+test('the text keeps a usable width before the actions are allowed to sit beside it', () => {
+  const kids = flatten(row());
+  const text = kids.find(n => n.props && n.props.style && String(n.props.style.flex || '').includes('1 1'));
+  assert.ok(text, 'the text column has no flex-basis — it will shrink to whatever the buttons leave over');
+  const basis = parseInt(String(text.props.style.flex).split(' ').pop(), 10);
+  assert.ok(basis >= 120,
+    `the text column may shrink to ${basis}px before the actions wrap; that is narrow enough to break the ` +
+    'title across several lines again');
+  assert.equal(text.props.style.minWidth, 0, 'without minWidth:0 a long word overflows the row instead of wrapping');
+});
+
+test('the actions stay together and keep their size', () => {
+  const acts = flatten(row()).find(n => n.props && n.props.style && n.props.style.flexShrink === 0 && n.props.style.gap === 6);
+  assert.ok(acts, 'the action group no longer resists shrinking — the buttons will squash instead of wrapping');
+  assert.equal(acts.props.style.marginLeft, 'auto',
+    'once wrapped onto their own line the actions drift to the left edge instead of staying with the row');
+});
