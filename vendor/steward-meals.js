@@ -455,19 +455,22 @@
       const body = String(text || "").trim();
       if (!body) return null;
       const cp = S().churchPub;
-      let team = [];
+      let audience = null;
       try {
         const ev = await new Promise((res) => {
           let best = null;
-          const s = S().subscribeMany([{ kinds: [30078], "#d": [CARETEAM_D + cp] }], { onevent(e) {
-            if (!best || e.created_at > best.created_at) best = e;
-          }, oneose() {
-            try {
-              s.close();
-            } catch (x) {
+          const s = S().subscribeMany([{ kinds: [30078], "#d": [CAREREQ_D + reqId] }], {
+            onevent(e) {
+              if (!best || e.created_at > best.created_at) best = e;
+            },
+            oneose() {
+              try {
+                s.close();
+              } catch (x) {
+              }
+              res(best);
             }
-            res(best);
-          } });
+          });
           setTimeout(() => {
             try {
               s.close();
@@ -477,12 +480,16 @@
           }, 4e3);
         });
         if (ev) {
-          const o = JSON.parse(ev.content);
-          if (Array.isArray(o.pubs)) team = o.pubs.filter(Boolean);
+          const o = JSON.parse(ev.content || "{}");
+          if (o && o.keys && typeof o.keys === "object") {
+            const l = Object.keys(o.keys).filter(Boolean);
+            if (l.length) audience = l;
+          }
         }
       } catch (e) {
       }
-      const sealed = S().sealToPubs([cp, requesterPub, ...team], { text: body, by: cp, at: now() });
+      if (!audience) return null;
+      const sealed = S().sealToPubs([...audience, cp], { text: body, by: cp, at: now() });
       if (!sealed) return null;
       const tags = [["d", CARECHAT_D + reqId + ":" + Math.random().toString(36).slice(2, 10)], ["t", NET], ["t", "carechat"], ["church", cp]];
       if (requesterPub) tags.push(["p", requesterPub]);

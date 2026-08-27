@@ -392,9 +392,29 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
   async function sendCareChat(reqId, requesterPub, text) {
     if (!S() || !S().publishSigned || !S().churchPub || !reqId) return null;
     const body = String(text || '').trim(); if (!body) return null;
-    const cp = S().churchPub; let team = [];
-    try { const ev = await new Promise(res => { let best = null; const s = S().subscribeMany([{ kinds: [30078], '#d': [CARETEAM_D + cp] }], { onevent(e) { if (!best || e.created_at > best.created_at) best = e; }, oneose() { try { s.close(); } catch (x) {} res(best); } }); setTimeout(() => { try { s.close(); } catch (x) {} res(best); }, 4000); }); if (ev) { const o = JSON.parse(ev.content); if (Array.isArray(o.pubs)) team = o.pubs.filter(Boolean); } } catch (e) {}
-    const sealed = S().sealToPubs([cp, requesterPub, ...team], { text: body, by: cp, at: now() });
+    const cp = S().churchPub;
+    // WHO A REPLY REACHES IS DECIDED BY THE REQUEST, NOT BY WHO IS TYPING — and the console is a sender too.
+    // This used to seal to the care-team roster, so a steward answering a young person's request produced a
+    // message the cleared youth worker handling it could not open, and wrapped the exchange for the whole care
+    // rota. The member app had the identical defect; both are fixed the same way and must stay in step.
+    // The request's envelope is { keys: { pubkey: wrapped }, enc } — its recipient list is in the event in
+    // clear, so reuse it and the thread reaches exactly whoever the request reached.
+    // NO FALLBACK to the roster: falling back is the bug, and a silent wide seal on a child's thread is worse
+    // than a send that visibly fails.
+    let audience = null;
+    try {
+      const ev = await new Promise(res => {
+        let best = null;
+        const s = S().subscribeMany([{ kinds: [30078], '#d': [CAREREQ_D + reqId] }], {
+          onevent(e) { if (!best || e.created_at > best.created_at) best = e; },
+          oneose() { try { s.close(); } catch (x) {} res(best); },
+        });
+        setTimeout(() => { try { s.close(); } catch (x) {} res(best); }, 4000);
+      });
+      if (ev) { const o = JSON.parse(ev.content || '{}'); if (o && o.keys && typeof o.keys === 'object') { const l = Object.keys(o.keys).filter(Boolean); if (l.length) audience = l; } }
+    } catch (e) {}
+    if (!audience) return null;
+    const sealed = S().sealToPubs([...audience, cp], { text: body, by: cp, at: now() });
     if (!sealed) return null;
     const tags = [['d', CARECHAT_D + reqId + ':' + Math.random().toString(36).slice(2, 10)], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);

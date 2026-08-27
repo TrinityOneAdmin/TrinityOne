@@ -378,6 +378,37 @@ async function _fetchChildCareAudience(cp) {
   if (approved === null && roster === null && !_relayAuthedAt) return null;
   return [...new Set([...(approved || []), ...(roster || [])].filter(Boolean))];
 }
+// WHO A REPLY REACHES IS DECIDED BY THE REQUEST, NOT BY WHOEVER IS TYPING.
+//
+// sendCareChat used to seal every message to the care rota. For an adult's request that is right by accident;
+// for a young person's it is wrong twice over. Measured on a phone against the live relay, 2026-08-27: a
+// cleared youth worker who is not also on the care rota messaged a child, the child read it and replied, and
+// her reply was sealed to the rota — so the relay served him the event, he held no key, and subscribeCareChat
+// dropped it as though it had never been said. The child answers and nobody comes. The same seal also wrapped
+// her words, in openable form, for the very group the feature exists to keep out.
+//
+// The branch cannot key off the sender: publishCareRequest asks `_sgSelf.isMinor`, which is the ASKER's own
+// status, and here the sender is usually the adult. So do not detect a child at all. `_sealToPubs` writes
+// `{ keys: { pubkey: wrapped }, enc }` and the request's envelope has the identical shape, so the recipient
+// list is sitting in the event in clear. Reuse it: a reply reaches exactly whoever the request reached, by
+// construction, for adult and child threads alike, and it keeps following if the request's audience rules
+// ever change again.
+//
+// DELIBERATELY NOT WIDENED: an adult cleared AFTER the request was made is not in that list and will not see
+// the thread. Adding them would broaden a child's disclosure without the church having chosen to, and that is
+// not this function's call to make. Owner asked, 2026-08-27; left narrow on purpose.
+async function _fetchCareThreadAudience(cp, reqId) {
+  if (!cp || !reqId) return null;
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CAREREQ_D + reqId] }]);
+    let best = null;
+    for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
+    if (!best) return null;
+    const o = JSON.parse(best.content || '{}');
+    const list = (o && o.keys && typeof o.keys === 'object') ? Object.keys(o.keys).filter(Boolean) : null;
+    return (list && list.length) ? list : null;
+  } catch (e) { return null; }
+}
 // Which write wins when two authors publish one church document — see src/church-doc-store.src.js.
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
@@ -3922,8 +3953,11 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     const body = String(text || '').trim();
     if (!sk || !cp || !reqId || !body) return null;
-    const team = await _fetchCareTeam(cp);
-    const sealed = _sealToPubs([cp, pub, requesterPub, ...team], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
+    // See _fetchCareThreadAudience. NO FALLBACK TO THE CARE TEAM: falling back is the bug this replaces, and
+    // a silent wide seal on a child's thread is worse than a send that visibly fails.
+    const audience = await _fetchCareThreadAudience(cp, reqId);
+    if (!audience) return null;
+    const sealed = _sealToPubs([...audience, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
     if (!sealed) return null;
     const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];

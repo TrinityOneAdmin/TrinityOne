@@ -399,10 +399,14 @@ function SafetyCheckPanel() {
 function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
+  // sendCareChat now refuses rather than sealing a reply to the care rota when it cannot establish who the
+  // thread reaches. Restoring the text without saying anything reads as a typo, not a failure. See the same
+  // change in app/screens-today.jsx — the member sheet and this one must behave alike.
+  const [err, setErr] = React.useState('');
   const endRef = React.useRef(null);
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareChat(reqId, setMsgs); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [reqId]);
   React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: 'end' }); } catch (e) {} }, [msgs.length]);
-  const send = async () => { const t = text.trim(); if (!t) return; setText(''); let ok = null; try { ok = await window.StewardMeals.sendCareChat(reqId, requesterPub, t); } catch (e) {} if (!ok) setText(t); };
+  const send = async () => { const t = text.trim(); if (!t) return; setText(''); setErr(''); let ok = null; try { ok = await window.StewardMeals.sendCareChat(reqId, requesterPub, t); } catch (e) {} if (!ok) { setText(t); setErr('Couldn’t send — we couldn’t confirm who this conversation reaches. Check your connection and try again.'); } };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
@@ -412,6 +416,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
           {msgs.map(m => <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>)}
           <div ref={endRef} />
         </div>
+        {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '10px 14px', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--ink)' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)' }}>
           <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
           <button onClick={send} className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
