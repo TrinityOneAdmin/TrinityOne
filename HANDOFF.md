@@ -7,6 +7,40 @@ current state is here at the top.
 
 ---
 
+## THE APP PROMISES A CHILD A PROTECTION THAT DOES NOT EXIST (found 2026-08-27, NOT FIXED)
+
+The most serious thing the configuration pass turned up, and it is told to the young person about themselves.
+
+`app/identity.jsx:1485` shows every minor, on their own profile:
+
+> Your church has set this up as a **young person's account**. Private messages are limited to the adults your
+> church has checked, and to your parent or guardian — everything else works normally.
+
+The relay does not enforce that. `safeguardAllows()` (scripts/gateway.mjs:1084) reads:
+
+    if (approvedIn(other, cp) || guardianLinkedIn(minorPub, other, cp)) continue;
+
+**Any approved member of the church passes.** Being "checked" — cleared for youth work — is not required, and
+is not what the gate tests. Only non-members are blocked.
+
+Proven on hardware, live relay, 2026-08-27, timestamps from the relay itself:
+
+    17:41  Bram admitted to the church
+    17:43  Bram's DM to Dorothy (a minor) ACCEPTED and stored
+    17:44  Bram's youth-work clearance published
+
+So an approved-but-unchecked adult messaged a child, one minute before anyone cleared him, and the message is
+readable on her phone. She was told that could not happen.
+
+**This is a wording decision, not necessarily a gate decision, and it is the owner's call.** The gate's own
+comment argues the looser rule deliberately — "A gate that is too tight is its own harm — it pushes a worried
+child onto channels the church cannot see at all" — and that reasoning fits the project's ethos of trusting
+people rather than software. If that reasoning stands, the FIX IS THE TEXT: say what is actually true (any
+member of your church can message you; the adults your church has checked are the ones who see a request for
+help). What must not stand is the current state, where a child and their parent read a guarantee the software
+does not keep. Whichever way it goes, it needs a test that drives a real relay, because this is precisely the
+claim a test that mirrors the client would pass while the gate says otherwise.
+
 ## DEVICE CONFIGURATION PASS, 2026-08-27 — FINDINGS ONLY, NOTHING FIXED
 
 OPPO + live a8 relay + steward console, church "ZZ DEVICE TEST". Collected while working steward settings
