@@ -7,6 +7,54 @@ current state is here at the top.
 
 ---
 
+## OPEN AND SERIOUS — A CHILD'S REPLY IS SEALED TO THE WRONG PEOPLE (found 2026-08-27, NOT FIXED)
+
+Found by an independent audit of `ad24099`. Traced in code, not suspected. This is the highest-value open item
+in the care seam and it is exactly the failure this project keeps repeating: the round of 2026-08-27 corrected
+what the *screen said* about who receives a child's request, and left the *mechanism* underneath it wrong.
+
+**The defect.** `publishCareRequest` (src/fellowship.src.js) has a minor branch: a young person's request seals
+to `_fetchChildCareAudience()` — church key, self, the adults the church has cleared, and safeguarding-capable
+stewards — and deliberately NOT to guardians, because a child may be asking about something at home.
+`sendCareChat` (src/fellowship.src.js ~3920, shipped at vendor/fellowship.js ~10352) has **no minor branch at
+all**. It seals every message in the thread to `[cp, pub, requesterPub, ...await _fetchCareTeam(cp)]`.
+
+**What that does to a real person.** A cleared youth worker who is not also on the care rota opens a child's
+request and messages "How can I help?" — the child can read it, because `requesterPub` is in the seal. The child
+replies. Their reply is key-wrapped for the care rota. The relay *serves* the event to the youth worker
+(`childCareReader` passes) but she holds no wrapped key, so `_openSealed` returns null and `subscribeCareChat`
+drops it silently — the file's own comment says "a missing key reads as 'this was never said'". **The child
+answers and nobody comes.** Second face of the same bug: the child's words are wrapped, in openable form, for
+the entire care rota — the exact group the feature exists to exclude. The relay withholds serving them today, so
+it is not a live leak, but the asking phone chose an audience it had no business choosing.
+
+It works at present only for cleared adults who happen to also sit on the care rota. That is luck, not design.
+
+**Plan to fix.**
+1. `sendCareChat` must seal to the SAME audience the request itself used, for every participant in the thread —
+   not to the sender's own category. Both the child and the cleared adult write into one thread; if they choose
+   different audiences the thread tears in half, which is what it does now.
+2. The branch cannot key off the sender (`_sgSelf`) — the adult replying is not a minor. It must come from the
+   REQUEST. Check first whether the care-request document already carries a usable marker; if not, add a new
+   field and fall back to deriving it from the requester's clearance. **Add, never repurpose** (standing rule,
+   2026-08-25): the relay rehydrates all history on every update, so an ingest change is retroactive.
+3. Decide the rotation case deliberately: an adult cleared AFTER a thread started holds no key for the earlier
+   messages. Either re-seal on clearance change, or leave it and word it honestly — but today
+   `CareRequestCard`'s fallback blames "this device isn't on the care team's key list", which is the wrong list
+   and will send someone hunting the wrong setting.
+4. **The test must drive a real seal and a real unseal.** Not injected outcomes — 18 tests once stayed green
+   with the feature dead in one character. Follow `scripts/relay-child-carereq.test.mjs`: spawn a real relay on
+   its own port, have a cleared non-rota adult AND a rota member each attempt to open a child's reply, and
+   assert the cleared adult can and the rota member cannot. Prove it fails against the current code first.
+5. Backwards compatibility: threads sealed the old way must still open for everyone who can open them today.
+
+**Two smaller things found in the same pass, not fixed.** `sendCareChat` spreads `...team` where
+`_fetchCareTeam` can return null (a failed roster read throws; the sheet catches it, so the send just fails and
+the text is restored — reliability, not safety). And a minor is still told "care team" by the send button
+("Send to care team"), the persistent sent-row ("your care team will be in touch"), the whole conversation UI
+("Your care team", "Private — you and the care team"), and the Care tab framing above the card — confirmed on
+the OPPO, 2026-08-27. Cosmetic beside the above, but it is the same wrong promise.
+
 ## OPEN, FROM THE ROUND-9 WORK — NOT FORGOTTEN, DELIBERATELY DEFERRED (2026-08-27)
 
 Six audits ran over the multi-author document store. These are the things they found that were NOT fixed,
