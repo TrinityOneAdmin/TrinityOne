@@ -6286,20 +6286,25 @@
       byId.delete(id);
       return null;
     }
-    const others = [...vers.keys()].filter((k) => k !== win._by);
+    const winKey = String(win._by || "");
+    const others = [...vers.keys()].filter((k) => k !== winKey);
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
   function _seedFromCache(versions, byId, items) {
     for (const it of items || []) {
       if (!it || it.id == null) continue;
-      let vers = versions.get(it.id);
-      if (!vers) {
-        vers = /* @__PURE__ */ new Map();
-        versions.set(it.id, vers);
+      if (it._by) {
+        let vers = versions.get(it.id);
+        if (!vers) {
+          vers = /* @__PURE__ */ new Map();
+          versions.set(it.id, vers);
+        }
+        vers.set(String(it._by), it);
+        _reduceVersions(vers, byId, it.id);
+      } else {
+        byId.set(it.id, it);
       }
-      vers.set(String(it._by || ""), it);
-      byId.set(it.id, it);
     }
   }
   function _absorbById(versions, byId, id, rec) {
@@ -6317,16 +6322,16 @@
   }
   function _forgetById(versions, byId, id, by, ts) {
     const vers = versions.get(id);
-    if (!vers) return false;
-    const k = String(by || "");
-    const had = vers.has(k) ? vers.get(k) : vers.size === 1 && vers.has("") ? vers.get("") : null;
-    if (!had) return false;
-    if (!vers.has(k)) {
-      vers.delete("");
-      if (!vers.size) versions.delete(id);
-      _reduceVersions(vers, byId, id);
-      return true;
+    if (!vers) {
+      if (byId.has(id)) {
+        byId.delete(id);
+        return true;
+      }
+      return false;
     }
+    const k = String(by || "");
+    const had = vers.get(k);
+    if (!had) return false;
     if ((had.ts || 0) > (ts || 0)) return false;
     vers.delete(k);
     if (!vers.size) versions.delete(id);
@@ -19404,9 +19409,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          cached.forEach((g) => {
-            if (g && g.id != null) byId.set(g.id, g);
-          });
+          _seedFromCache(versions, byId, cached);
           if (cached.length) onGroups(cached);
         }
       } catch {
@@ -19473,9 +19476,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          cached.forEach((p) => {
-            if (p && p.id != null) byId.set(p.id, p);
-          });
+          _seedFromCache(versions, byId, cached);
           if (cached.length) onPlans(cached);
         }
       } catch {
@@ -19540,9 +19541,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          cached.forEach((it) => {
-            if (it && it.id != null) byId.set(it.id, it);
-          });
+          _seedFromCache(versions, byId, cached);
           if (cached.length) onDevos(cached);
         }
       } catch {
@@ -20353,9 +20352,12 @@ zoo`.split("\n");
           return false;
         }
       }
-      try {
-        localStorage.setItem(ACTIVE_ID_KEY, actingChurch || "");
-      } catch (e) {
+      const _isNetwork = !actingChurch && tp !== churchPub;
+      if (!_isNetwork) {
+        try {
+          localStorage.setItem(ACTIVE_ID_KEY, actingChurch || "");
+        } catch (e) {
+        }
       }
       lastProfile = {};
       _profileLoaded = false;

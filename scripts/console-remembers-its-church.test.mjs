@@ -93,11 +93,28 @@ test('A FAILED SWITCH DOES NOT OVERWRITE A GOOD MEMORY', () => {
     'never managed to go, and the next boot tries to enter it');
 });
 
-test('a network identity is not remembered, because it is never restored', () => {
+test('glancing at a network does NOT erase the church you were running', () => {
+  // The restore only ever re-enters a stewarded church, so a network is never stored. But CLEARING the memory
+  // was worse: a delegated steward who stepped sideways to a network view had their remembered church wiped,
+  // and the next reload dropped them into their own empty church — round 9's trap, one click away.
   const w = world({ stored: ST_AIDANS, networks: [NETWORK] });
   w.setActive(NETWORK);
-  assert.equal(w.stored(), '',
-    'glancing at a network leaves a value the next boot silently ignores — the round-9 trap, one click away');
+  assert.equal(w.stored(), ST_AIDANS,
+    'stepping sideways to a network threw away the church this console was running');
+});
+
+test('THE ORDERING IS LOAD-BEARING: the restore must run after the stewarded list is known', () => {
+  // An auditor defeated the previous version of this file by moving the restore block ABOVE the cache load.
+  // The feature is then completely dead — the stewarded list is always empty when the guard runs, so a
+  // delegated steward lands in their own empty church on every boot — and all ten tests stayed green,
+  // because the harness pre-populates that list and runs only the sliced-out block. Assert the ordering.
+  const body = stripComments(fnBody(V, 'subscribeStewardedChurches(cb)', 'subscribeStewardedChurches'));
+  const load = body.indexOf('stewardedChurches.set(c.cp');
+  const restore = body.indexOf('const want =');
+  assert.ok(load !== -1 && restore !== -1, 're-anchor: one of the two landmarks has moved');
+  assert.ok(load < restore,
+    'the restore runs before the console knows which churches it stewards, so the guard always fails and a ' +
+    'delegated steward boots into their own empty church every time');
 });
 
 // ── the restore half ─────────────────────────────────────────────────────────────────────────────────────

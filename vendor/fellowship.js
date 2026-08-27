@@ -3516,20 +3516,25 @@
       byId.delete(id);
       return null;
     }
-    const others = [...vers.keys()].filter((k) => k !== win._by);
+    const winKey = String(win._by || "");
+    const others = [...vers.keys()].filter((k) => k !== winKey);
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
   function _seedFromCache(versions, byId, items) {
     for (const it of items || []) {
       if (!it || it.id == null) continue;
-      let vers = versions.get(it.id);
-      if (!vers) {
-        vers = /* @__PURE__ */ new Map();
-        versions.set(it.id, vers);
+      if (it._by) {
+        let vers = versions.get(it.id);
+        if (!vers) {
+          vers = /* @__PURE__ */ new Map();
+          versions.set(it.id, vers);
+        }
+        vers.set(String(it._by), it);
+        _reduceVersions(vers, byId, it.id);
+      } else {
+        byId.set(it.id, it);
       }
-      vers.set(String(it._by || ""), it);
-      byId.set(it.id, it);
     }
   }
   function _absorbById(versions, byId, id, rec) {
@@ -3547,16 +3552,16 @@
   }
   function _forgetById(versions, byId, id, by, ts) {
     const vers = versions.get(id);
-    if (!vers) return false;
-    const k = String(by || "");
-    const had = vers.has(k) ? vers.get(k) : vers.size === 1 && vers.has("") ? vers.get("") : null;
-    if (!had) return false;
-    if (!vers.has(k)) {
-      vers.delete("");
-      if (!vers.size) versions.delete(id);
-      _reduceVersions(vers, byId, id);
-      return true;
+    if (!vers) {
+      if (byId.has(id)) {
+        byId.delete(id);
+        return true;
+      }
+      return false;
     }
+    const k = String(by || "");
+    const had = vers.get(k);
+    if (!had) return false;
     if ((had.ts || 0) > (ts || 0)) return false;
     vers.delete(k);
     if (!vers.size) versions.delete(id);
@@ -9386,9 +9391,7 @@
       }
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      for (const c of loadDocCache("categories", pubk)) {
-        if (c && c.id) byId.set(c.id, c);
-      }
+      _seedFromCache(versions, byId, loadDocCache("categories", pubk));
       let eosed = false;
       const emit = _coalesce(() => {
         const v = [...byId.values()].filter((c) => _churchVoice(pubk, c));
@@ -9663,9 +9666,7 @@
       const PLAN_D = "trinityone/plan:";
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      for (const p of loadDocCache("plans", pubk)) {
-        if (p && p.id) byId.set(p.id, p);
-      }
+      _seedFromCache(versions, byId, loadDocCache("plans", pubk));
       let timer = null;
       let eosed = false;
       const emit = () => {
@@ -9720,9 +9721,7 @@
       const DEVO_D = "trinityone/devotional:";
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      for (const dv of loadDocCache("devos", pubk)) {
-        if (dv && dv.id) byId.set(dv.id, dv);
-      }
+      _seedFromCache(versions, byId, loadDocCache("devos", pubk));
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
       let timer = null;
       let eosed = false;

@@ -3194,7 +3194,7 @@ window.Fellowship = {
     if (!pubk) { onCats([]); return () => {}; }
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
-    for (const c of loadDocCache('categories', pubk)) { if (c && c.id) byId.set(c.id, c); }   // paint cached instantly
+    _seedFromCache(versions, byId, loadDocCache('categories', pubk));   // paint cached instantly — and seed the store, or a delete finds nothing to withdraw
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = _coalesce(() => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
     if (byId.size) emit();   // paint cached categories before the shared hub replays/answers
@@ -3428,7 +3428,7 @@ window.Fellowship = {
     const PLAN_D = 'trinityone/plan:';
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
-    for (const p of loadDocCache('plans', pubk)) { if (p && p.id) byId.set(p.id, p); }   // paint cached instantly
+    _seedFromCache(versions, byId, loadDocCache('plans', pubk));   // paint cached instantly — and seed the store
     let timer = null;   // re-emit when the next scheduled item is due (drip release)
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = () => {
@@ -3461,7 +3461,7 @@ window.Fellowship = {
     const DEVO_D = 'trinityone/devotional:';
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
-    for (const dv of loadDocCache('devos', pubk)) { if (dv && dv.id) byId.set(dv.id, dv); }   // paint cached instantly
+    _seedFromCache(versions, byId, loadDocCache('devos', pubk));   // paint cached instantly — and seed the store
     // honour the steward's explicit order (lower = first); unordered devotionals fall back to newest-first
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
     let timer = null;   // re-emit when the next scheduled devotional is due (drip release)

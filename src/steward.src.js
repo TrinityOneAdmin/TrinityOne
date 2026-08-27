@@ -5279,7 +5279,7 @@ window.Steward = {
     // steward-chosen order first (groups without an order fall to the end, by age)
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); };
     // paint cached groups instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(g => { if (g && g.id != null) byId.set(g.id, g); }); if (cached.length) onGroups(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onGroups(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -5319,7 +5319,7 @@ window.Steward = {
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onPlans(arr); };
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(p => { if (p && p.id != null) byId.set(p.id, p); }); if (cached.length) onPlans(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onPlans(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -5359,7 +5359,7 @@ window.Steward = {
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
     const emit = () => { const arr = [...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onDevos(arr); };
     // paint the last-known devotionals instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(it => { if (it && it.id != null) byId.set(it.id, it); }); if (cached.length) onDevos(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onDevos(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -5907,10 +5907,14 @@ window.Steward = {
       if (!rec) return false;
       try { sk = privateKeyFromSeedWords(rec.mnemonic); pub = getPublicKey(sk); actingChurch = ''; } catch { return false; }
     }
-    // A NETWORK KEY IS DELIBERATELY NOT REMEMBERED — the restore only ever re-enters a stewarded church, so
-    // remembering a network would leave a stale value that the next boot silently ignores. Clearing it is the
-    // honest record: this console is running its own church again.
-    try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {}
+    // A NETWORK KEY IS NOT REMEMBERED — the restore only ever re-enters a stewarded church, so storing one
+    // would leave a value the next boot silently ignores. But CLEARING it was worse, and an audit measured
+    // why: a delegated steward running St Aidan's who merely glanced at a network view had their remembered
+    // church wiped, so the next reload dropped them back into their own empty church. That is round 9's trap,
+    // one click away. Leave the memory alone when stepping sideways to a network; only a deliberate switch
+    // between churches changes where this console comes back to.
+    const _isNetwork = !actingChurch && tp !== churchPub;
+    if (!_isNetwork) { try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {} }
     lastProfile = {}; _profileLoaded = false;   // don't carry one identity's profile fields — or its loaded-ness — into the other's edits
     // The just-published clearance cache is per-CHURCH and must not survive the switch either: it is keyed by
     // member pubkey alone, so a member who belongs to both churches could be skipped for the wrong one within

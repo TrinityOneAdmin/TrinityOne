@@ -44,7 +44,11 @@ export function _pickWinner(vers) {
 export function _reduceVersions(vers, byId, id) {
   const win = _pickWinner(vers);
   if (!win) { byId.delete(id); return null; }
-  const others = [...vers.keys()].filter(k => k !== win._by);
+  // Compare by the KEY we filed it under, not by the record's field. A record restored from an old cache has
+  // no author field while its key is '', so filtering on `win._by` left the winner in its own list of
+  // competitors — `_alt` came back as ["", <the winner>], which is nonsense a banner would have printed.
+  const winKey = String(win._by || '');
+  const others = [...vers.keys()].filter(k => k !== winKey);
   byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
   return win;
 }
@@ -60,9 +64,22 @@ export function _reduceVersions(vers, byId, id) {
 export function _seedFromCache(versions, byId, items) {
   for (const it of (items || [])) {
     if (!it || it.id == null) continue;
-    let vers = versions.get(it.id); if (!vers) { vers = new Map(); versions.set(it.id, vers); }
-    vers.set(String(it._by || ''), it);
-    byId.set(it.id, it);
+    if (it._by) {
+      // We know whose copy this is, so it can take part in the rule like any other write.
+      let vers = versions.get(it.id); if (!vers) { vers = new Map(); versions.set(it.id, vers); }
+      vers.set(String(it._by), it);
+      _reduceVersions(vers, byId, it.id);
+    } else {
+      // AN OLD CACHE RECORDS NO AUTHOR, AND GUESSING ONE IS WORSE THAN ADMITTING WE DO NOT KNOW.
+      // The first attempt filed these under '' so they could be compared like anything else. That made an
+      // upgrading console strictly worse than before: an anonymous entry beat real copies on a tie (the empty
+      // name sorts lowest), it invented a competitor out of itself, and — measured — a delete from the real
+      // author was REFUSED whenever a second author's copy existed, which is the entire case this store was
+      // written for. An upgraded console would have shown a deleted rota for ever.
+      // So: paint it, and let it be superseded. The first live copy replaces it, and any delete clears it —
+      // which is exactly what the old code did with these entries.
+      byId.set(it.id, it);
+    }
   }
 }
 export function _absorbById(versions, byId, id, rec) {
@@ -79,13 +96,13 @@ export function _absorbById(versions, byId, id, rec) {
 // even see. Now it withdraws that author's version and the next-best is promoted, so the surviving rota comes
 // back rather than the Sunday going blank.
 export function _forgetById(versions, byId, id, by, ts) {
-  const vers = versions.get(id); if (!vers) return false;
+  const vers = versions.get(id);
+  // Painted from an old cache and nothing live has arrived yet: we do not know whose it is, so any delete
+  // binds it — which is what the old code did, and refusing would leave it on screen for ever.
+  if (!vers) { if (byId.has(id)) { byId.delete(id); return true; } return false; }
   const k = String(by || '');
-  // An entry restored from a cache written before authors were recorded is bound by anybody's delete — we
-  // cannot tell whose it was, and refusing would leave it on screen for ever.
-  const had = vers.has(k) ? vers.get(k) : (vers.size === 1 && vers.has('') ? vers.get('') : null);
+  const had = vers.get(k);
   if (!had) return false;                                         // nothing of theirs to withdraw
-  if (!vers.has(k)) { vers.delete(''); if (!vers.size) versions.delete(id); _reduceVersions(vers, byId, id); return true; }
   if ((had.ts || 0) > (ts || 0)) return false;                    // a stale tombstone must not undo a newer edit
   vers.delete(k);
   if (!vers.size) versions.delete(id);

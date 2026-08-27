@@ -213,9 +213,89 @@ test('seeding from cache does not fabricate a conflict', () => {
     'one author’s cached copy and their own live copy were counted as two people publishing');
 });
 
-test('both readers seed from their cache', () => {
-  const phone = stripComments(fnBody(V, 'subscribeChurchGroups(churchNpub, onGroups)', 'subscribeChurchGroups'));
-  assert.match(phone, /_seedFromCache\(versions\d*, byId/, 'the member app paints cache into the screen only');
-  const con = stripComments(fnBody(S, '_subAddr(prefix, map, onItems)', '_subAddr'));
-  assert.match(con, /_seedFromCache\(versions\d*, byId/, 'the console paints cache into the screen only');
+test('EVERY reader that paints from cache seeds the store — found by sweeping, not by naming', () => {
+  // THE TEST THAT SHOULD HAVE CAUGHT THE LAST MISS. Its predecessor named the two call sites I had fixed and
+  // was therefore green while six other readers still painted their cache straight onto the screen — so a
+  // group, reading plan, devotional or category deleted while the app was closed stayed visible for ever.
+  // Naming what you fixed proves nothing. Sweep the SOURCE for every reader that uses the store, and require
+  // each one's cache paint to go through it.
+  const SRC = { 'src/fellowship.src.js': null, 'src/steward.src.js': null };
+  for (const f of Object.keys(SRC)) SRC[f] = readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+  const problems = [];
+  for (const [file, text] of Object.entries(SRC)) {
+    const lines = stripComments(text).split('\n');
+    const fnRe = /^  ([A-Za-z_]\w*)\(/;
+    const starts = [];
+    lines.forEach((l, i) => { const m = l.match(fnRe); if (m) starts.push([i, m[1]]); });
+    starts.forEach(([ln, name], idx) => {
+      const end = idx + 1 < starts.length ? starts[idx + 1][0] : lines.length;
+      const body = lines.slice(ln, end).join('\n');
+      if (!/_(absorbById|forgetById)\(versions/.test(body)) return;      // not a store-backed reader
+      const paints = /loadDocCache\(|JSON\.parse\(localStorage\.getItem\(CACHE_KEY\)/.test(body);
+      if (paints && !/_seedFromCache\(versions/.test(body))
+        problems.push(file + ' → ' + name + ' paints from cache without seeding the store');
+      if (/byId\.(set|delete)\(id/.test(body))
+        problems.push(file + ' → ' + name + ' still writes by id with no rule about who wins');
+    });
+  }
+  assert.deepEqual(problems, [],
+    'a document deleted while the app was closed will stay on screen for ever in:\n  ' + problems.join('\n  '));
+});
+
+test('and every use of the store has a version map in scope', () => {
+  // I twice left a call to _forgetById(versions, …) in a function that declares no `versions` — a crash on
+  // every delete, not a bug, and I would have shipped it. Sweep for it rather than trusting I looked.
+  const crashes = [];
+  for (const f of ['src/fellowship.src.js', 'src/steward.src.js']) {
+    const lines = stripComments(readFileSync(new URL('../' + f, import.meta.url), 'utf8')).split('\n');
+    const starts = [];
+    lines.forEach((l, i) => { const m = l.match(/^  ([A-Za-z_]\w*)\(/); if (m) starts.push([i, m[1]]); });
+    starts.forEach(([ln, name], idx) => {
+      const end = idx + 1 < starts.length ? starts[idx + 1][0] : lines.length;
+      const body = lines.slice(ln, end).join('\n');
+      if (/_(absorbById|forgetById|seedFromCache)\(versions/.test(body) && !/const versions = new Map\(\)/.test(body))
+        crashes.push(f + ' → ' + name);
+    });
+  }
+  assert.deepEqual(crashes, [], 'these call the store with no version map in scope — every delete throws:\n  ' + crashes.join('\n  '));
+});
+
+// ── AN UPGRADING CONSOLE: THE CACHE IT ALREADY HOLDS RECORDS NO AUTHOR ───────────────────────────────────
+// The console never wrote an author into its calendar cache, so on the first boot after this ships every
+// cached rota, service and roster is anonymous. The first attempt filed those under '' so they could be
+// compared like anything else, and an audit measured what that did: the anonymous entry beat real copies on
+// a tie, invented a competitor out of itself, and — worst — a delete from the real author was REFUSED
+// whenever a second author's copy existed. An upgraded console would have shown a deleted rota for ever, in
+// exactly the two-author case this whole store exists for.
+test('an anonymous cached copy never competes with a real one', () => {
+  const m = store(V);
+  m.paint([{ id: 'svc1', ts: 100, tag: 'vicar rota, from an old cache' }]);
+  m.put(WARDEN, 162, 'warden rota, live');
+  assert.equal(m.seen().tag, 'warden rota, live', 'an anonymous cached copy is being ranked against real ones');
+  assert.equal(m.seen()._alt, undefined,
+    'the upgrade invented a competing author out of a cache entry — a banner would print it as a real person');
+});
+
+test('an anonymous cached copy never beats a real one on a tie', () => {
+  const m = store(V);
+  m.paint([{ id: 'svc1', ts: 500, tag: 'anonymous' }]);
+  m.put(CHURCH, 500, 'real');
+  assert.equal(m.seen().tag, 'real', 'the empty author name sorts lowest and wins ties it should never enter');
+});
+
+test('THE UPGRADE CASE: a delete from the real author is honoured, not refused', () => {
+  const m = store(V);
+  m.paint([{ id: 'svc1', ts: 100, tag: 'from an old cache' }]);
+  m.put(WARDEN, 162, 'warden');
+  assert.equal(m.del(WARDEN, 200), true,
+    'on an upgraded console the author’s own delete was refused, so a withdrawn rota stayed on screen for ever');
+  assert.equal(m.seen(), undefined);
+});
+
+test('…and an anonymous entry on its own is still cleared by anybody’s delete', () => {
+  // Which is what the old code did with these entries. Refusing would strand every existing install.
+  const m = store(V);
+  m.paint([{ id: 'svc1', ts: 100, tag: 'legacy' }]);
+  assert.equal(m.del(WARDEN, 200), true, 'upgrading strands people on documents their church already deleted');
+  assert.equal(m.seen(), undefined);
 });
