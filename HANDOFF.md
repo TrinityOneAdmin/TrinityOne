@@ -7,6 +7,24 @@ current state is here at the top.
 
 ---
 
+## EVERY CHANGE REQUIRES AN INDEPENDENT AUDIT — OWNER, 2026-08-27
+
+Not per stage, not per round. **Every change.** This replaces the older "after each fix, have an auditor look
+over your work while you move on". It is not satisfied by re-reading your own work, and it is not satisfied by
+the suite going green.
+
+Run it read-only, in an isolated worktree, briefed to **refute** rather than confirm, and tell it the specific
+ways you may have fooled yourself. Then verify its serious findings yourself before acting on them — an
+auditor's report is no more trustworthy than a simulated member's.
+
+It hardened because round 9's fixes took three passes: the first read as complete and left the delete path,
+the console and four sibling readers untouched; the second introduced a fresh regression (a cached document
+could no longer be deleted, so it stayed on screen for ever); and while fixing that I broke the same thing
+three times by pattern-replacing text that appeared five times and taking the first match — twice leaving a
+call with an undeclared variable, which is a crash, not a bug.
+
+---
+
 ## THE FAILURE MODE THIS PROJECT KEEPS REPEATING — OWNER, 2026-08-26
 
 Read this before you change anything. The owner named it after simulation round 9, looking at six broken
