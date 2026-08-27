@@ -390,7 +390,7 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     return () => { try { sub.close(); } catch (e) {} };
   }
   async function sendCareChat(reqId, requesterPub, text) {
-    if (!S() || !S().publishSigned || !S().churchPub || !reqId) return null;
+    if (!S() || !S().publishSigned || !S().churchPub || !reqId || !requesterPub) return null;
     const body = String(text || '').trim(); if (!body) return null;
     const cp = S().churchPub;
     // WHO A REPLY REACHES IS DECIDED BY THE REQUEST, NOT BY WHO IS TYPING — and the console is a sender too.
@@ -401,20 +401,45 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     // clear, so reuse it and the thread reaches exactly whoever the request reached.
     // NO FALLBACK to the roster: falling back is the bug, and a silent wide seal on a child's thread is worse
     // than a send that visibly fails.
-    let audience = null;
+    let audience = null, teamThread = false;
     try {
       const ev = await new Promise(res => {
         let best = null;
         const s = S().subscribeMany([{ kinds: [30078], '#d': [CAREREQ_D + reqId] }], {
-          onevent(e) { if (!best || e.created_at > best.created_at) best = e; },
+          // ONLY THE ASKER'S OWN COPY. The relay lets an ordinary member publish a carereq: at somebody else's
+          // d-tag, and this console reads EVERY request — so without an author check it is the surface most
+          // reliably fed a forgery. See the member-side note in src/fellowship.src.js.
+          onevent(e) { if (requesterPub && e.pubkey !== requesterPub) return; if (!best || e.created_at > best.created_at) best = e; },
           oneose() { try { s.close(); } catch (x) {} res(best); },
         });
         setTimeout(() => { try { s.close(); } catch (x) {} res(best); }, 4000);
       });
-      if (ev) { const o = JSON.parse(ev.content || '{}'); if (o && o.keys && typeof o.keys === 'object') { const l = Object.keys(o.keys).filter(Boolean); if (l.length) audience = l; } }
+      if (ev) {
+        const o = JSON.parse(ev.content || '{}');
+        if (o && o.keys && typeof o.keys === 'object') { const l = Object.keys(o.keys).filter(Boolean); if (l.length) audience = l; }
+        // The asker records WHICH rule chose the audience. 'team' means an ordinary adult request, and those
+        // also reach whoever is on the care rota now — otherwise a care member who joined after the request
+        // was opened silently cannot read new replies. A young person's thread is never widened. A request
+        // written before this tag existed has no tag and stays narrow, which is the safe direction.
+        teamThread = (((ev.tags || []).find(t => t[0] === 'aud') || [])[1] || '') === 'team';
+      }
     } catch (e) {}
     if (!audience) return null;
-    const sealed = S().sealToPubs([...audience, cp], { text: body, by: cp, at: now() });
+    let extra = [];
+    if (teamThread) {
+      try {
+        const ev2 = await new Promise(res => {
+          let best = null;
+          const s2 = S().subscribeMany([{ kinds: [30078], '#d': [CARETEAM_D + cp] }], {
+            onevent(e) { if (e.pubkey !== cp) return; if (!best || e.created_at > best.created_at) best = e; },
+            oneose() { try { s2.close(); } catch (x) {} res(best); },
+          });
+          setTimeout(() => { try { s2.close(); } catch (x) {} res(best); }, 4000);
+        });
+        if (ev2) { const o2 = JSON.parse(ev2.content || '{}'); if (Array.isArray(o2.pubs)) extra = o2.pubs.filter(Boolean); }
+      } catch (e) {}
+    }
+    const sealed = S().sealToPubs([...audience, ...extra, cp], { text: body, by: cp, at: now() });
     if (!sealed) return null;
     const tags = [['d', CARECHAT_D + reqId + ':' + Math.random().toString(36).slice(2, 10)], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);

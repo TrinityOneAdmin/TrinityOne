@@ -1000,8 +1000,10 @@ const MINORS_BY = new Map();   // churchpub -> Set(minor pubkeys)
 const MINORS = new Set();
 function rebuildMinors() { MINORS.clear(); for (const s of MINORS_BY.values()) for (const p of s) MINORS.add(p); }
 // Which churches ALLOW a child to publish a photograph (features.childPhotos on the church's own kind-0).
-// DEFAULT-DENY: a church absent from this set does not allow it. That is the safe direction, and on a relay
-// that rehydrates its whole history at boot the church profile is always present before any member write.
+// DEFAULT-DENY: a church absent from this set does not allow it. That is the safe direction — but it is only
+// SAFE, not correct, if the set is actually populated: an empty set silently refuses photos for a church that
+// deliberately allows them. hydrateMaps() therefore replays kind 0 explicitly. It did not, originally, and
+// this comment claimed it did; the claim was never checked and an audit disproved it with a restart probe.
 const CHILD_PHOTOS_OK = new Set();
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
 const APPROVED = new Set();
@@ -1351,7 +1353,7 @@ function clearDerivedMaps() {
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
   // flag that lets minors read a room.
-  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE]) { try { s.clear(); } catch {} }
+  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK]) { try { s.clear(); } catch {} }
 }
 let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
@@ -1379,6 +1381,14 @@ function hydrateMaps() {
     // itself". Two passes: grant-conferring documents, then everything. note() is idempotent for these, and
     // the extra ASC pass is boot-time only.
     const dOf = (e) => ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    // CHURCH PROFILES TOO. The passes below replay kind 30078 only, and a church's safeguarding switches live
+    // on its kind-0 (features.childPhotos). Without this CHILD_PHOTOS_OK is empty after every boot, and since
+    // that gate default-denies, a church which deliberately switched children's photos ON had its teenagers'
+    // profile updates refused after any restart — and this relay self-updates and restarts on its own, so
+    // "after any restart" means "one day, by itself". Found by audit, 2026-08-27, and proven with a restart
+    // probe; the comment where the gate is defined asserted the opposite and had never been checked.
+    // note() short-circuits on CHURCH_PUBS.has(e.pubkey) before parsing, so this costs a scan and nothing more.
+    store.eachKind([0], note);
     store.eachKind([30078], (e) => { const d = dOf(e); if (d.startsWith(STEWARDS_D) || d.startsWith(NETWORK_D)) note(e); });
     store.eachKind([30078], note);                     // uncapped ASC iteration — no 10k truncation of old docs
   }

@@ -451,16 +451,20 @@
       };
     }
     async function sendCareChat(reqId, requesterPub, text) {
-      if (!S() || !S().publishSigned || !S().churchPub || !reqId) return null;
+      if (!S() || !S().publishSigned || !S().churchPub || !reqId || !requesterPub) return null;
       const body = String(text || "").trim();
       if (!body) return null;
       const cp = S().churchPub;
-      let audience = null;
+      let audience = null, teamThread = false;
       try {
         const ev = await new Promise((res) => {
           let best = null;
           const s = S().subscribeMany([{ kinds: [30078], "#d": [CAREREQ_D + reqId] }], {
+            // ONLY THE ASKER'S OWN COPY. The relay lets an ordinary member publish a carereq: at somebody else's
+            // d-tag, and this console reads EVERY request — so without an author check it is the surface most
+            // reliably fed a forgery. See the member-side note in src/fellowship.src.js.
             onevent(e) {
+              if (requesterPub && e.pubkey !== requesterPub) return;
               if (!best || e.created_at > best.created_at) best = e;
             },
             oneose() {
@@ -485,11 +489,45 @@
             const l = Object.keys(o.keys).filter(Boolean);
             if (l.length) audience = l;
           }
+          teamThread = (((ev.tags || []).find((t) => t[0] === "aud") || [])[1] || "") === "team";
         }
       } catch (e) {
       }
       if (!audience) return null;
-      const sealed = S().sealToPubs([...audience, cp], { text: body, by: cp, at: now() });
+      let extra = [];
+      if (teamThread) {
+        try {
+          const ev2 = await new Promise((res) => {
+            let best = null;
+            const s2 = S().subscribeMany([{ kinds: [30078], "#d": [CARETEAM_D + cp] }], {
+              onevent(e) {
+                if (e.pubkey !== cp) return;
+                if (!best || e.created_at > best.created_at) best = e;
+              },
+              oneose() {
+                try {
+                  s2.close();
+                } catch (x) {
+                }
+                res(best);
+              }
+            });
+            setTimeout(() => {
+              try {
+                s2.close();
+              } catch (x) {
+              }
+              res(best);
+            }, 4e3);
+          });
+          if (ev2) {
+            const o2 = JSON.parse(ev2.content || "{}");
+            if (Array.isArray(o2.pubs)) extra = o2.pubs.filter(Boolean);
+          }
+        } catch (e) {
+        }
+      }
+      const sealed = S().sealToPubs([...audience, ...extra, cp], { text: body, by: cp, at: now() });
       if (!sealed) return null;
       const tags = [["d", CARECHAT_D + reqId + ":" + Math.random().toString(36).slice(2, 10)], ["t", NET], ["t", "carechat"], ["church", cp]];
       if (requesterPub) tags.push(["p", requesterPub]);

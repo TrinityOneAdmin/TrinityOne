@@ -102,8 +102,90 @@ test('UNMARKING someone who was NOT suppressed must not suppress them', () => {
     'unmarking a child SUPPRESSED their photo — the opposite of what the action means');
 });
 
+test('kidPhotosAllowed is derived from the CHURCH, and derived correctly', () => {
+  // runToggle injects kidPhotosAllowed as a free variable, so the real derivation sits outside the slice it
+  // runs. The audit's exact defeat: change that one line to `const kidPhotosAllowed = true;` and a photo-OFF
+  // church silently stops suppressing marked children's existing photos while all these tests stay green.
+  // So evaluate the SHIPPED expression against real church shapes.
+  const line = (SRC.match(/const kidPhotosAllowed = ([^;]+);/) || [])[1];
+  assert.ok(line, 're-anchor: kidPhotosAllowed is no longer derived here at all');
+  const derive = new Function('church', `return (${line});`);
+  assert.equal(derive({ features: { childPhotos: true } }), true,
+    'a church that ALLOWS children’s photos is read as disallowing, so it gets overruled');
+  assert.equal(derive({ features: {} }), false,
+    'a church with the setting absent is read as ALLOWING — the default must be off');
+  assert.equal(derive({ features: { childPhotos: false } }), false, 'an explicit false is read as allowing');
+  assert.equal(derive({}), false, 'a church with no features at all is read as allowing');
+  assert.equal(derive({ features: { childPhotos: 'yes' } }), false,
+    'a non-boolean unlocks children’s photos — this must be an identity check, not a truthy one');
+});
+
 test('the comment explaining why it is one-way is still there', () => {
   // Not decoration: the next reader will otherwise "fix" the asymmetry above and reopen it.
   const around = stripComments(slice('const toggleMinor = (pk) => {', '\n  };'));
   assert.match(around, /setNoPhoto/, 're-anchor: toggleMinor no longer touches the suppression list at all');
+});
+
+// ── the RECONCILE for children marked before this build shipped ─────────────────────────────────────────────
+// toggleMinor only helps from the day it ships. A church that marked its under-18s months ago is exactly the
+// population at risk and no mark action ever fires again for them. Found by audit after the first version of
+// this fix covered fresh marks only.
+function runReconcile({ minors, nophoto, kidPhotosAllowed, loaded = true, authed = true, twice = false }) {
+  // Anchored on this effect's OWN wording. It is deliberately unlike the clearance back-fill's opening line,
+  // because relay-clearance.test.mjs slices that one out by searching for `if (!sg.loaded) return` — writing
+  // this effect with the same line handed four of those tests the wrong function to assert against.
+  const body = slice('    if (!sg || !sg.loaded) return;', '}, [kidPhotosAllowed,');
+  const published = [];
+  const sg = { loaded, minors, nophoto };
+  const win = { Steward: {
+    churchPub: 'cp', actingChurch: null,
+    relayAuthed: () => authed,
+    setNoPhoto: (l) => { published.push(l); },
+  } };
+  // `body` already starts at the effect's first guard and ends before its deps array, so it IS the statement
+  // list — no trimming. The previous version hunted for `=>` and cut from there, which silently mangled the
+  // slice the moment the anchor moved.
+  const run = new Function('sg', 'nophotoSet', 'kidPhotosAllowed', 'window', '__state',
+    'let nophotoBackfillDone = __state.done;\nreturn function(){' + body + '\n__state.done = nophotoBackfillDone; };')(
+    sg, new Set(nophoto), kidPhotosAllowed, win, { done: '' });
+  run(); if (twice) run();
+  return published;
+}
+
+test('a child marked BEFORE this shipped is suppressed on the next console visit', () => {
+  const out = runReconcile({ minors: ['kid1', 'kid2'], nophoto: [], kidPhotosAllowed: false });
+  assert.equal(out.length, 1, 'a church that did its safeguarding before this build gets no protection at all');
+  assert.deepEqual(out[0].sort(), ['kid1', 'kid2']);
+});
+
+test('an existing suppression entry is kept, not replaced', () => {
+  // setNoPhoto REPLACES the whole list, so dropping an entry here silently un-suppresses somebody a steward
+  // switched off by hand.
+  const out = runReconcile({ minors: ['kid1'], nophoto: ['adultModerated'], kidPhotosAllowed: false });
+  assert.deepEqual(out[0].sort(), ['adultModerated', 'kid1'],
+    'a steward’s own moderation entry was dropped from the list');
+});
+
+test('a church that ALLOWS children’s photos is left alone', () => {
+  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: true }).length, 0,
+    'a church that deliberately permits children’s photos was overruled');
+});
+
+test('nothing is republished when there is nothing missing', () => {
+  assert.equal(runReconcile({ minors: ['kid1'], nophoto: ['kid1'], kidPhotosAllowed: false }).length, 0,
+    'republishes the whole list on every tick');
+});
+
+test('it does not fire before the lists have loaded, or before the relay authed', () => {
+  // The minors document is served only to an authenticated reader, so an unauthenticated read looks exactly
+  // like a church with no children — and acting on that would publish a wrong list.
+  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, loaded: false }).length, 0,
+    'acted on lists that had not arrived');
+  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, authed: false }).length, 0,
+    'acted on an unauthenticated read, where an empty minors list is indistinguishable from no children');
+});
+
+test('running twice on the same state publishes once', () => {
+  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, twice: true }).length, 1,
+    'the lists re-emit on every tick, so this would republish forever');
 });

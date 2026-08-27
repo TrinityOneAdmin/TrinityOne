@@ -6241,18 +6241,21 @@
     if (approved === null && roster === null && !_relayAuthedAt) return null;
     return [...new Set([...approved || [], ...roster || []].filter(Boolean))];
   }
-  async function _fetchCareThreadAudience(cp, reqId) {
-    if (!cp || !reqId) return null;
+  async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
+    if (!cp || !reqId || !requesterPub) return null;
     try {
       const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CAREREQ_D + reqId] }]);
       let best = null;
       for (const e of evs || []) {
+        if (e.pubkey !== requesterPub) continue;
         if (!best || e.created_at > best.created_at) best = e;
       }
       if (!best) return null;
       const o = JSON.parse(best.content || "{}");
       const list = o && o.keys && typeof o.keys === "object" ? Object.keys(o.keys).filter(Boolean) : null;
-      return list && list.length ? list : null;
+      if (!list || !list.length) return null;
+      const mode = ((best.tags || []).find((t) => t[0] === "aud") || [])[1] || "";
+      return { pubs: list, team: mode === "team" };
     } catch (e) {
       return null;
     }
@@ -10182,7 +10185,7 @@
         }
       }
       const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
-      const evt = finalizeEvent2({ kind: 30078, created_at: body.at, tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp]], content: JSON.stringify({ keys, enc }) }, sk);
+      const evt = finalizeEvent2({ kind: 30078, created_at: body.at, tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp], ["aud", childish ? "cleared" : "team"]], content: JSON.stringify({ keys, enc }) }, sk);
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
@@ -10375,9 +10378,10 @@
       }
       const body = String(text || "").trim();
       if (!sk || !cp || !reqId || !body) return null;
-      const audience = await _fetchCareThreadAudience(cp, reqId);
+      const audience = await _fetchCareThreadAudience(cp, reqId, requesterPub);
       if (!audience) return null;
-      const sealed = _sealToPubs([...audience, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1e3) });
+      const extra = audience.team ? await _fetchCareTeam(cp) || [] : [];
+      const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1e3) });
       if (!sealed) return null;
       const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
       const tags = [["d", CARECHAT_D + reqId + ":" + msgId], ["t", NET], ["t", "carechat"], ["church", cp]];

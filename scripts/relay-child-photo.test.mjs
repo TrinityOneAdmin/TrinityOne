@@ -106,6 +106,42 @@ test('and when the church DOES allow children’s photos, the child’s lands', 
     'church’s decision, not override it — different churches safeguard differently.');
 });
 
+test('THE SETTING SURVIVES A RELAY RESTART — the gate is rebuilt at boot, not just live', async () => {
+  // The original fix populated CHILD_PHOTOS_OK from note() only, and hydrateMaps() replays kind 30078 alone,
+  // so the set was empty after every boot. Because the gate default-denies, a church that had deliberately
+  // switched children's photos ON found its teenagers' photo updates refused after any restart — and this
+  // relay self-updates and restarts by itself. Caught by audit, 2026-08-27, with exactly this probe. Without
+  // a restart in the test the whole class is invisible: every other assertion here passes against the bug.
+  assert.equal((await publish(pub, churchProfile(true)))[0], true, 'church profile update refused');
+  await sleep(200);
+
+  pub.close();
+  relay.kill('SIGKILL');
+  await sleep(400);
+  relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' }, stdio: 'ignore' });
+  await waitReady();
+  pub = await connect();
+
+  const [ok, why] = await publish(pub, profileWithPhoto(ellie));
+  assert.equal(ok, true,
+    `after a restart the relay refused a photo the church had ALLOWED: ${why}. CHILD_PHOTOS_OK was not ` +
+    'rebuilt at boot, so the default-deny gate silently blocked a church that had opted in.');
+});
+
+test('…and a church that DISALLOWS is still enforced after a restart', async () => {
+  // The mirror. A boot that forgot the flag could equally fail open if the default were ever flipped.
+  assert.equal((await publish(pub, churchProfile(false)))[0], true, 'church profile update refused');
+  await sleep(200);
+  pub.close();
+  relay.kill('SIGKILL');
+  await sleep(400);
+  relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' }, stdio: 'ignore' });
+  await waitReady();
+  pub = await connect();
+  const [ok] = await publish(pub, profileWithPhoto(ellie));
+  assert.equal(ok, false, 'after a restart a child’s photograph landed in a church that disallows them');
+});
+
 test('switching it back off refuses again — the flag is live, not read once at boot', async () => {
   assert.equal((await publish(pub, churchProfile(false)))[0], true, 'church profile update refused');
   await sleep(200);

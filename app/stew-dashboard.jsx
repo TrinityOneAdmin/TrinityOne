@@ -3957,6 +3957,11 @@ window.BulkInviteModal = BulkInviteModal;
 // (These files are classic scripts sharing ONE global scope, so this name must stay unique across app/*.jsx;
 // scripts/bundle-free-globals.test.mjs is the guard.)
 let clearanceBackfillDone = '';
+// Same idea, separate concern: which (church, minors, nophoto) combination we have already reconciled photos
+// for. Deliberately NOT folded into the clearance back-fill above — that one is a per-member batch with a
+// retry cooldown and a hard-won double-fire guard, and this is a single list publish. Tangling them would put
+// a safeguarding write behind a mechanism tuned for something else.
+let nophotoBackfillDone = '';
 // When a back-fill last FAILED. HANDOFF-2026-07-31 audit. Releasing the claim on failure (below) is what keeps
 // a partial back-fill retryable — but the effect's deps are fresh array identities on every roster emit, so
 // without a cooldown the next emit restarts the whole thing at once. Before fix 4, an offline publish() lied
@@ -4095,6 +4100,35 @@ function DashMembers() {
   // Miriam cleared a six-year-old by mis-tapping an unnamed button; while the child mark stood the relay
   // still protected everyone, and the danger arrived the moment a steward corrected the mark and left the
   // clearance behind. Measured before the fix: the six-year-old could then privately message another child.
+  // CHILDREN MARKED BEFORE THIS BUILD SHIPPED ARE THE ONES MOST AT RISK.
+  // toggleMinor now suppresses the photo of anyone newly marked as a child, but that only helps from the day
+  // it ships. A church that did its safeguarding first — marked its under-18s months ago — has exactly the
+  // population this protects and gets nothing, because no mark action ever fires again. The relay cannot
+  // rewrite a kind-0 somebody already signed, so the suppression list is the only route. Found by audit,
+  // 2026-08-27, after the first version of this fix covered only fresh marks.
+  // Adds only, never removes: that list is also ordinary steward moderation.
+  //
+  // PLACED AFTER THE CLEARANCE BACK-FILL, AND WORDED DIFFERENTLY, ON PURPOSE. relay-clearance.test.mjs slices
+  // that effect out of this file by searching forward from `let clearanceBackfillDone` for the first
+  // `if (!sg.loaded) return` and the first `}, [sg.loaded`. Writing this effect above it, with the same two
+  // lines, silently handed those tests THIS function to assert against — four of them failed and none of them
+  // was about photos. Hence `!sg ||` and the reordered deps: they cannot match either anchor.
+  React.useEffect(() => {
+    if (!sg || !sg.loaded) return;          // distinct from the clearance back-fill's guard on purpose — see below
+    try { if (!(window.Steward.relayAuthed && window.Steward.relayAuthed())) return; } catch (e) { return; }
+    if (window.Steward.actingChurch) return;          // a delegated console signs with its own church key
+    if (kidPhotosAllowed) return;                     // this church permits them; not ours to overrule
+    const minors = sg.minors || [];
+    if (!minors.length) return;
+    const missing = minors.filter(p => !nophotoSet.has(p));
+    if (!missing.length) return;
+    const sig = [window.Steward.churchPub || '', minors.join(','), (sg.nophoto || []).join(',')].join('|');
+    if (nophotoBackfillDone === sig) return;          // the lists re-emit on every tick
+    nophotoBackfillDone = sig;                        // claim BEFORE publishing, like the back-fill below
+    try { window.Steward.setNoPhoto([...(sg.nophoto || []), ...missing]); }
+    catch (e) { nophotoBackfillDone = ''; }           // give the claim back so the next visit retries
+  }, [kidPhotosAllowed, sg.loaded, sg.minors, sg.nophoto]);
+
   const toggleMinor = (pk) => {
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];

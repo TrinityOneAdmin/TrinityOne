@@ -397,16 +397,30 @@ async function _fetchChildCareAudience(cp) {
 // DELIBERATELY NOT WIDENED: an adult cleared AFTER the request was made is not in that list and will not see
 // the thread. Adding them would broaden a child's disclosure without the church having chosen to, and that is
 // not this function's call to make. Owner asked, 2026-08-27; left narrow on purpose.
-async function _fetchCareThreadAudience(cp, reqId) {
-  if (!cp || !reqId) return null;
+//
+// AND ONLY THE ASKER'S OWN COPY COUNTS. The first version of this took the newest event at that d-tag with no
+// author check, and the relay's write gate lets an ordinary member publish a `carereq:` at somebody else's
+// d-tag — proven by audit, 2026-08-27: a member published at a child's request id and it was accepted. A
+// hostile member who learns the id could then plant a newer request whose key list contains only themselves,
+// and a steward answering from the console (which reads every request, so always receives the forgery) would
+// seal their reply away from the child and from the cleared adult. That is the same "child answers and nobody
+// comes" failure this function exists to prevent, re-opened from the other end. Nothing legitimately publishes
+// a request on somebody else's behalf, so the asker is the only author whose copy may decide the audience.
+async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
+  if (!cp || !reqId || !requesterPub) return null;
   try {
     const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CAREREQ_D + reqId] }]);
     let best = null;
-    for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
+    for (const e of (evs || [])) {
+      if (e.pubkey !== requesterPub) continue;                        // a forgery, or somebody else's thread
+      if (!best || e.created_at > best.created_at) best = e;
+    }
     if (!best) return null;
     const o = JSON.parse(best.content || '{}');
     const list = (o && o.keys && typeof o.keys === 'object') ? Object.keys(o.keys).filter(Boolean) : null;
-    return (list && list.length) ? list : null;
+    if (!list || !list.length) return null;
+    const mode = ((best.tags || []).find(t => t[0] === 'aud') || [])[1] || '';
+    return { pubs: list, team: mode === 'team' };     // absent tag → narrow, the safe default
   } catch (e) { return null; }
 }
 // Which write wins when two authors publish one church document — see src/church-doc-store.src.js.
@@ -3833,7 +3847,16 @@ window.Fellowship = {
     const keys = {};
     for (const p of recips) { try { keys[p] = nip44e(keyHex, nip44ck(sk, p)); } catch (e) {} }
     const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
-    const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp]], content: JSON.stringify({ keys, enc }) }, sk);
+    // WHICH RULE PICKED THIS AUDIENCE, said out loud. A reply reuses the request's recipient list, which is
+    // right for a young person — but for an ordinary adult it froze the care rota as it stood that day, so a
+    // care member who joined afterwards could no longer read new replies on a live thread. "Any care member
+    // can pick up the thread" is the point of the adult flow. It cannot be inferred: a cleared adult may also
+    // sit on the care rota, so "does the audience overlap the rota?" would widen a CHILD's thread to the rota.
+    // So the asker says so. A new tag, never a repurposed one — the relay rehydrates all history on update.
+    // Requests written before this simply lack the tag and stay narrow, which is the safe direction.
+    // The tag carries no more than the relay already knows: it holds the minors list itself, and only the
+    // sealed audience is ever served this event.
+    const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['aud', childish ? 'cleared' : 'team']], content: JSON.stringify({ keys, enc }) }, sk);
     try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request publish failed', e); return null; }
     // The caller must be able to tell the member the truth about who has this. `narrowed` = we could not
     // establish the team, so only the church leader holds a key to it; teamCount 0 with narrowed false = the
@@ -3955,9 +3978,14 @@ window.Fellowship = {
     if (!sk || !cp || !reqId || !body) return null;
     // See _fetchCareThreadAudience. NO FALLBACK TO THE CARE TEAM: falling back is the bug this replaces, and
     // a silent wide seal on a child's thread is worse than a send that visibly fails.
-    const audience = await _fetchCareThreadAudience(cp, reqId);
+    const audience = await _fetchCareThreadAudience(cp, reqId, requesterPub);
     if (!audience) return null;
-    const sealed = _sealToPubs([...audience, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
+    // An ADULT's thread also reaches whoever is on the care rota NOW, so somebody who joined the team after
+    // the request was opened can still pick it up. A young person's does not, and must not: their audience is
+    // the adults the church cleared, and widening it to the rota is the whole defect this file was written
+    // for. Only the request's own `aud` tag may authorise the widening.
+    const extra = audience.team ? ((await _fetchCareTeam(cp)) || []) : [];
+    const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
     if (!sealed) return null;
     const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];

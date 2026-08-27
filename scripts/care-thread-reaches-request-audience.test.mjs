@@ -151,6 +151,40 @@ test('and the care rota, who were never in the request, are not given a key to i
   assert.ok(sealed.keys[church.pub], 'the church key must keep a copy — the office is the route of last resort');
 });
 
+test('a request document forged by somebody else is ignored', async () => {
+  // The relay's write gate lets an ordinary member publish a carereq: at ANOTHER member's d-tag — proven by
+  // audit against a real relay, 2026-08-27. Taking the newest event at that d-tag with no author check
+  // therefore hands the choice of audience to whoever writes last. Nothing legitimately publishes a request
+  // on somebody else's behalf, so only the asker's own copy may decide who a reply reaches.
+  const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
+  const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
+  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
+  const published = [];
+  const real   = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
+  const forged = { created_at: 999, pubkey: rota.pub,
+    content: JSON.stringify(sealTo(rota.sk, [rota.pub], { note: 'mine now' })) };
+  const send = new Function(
+    'pool', 'churchRelays', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
+    'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
+    `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+  )(
+    { querySync: async () => [real, forged] }, () => ['ws://x'],
+    'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
+    ellie.sk, ellie.pub,
+    { Fellowship: { churchPub: church.pub, ready: Promise.resolve() } },
+    crypto, nip44e, nip44ck, hexOf,
+    (e) => ({ ...e, pubkey: ellie.pub, id: 'evt' }),
+    async (_r, evt) => { published.push(evt); return true; },
+  );
+  await send(REQ_ID, ellie.pub, 'private');
+  assert.equal(published.length, 1, 'nothing was published');
+  const sealed = JSON.parse(published[0].content);
+  assert.ok(sealed.keys[grace.pub],
+    'a member planted a newer carereq: at the child’s d-tag and the reply was sealed to THEM instead — the ' +
+    'cleared adult gets nothing, which is the exact failure this file exists to prevent, re-opened');
+  assert.equal(sealed.keys[rota.pub], undefined, 'the forger was handed a key to a child’s thread');
+});
+
 test('when the request cannot be read, it REFUSES — it does not fall back to the care team', async () => {
   const { send, published } = buildSender({ requestEvent: null });
   const out = await send(REQ_ID, ellie.pub, 'hello');
@@ -160,13 +194,61 @@ test('when the request cannot be read, it REFUSES — it does not fall back to t
     'wide seal on a child’s thread is worse than a send that visibly fails.');
 });
 
-test('the console sends the same way — both halves of the app must agree', () => {
-  const fn = stripComments(slice(MEALS_SRC, 'async function sendCareChat(', '\n  }\n'));
-  assert.match(fn, /CAREREQ_D \+ reqId/,
-    'the console still seals a reply to the care-team roster, so a steward answering a young person produces ' +
-    'a message the cleared adult handling it cannot open');
-  assert.doesNotMatch(fn, /CARETEAM_D/,
-    'the console still consults the care-team roster to decide who a reply reaches');
+// ── the CONSOLE half, RUN rather than read ───────────────────────────────────────────────────────────────
+// This was a string test: it asserted the source mentioned CAREREQ_D and not CARETEAM_D. The audit defeated it
+// in one line — re-add a roster fallback written as the inline literal NET + '/careteam:' + cp and both
+// assertions still pass while the console goes back to sealing a child's thread to the whole rota. Worse, a
+// function no test ever executes can regress in any way at all. So execute it.
+function buildConsoleSender({ requestEvents }) {
+  const fn = slice(MEALS_SRC, '  async function sendCareChat(', '\n  }\n') + '\n  }';
+  const published = [];
+  const S = () => ({
+    churchPub: church.pub,
+    publishSigned: (evt) => { published.push(evt); return { id: 'evt' }; },
+    sealToPubs: (recips, body) => sealTo(church.sk, recips, body),
+    subscribeMany: (_filters, handlers) => {
+      for (const e of requestEvents) { try { handlers.onevent(e); } catch (x) {} }
+      try { handlers.oneose && handlers.oneose(); } catch (x) {}
+      return { close() {} };
+    },
+  });
+  const send = new Function('S', 'now', 'CAREREQ_D', 'CARECHAT_D', 'CARETEAM_D', 'NET', 'Math',
+    fn + '\nreturn sendCareChat;')(
+    S, () => 1000, 'trinityone/carereq:', 'trinityone/carechat:', 'trinityone/careteam:', 'trinityone', Math);
+  return { send, published };
+}
+
+test('THE CONSOLE seals a reply to the request’s audience, not the care rota', async () => {
+  const reqEvent = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
+  const { send, published } = buildConsoleSender({ requestEvents: [reqEvent] });
+  await send(REQ_ID, ellie.pub, 'A steward replying to a young person.');
+  assert.equal(published.length, 1, 'the console published nothing');
+  const sealed = JSON.parse(published[0].content);
+  assert.ok(sealed.keys[grace.pub],
+    'a STEWARD’s reply to a young person cannot be opened by the cleared adult handling the case — the ' +
+    'console had the identical defect as the member app and both must stay in step');
+  assert.equal(sealed.keys[rota.pub], undefined, 'the console wrapped a child’s thread for the care rota');
+});
+
+test('the console refuses when it cannot establish the audience', async () => {
+  const { send, published } = buildConsoleSender({ requestEvents: [] });
+  const out = await send(REQ_ID, ellie.pub, 'hello');
+  assert.equal(out, null, 'reported success with no audience');
+  assert.equal(published.length, 0, 'the console fell back and published anyway');
+});
+
+test('THE CONSOLE ignores a request document forged by somebody else', async () => {
+  // The console reads EVERY request, so it is the surface most reliably handed a forgery.
+  const real = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
+  const forged = { created_at: 999, pubkey: rota.pub,
+    content: JSON.stringify(sealTo(rota.sk, [rota.pub], { note: 'mine now' })) };
+  const { send, published } = buildConsoleSender({ requestEvents: [real, forged] });
+  await send(REQ_ID, ellie.pub, 'reply');
+  const sealed = JSON.parse(published[0].content);
+  assert.ok(sealed.keys[grace.pub],
+    'a member planted a newer carereq: at the child’s d-tag and the console sealed the steward’s reply to ' +
+    'the forger instead — the child and the cleared adult get nothing');
+  assert.equal(sealed.keys[rota.pub], undefined, 'the forger was given a key to the thread');
 });
 
 test('the shipped bundles carry it', () => {
@@ -174,4 +256,71 @@ test('the shipped bundles carry it', () => {
     'vendor/fellowship.js predates this fix — run: npm run build:fellowship');
   assert.match(MEALS_VEN, /carereq:/,
     'vendor/steward-meals.js predates this fix — run: bash scripts/build-steward-meals.sh');
+});
+
+// ── widening: an adult's thread follows the care rota, a child's never does ──────────────────────────────────
+// Reusing the request's frozen recipient list is right for a young person and wrong for an adult: it pinned
+// the care rota as it stood that day, so a care member who joined afterwards could not read new replies on a
+// live thread, and "any care member can pick up the thread" is the point of the adult flow. Found by audit.
+// It cannot be inferred — a cleared adult may ALSO sit on the care rota, so "does the audience overlap the
+// rota?" would widen a child's thread to the rota, which is the original defect wearing a different hat. The
+// asker therefore records which rule chose the audience, in an `aud` tag.
+function sendWith({ reqTags, careTeam }) {
+  const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
+  const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
+  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
+  const published = [];
+  const reqEvent = { created_at: 100, pubkey: ellie.pub, tags: reqTags, content: JSON.stringify(CHILD_REQUEST) };
+  const send = new Function(
+    'pool', 'churchRelays', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
+    'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny', '_fetchCareTeam',
+    `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+  )(
+    { querySync: async () => [reqEvent] }, () => ['ws://x'],
+    'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
+    ellie.sk, ellie.pub,
+    { Fellowship: { churchPub: church.pub, ready: Promise.resolve() } },
+    crypto, nip44e, nip44ck, hexOf,
+    (e) => ({ ...e, pubkey: ellie.pub, id: 'evt' }),
+    async (_r, evt) => { published.push(evt); return true; },
+    async () => careTeam,
+  );
+  return { send, published };
+}
+
+test('A CHILD’S THREAD IS NEVER WIDENED, even when a care rota exists', async () => {
+  const { send, published } = sendWith({ reqTags: [['aud', 'cleared']], careTeam: [rota.pub] });
+  await send(REQ_ID, ellie.pub, 'something private');
+  const sealed = JSON.parse(published[0].content);
+  assert.equal(sealed.keys[rota.pub], undefined,
+    'the care rota was handed a key to a young person’s thread — the exact defect this whole file exists ' +
+    'to prevent, reintroduced by the widening');
+  assert.ok(sealed.keys[grace.pub], 'the cleared adult lost their key');
+});
+
+test('an ADULT’s thread reaches whoever is on the rota NOW', async () => {
+  const { send, published } = sendWith({ reqTags: [['aud', 'team']], careTeam: [rota.pub] });
+  await send(REQ_ID, ellie.pub, 'ordinary care message');
+  const sealed = JSON.parse(published[0].content);
+  assert.ok(sealed.keys[rota.pub],
+    'a care member who joined after the request was opened still cannot read new replies — an adult care ' +
+    'hand-off silently stops working');
+});
+
+test('a request written before the tag existed stays narrow', async () => {
+  // Backwards compatibility: the relay rehydrates all history, so old requests replay with no `aud` tag.
+  // Narrow is the safe default — never widen on an absent marker.
+  const { send, published } = sendWith({ reqTags: [], careTeam: [rota.pub] });
+  await send(REQ_ID, ellie.pub, 'legacy thread');
+  const sealed = JSON.parse(published[0].content);
+  assert.equal(sealed.keys[rota.pub], undefined,
+    'a request with no audience marker was widened to the care rota — if that request came from a child, ' +
+    'their thread just reached the rota');
+});
+
+test('the request itself records which rule chose its audience', () => {
+  const fn = stripComments(slice(SRC, '  async publishCareRequest(', '  subscribeCareRequests('));
+  assert.match(fn, /\['aud', childish \? 'cleared' : 'team'\]/,
+    're-anchor: the request no longer declares its audience rule, so every thread falls back to narrow and ' +
+    'adult care hand-offs quietly stop working');
 });
