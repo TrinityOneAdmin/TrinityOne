@@ -14787,6 +14787,7 @@ zoo`.split("\n");
       return [];
     }
   }
+  var ACTIVE_ID_KEY = "trinityone.steward.active-id";
   var NAMES_LS = "trinityone.steward.relay-names";
   var DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, "http").replace(/\/relay\/?$/i, "");
   function _dirBases() {
@@ -20262,6 +20263,10 @@ zoo`.split("\n");
     // the active signing+reading identity. Subscriptions are keyed on activePub, so the dashboard re-renders.
     setActiveIdentity(targetPub) {
       const tp = toPubHex(targetPub) || targetPub || churchPub;
+      try {
+        localStorage.setItem(ACTIVE_ID_KEY, String(tp || ""));
+      } catch (e) {
+      }
       if (tp === churchPub) {
         sk = churchSk;
         pub = churchPub;
@@ -20322,6 +20327,13 @@ zoo`.split("\n");
           if (c && c.cp && !_ownedPubs.has(c.cp)) stewardedChurches.set(c.cp, { name: c.name || "Church" });
         });
       } catch {
+      }
+      try {
+        const want = localStorage.getItem(ACTIVE_ID_KEY) || "";
+        if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+          window.Steward.setActiveIdentity(want);
+        }
+      } catch (e) {
       }
       const nameSubs = /* @__PURE__ */ new Map();
       const resolveName = (cp) => {

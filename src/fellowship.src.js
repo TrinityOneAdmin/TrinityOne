@@ -377,6 +377,45 @@ async function _fetchChildCareAudience(cp) {
   if (approved === null && roster === null && !_relayAuthedAt) return null;
   return [...new Set([...(approved || []), ...(roster || [])].filter(Boolean))];
 }
+// ── which write wins when two people publish the same church document ────────────────────────────────────
+// LAST WRITER WINS IS NOT A RULE HERE, IT IS AN ACCIDENT OF NETWORK ORDER.
+//
+// A church document keyed by id — a service, a rota, a roster, a run sheet, an event — may legitimately be
+// written by more than one trusted author: the church key itself, and any steward it has empowered. These are
+// addressable events, so the relay keeps ONE per author; it cannot collapse two authors into one. That leaves
+// the choice to the client, and the client was not making one. `byId.set(id, …)` on arrival meant whichever
+// copy happened to land last won, so two members could hold different rotas for the same service, and the
+// same member could see a different one after a reconnect.
+//
+// SIMULATION ROUND 9, and it is not a hypothetical. The vicar published a rota for one Sunday with ten real
+// people on it, properly sealed. The churchwarden — who could not see hers, and had been told "build your
+// first team" — published a parallel rota for the same service 62 seconds later. Both were valid. The second
+// silently replaced the first on every phone in the parish. Four people had already pressed "Yes, I can
+// serve"; their acceptances were published correctly, and their phones told them "No dates scheduled for you
+// yet", because the rota that had their names in it no longer existed anywhere they could see.
+//
+// This does not decide who OUGHT to win — the app cannot know that, and both writes were authorised. What it
+// guarantees is that every member decides the same way: newest by the author's own clock, and on an exact tie
+// the lower pubkey, which is arbitrary but stable. A congregation looking at one rota and disagreeing about
+// what it says is worse than a congregation looking at the wrong one together.
+//
+// `_alt` records that a second author holds a competing copy, so a screen can say so rather than pretending
+// there is only one. Nothing reads it yet; the console half of this fix is where it will be used.
+function _absorbById(byId, id, rec) {
+  const prev = byId.get(id);
+  if (prev) {
+    const a = prev.ts || 0, b = rec.ts || 0;
+    const older = a > b || (a === b && String(prev._by || '') < String(rec._by || ''));
+    if (older) {
+      // keep what we have, but remember that somebody else published one too
+      if (rec._by && rec._by !== prev._by) prev._alt = rec._by;
+      return false;
+    }
+    if (prev._by && prev._by !== rec._by) rec._alt = prev._by;
+  }
+  byId.set(id, rec);
+  return true;
+}
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
 function _decEvt(cp, e) {
@@ -3500,8 +3539,8 @@ window.Fellowship = {
           const c = _openChurchDoc(pubk, e.content);
           // sealed, and this member has no key for it yet — keep it in the list as LOCKED so the screen can
           // say so. Dropping it here is what would turn "your key hasn't arrived" into "nothing is on".
-          if (c === null) { byId.set(id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }
-          byId.set(id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }); emit();
+          if (c === null) { _absorbById(byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }
+          _absorbById(byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }); emit();
         } catch {}
       },
       onroster() { emit(); },

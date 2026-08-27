@@ -593,6 +593,7 @@ function extraRelays() {
 // this re-resolves those names against the directory in the background and swaps the stale url for the live one,
 // so the connection just follows the rotating tunnel instead of breaking. (The directory always maps a claimed
 // name → the relay's current url — the relay re-claims it on every go-public/boot.)
+const ACTIVE_ID_KEY = 'trinityone.steward.active-id';   // which church this console is running, across reloads
 const NAMES_LS = 'trinityone.steward.relay-names';
 const DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, 'http').replace(/\/relay\/?$/i, '');   // wss://app…/relay → https://app…
 // The directory is MIRRORED across relays, so resolve/discover against several — this church's own relay first
@@ -5877,6 +5878,13 @@ window.Steward = {
   // the active signing+reading identity. Subscriptions are keyed on activePub, so the dashboard re-renders.
   setActiveIdentity(targetPub) {
     const tp = toPubHex(targetPub) || targetPub || churchPub;
+    // REMEMBER WHICH CHURCH THIS CONSOLE IS RUNNING. Nothing persisted this, so every page refresh dropped a
+    // delegated steward back into the empty church that "Help run a church" makes for them — with an invite
+    // poster, a join link, and no sign they were ever approved. Simulation round 9: the churchwarden was
+    // approved, reloaded, saw "Build your first team" where the church already had four, and built duplicates
+    // in good faith. That is what put two rotas on one Sunday. He said it plainly: "every page refresh throws
+    // me back into my own empty church, and I have to find the switcher again."
+    try { localStorage.setItem(ACTIVE_ID_KEY, String(tp || '')); } catch (e) {}
     if (tp === churchPub) { sk = churchSk; pub = churchPub; actingChurch = ''; }
     else if (stewardedChurches.has(tp)) { sk = churchSk; pub = tp; actingChurch = tp; }   // delegated: OUR key signs, church's context reads
     else {
@@ -5941,6 +5949,20 @@ window.Steward = {
     // paint instantly from the last-known list (with real names) so the switcher doesn't flash "Church"/empty on launch
     const _ownedPubs = new Set([me, ...netKeys().map(r => r.pub)]);   // never resurrect a church/network we HOLD as "stewarded"
     try { (JSON.parse(lsGet(CACHE) || '[]') || []).forEach(c => { if (c && c.cp && !_ownedPubs.has(c.cp)) stewardedChurches.set(c.cp, { name: c.name || 'Church' }); }); } catch {}
+    // …AND GO BACK TO THE CHURCH THIS CONSOLE WAS RUNNING. The cache above is the earliest moment we know
+    // which churches we steward, so it is the earliest moment the remembered choice can be honoured. Without
+    // this a delegated steward reloads into the empty church that "Help run a church" made for them, with no
+    // sign they were ever approved — which is how one Sunday ended up with two rotas on it.
+    //
+    // Guarded three ways, because getting this wrong quietly would be worse than not doing it at all: only a
+    // church we actually steward (a stale entry is ignored), never one we HOLD ourselves (the ordinary owner
+    // case, which needs no switching), and only when we are not already there.
+    try {
+      const want = localStorage.getItem(ACTIVE_ID_KEY) || '';
+      if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+        window.Steward.setActiveIdentity(want);
+      }
+    } catch (e) {}
     // resolve a stewarded church's real name from its kind-0 profile (kept open so a rename follows live)
     const nameSubs = new Map();
     const resolveName = (cp) => {

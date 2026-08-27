@@ -6165,6 +6165,20 @@
     if (approved === null && roster === null && !_relayAuthedAt) return null;
     return [...new Set([...approved || [], ...roster || []].filter(Boolean))];
   }
+  function _absorbById(byId, id, rec) {
+    const prev = byId.get(id);
+    if (prev) {
+      const a = prev.ts || 0, b = rec.ts || 0;
+      const older = a > b || a === b && String(prev._by || "") < String(rec._by || "");
+      if (older) {
+        if (rec._by && rec._by !== prev._by) prev._alt = rec._by;
+        return false;
+      }
+      if (prev._by && prev._by !== rec._by) rec._alt = prev._by;
+    }
+    byId.set(id, rec);
+    return true;
+  }
   function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
     const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
@@ -9731,11 +9745,11 @@
           try {
             const c = _openChurchDoc(pubk, e.content);
             if (c === null) {
-              byId.set(id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              _absorbById(byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
               emit();
               return;
             }
-            byId.set(id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
+            _absorbById(byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
             emit();
           } catch {
           }
