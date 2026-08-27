@@ -29,9 +29,18 @@ OPPO, it offers only Symbol / Initial / Colour — so this is not reachable by a
 build. What reaches it: an old or modified client, a direct publish by anyone holding the key, and — the case
 worth worrying about — **a member who already had a photo and is only marked as a child afterwards**. Nothing
 retracts the existing `av.kind:'photo'`, and the renderer never re-checks. That last one needs no tampering at
-all and is the ordinary way a church discovers a member is under 18. It is PARTLY tested: the console does not
-render member photos, so it was not observable there, and the phone was unavailable to finish it. Finish that
-sub-case before sizing the fix.
+all and is the ordinary way a church discovers a member is under 18. **That sub-case is now CONFIRMED on the phone** and it is
+the strongest form of this finding, because it needs no tampering and no old build:
+
+    church setting: children's photos OFF
+    Bram (adult) sets a photo        -> renders on Dorothy's phone, alt="Bram Whitlock's picture", 44px
+    steward marks Bram as a CHILD    -> relay minors list now contains him
+    Dorothy's phone, fresh unlock    -> STILL renders alt="Bram Whitlock's picture", 44px, visible
+
+Marking an existing member as a child does not retract their photograph. That is the ordinary path a church
+takes when it learns a member is under 18, and the safeguarding setting they switched on does nothing about it.
+Note the console DID correctly drop his youth clearance in the same action — so the mark-as-child path already
+knows to clean up adjacent state; the photo is simply not among the things it cleans.
 
 **Where the fix belongs.** In `accept()`, beside the other safeguarding gates: refuse (or strip) a kind-0
 carrying `av.kind === 'photo'` from a pubkey in that church's MINORS list when the church has not set
