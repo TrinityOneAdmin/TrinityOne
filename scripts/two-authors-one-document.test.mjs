@@ -27,14 +27,18 @@ const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8')
 // Lift the whole store out of the SHIPPED bundle — the picker, the reducer, the absorber and the delete —
 // because they only make sense together and a delete is judged by the same rule as a write.
 function store(bundle) {
-  const src = ['function _pickWinner', 'function _reduceVersions', 'function _absorbById', 'function _forgetById', 'function _seedFromCache']
-    .map(n => fnBody(bundle, n, n.split(' ')[1])).join('\n');
-  const api = new Function(src + '\nreturn { _absorbById, _forgetById, _seedFromCache };')();
+  // _reduceAll is imported only by the member app — the console does not filter by roster at all (see the
+  // test at the bottom of this file), so the bundler drops it there. Lift what each bundle actually carries.
+  const names = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_seedFromCache', '_reduceAll']
+    .filter(n => bundle.includes('function ' + n + '('));
+  const src = names.map(n => fnBody(bundle, 'function ' + n, n)).join('\n');
+  const api = new Function(src + '\nreturn { ' + names.join(', ') + ' };')();
   const versions = new Map(), byId = new Map();
   return {
     byId,
-    put: (by, ts, tag, id) => api._absorbById(versions, byId, id || 'svc1', { id: id || 'svc1', _by: by, ts, tag }),
-    del: (by, ts, id) => api._forgetById(versions, byId, id || 'svc1', by, ts),
+    put: (by, ts, tag, id, trust) => api._absorbById(versions, byId, id || 'svc1', { id: id || 'svc1', _by: by, ts, tag }, trust),
+    del: (by, ts, id, trust) => api._forgetById(versions, byId, id || 'svc1', by, ts, trust),
+    revoke: (trust) => { if (!api._reduceAll) throw new Error('this bundle does not re-choose winners on a roster change'); api._reduceAll(versions, byId, trust); },
     seen: (id) => byId.get(id || 'svc1'),
     paint: (items) => api._seedFromCache(versions, byId, items),
   };
@@ -322,4 +326,66 @@ test('a tie is broken toward the LOWER pubkey, and that direction is pinned', ()
     'the tie-break direction has flipped — two app versions in one church will now disagree about the rota');
   const c = store(S); c.put(HIGH, 500, 'higher pubkey'); c.put(LOW, 500, 'lower pubkey');
   assert.equal(c.seen().tag, 'lower pubkey', 'the console breaks ties the other way from the phones');
+});
+
+
+// ── REVOKING A STEWARD MUST NOT BLANK THE CHURCH'S OWN RECORDS ───────────────────────────────────────────
+// Owner, 2026-08-27: "the church's key should be primary owner of documents like rotas. Having it tied to an
+// individual user is a risk." The trust check used to run AFTER the winner was chosen, so a revoked steward's
+// copy won and was then dropped — showing nothing, while the church's own copy sat unused in this store.
+// Gordon steps down and every rota, room and service he last touched goes blank on every phone in the parish.
+test('when a steward is revoked, the church’s own copy is shown — not a blank', () => {
+  const trustAll = () => true;
+  const churchOnly = (rec) => rec._by === CHURCH;
+  const m = store(V);
+  m.put(CHURCH, 100, 'the church’s rota', 'svc1', trustAll);
+  m.put(WARDEN, 200, 'the warden’s newer edit', 'svc1', trustAll);
+  assert.equal(m.seen().tag, 'the warden’s newer edit', 'setup: the warden’s edit is the one on show');
+  m.revoke(churchOnly);                                     // the church removes him from its roster
+  assert.ok(m.seen(), 'every document the departing steward last touched went blank across the parish');
+  assert.equal(m.seen().tag, 'the church’s rota', 'the church’s own copy was not promoted');
+});
+
+test('…and re-rostering him brings his edit straight back', () => {
+  const trustAll = () => true;
+  const m = store(V);
+  m.put(CHURCH, 100, 'church', 'svc1', trustAll);
+  m.put(WARDEN, 200, 'warden', 'svc1', trustAll);
+  m.revoke((rec) => rec._by === CHURCH);
+  m.revoke(trustAll);
+  assert.equal(m.seen().tag, 'warden', 'restoring a steward does not restore the work they had done');
+});
+
+test('a document ONLY the revoked steward wrote still disappears, and that is correct', () => {
+  // There is no church copy to promote. It is not lost — it needs the church to republish it — but showing a
+  // revoked person's document would defeat the point of revoking them.
+  const m = store(V);
+  m.put(WARDEN, 200, 'warden alone', 'svc1', () => true);
+  m.revoke((rec) => rec._by === CHURCH);
+  assert.equal(m.seen(), undefined, 'a revoked steward’s sole work is still being served to the congregation');
+});
+
+test('a delete from a revoked steward cannot remove the church’s copy', () => {
+  const m = store(V);
+  m.put(CHURCH, 100, 'church', 'svc1', () => true);
+  m.put(WARDEN, 200, 'warden', 'svc1', () => true);
+  const churchOnly = (rec) => rec._by === CHURCH;
+  m.del(WARDEN, 300, 'svc1', churchOnly);
+  assert.ok(m.seen() && m.seen().tag === 'church', 'a removed steward could still blank the church’s record');
+});
+
+
+test('KNOWN GAP: the console does not hide a revoked steward’s work, and the office cannot see what members lost', () => {
+  // The member app chooses among copies whose author is still on the church's signed roster. The console
+  // applies no such filter anywhere — so when a steward is revoked, every phone in the parish promotes the
+  // church's copy while the console keeps showing the steward's. Before this change the phones went BLANK and
+  // the console still looked perfect; the blanking is fixed, the disagreement is not.
+  //
+  // Recorded as a test rather than a comment so it cannot be quietly forgotten, and so the day somebody wires
+  // roster trust into the console this fails and tells them to update it. Owner's decision, 2026-08-27, is
+  // that the church key should be the primary owner of these documents — the writing-side half of that
+  // (the church ADOPTING a steward's document by republishing it under its own key) is not built either.
+  assert.ok(!S.includes('function _reduceAll('),
+    'the console now carries the roster re-choose — wire it up properly and rewrite this test');
+  assert.ok(V.includes('function _reduceAll('), 're-anchor: the member app lost its roster re-choose');
 });

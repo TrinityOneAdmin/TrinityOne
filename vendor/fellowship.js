@@ -3498,9 +3498,10 @@
   }
 
   // src/church-doc-store.src.js
-  function _pickWinner(vers) {
+  function _pickWinner(vers, trusted) {
     let best = null;
     for (const rec of vers.values()) {
+      if (trusted && !trusted(rec)) continue;
       if (!best) {
         best = rec;
         continue;
@@ -3510,8 +3511,8 @@
     }
     return best;
   }
-  function _reduceVersions(vers, byId, id) {
-    const win = _pickWinner(vers);
+  function _reduceVersions(vers, byId, id, trusted) {
+    const win = _pickWinner(vers, trusted);
     if (!win) {
       byId.delete(id);
       return null;
@@ -3521,7 +3522,7 @@
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
-  function _seedFromCache(versions, byId, items) {
+  function _seedFromCache(versions, byId, items, trusted) {
     for (const it of items || []) {
       if (!it || it.id == null) continue;
       if (it._by) {
@@ -3531,13 +3532,13 @@
           versions.set(it.id, vers);
         }
         vers.set(String(it._by), it);
-        _reduceVersions(vers, byId, it.id);
+        _reduceVersions(vers, byId, it.id, trusted);
       } else {
         byId.set(it.id, it);
       }
     }
   }
-  function _absorbById(versions, byId, id, rec) {
+  function _absorbById(versions, byId, id, rec, trusted) {
     let vers = versions.get(id);
     if (!vers) {
       vers = /* @__PURE__ */ new Map();
@@ -3547,10 +3548,10 @@
     const had = vers.get(by);
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
-    const win = _reduceVersions(vers, byId, id);
+    const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
   }
-  function _forgetById(versions, byId, id, by, ts) {
+  function _forgetById(versions, byId, id, by, ts, trusted) {
     const vers = versions.get(id);
     if (!vers) {
       if (byId.has(id)) {
@@ -3565,8 +3566,11 @@
     if ((had.ts || 0) > (ts || 0)) return false;
     vers.delete(k);
     if (!vers.size) versions.delete(id);
-    _reduceVersions(vers, byId, id);
+    _reduceVersions(vers, byId, id, trusted);
     return true;
+  }
+  function _reduceAll(versions, byId, trusted) {
+    for (const [id, vers] of versions) _reduceVersions(vers, byId, id, trusted);
   }
 
   // node_modules/nostr-tools/lib/esm/pure.js
@@ -9336,7 +9340,8 @@
       }
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      _seedFromCache(versions, byId, loadDocCache("groups", pubk));
+      const _trust = (rec) => _churchVoice(pubk, rec);
+      _seedFromCache(versions, byId, loadDocCache("groups", pubk), _trust);
       let eosed = false;
       const emit = _coalesce(() => {
         const v = [...byId.values()].filter((g) => _churchVoice(pubk, g));
@@ -9355,14 +9360,14 @@
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
               emit();
             }
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey }, _trust);
             _noteGroupLeaders(pubk, id, c, e.pubkey);
             if (!_needAuth && pub && c.visibility === "invite" && Array.isArray(c.members) && c.members.some((p) => toPub(p) === pub)) _needAuth = true;
             emit();
@@ -9370,9 +9375,10 @@
           }
         },
         onroster() {
+          _reduceAll(versions, byId, _trust);
           emit();
         },
-        // the church-signed steward roster arrived/changed — re-filter
+        // a revocation must promote the church's copy, not just hide theirs   // the church-signed steward roster arrived/changed — re-filter
         oneose() {
           eosed = true;
           if (byId.size) emit();
@@ -9391,7 +9397,8 @@
       }
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      _seedFromCache(versions, byId, loadDocCache("categories", pubk));
+      const _trust = (rec) => _churchVoice(pubk, rec);
+      _seedFromCache(versions, byId, loadDocCache("categories", pubk), _trust);
       let eosed = false;
       const emit = _coalesce(() => {
         const v = [...byId.values()].filter((c) => _churchVoice(pubk, c));
@@ -9410,22 +9417,23 @@
           const id = d.slice(CATEGORY_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
               emit();
             }
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey }, _trust);
             emit();
           } catch {
           }
         },
         onroster() {
+          _reduceAll(versions, byId, _trust);
           emit();
         },
-        // re-filter once the steward roster lands (steward-authored categories)
+        // a revocation must promote the church's copy, not just hide theirs   // re-filter once the steward roster lands (steward-authored categories)
         oneose() {
           eosed = true;
           if (byId.size) emit();
@@ -9666,7 +9674,8 @@
       const PLAN_D = "trinityone/plan:";
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      _seedFromCache(versions, byId, loadDocCache("plans", pubk));
+      const _trust = (rec) => _churchVoice(pubk, rec);
+      _seedFromCache(versions, byId, loadDocCache("plans", pubk), _trust);
       let timer = null;
       let eosed = false;
       const emit = () => {
@@ -9685,20 +9694,22 @@
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
               emit();
             }
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _trust);
             emit();
           } catch {
           }
         },
         onroster() {
+          _reduceAll(versions, byId, _trust);
           emit();
         },
+        // a revocation must promote the church's copy, not just hide theirs
         oneose() {
           eosed = true;
           if (byId.size) emit();
@@ -9721,7 +9732,8 @@
       const DEVO_D = "trinityone/devotional:";
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
-      _seedFromCache(versions, byId, loadDocCache("devos", pubk));
+      const _trust = (rec) => _churchVoice(pubk, rec);
+      _seedFromCache(versions, byId, loadDocCache("devos", pubk), _trust);
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
       let timer = null;
       let eosed = false;
@@ -9741,20 +9753,22 @@
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
               emit();
             }
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _trust);
             emit();
           } catch {
           }
         },
         onroster() {
+          _reduceAll(versions, byId, _trust);
           emit();
         },
+        // a revocation must promote the church's copy, not just hide theirs
         oneose() {
           eosed = true;
           if (byId.size) emit();
@@ -9776,6 +9790,7 @@
       }
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
+      const _trust = (rec) => _churchVoice(pubk, rec);
       let eosed = false;
       const emit = _coalesce(() => {
         const v = [...byId.values()].filter((x) => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -9792,7 +9807,7 @@
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
               emit();
             }
             return;
@@ -9800,18 +9815,20 @@
           try {
             const c = _openChurchDoc(pubk, e.content);
             if (c === null) {
-              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _trust);
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }, _trust);
             emit();
           } catch {
           }
         },
         onroster() {
+          _reduceAll(versions, byId, _trust);
           emit();
         },
+        // a revocation must promote the church's copy, not just hide theirs
         oneose() {
           eosed = true;
           if (byId.size) emit();
@@ -9941,6 +9958,8 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
+      const versions = /* @__PURE__ */ new Map();
+      const _trust = (rec) => _churchVoice(pubk, rec);
       const rosterPeople = /* @__PURE__ */ new Map();
       let openedBy = "steward", adminGroupId = "", eosed = false;
       const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === "member" || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by);
@@ -10008,14 +10027,16 @@
               sealed = !s2;
             }
             const f = s2 ? { ...c, ...s2 } : c;
-            byId.set(id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at });
+            _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at }, _trust);
             emit();
           } catch {
           }
         },
         onroster() {
+          _reduceAll(versions, byId, _trust);
           emit();
         },
+        // a revocation must promote the church's copy, not just hide theirs
         oneose() {
           eosed = true;
           if (byId.size) emit();

@@ -29,9 +29,23 @@
 // same on every phone. This deliberately does NOT decide who OUGHT to win; the app cannot know that and both
 // writes were authorised. A congregation looking at one rota and disagreeing about what it says is worse than
 // looking at the wrong one together.
-export function _pickWinner(vers) {
+// `trusted` decides whether a copy may be SHOWN at all — the church key, or a steward still on the church's
+// signed roster. It is asked here, while choosing, rather than afterwards.
+//
+// OWNER, 2026-08-27: "the church's key should be primary owner of documents like rotas. Having it tied to an
+// individual user is a risk." He is right, and this is the half that can be fixed where the document is read.
+// Revoking a steward used to blank every document their copy happened to win: the newest copy was chosen
+// first, THEN found to be from a revoked author, and dropped — while the church's own older copy sat unused
+// in this very store. Gordon steps down and every rota, room and service he last touched goes blank on every
+// phone, offline too, while the console (which filters by nothing) shows the office a church in perfect
+// order. Choosing among trusted copies promotes the church's instead.
+//
+// A copy the church solely authored through a steward has nothing to fall back to; that needs the church key
+// to ADOPT these documents, which is a separate change on the writing side.
+export function _pickWinner(vers, trusted) {
   let best = null;
   for (const rec of vers.values()) {
+    if (trusted && !trusted(rec)) continue;                       // revoked author — never the one on show
     if (!best) { best = rec; continue; }
     const a = best.ts || 0, b = rec.ts || 0;
     if (b > a || (b === a && String(rec._by || '') < String(best._by || ''))) best = rec;
@@ -41,8 +55,8 @@ export function _pickWinner(vers) {
 // Recompute what the screen sees from the versions we hold. `_alt` is DERIVED, never remembered: the first
 // version of this kept it as a single slot that the winner's own next edit quietly erased, and that would
 // have made a future "two people published this" banner lie in exactly the situation it exists for.
-export function _reduceVersions(vers, byId, id) {
-  const win = _pickWinner(vers);
+export function _reduceVersions(vers, byId, id, trusted) {
+  const win = _pickWinner(vers, trusted);
   if (!win) { byId.delete(id); return null; }
   // Compare by the KEY we filed it under, not by the record's field. A record restored from an old cache has
   // no author field while its key is '', so filtering on `win._by` left the winner in its own list of
@@ -61,14 +75,14 @@ export function _reduceVersions(vers, byId, id) {
 // A cache written before this shipped has no author recorded. Those are seeded under '' and _forgetById
 // treats an unknown author as bound by anybody's delete — which is exactly the old behaviour, so upgrading
 // does not strand old entries.
-export function _seedFromCache(versions, byId, items) {
+export function _seedFromCache(versions, byId, items, trusted) {
   for (const it of (items || [])) {
     if (!it || it.id == null) continue;
     if (it._by) {
       // We know whose copy this is, so it can take part in the rule like any other write.
       let vers = versions.get(it.id); if (!vers) { vers = new Map(); versions.set(it.id, vers); }
       vers.set(String(it._by), it);
-      _reduceVersions(vers, byId, it.id);
+      _reduceVersions(vers, byId, it.id, trusted);
     } else {
       // AN OLD CACHE RECORDS NO AUTHOR, AND GUESSING ONE IS WORSE THAN ADMITTING WE DO NOT KNOW.
       // The first attempt filed these under '' so they could be compared like anything else. That made an
@@ -82,20 +96,20 @@ export function _seedFromCache(versions, byId, items) {
     }
   }
 }
-export function _absorbById(versions, byId, id, rec) {
+export function _absorbById(versions, byId, id, rec, trusted) {
   let vers = versions.get(id); if (!vers) { vers = new Map(); versions.set(id, vers); }
   const by = String(rec._by || '');
   const had = vers.get(by);
   if (had && (had.ts || 0) > (rec.ts || 0)) return false;        // an author's own older copy, replayed late
   vers.set(by, rec);
-  const win = _reduceVersions(vers, byId, id);
+  const win = _reduceVersions(vers, byId, id, trusted);
   return !!win && win._by === by;                                 // did THIS write become what people see?
 }
 // A DELETE BINDS ONLY ITS OWN AUTHOR'S COPY. Keyed purely on the id — which is what shipped — one steward
 // tidying up their duplicate removed everybody's, including the copy they had no authority over and could not
 // even see. Now it withdraws that author's version and the next-best is promoted, so the surviving rota comes
 // back rather than the Sunday going blank.
-export function _forgetById(versions, byId, id, by, ts) {
+export function _forgetById(versions, byId, id, by, ts, trusted) {
   const vers = versions.get(id);
   // Painted from an old cache and nothing live has arrived yet: we do not know whose it is, so any delete
   // binds it — which is what the old code did, and refusing would leave it on screen for ever.
@@ -106,6 +120,14 @@ export function _forgetById(versions, byId, id, by, ts) {
   if ((had.ts || 0) > (ts || 0)) return false;                    // a stale tombstone must not undo a newer edit
   vers.delete(k);
   if (!vers.size) versions.delete(id);
-  _reduceVersions(vers, byId, id);
+  _reduceVersions(vers, byId, id, trusted);
   return true;
+}
+
+// WHO IS TRUSTED CHANGES WHILE THE APP IS OPEN. A church's signed roster arrives after the documents do, and
+// a steward can be revoked mid-session. Re-choose every winner when that happens, or the screen keeps showing
+// a choice made under the old answer — a revoked steward's rota lingering, or the church's copy still hidden
+// behind theirs long after the roster said otherwise.
+export function _reduceAll(versions, byId, trusted) {
+  for (const [id, vers] of versions) _reduceVersions(vers, byId, id, trusted);
 }

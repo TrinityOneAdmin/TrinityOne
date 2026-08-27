@@ -6268,9 +6268,10 @@
   }
 
   // src/church-doc-store.src.js
-  function _pickWinner(vers) {
+  function _pickWinner(vers, trusted) {
     let best = null;
     for (const rec of vers.values()) {
+      if (trusted && !trusted(rec)) continue;
       if (!best) {
         best = rec;
         continue;
@@ -6280,8 +6281,8 @@
     }
     return best;
   }
-  function _reduceVersions(vers, byId, id) {
-    const win = _pickWinner(vers);
+  function _reduceVersions(vers, byId, id, trusted) {
+    const win = _pickWinner(vers, trusted);
     if (!win) {
       byId.delete(id);
       return null;
@@ -6291,7 +6292,7 @@
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
-  function _seedFromCache(versions, byId, items) {
+  function _seedFromCache(versions, byId, items, trusted) {
     for (const it of items || []) {
       if (!it || it.id == null) continue;
       if (it._by) {
@@ -6301,13 +6302,13 @@
           versions.set(it.id, vers);
         }
         vers.set(String(it._by), it);
-        _reduceVersions(vers, byId, it.id);
+        _reduceVersions(vers, byId, it.id, trusted);
       } else {
         byId.set(it.id, it);
       }
     }
   }
-  function _absorbById(versions, byId, id, rec) {
+  function _absorbById(versions, byId, id, rec, trusted) {
     let vers = versions.get(id);
     if (!vers) {
       vers = /* @__PURE__ */ new Map();
@@ -6317,10 +6318,10 @@
     const had = vers.get(by);
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
-    const win = _reduceVersions(vers, byId, id);
+    const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
   }
-  function _forgetById(versions, byId, id, by, ts) {
+  function _forgetById(versions, byId, id, by, ts, trusted) {
     const vers = versions.get(id);
     if (!vers) {
       if (byId.has(id)) {
@@ -6335,7 +6336,7 @@
     if ((had.ts || 0) > (ts || 0)) return false;
     vers.delete(k);
     if (!vers.size) versions.delete(id);
-    _reduceVersions(vers, byId, id);
+    _reduceVersions(vers, byId, id, trusted);
     return true;
   }
 
