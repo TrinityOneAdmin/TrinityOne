@@ -1595,7 +1595,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
               flex: 1, resize: 'none', minHeight: 44, maxHeight: 96, padding: '12px 15px', borderRadius: 16,
               border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5,
               fontFamily: 'var(--font-ui)', color: 'var(--ink)', lineHeight: 1.35 }} />
-          <button onClick={sendText} style={{ width: 44, height: 44, borderRadius: 14, border: 'none',
+          <button onClick={sendText} aria-label="Send" style={{ width: 44, height: 44, borderRadius: 14, border: 'none',
             background: draft.trim() ? 'var(--clay)' : 'var(--line)', cursor: draft.trim() ? 'pointer' : 'default',
             color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background .2s' }}>
             <Icon name="send" size={20} color="#fff" /></button>
@@ -1964,7 +1964,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
               placeholder="Message privately…" style={{ flex: 1, resize: 'none', minHeight: 44, maxHeight: 96, padding: '12px 15px', borderRadius: 16,
                 border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', lineHeight: 1.35 }} />
-            <button onClick={send} style={{ width: 44, height: 44, borderRadius: 14, border: 'none', flexShrink: 0,
+            <button onClick={send} aria-label="Send" style={{ width: 44, height: 44, borderRadius: 14, border: 'none', flexShrink: 0,
               background: draft.trim() ? 'var(--clay)' : 'var(--line)', cursor: draft.trim() ? 'pointer' : 'default',
               color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background .2s' }}>
               <Icon name="send" size={20} color="#fff" /></button>

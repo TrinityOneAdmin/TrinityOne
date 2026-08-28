@@ -587,6 +587,18 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // The Care tab is also the permanent home for a live safety check's "I'm safe / I need help" — which is what
   // lets the Today banner be dismissible. The safety check rides on this same toggle: care off = no check at all.
   const careOn = !!(ctx.care && ctx.care.settings && ctx.care.settings.enabled);
+  // A TAB CAN VANISH WHILE YOU ARE STANDING ON IT. A member sitting on Serving -> Care when a steward switches
+  // Practical care off kept `tab === 'care'`, found no matching tab, and rendered NOTHING: an empty pane with
+  // no tab selected and no clue what to press. Measured on the OPPO, 2026-08-27 — no tab carried aria-selected,
+  // none was highlighted, and the only text on screen belonged to the Today screen underneath. It recovers by
+  // itself the moment the tab comes back, so the state is stuck rather than corrupt, which is exactly the
+  // silent-blank class this project keeps meeting. Fall back to the first tab that still exists.
+  const _tabs = [['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])];
+  const _tabKeys = _tabs.map(t => t[0]).join(',');
+  React.useEffect(() => {
+    if (_tabs.some(t => t[0] === tab)) return;
+    setTab(_tabs[0][0]);
+  }, [_tabKeys, tab]);
   const close = () => setSheet(null);
 
   return (
@@ -617,7 +629,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             side gets. scroll-padding covers the other scroll — scrollIntoView aligns the BUTTON to the
             nearest edge and reads straight past a spacer. */}
         <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '4px 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
-          {[['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
+          {_tabs.map(([k, lbl, ic]) => {
             const on = tab === k;
             return (
               <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>

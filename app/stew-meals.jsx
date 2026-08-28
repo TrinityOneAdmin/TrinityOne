@@ -197,7 +197,10 @@ function DashMealsPanel({ church }) {
     return g;
   };
   const toggleBtn = (active, onClick, label) => (
-    <button onClick={(e) => { e.stopPropagation(); onClick(); }} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+    // role + aria-checked, like every toggle in stew-dashboard.jsx. Without them a screen reader reads this as
+    // an unlabelled button with no state: someone using one could not tell whether practical care was on or
+    // off, only that there was something here to press. Found in the accessibility sweep, 2026-08-27.
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }} aria-label={label} role="switch" aria-checked={!!active} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
     </button>
   );
@@ -407,9 +410,17 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareChat(reqId, setMsgs); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [reqId]);
   React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: 'end' }); } catch (e) {} }, [msgs.length]);
   const send = async () => { const t = text.trim(); if (!t) return; setText(''); setErr(''); let ok = null; try { ok = await window.StewardMeals.sendCareChat(reqId, requesterPub, t); } catch (e) {} if (!ok) { setText(t); setErr('Couldn’t send — we couldn’t confirm who this conversation reaches. Check your connection and try again.'); } };
+  // ESCAPE CLOSES IT. This panel had no role, no aria-modal and no key handler: to a screen reader it was an
+  // anonymous div, and to a keyboard user the only way out was a mouse click on the backdrop. Found in the
+  // accessibility sweep, 2026-08-27 — pressing Escape did nothing at all.
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="heart" size={17} color="var(--clay)" /><div style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{title || 'Care conversation'}</div><button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} color="currentColor" /></button></div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 7 }}>
           {msgs.length === 0 ? <div style={{ margin: 'auto', color: 'var(--ink-3)', fontSize: 13 }}>No messages yet.</div> : null}

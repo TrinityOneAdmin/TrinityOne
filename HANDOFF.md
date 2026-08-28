@@ -64,12 +64,14 @@ answer is "never built", note the plumbing is already in place and only the cont
 
 ## TWO MORE FROM THE CONFIGURATION PASS, 2026-08-27 — NOT FIXED
 
-**A. Marking someone as a child silently strips their youth clearance, and unmarking does not give it back.**
+**A. CORRECTED, AND NOW FIXED. UNmarking a child revokes their youth clearance — not marking, as this entry originally said.**
 Measured. Bram was cleared for youth; a steward marked him as a child; the cleared list went from
 `{"pubkeys":["d14d2a62…"]}` to `{"pubkeys":[],"cleared":{}}`. Unmarking him as a child left it empty — the
-clearance is gone, silently, and the console says nothing about it either way. Revoking on mark is arguably
-right (the gateway comment at `approvedIn` warns loudly about stale clearance surviving on someone who is
-later unmarked, and this is the code avoiding exactly that). What is wrong is that it is invisible: a steward
+clearance is gone, silently, and the console says nothing about it either way. The direction was wrong in my note: `toggleMinor` reads
+`unmarking ? (sg.approved||[]).filter(...) : (sg.approved||[])`, so marking leaves clearances alone and
+UNMARKING removes them. That is deliberate and correct — the gateway comment at `approvedIn` warns at length
+that a stale clearance surviving on someone who is later unmarked turns a six-year-old into an adult the relay
+treats as cleared to message children. What was wrong is only that it was invisible: a steward
 who mis-taps "Child" on an adult destroys that adult's clearance and gets no warning, no undo, and no notice
 that re-clearing is now required. At minimum say so at the moment of the tap.
 
