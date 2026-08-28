@@ -213,6 +213,31 @@ one shown to the CLEARED ADULT about a child's request.
 **5. WITHDRAWN.** This slot held a claim that the child/adult DM gate was never holding and that any approved
 member may message a child. It is false — see the false-alarm section above. The gate is enforced and correct.
 
+## VERIFIED ON DEVICE, 2026-08-28 — what the branch's member-app fixes actually do on hardware
+
+OPPO + live a8 relay + the branch APK (debug-signed; testing signing until go-live). Each proved on the phone,
+not inferred:
+
+- **Child-facing wording.** Nothing on Today says "care team" to a 15-year-old any more. Her row reads
+  "Sent privately — someone at your church who can help will be in touch."
+- **The blank Serving pane.** She was on Serving → Care, a steward switched Practical care off, and the pane
+  now falls back: the Care tab disappears and **Serving is selected and populated** (692 characters of real
+  content) instead of an empty pane with no tab highlighted.
+- **The stale dead-end card.** Clearance revoked -> the card appears and the ask control hides; clearance
+  restored -> the card goes and the control returns. **Both without restarting the app**, which is the whole
+  point: a young person used to be told "your church hasn't set up who can help young people yet" and keep
+  being told it after the church fixed exactly that.
+
+**NOT device-verified, and why.** Three of the branch's fixes cannot be exercised against a8 yet:
+  - the relay's care-request id ownership and the children's-photo write gate live in `gateway.mjs`, which a8
+    does not run until the relay is updated;
+  - the console's photo-suppression reconcile, its `aria-checked` toggles and the Escape handler are served
+    FROM a8, so the browser console is still running the old code — measured: `aria-checked` on the
+    practical-care toggle reads `null` there, exactly as it did before the fix;
+  - the on-behalf triage filter needs a second care admin, and the only other client on this church is served
+    from a8 too. It is covered by six tests that run the shipped filter expression itself.
+All three are covered by tests that spawn a real relay or execute the shipped code; none is device-proven.
+
 ## OPEN AND SERIOUS — A CHILD'S REPLY IS SEALED TO THE WRONG PEOPLE (found 2026-08-27, NOT FIXED)
 
 Found by an independent audit of `ad24099`. Traced in code, not suspected. This is the highest-value open item
