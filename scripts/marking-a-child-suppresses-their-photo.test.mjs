@@ -141,7 +141,14 @@ function runReconcile({ minors, nophoto, kidPhotosAllowed, loaded = true, authed
   const win = { Steward: {
     churchPub: 'cp', actingChurch: null,
     relayAuthed: () => authed,
-    setNoPhoto: (l) => { published.push(l); return failPublish ? Promise.reject(new Error('connection failure')) : Promise.resolve(true); },
+    // HOW PRODUCTION ACTUALLY FAILS. publish() catches internally and `return false` when every relay
+    // refuses — it does NOT reject. The first version of this mock rejected, so it validated a path production
+    // never takes and passed over a fix that was wrong for the real failure. 'reject' is kept as a second
+    // shape because setNoPhoto can also throw synchronously before it ever publishes.
+    setNoPhoto: (l) => { published.push(l);
+      if (failPublish === 'reject') return Promise.reject(new Error('connection failure'));
+      if (failPublish) return Promise.resolve(false);          // the real one
+      return Promise.resolve(true); },
   } };
   // `body` already starts at the effect's first guard and ends before its deps array, so it IS the statement
   // list — no trimming. The previous version hunted for `=>` and cut from there, which silently mangled the
@@ -192,12 +199,18 @@ test('A FAILED PUBLISH IS RETRIED — the claim is given back', async () => {
   // setNoPhoto returns a promise and publish() THROWS on a connection failure. The first version wrapped the
   // call in a bare try/catch, which catches only a synchronous error — so a failed send was recorded as done,
   // nothing retried for the rest of the session, and a child's existing photo went on showing. Audit 2026-08-28.
-  const state = { done: '' };
-  const out = await runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, failPublish: true, state });
-  assert.equal(out.length, 1, 'it did not even attempt the publish');
-  assert.equal(state.done, '',
-    'the signature stayed claimed after the publish failed, so nothing will retry this session and the ' +
-    'child\'s photo keeps rendering on every other member\'s device');
+  // Both failure shapes. resolve(false) is what publish() really does when every relay refuses; a rejection
+  // only happens if setNoPhoto throws before publishing. The first version tested ONLY the rejection, which
+  // is why it passed over a fix that handled only rejections.
+  for (const shape of [true, 'reject']) {
+    const state = { done: '' };
+    const out = await runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, failPublish: shape, state });
+    assert.equal(out.length, 1, `it did not even attempt the publish (${shape})`);
+    assert.equal(state.done, '',
+      `the signature stayed claimed after a ${shape === 'reject' ? 'rejected' : 'refused (resolve false)'} ` +
+      'publish, so nothing will retry this session and the child\'s photo keeps rendering on every other ' +
+      'member\'s device');
+  }
 });
 
 test('running twice on the same state publishes once', async () => {

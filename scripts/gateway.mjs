@@ -938,6 +938,23 @@ function idNamesOwner(id) {
   for (const cp of CHURCH_PUBS) if (cp.startsWith(m[1])) return cp;
   return '';                                     // names a church this relay does not carry — not our business
 }
+// A CARE REQUEST ID NAMES ITS ASKER — `<askerpubprefix>-<random>`, checked with nothing remembered.
+//
+// The map below (CAREREQ_OWNER) was the first attempt and it only ever guarded accept(). accept() is the live
+// write door; /import and relay-to-relay sync call store.put() directly and never reach it, so a forged copy
+// could arrive by replication and sit beside the real one — and every reader picks newest-wins. This check has
+// no such gap because it holds no state: it is a property of the event, true at every door, on every relay,
+// after every restart, and for any entry point added later.
+//
+// Returns true when the id carries no owner prefix — a request from a build that predates this. Those fall
+// back to CAREREQ_OWNER, exactly as idOwnerOk falls back to first-writer-wins for an id with no embedded
+// owner, so a member whose app has not updated can still ask for help.
+function carereqIdOk(e, d) {
+  if (!d.startsWith(CAREREQ_D)) return true;
+  const m = ID_OWNER_RE.exec(d.slice(CAREREQ_D.length));
+  if (!m) return true;                                   // no embedded owner → the map decides
+  return String(e.pubkey || '').startsWith(m[1]);        // the id names them, so only they may write here
+}
 function idOwnerOk(owner, e, id) {
   const cp = namedChurch(e) || e.pubkey;
   if (!owner) {
@@ -1994,9 +2011,10 @@ function accept(e) {
     // person who asked. Enforced HERE because the clients cannot tell the two copies apart: whichever one they
     // trust to name the asker is the one an attacker controls.
     if (d.startsWith(CAREREQ_D)) {
+      if (!carereqIdOk(e, d)) return false;              // the id names somebody else
       const rid = d.slice(CAREREQ_D.length);
       const owner = rid && CAREREQ_OWNER.get(rid);
-      if (owner && owner !== e.pubkey) return false;
+      if (owner && owner !== e.pubkey) return false;     // …or an older, prefix-less id already claimed
     }
     // a message in a request's shared care-team↔asker thread. Member-writable (so the asker can reply); must
     // name its church, then falls to the member rule + per-member cap. The content is sealed to the care team +
@@ -2162,6 +2180,11 @@ function canRead(e, authed) {
       return !!authed && (authed === e.pubkey || authed === pHex || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp));
     }
     if (d.startsWith(CAREREQ_D)) {   // a member's private ask-for-help — CARE-TEAM ONLY (mirror SAFE_D), never served to the whole church
+      // AND NEVER A COPY WRITTEN AT SOMEBODY ELSE'S ID. The write gates above stop one being stored, but this
+      // relay may already hold one from an older build, and a reader picks newest-wins between two copies at
+      // one id. Refusing to SERVE it makes anything already on disk inert, so the fix does not depend on
+      // having caught it on the way in.
+      if (!carereqIdOk(e, d)) return false;
       const cp = owningChurch(e, d);
       if (!authed || !cp) return false;
       // SAFEGUARDING: A CHILD'S DISCLOSURE IS NOT CARE-TEAM BUSINESS. The follow-up thread (CARECHAT_D, just
@@ -3097,6 +3120,10 @@ function serveStatic(req, res) {
           if (e && e._manifest) continue;                            // the archive's manifest header line
           let ok = false; try { ok = !!(e && e.id && e.sig && verifyEvent(e)); } catch { ok = false; }   // verifyEvent can THROW on malformed input — one bad line must never kill the whole import (→ hang → 502)
           if (!ok) { invalid++; continue; }
+          // A CARE REQUEST'S ID NAMES ITS ASKER, AND THAT HOLDS AT EVERY DOOR — not just accept(). These paths write
+          // straight to the store, so without this a forged request arrives by import or by relay-to-relay sync, sits
+          // beside the genuine one (addressable events are per author), and every reader picks newest-wins.
+          if (!carereqIdOk(e, dtag(e))) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
             if (r === 'stored') imported++;
@@ -4155,6 +4182,7 @@ async function syncChurchFromPeer(cp, peerBase) {
     await forEachNdjsonLine(r, MAX_IMPORT, (s) => {   // stream the corpus line-by-line (bounded memory)
       let e; try { e = JSON.parse(s); } catch { return; }
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
+      if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
       const put = store.put(e, cp);
       if (put === 'stored') { imported++; note(e); }
       if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
@@ -4218,7 +4246,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }

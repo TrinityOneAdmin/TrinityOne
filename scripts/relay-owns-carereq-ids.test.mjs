@@ -24,7 +24,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8882;
+const PORT = 8883;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:';
 const now = () => Math.floor(Date.now() / 1000);
@@ -101,4 +101,53 @@ test('OWNERSHIP SURVIVES A RESTART — it is rebuilt from what is on disk', asyn
   pub = await connect();
   const [ok] = await publish(pub, carereq(mallory, 'req1'));
   assert.equal(ok, false, 'after a restart the id was unowned again and the forgery was accepted');
+});
+
+// ── the ID ITSELF NAMES THE ASKER ──────────────────────────────────────────────────────────────────────────
+// The map above only ever guarded accept(). /import and relay-to-relay sync call store.put() directly and
+// never reach it, so a forged request could arrive by replication and sit beside the genuine one — every
+// reader then picks newest-wins. A map is bookkeeping and bookkeeping has doors; an id that names its owner
+// is a property of the event, true at every door, on every relay, after every restart. Same convention as
+// `group:`/`roster:` (ID_OWNER_RE). Audit, 2026-08-28.
+const selfNamed = (who, tail, at) => finalizeEvent({ kind: 30078, created_at: at || now(),
+  tags: [['d', CAREREQ_D + who.pub.slice(0, 16) + '-' + tail], ['t', 'trinityone'], ['church', cp]],
+  content: JSON.stringify({ keys: { [who.pub]: 'x' }, enc: 'y' }) }, who.sk);
+// the same id, signed by somebody else — what a forger must produce
+const forged = (who, ownerPub, tail) => finalizeEvent({ kind: 30078, created_at: now(),
+  tags: [['d', CAREREQ_D + ownerPub.slice(0, 16) + '-' + tail], ['t', 'trinityone'], ['church', cp]],
+  content: JSON.stringify({ keys: { [who.pub]: 'x' }, enc: 'y' }) }, who.sk);
+
+test('a request whose id names the asker is accepted', async () => {
+  const [ok, why] = await publish(pub, selfNamed(ellie, 'aaaa1111'));
+  assert.equal(ok, true, `a member could not ask for help with a self-naming id: ${why}`);
+});
+
+test('A FORGERY AT THAT ID IS REFUSED WITH NOTHING REMEMBERED', async () => {
+  const [ok] = await publish(pub, forged(mallory, ellie.pub, 'aaaa1111'));
+  assert.equal(ok, false,
+    'a member published at an id that names somebody else. The steward\'s triage list takes newest-wins, so ' +
+    'their reply would seal to the forger and the asker would get nothing.');
+});
+
+test('…and at an id that has never been seen, so no map could help', async () => {
+  // This is the case the map cannot cover: nothing has claimed the id, so first-writer-wins would ACCEPT it.
+  // Only the id naming its owner refuses it.
+  const [ok] = await publish(pub, forged(mallory, ellie.pub, 'neverseen9'));
+  assert.equal(ok, false,
+    'a forger claimed an unused id belonging to another member — this is exactly the hole a replicated ' +
+    'forgery walks through, because on a second relay the id has never been seen either');
+});
+
+test('back-dating does not help, because there is no ordering to win', async () => {
+  const [ok] = await publish(pub, finalizeEvent({ kind: 30078, created_at: 1,
+    tags: [['d', CAREREQ_D + ellie.pub.slice(0, 16) + '-bbbb2222'], ['t', 'trinityone'], ['church', cp]],
+    content: 'x' }, mallory.sk));
+  assert.equal(ok, false, 'a back-dated forgery was accepted');
+});
+
+test('a member whose app has NOT updated can still ask for help', async () => {
+  // Old builds mint a bare random id with no owner prefix. Refusing those would refuse a request for help
+  // because somebody had not updated their app, which is the worst thing on this screen to refuse.
+  const [ok, why] = await publish(pub, carereq(mallory, 'legacyid00000000'));
+  assert.equal(ok, true, `a prefix-less id from an older build was refused: ${why}`);
 });

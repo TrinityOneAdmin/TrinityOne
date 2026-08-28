@@ -3846,7 +3846,23 @@ window.Fellowship = {
     let enc; try { enc = nip44e(JSON.stringify(body), keyBytes); } catch (e) { return null; }
     const keys = {};
     for (const p of recips) { try { keys[p] = nip44e(keyHex, nip44ck(sk, p)); } catch (e) {} }
-    const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
+    // THE ID SAYS WHOSE REQUEST THIS IS. Addressable events are per (author, kind, d-tag), so two members can
+    // both hold a copy at one id and every reader has to choose between them — they choose newest-wins. That
+    // let a member publish a newer copy at somebody else's request id, become "the asker" in the steward's
+    // triage list, and redirect the reply away from the person who actually asked. Guarding it with a map of
+    // who-claimed-what only worked on the door that map was checked at; import and relay-to-relay sync store
+    // events without passing it.
+    //
+    // So make the id prove its own owner, the way `group:` and `roster:` ids already do
+    // (`ID_OWNER_RE = /^([0-9a-f]{8,64})-/` in scripts/gateway.mjs). `<asker>-<random>` can be checked by
+    // anyone, at any door, on any relay, after any restart, with nothing remembered — a forged request stops
+    // being something to catch and becomes something you cannot construct.
+    //
+    // No new disclosure: the event is SIGNED by the asker, so their key was always on it.
+    // A request written by an older build has no prefix; the relay falls back to first-writer-wins for those,
+    // so a member whose app has not updated can still ask for help. That fallback is the same one idOwnerOk
+    // applies to group ids, and it can be dropped once every client mints prefixed ids.
+    const id = pub.slice(0, 16) + '-' + _hex(crypto.getRandomValues(new Uint8Array(8)));
     // WHICH RULE PICKED THIS AUDIENCE, said out loud. A reply reuses the request's recipient list, which is
     // right for a young person — but for an ordinary adult it froze the care rota as it stood that day, so a
     // care member who joined afterwards could no longer read new replies on a live thread. "Any care member

@@ -10184,7 +10184,7 @@
         } catch (e) {
         }
       }
-      const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
+      const id = pub.slice(0, 16) + "-" + _hex(crypto.getRandomValues(new Uint8Array(8)));
       const evt = finalizeEvent2({ kind: 30078, created_at: body.at, tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp], ["aud", childish ? "cleared" : "team"]], content: JSON.stringify({ keys, enc }) }, sk);
       try {
         await _publishAny(churchRelays(), evt);

@@ -4128,13 +4128,20 @@ function DashMembers() {
     const sig = [window.Steward.churchPub || '', minors.join(','), (sg.nophoto || []).join(',')].join('|');
     if (nophotoBackfillDone === sig) return;          // the lists re-emit on every tick
     nophotoBackfillDone = sig;                        // claim BEFORE publishing, like the back-fill below
-    // AND GIVE THE CLAIM BACK IF THE PUBLISH DID NOT LAND. setNoPhoto() returns a promise and publish()
-    // THROWS on a connection failure — so a bare try/catch around the call caught only a synchronous error
-    // and treated a failed send as done. The signature stayed claimed, nothing retried for the rest of the
-    // session, and a child's existing photo went on showing. Audit, 2026-08-28. Only ever clear our OWN
-    // claim: if the lists moved on, a later signature owns the marker and blanking it here would undo theirs.
+    // AND GIVE THE CLAIM BACK IF THE PUBLISH DID NOT LAND.
+    //
+    // publish() DOES NOT REJECT when every relay refuses: it catches internally and `return false`
+    // (src/steward.src.js). The first attempt at this released the claim only in `.catch`, on the stated
+    // belief that publish throws — so on the one failure mode it was written for, nothing was released,
+    // nothing retried, and a marked child's existing photograph kept rendering. The test injected a rejection,
+    // which production never produces, so it passed over the broken code. Audit, 2026-08-28; my error twice
+    // over, in the fix and in the test that was supposed to catch it.
+    //
+    // So check the RESOLVED VALUE, and keep the catch for a synchronous throw. Only ever clear our OWN claim:
+    // if the lists moved on, a later signature owns the marker and blanking it here would undo theirs.
     Promise.resolve()
       .then(() => window.Steward.setNoPhoto([...(sg.nophoto || []), ...missing]))
+      .then((r) => { if (!r && nophotoBackfillDone === sig) nophotoBackfillDone = ''; })
       .catch(() => { if (nophotoBackfillDone === sig) nophotoBackfillDone = ''; });
   }, [kidPhotosAllowed, sg.loaded, sg.minors, sg.nophoto]);
 
