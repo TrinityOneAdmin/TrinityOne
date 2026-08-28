@@ -19,6 +19,16 @@ const read = (f) => readFileSync(new URL('../' + f, import.meta.url), 'utf8');
 const CHAT = read('app/screens-chat.jsx');
 const MEALS = read('app/stew-meals.jsx');
 const DASH = read('app/stew-dashboard.jsx');
+const SCHED = read('app/stew-schedule.jsx');
+// Comments are stripped before any of the Groups/Rota assertions below: this repo has already shipped an
+// assertion that was satisfied by the comment explaining the rule.
+const stripC = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+const SCHED_CODE = stripC(SCHED), DASH_CODE = stripC(DASH);
+const lineWith = (src, needle) => {
+  const l = src.split('\n').find(x => x.includes(needle));
+  assert.ok(l, 're-anchor this test: could not find ' + needle);
+  return l;
+};
 
 // A button is "named" if it carries a NON-EMPTY aria-label or title. Merely CONTAINING the word aria-label is
 // not enough: `aria-label=""` passed the first version of this test while a screen reader announced nothing
@@ -90,4 +100,64 @@ test('the console’s care conversation is a real dialog, and Escape closes it',
     'backdrop, which is not a way out at all');
   assert.match(MEALS_CODE.slice(keyAt, keyAt + 120), /onClose\(\)/,
     'the Escape handler exists but does not close anything');
+});
+
+
+// ── SWEEP DEFECT 4, 2026-08-28: the Groups and Rota tabs, measured on the console ─────────────────────────
+// Four separate gaps, none of which the checks above could catch, because a `title` counted as a name and
+// stew-schedule.jsx was never read at all:
+//   · the empty rota slot announced itself as "DoorAssign" — the role name and the word Assign are sibling
+//     divs inside one button, so they concatenate
+//   · five roster buttons said "Remove this role" / "Remove this person" without ever saying WHICH, so a
+//     list of six roles offered six identical controls
+//   · the rota-visibility button announced "Everyone" — its VALUE, with nothing saying what it governs
+//   · Child-safe? and Encrypt? are toggles that never reported whether they were on
+
+test('an empty rota slot says what it will assign, instead of running the role into the word Assign', () => {
+  const l = lineWith(SCHED_CODE, "aria-label={'Assign someone to ' + role.name}");
+  assert.ok(l.includes('<button'), 'the label is no longer on the slot button itself');
+  // The two sibling divs are still there — that is the layout. The point is that the button now overrides
+  // the name they would otherwise concatenate into.
+  assert.match(SCHED_CODE, /aria-label=\{'Assign someone to ' \+ role\.name\}/,
+    'the empty rota slot is announced as "DoorAssign" again');
+});
+
+test('a filled rota slot names the role, the person and their reply', () => {
+  const l = lineWith(SCHED_CODE, 'Change who’s on this slot" aria-label=');
+  for (const part of ['role.name', 'a.name', 'vm.label']) {
+    assert.ok(l.includes(part), `the filled slot no longer announces ${part}`);
+  }
+});
+
+test('every roster remove button says WHICH role, person or pod it removes', () => {
+  for (const [needle, ref] of [
+    ["aria-label={'Remove the role '", 'r.name'],
+    ["aria-label={'Remove ' + (pp.name", 'pp.name'],
+    ["aria-label={'Remove the pod '", 'pod.name'],
+  ]) {
+    const l = lineWith(SCHED_CODE, needle);
+    assert.ok(l.includes(ref),
+      `a roster remove button does not name what it removes (${ref}) — six identical controls in a row`);
+  }
+});
+
+test('the rota-visibility button announces what it governs, not only its current value', () => {
+  const l = lineWith(SCHED_CODE, 'aria-haspopup="menu"');
+  assert.match(l, /aria-label=\{'Who can see the rota: '/,
+    'the visibility button is announced as "Everyone" — the value, with nothing saying what it sets');
+  assert.match(l, /aria-expanded=\{!!visMenu\}/, 'the menu button does not report whether the menu is open');
+});
+
+// Pinned to the exact expressions, exactly as the giving toggle above is: `aria-pressed={false}` and
+// `aria-pressed={!it.childsafe}` both mention the state and both announce the wrong one.
+test('the Child-safe and Encrypt toggles report their REAL state and name their group', () => {
+  const cs = lineWith(DASH_CODE, 'childsafe: !it.childsafe');
+  assert.match(cs, /aria-pressed=\{!!it\.childsafe\}/,
+    'Child-safe does not announce whether it is on — check it is not negated or pinned to a constant');
+  assert.ok(cs.includes("(it.name || 'This group')"), 'Child-safe does not say which group it belongs to');
+
+  const en = lineWith(DASH_CODE, 'onClick={() => toggleEncrypt(it)}');
+  assert.match(en, /aria-pressed=\{!!it\.encrypted\}/,
+    'Encrypt does not announce whether it is on — check it is not negated or pinned to a constant');
+  assert.ok(en.includes("(it.name || 'This group')"), 'Encrypt does not say which group it belongs to');
 });

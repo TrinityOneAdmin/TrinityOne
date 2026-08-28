@@ -215,13 +215,13 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 9 }}>
         {roles.map(r => (
           <span key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 8px 6px 11px', borderRadius: 999, background: `color-mix(in oklab, ${m.accent} 12%, var(--surface))`, border: `1px solid color-mix(in oklab, ${m.accent} 26%, transparent)`, fontSize: 13, fontWeight: 700 }}>
-            {r.name}<button onClick={() => setRoles(x => x.filter(y => y.id !== r.id))} title="Remove this role" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={13} /></button></span>
+            {r.name}<button onClick={() => setRoles(x => x.filter(y => y.id !== r.id))} title="Remove this role" aria-label={'Remove the role ' + (r.name || '')} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={13} /></button></span>
         ))}
         {roles.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No roles yet.</span> : null}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <input value={newRole} onChange={e => setNewRole(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRole(); }} placeholder="Add a role — e.g. Sound" style={schFld} />
-        <button onClick={addRole} title="Add this role to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', flexShrink: 0 }}><Icon name="plus" size={15} color="currentColor" /></button>
+        <button onClick={addRole} title="Add this role to the team" aria-label="Add this role to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', flexShrink: 0 }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
       <div style={schLbl}>People who can serve</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 9 }}>
@@ -229,7 +229,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
           <div key={pp.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <div style={{ width: 30, height: 30, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{(pp.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{pp.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{pp.pub ? 'On the app · gets reminders' : 'Off-app'}</div></div>
-            <button onClick={() => setPeople(x => x.filter(y => y.id !== pp.id))} title="Remove this person from the team" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} /></button>
+            <button onClick={() => setPeople(x => x.filter(y => y.id !== pp.id))} title="Remove this person from the team" aria-label={'Remove ' + (pp.name || 'this person') + ' from the team'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} /></button>
           </div>
         ))}
         {people.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No one added yet.</span> : null}
@@ -240,7 +240,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
           <option value="">…or link a member</option>
           {(members || []).filter(mm => !people.some(p => p.pub && p.pub === mm.pubkey)).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
         </select>
-        <button onClick={addPerson} title="Add this person to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
+        <button onClick={addPerson} title="Add this person to the team" aria-label="Add this person to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
       <div style={schLbl}>Serving pods <span style={{ fontWeight: 500, color: 'var(--ink-3)' }}>— a set of people who serve together; apply one to a service in a tap</span></div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 9 }}>
@@ -248,7 +248,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
           <div key={pod.id} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 11, background: 'var(--surface-2)' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: roles.length ? 9 : 0 }}>
               <input value={pod.name} onChange={e => setPodName(pod.id, e.target.value)} style={{ ...schFld, fontWeight: 700 }} />
-              <button onClick={() => delPod(pod.id)} title="Remove this pod" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} /></button>
+              <button onClick={() => delPod(pod.id)} title="Remove this pod" aria-label={'Remove the pod ' + (pod.name || '')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} /></button>
             </div>
             {roles.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Add roles above first, then pick who fills each.</div> : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -643,7 +643,7 @@ function DashRota({ onNewTeam }) {
                 SEND the rota to from now on — it cannot reach back onto a phone that already downloaded one.
                 Real protection against everyone who has not fetched it, and not a wall between members. */}
             <div style={{ position: 'relative' }}>
-              <button onClick={() => setVisMenu(v => !v)} title="Choose who can see this church's rota" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>
+              <button onClick={() => setVisMenu(v => !v)} title="Choose who can see this church's rota" aria-haspopup="menu" aria-expanded={!!visMenu} aria-label={'Who can see the rota: ' + (ROTA_VIS_LABEL[rotaVis] || ROTA_VIS_LABEL.church) + '. Change this'} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>
                 <Icon name="users" size={15} color="currentColor" /> {ROTA_VIS_LABEL[rotaVis] || ROTA_VIS_LABEL.church} <Icon name="chevD" size={13} color="currentColor" /></button>
               {visMenu ? (
                 <React.Fragment>
@@ -722,7 +722,7 @@ function DashRota({ onNewTeam }) {
                         };
                         const vm = vmap[verdict] || vmap[''];
                         return (
-                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
+                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={role.name + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
@@ -733,7 +733,7 @@ function DashRota({ onNewTeam }) {
                         );
                       }
                       return (
-                        <button key={role.id} onClick={() => setAssignSlot(slot)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1.5px dashed color-mix(in oklab, var(--gold) 55%, var(--line))', background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))' }}>
+                        <button key={role.id} onClick={() => setAssignSlot(slot)} aria-label={'Assign someone to ' + role.name} title={'Assign someone to ' + role.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1.5px dashed color-mix(in oklab, var(--gold) 55%, var(--line))', background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))' }}>
                           <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--gold) 20%, var(--surface))', color: '#8a6717', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="plus" size={15} /></div>
                           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}</div><div style={{ fontWeight: 700, fontSize: 13.5, color: '#8a6717' }}>Assign</div></div>
                         </button>
