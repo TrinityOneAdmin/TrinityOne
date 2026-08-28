@@ -3859,9 +3859,10 @@ window.Fellowship = {
     // being something to catch and becomes something you cannot construct.
     //
     // No new disclosure: the event is SIGNED by the asker, so their key was always on it.
-    // A request written by an older build has no prefix; the relay falls back to first-writer-wins for those,
-    // so a member whose app has not updated can still ask for help. That fallback is the same one idOwnerOk
-    // applies to group ids, and it can be dropped once every client mints prefixed ids.
+    // There is no fallback: the relay REFUSES an id that names nobody, and answers with "please update the
+    // app to ask for help" so a member on an older build is told what to do rather than to check their wifi.
+    // The fallback existed briefly and had to go — it was consulted at only one of the four doors into the
+    // relay, which preserved the exact bypass this id is here to close.
     const id = pub.slice(0, 16) + '-' + _hex(crypto.getRandomValues(new Uint8Array(8)));
     // WHICH RULE PICKED THIS AUDIENCE, said out loud. A reply reuses the request's recipient list, which is
     // right for a young person — but for an ordinary adult it froze the care rota as it stood that day, so a

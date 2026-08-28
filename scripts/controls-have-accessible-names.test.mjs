@@ -27,7 +27,10 @@ const namedBy = (line, attr) => {
   const m = new RegExp(attr + '=(?:"([^"]*)"|\\{([^}]*)\\})').exec(line);
   if (!m) return false;
   const v = (m[1] !== undefined ? m[1] : m[2]) || '';
-  return v.trim().length > 0 && v.trim() !== '""' && v.trim() !== "''";
+  const t = v.trim();
+  // …and a label of nothing but quotes or whitespace is not a label. `aria-label={' '}` passed the first
+  // hardening: non-empty by length, silent to a screen reader.
+  return t.length > 0 && t !== '""' && t !== "''" && t !== "' '" && t !== '" "' && /[^\s'"{}]/.test(t);
 };
 function unnamedIconButtons(src, iconName) {
   const lines = src.split('\n');
@@ -63,10 +66,11 @@ test('the giving switch reports whether it is on', () => {
   assert.match(btn, /role="switch"/, 'the giving toggle is not announced as a switch');
   // …and reports the REAL state. `aria-checked={false}` satisfied the old assertion while announcing "off"
   // whatever the setting was — the audit's exact defeat.
-  assert.doesNotMatch(btn, /aria-checked=\{\s*(true|false)\s*\}/,
-    'the giving toggle announces a hard-coded state, so it is wrong half the time');
-  assert.match(btn, /aria-checked=\{[^}]*giving[^}]*\}/,
-    'the giving toggle does not report the actual setting');
+  // Pinned to the exact expression on purpose. A looser check accepted `aria-checked={!giving}` and
+  // `{giving && false}` — both mention the state and both announce the wrong one. This is a one-line control
+  // that has no reason to change shape; if it does, read this and decide deliberately.
+  assert.match(btn, /aria-checked=\{!!church\.giving\}/,
+    'the giving toggle no longer announces the real setting — check it is not negated or ANDed to a constant');
 });
 
 test('the console’s care conversation is a real dialog, and Escape closes it', () => {
@@ -77,10 +81,13 @@ test('the console’s care conversation is a real dialog, and Escape closes it',
   assert.match(panel, /aria-modal="true"/, 'nothing tells assistive tech the rest of the page is inert');
   // …and the handler must actually CLOSE it. `if (e.key === 'Escape') {}` satisfied the old assertion while
   // Escape did nothing at all — the audit's exact defeat.
-  const keyAt = MEALS.indexOf("e.key === 'Escape'");
+  // Comments stripped first: this repo has shipped an assertion that was satisfied by the comment explaining
+  // the rule, and the raw-source anchor would find the FIRST mention rather than the handler.
+  const MEALS_CODE = MEALS.replace(/\/\/.*$/gm, '');
+  const keyAt = MEALS_CODE.indexOf("e.key === 'Escape'");
   assert.ok(keyAt > 0,
     'Escape does not close the care conversation — a keyboard user’s only way out is a mouse click on the ' +
     'backdrop, which is not a way out at all');
-  assert.match(MEALS.slice(keyAt, keyAt + 120), /onClose\(\)/,
+  assert.match(MEALS_CODE.slice(keyAt, keyAt + 120), /onClose\(\)/,
     'the Escape handler exists but does not close anything');
 });

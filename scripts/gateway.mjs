@@ -4456,7 +4456,11 @@ wss.on('connection', (ws, req) => {
       // sends that person off to check their connection when the truth is their app is too old. This is the
       // one screen where a misleading failure is least acceptable: somebody asking for help.
       if (!accept(evt)) {
-        const _rd = dtag(evt);
+        // `|| ''` — dtag() returns undefined for a validly-signed 1-element ["d"] tag, which nostr-tools
+        // permits. A blocked member's event is refused before `d` is ever read, so this line was the first to
+        // touch it: .startsWith on undefined threw, the process-level handler swallowed it, and the sender got
+        // NO reply at all where the old code sent a refusal. Audit, 2026-08-28.
+        const _rd = dtag(evt) || '';
         const _stale = evt.kind === 30078 && _rd.startsWith(CAREREQ_D) && !ID_OWNER_RE.test(_rd.slice(CAREREQ_D.length));
         rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids' : 'not a member or not permitted for this group');
         ws.send(JSON.stringify(['OK', evt.id, false, _stale

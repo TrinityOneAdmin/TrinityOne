@@ -45,13 +45,18 @@ test('every store.put is either accept-gated or carries the id check', () => {
     //   `// carereqIdOk() is applied upstream`         — a comment, in a new door with no call at all
     // So: ignore comment lines, and require the refusal shape — a NEGATED call that returns, continues or
     // increments-and-continues. That is the only form that actually stops the put underneath it.
+    // Strip comments ENTIRELY, not just whole-line ones: a trailing `// !carereqIdOk(...) return` above a
+    // neutered door satisfied the match. Same trap this repo has hit before — an assertion satisfied by the
+    // comment that explains the rule.
     const window = LINES.slice(Math.max(0, i - 14), i + 1)
-      .filter(l => !l.trim().startsWith('//'))
+      .map(l => l.replace(/\/\/.*$/, ''))
       .join('\n');
     // Deliberately not bracket-counting: the argument is `dtag(e)`, so the call nests a paren and a regex that
     // counts them is wrong in a way that reads as the app being broken. Require the NEGATED call and a bail-out
     // close behind it.
-    const guarded = /!\s*carereqIdOk\([\s\S]{0,60}?(return|continue|\+\+)/.test(window);
+    // The bail-out must actually LEAVE. `++` was accepted and let `{ invalid++; }` through — /import then
+    // counts the forgery invalid and stores it anyway. Only `return` and `continue` stop the put below.
+    const guarded = /!\s*carereqIdOk\([\s\S]{0,60}?(return|continue)\b/.test(window);
     // Exactly ONE site may rely on accept() — the live publish path — and it is named, not guessed at. A
     // proximity search for "accept(" in the preceding lines matched unrelated prose and let an unguarded
     // /import through: the escape hatch was wider than the rule it was excusing.
