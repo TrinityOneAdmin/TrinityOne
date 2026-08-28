@@ -286,10 +286,14 @@ called time on it, correctly.
   `subscribeMyServingRequests` in the app) still decide by arrival order and delete by id. Concretely: a
   DELEGATED steward withdrawing a "can you serve?" never clears it from anyone's phone — the member honours a
   withdrawal only from the church key. A stale ask card, for ever.
-- **Sealed group events render blank in the console's group window**, and have since `c592abb` (15 Aug). The
-  console seals event documents; both group-event readers parse with bare `JSON.parse`, so a sealed event has
-  no title, date or place. Members are rescued by accident — the merged calendar dedups against the properly
-  unsealing church-calendar reader — which is luck, not design.
+- **Sealed group events render blank in the console's group window** — **VERIFIED ON DEVICE 2026-08-28,
+  exactly as described.** Live console + live relay + the OPPO. A steward scheduled "SEAL CHECK — group event"
+  in the Prayer group's window: it published fine (`trinityone/event:evtmtcldwo51i35ua`, content
+  `{"e":"Av29Q/dJ…"}` — the sealed envelope) and the group window that posted it showed **nothing at all** —
+  no title, no date, no upcoming block. The member's phone DOES show it under Events, confirming the
+  "rescued by accident" half too. So the person who schedules it is the one person who cannot see it.
+  `publishEvent` seals via `_sealChurchDoc` (src/steward.src.js:5605) and `subscribeGroupEvents` reads with a
+  bare `JSON.parse(e.content)` (:5643), so the fields come back undefined.
 - **The console does not filter by roster at all.** After `de6e05a` the phones promote the church's copy when a
   steward is revoked; the console still shows the revoked steward's. Pinned by a failing-if-changed test.
 - **A steward's SOLE work still vanishes on revocation** — nothing to promote. Needs the church to republish.
