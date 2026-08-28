@@ -55,54 +55,6 @@ before(async () => {
 });
 after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
-test('the asker can open a request', async () => {
-  const [ok, why] = await publish(pub, carereq(ellie, 'req1'));
-  assert.equal(ok, true, `a member could not ask for help at all: ${why}`);
-});
-
-test('ANOTHER MEMBER CANNOT WRITE AT THAT SAME ID', async () => {
-  await sleep(150);
-  const [ok] = await publish(pub, carereq(mallory, 'req1'));
-  assert.equal(ok, false,
-    'a member published their own copy at somebody else\'s request id. Every reader takes newest-wins, so ' +
-    'that copy becomes "the request" — the steward\'s reply seals to the forger and the asker gets nothing.');
-});
-
-test('…not even with an older timestamp, which would win an earliest-wins rule', async () => {
-  const [ok] = await publish(pub, carereq(mallory, 'req1', now() - 86400));
-  assert.equal(ok, false, 'back-dating let a second author claim an id that was already owned');
-});
-
-test('the asker may still update their OWN request', async () => {
-  await sleep(150);
-  const [ok, why] = await publish(pub, carereq(ellie, 'req1'));
-  assert.equal(ok, true, `the asker can no longer revise or withdraw their own request: ${why}`);
-});
-
-// NOT COVERED HERE, and worth knowing: the `!CAREREQ_OWNER.has(rid)` guard in note() only changes anything
-// for events ALREADY ON DISK when this fix ships. accept() runs before note(), so once the gate is live a
-// second author's copy is refused and never stored — which means this test cannot manufacture the case. If a
-// forgery were already stored from an older build, boot replays in created_at ASC and the earliest copy wins,
-// which is why the guard is `!has` rather than an unconditional set. Pre-pilot there is no such data.
-test('a fresh id is still free to whoever asks first', async () => {
-  const [ok, why] = await publish(pub, carereq(mallory, 'req2'));
-  assert.equal(ok, true, `ownership leaked across ids — nobody else can ask for help any more: ${why}`);
-});
-
-test('OWNERSHIP SURVIVES A RESTART — it is rebuilt from what is on disk', async () => {
-  // CHILD_PHOTOS_OK shipped without this and was empty after every boot. note() replays kind 30078 at boot in
-  // created_at order, so the map refills — but only a restart proves it, and only a restart would have caught
-  // that one.
-  pub.close();
-  relay.kill('SIGKILL');
-  await sleep(400);
-  relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' }, stdio: 'ignore' });
-  await waitReady();
-  pub = await connect();
-  const [ok] = await publish(pub, carereq(mallory, 'req1'));
-  assert.equal(ok, false, 'after a restart the id was unowned again and the forgery was accepted');
-});
-
 // ── the ID ITSELF NAMES THE ASKER ──────────────────────────────────────────────────────────────────────────
 // The map above only ever guarded accept(). /import and relay-to-relay sync call store.put() directly and
 // never reach it, so a forged request could arrive by replication and sit beside the genuine one — every
@@ -145,9 +97,15 @@ test('back-dating does not help, because there is no ordering to win', async () 
   assert.equal(ok, false, 'a back-dated forgery was accepted');
 });
 
-test('a member whose app has NOT updated can still ask for help', async () => {
-  // Old builds mint a bare random id with no owner prefix. Refusing those would refuse a request for help
-  // because somebody had not updated their app, which is the worst thing on this screen to refuse.
+test('AN ID THAT NAMES NOBODY IS REFUSED — one rule, not two', async () => {
+  // This used to be allowed, falling back to a map of who-claimed-which-id. The fallback was not free: the map
+  // was consulted only in accept(), so a prefix-less request had protection at ONE door out of four — the very
+  // bypass the id check exists to close, preserved inside the thing that replaced it. Decided with the owner,
+  // 2026-08-28: this lands before the pilot, so no member is running an app old enough to mint one.
   const [ok, why] = await publish(pub, carereq(mallory, 'legacyid00000000'));
-  assert.equal(ok, true, `a prefix-less id from an older build was refused: ${why}`);
+  assert.equal(ok, false, 'a request whose id names nobody was stored, and nothing guards it on three of the ' +
+    'four doors into this relay');
+  assert.match(String(why), /update/i,
+    `the refusal does not tell the app to update (${why}), so a member on an out-of-date build is told their ` +
+    'connection failed when the truth is their app is too old');
 });

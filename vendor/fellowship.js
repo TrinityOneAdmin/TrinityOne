@@ -10190,6 +10190,7 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care request publish failed", e);
+        if (/update the app/i.test(String(e && e.message || ""))) return { error: "stale-app" };
         return null;
       }
       return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };

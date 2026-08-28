@@ -35,6 +35,10 @@ const MINORS_D = 'trinityone/minors:', AVAIL_D = 'trinityone/careavail:', SAFE_D
 const NEED_D = 'trinityone/care:', SLOT_D = 'trinityone/careslot:', SKIP_D = 'trinityone/careskip:';
 const NETWORK_D = 'trinityone/network:';
 const OPEN_GID = 'grpA-prayer-open', OPEN_GID_B = 'grpB-prayer-open';
+// A CARE REQUEST ID NAMES ITS ASKER — `<first16 of their pubkey>-<tail>` — and the relay refuses one that
+// does not, so these fixtures mint them the way the app does. Before that rule the id was random and any
+// author could write at it; that is what let a forged request replace a real one in the steward's queue.
+const rid = (who, tail) => who.pub.slice(0, 16) + '-' + tail;
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -94,7 +98,7 @@ before(async () => {
   assert.equal((await publish(pub, doc(A, MEALS_SETTINGS_D, { enabled: true, adminGroupId: TEAM })))[0], true);
   await sleep(150);
   assert.equal((await publish(pub, chat(alice, GID, 'MEETING AT THE FARMHOUSE 9PM')))[0], true, 'a member of the private group can post');
-  assert.equal((await publish(pub, doc(alice, CAREREQ_D + 'r1', { keys: {}, enc: 'SEALED' }, [['church', A.pub]])))[0], true);
+  assert.equal((await publish(pub, doc(alice, CAREREQ_D + rid(alice, 'r1'), { keys: {}, enc: 'SEALED' }, [['church', A.pub]])))[0], true);
   // …and the pieces the cross-tenant cases need: a member of B, and A's ORDINARY open group. The invite-only
   // group above was already guarded (AUDIT-2026-07-24); the OPEN group — the one a congregation actually talks
   // in — was never brought along.
@@ -127,7 +131,7 @@ test('a co-tenant church CANNOT rewrite another church’s team roster', async (
 });
 
 test('the hijack does not grant care-admin: A’s sealed help request stays private', async () => {
-  const ws = await connect(); const got = await reqCollect(ws, 'x2', { kinds: [30078], '#d': [CAREREQ_D + 'r1'] }, mallory.sk); ws.close();
+  const ws = await connect(); const got = await reqCollect(ws, 'x2', { kinds: [30078], '#d': [CAREREQ_D + rid(alice, 'r1')] }, mallory.sk); ws.close();
   assert.equal(got.length, 0, 'a member who forged the roster must not read A’s ask-for-help request');
 });
 

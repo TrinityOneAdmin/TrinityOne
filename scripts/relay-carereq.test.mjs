@@ -23,6 +23,10 @@ import { requireFreePort } from './test-ports.mjs';
 const PORT = 8856;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:', CARETEAM_D = 'trinityone/careteam:', CARESTATUS_D = 'trinityone/carereqstatus:', CARECHAT_D = 'trinityone/carechat:';
+// A CARE REQUEST ID NAMES ITS ASKER — `<first16 of their pubkey>-<tail>` — and the relay refuses one that
+// does not, so these fixtures mint them the way the app does. Before that rule the id was random and any
+// author could write at it; that is what let a forged request replace a real one in the steward's queue.
+const rid = (who, tail) => who.pub.slice(0, 16) + '-' + tail;
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -65,14 +69,14 @@ before(async () => {
   await sleep(120);
   // church publishes the care-team roster; member M opens a private request
   assert.equal((await publish(pub, careteam(church)))[0], true, 'church published the care-team roster');
-  assert.equal((await publish(pub, carereq(M, 'req1', 'CIPHERTEXT-M-help')))[0], true, 'member M opened a request');
+  assert.equal((await publish(pub, carereq(M, rid(M, 'req1'), 'CIPHERTEXT-M-help')))[0], true, 'member M opened a request');
 });
 after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
 test('any member can open a request; an outsider cannot; a church-less request is refused', async () => {
-  assert.equal((await publish(pub, carereq(N, 'req2', 'CIPHERTEXT-N')))[0], true, 'member N can open a request');
-  assert.equal((await publish(pub, carereq(rando, 'req3', 'x')))[0], false, 'a non-member outsider cannot');
-  assert.equal((await publish(pub, carereq(M, 'req4', 'x', /*tagChurch*/ false)))[0], false, 'a request naming no church is refused');
+  assert.equal((await publish(pub, carereq(N, rid(N, 'req2'), 'CIPHERTEXT-N')))[0], true, 'member N can open a request');
+  assert.equal((await publish(pub, carereq(rando, rid(rando, 'req3'), 'x')))[0], false, 'a non-member outsider cannot');
+  assert.equal((await publish(pub, carereq(M, rid(M, 'req4'), 'x', /*tagChurch*/ false)))[0], false, 'a request naming no church is refused');
 });
 
 test('only church/steward can write the care-team roster — a plain member cannot forge it', async () => {
@@ -85,36 +89,36 @@ test('a member CAN read the roster (so it can seal a request to the care team)',
 });
 
 test('the author reads their own request back; the church (care team) reads it', async () => {
-  const ws1 = await connect(); const mine = await reqCollect(ws1, 'a1', { kinds: [30078], '#d': [CAREREQ_D + 'req1'] }, M.sk); ws1.close();
-  assert.ok(ofD(mine, CAREREQ_D + 'req1').some(e => e.pubkey === M.pub), 'the author reads their own request');
-  const ws2 = await connect(); const asChurch = await reqCollect(ws2, 'c1', { kinds: [30078], '#d': [CAREREQ_D + 'req1'] }, church.sk); ws2.close();
-  assert.ok(ofD(asChurch, CAREREQ_D + 'req1').some(e => e.pubkey === M.pub), 'the church (care team) reads the request');
+  const ws1 = await connect(); const mine = await reqCollect(ws1, 'a1', { kinds: [30078], '#d': [CAREREQ_D + rid(M, 'req1')] }, M.sk); ws1.close();
+  assert.ok(ofD(mine, CAREREQ_D + rid(M, 'req1')).some(e => e.pubkey === M.pub), 'the author reads their own request');
+  const ws2 = await connect(); const asChurch = await reqCollect(ws2, 'c1', { kinds: [30078], '#d': [CAREREQ_D + rid(M, 'req1')] }, church.sk); ws2.close();
+  assert.ok(ofD(asChurch, CAREREQ_D + rid(M, 'req1')).some(e => e.pubkey === M.pub), 'the church (care team) reads the request');
 });
 
 test('another member CANNOT read the request, and anon reads nothing (care-team only)', async () => {
-  const ws = await connect(); const asN = await reqCollect(ws, 'n1', { kinds: [30078], '#d': [CAREREQ_D + 'req1'] }, N.sk); ws.close();
-  assert.equal(ofD(asN, CAREREQ_D + 'req1').length, 0, 'a different member cannot read the ask-for-help request');
-  const ws2 = await connect(); const anon = await reqCollect(ws2, 'x1', { kinds: [30078], '#d': [CAREREQ_D + 'req1'] }); ws2.close();
-  assert.equal(ofD(anon, CAREREQ_D + 'req1').length, 0, 'anon reads no requests');
+  const ws = await connect(); const asN = await reqCollect(ws, 'n1', { kinds: [30078], '#d': [CAREREQ_D + rid(M, 'req1')] }, N.sk); ws.close();
+  assert.equal(ofD(asN, CAREREQ_D + rid(M, 'req1')).length, 0, 'a different member cannot read the ask-for-help request');
+  const ws2 = await connect(); const anon = await reqCollect(ws2, 'x1', { kinds: [30078], '#d': [CAREREQ_D + rid(M, 'req1')] }); ws2.close();
+  assert.equal(ofD(anon, CAREREQ_D + rid(M, 'req1')).length, 0, 'anon reads no requests');
   assert.equal(anon.gotAuth, true, 'relay challenged (request present, withheld)');
 });
 
 test('only the care team may resolve a request (carereqstatus) — a plain member cannot', async () => {
-  assert.equal((await publish(pub, status(church, 'req1', 'approved')))[0], true, 'the church can resolve a request');
-  assert.equal((await publish(pub, status(N, 'req1', 'declined')))[0], false, 'a plain member cannot write a resolution');
+  assert.equal((await publish(pub, status(church, rid(M, 'req1'), 'approved')))[0], true, 'the church can resolve a request');
+  assert.equal((await publish(pub, status(N, rid(M, 'req1'), 'declined')))[0], false, 'a plain member cannot write a resolution');
 });
 
 test('the requester reads their resolution (p-tagged); another member cannot', async () => {
-  const ws = await connect(); const asM = await reqCollect(ws, 's1', { kinds: [30078], '#d': [CARESTATUS_D + 'req1'] }, M.sk); ws.close();
-  assert.equal(ofD(asM, CARESTATUS_D + 'req1').length, 1, 'the asker sees their request was resolved');
-  const ws2 = await connect(); const asN = await reqCollect(ws2, 's2', { kinds: [30078], '#d': [CARESTATUS_D + 'req1'] }, N.sk); ws2.close();
-  assert.equal(ofD(asN, CARESTATUS_D + 'req1').length, 0, 'an unrelated member cannot read the resolution');
+  const ws = await connect(); const asM = await reqCollect(ws, 's1', { kinds: [30078], '#d': [CARESTATUS_D + rid(M, 'req1')] }, M.sk); ws.close();
+  assert.equal(ofD(asM, CARESTATUS_D + rid(M, 'req1')).length, 1, 'the asker sees their request was resolved');
+  const ws2 = await connect(); const asN = await reqCollect(ws2, 's2', { kinds: [30078], '#d': [CARESTATUS_D + rid(M, 'req1')] }, N.sk); ws2.close();
+  assert.equal(ofD(asN, CARESTATUS_D + rid(M, 'req1')).length, 0, 'an unrelated member cannot read the resolution');
 });
 
 test('shared thread: the asker can post + read; the care team reads; an unrelated member cannot', async () => {
-  const dM = CARECHAT_D + 'req1:m1';
-  assert.equal((await publish(pub, chat(M, 'req1', 'm1')))[0], true, 'the asker (a member) can post to the thread');
-  assert.equal((await publish(pub, chat(rando, 'req1', 'm2')))[0], false, 'a non-member outsider cannot post');
+  const dM = CARECHAT_D + rid(M, 'req1') + ':m1';
+  assert.equal((await publish(pub, chat(M, rid(M, 'req1'), 'm1')))[0], true, 'the asker (a member) can post to the thread');
+  assert.equal((await publish(pub, chat(rando, rid(M, 'req1'), 'm2')))[0], false, 'a non-member outsider cannot post');
   const ws1 = await connect(); const asChurch = await reqCollect(ws1, 'h1', { kinds: [30078], '#d': [dM] }, church.sk); ws1.close();
   assert.equal(ofD(asChurch, dM).length, 1, 'the care team reads the thread');
   const ws2 = await connect(); const asM = await reqCollect(ws2, 'h2', { kinds: [30078], '#d': [dM] }, M.sk); ws2.close();
@@ -129,11 +133,11 @@ test('SAFEGUARDING: a non-cleared adult cannot join a MINOR asker’s thread; th
   assert.equal((await publish(pub, minors))[0], true, 'minors list stored');
   await sleep(150);
   // an uncleared adult member may NOT post into the child's thread (routing-around the kind-4 gate is blocked)
-  assert.equal((await publish(pub, chat(N, 'req1', 'sgN')))[0], false, 'a non-cleared adult cannot message a child');
+  assert.equal((await publish(pub, chat(N, rid(M, 'req1'), 'sgN')))[0], false, 'a non-cleared adult cannot message a child');
   // the child themselves may post, and the child's OWN church may reach them
-  assert.equal((await publish(pub, chat(M, 'req1', 'sgSelf')))[0], true, 'the child may post to their own thread');
-  assert.equal((await publish(pub, chat(church, 'req1', 'sgCh')))[0], true, 'the child’s own church may reach them');
+  assert.equal((await publish(pub, chat(M, rid(M, 'req1'), 'sgSelf')))[0], true, 'the child may post to their own thread');
+  assert.equal((await publish(pub, chat(church, rid(M, 'req1'), 'sgCh')))[0], true, 'the child’s own church may reach them');
   // and an uncleared adult cannot READ the child's thread
-  const ws = await connect(); const asN = await reqCollect(ws, 'sg1', { kinds: [30078], '#d': [CARECHAT_D + 'req1:sgCh'] }, N.sk); ws.close();
-  assert.equal(ofD(asN, CARECHAT_D + 'req1:sgCh').length, 0, 'a non-cleared adult cannot read a child’s thread');
+  const ws = await connect(); const asN = await reqCollect(ws, 'sg1', { kinds: [30078], '#d': [CARECHAT_D + rid(M, 'req1') + ':sgCh'] }, N.sk); ws.close();
+  assert.equal(ofD(asN, CARECHAT_D + rid(M, 'req1') + ':sgCh').length, 0, 'a non-cleared adult cannot read a child’s thread');
 });

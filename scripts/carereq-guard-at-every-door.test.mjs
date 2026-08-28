@@ -74,13 +74,19 @@ test('the check is stateless — it reads the event, not a map', () => {
   assert.match(fn, /e\.pubkey/, 'it does not compare the id against the event author at all');
 });
 
-test('an id with no owner prefix is still allowed through', () => {
-  // Old builds mint a bare random id. Refusing those refuses a request for help because somebody has not
-  // updated their app — the worst thing on this screen to refuse.
+test('ONE RULE: an id that names nobody is refused', () => {
+  // This began as two rules — the id check, plus a map of who-claimed-which-id as a fallback for ids minted
+  // before it. The fallback was not free: the map was consulted only in accept(), so a prefix-less request had
+  // protection at ONE door out of four, preserving the exact bypass the id check exists to close. Decided with
+  // the owner, 2026-08-28: this lands before the pilot, so nobody is running an app old enough to mint one,
+  // and the relay tells such an app to update rather than blaming the member's connection.
   const at = SRC.indexOf('function carereqIdOk(');
   const fn = SRC.slice(at, SRC.indexOf('\n}', at));
-  assert.match(fn, /if \(!m\) return true;/,
-    'a request from an app that predates self-naming ids is refused outright');
+  assert.match(fn, /if \(!m\) return false;/,
+    'an id that names nobody is waved through, and three of the four doors have nothing else to check it with');
+  assert.equal(SRC.indexOf('CAREREQ_OWNER'), -1,
+    'the ownership map is back. It only ever guarded one door; keeping it alongside the id check is what ' +
+    'carried the bypass forward.');
 });
 
 test('the read gate refuses to SERVE a mismatched copy', () => {

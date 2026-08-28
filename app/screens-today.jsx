@@ -528,6 +528,11 @@ const CARE_SEND_REFUSAL = {
   'no-one-cleared': 'Your church hasn’t set up who can help young people yet. Please speak to a leader in person — they can sort this out for you.',
   'unknown-audience': 'We couldn’t check who can help you right now. Try again in a moment, or speak to a leader in person.',
   'unknown-clearance': 'We couldn’t check your account with your church yet. Try again in a moment, or speak to a leader in person.',
+  // The relay refuses a request from a build that predates self-naming request ids. Without this the member is
+  // told to check their connection, which sends them looking in the wrong place on the one screen where that
+  // matters most. This build cannot itself produce that refusal — it always mints a naming id — so it is
+  // insurance for the NEXT time the relay has to refuse an old app, not for this change.
+  'stale-app': 'Please update the app to ask for help — this version can’t send a request. If you can’t update right now, speak to a leader in person.',
 };
 function careSentWording(res) {
   // A YOUNG PERSON DID NOT WRITE TO THE CARE TEAM. Their request goes to the adults their church has cleared,

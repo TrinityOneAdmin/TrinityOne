@@ -3873,7 +3873,16 @@ window.Fellowship = {
     // The tag carries no more than the relay already knows: it holds the minors list itself, and only the
     // sealed audience is ever served this event.
     const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['aud', childish ? 'cleared' : 'team']], content: JSON.stringify({ keys, enc }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request publish failed', e); return null; }
+    // KEEP THE RELAY'S REASON when it is one the member can act on. _publishAny throws with the relay's own
+    // message; swallowing it turned "your app is too old" into "check your connection", which sends somebody
+    // asking for help off to look at their wifi. Everything else still returns null, so no existing caller
+    // changes behaviour.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) {
+      console.warn('[fellowship] care request publish failed', e);
+      if (/update the app/i.test(String((e && e.message) || ''))) return { error: 'stale-app' };
+      return null;
+    }
     // The caller must be able to tell the member the truth about who has this. `narrowed` = we could not
     // establish the team, so only the church leader holds a key to it; teamCount 0 with narrowed false = the
     // church has genuinely named nobody. Either way "Sent to your care team" is not a true sentence.

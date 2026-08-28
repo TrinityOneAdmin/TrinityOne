@@ -940,19 +940,24 @@ function idNamesOwner(id) {
 }
 // A CARE REQUEST ID NAMES ITS ASKER — `<askerpubprefix>-<random>`, checked with nothing remembered.
 //
-// The map below (CAREREQ_OWNER) was the first attempt and it only ever guarded accept(). accept() is the live
+// ONE RULE, NOT TWO. This began as a map of who-claimed-which-id, and when the id check was added the map
+// stayed on as a fallback for ids minted before it. That fallback was not free: the map was only ever
+// consulted in accept(), so a request with no owner prefix had protection at ONE door out of four — the very
+// bypass the id check exists to close, preserved inside the thing that replaced it. An id that names nobody is
+// now refused outright. Decided with the owner, 2026-08-28: this lands before the pilot, so no member is
+// running an app old enough to mint one.
+//
+// The first attempt was a map of who-claimed-which-id, and it only ever guarded accept(). accept() is the live
 // write door; /import and relay-to-relay sync call store.put() directly and never reach it, so a forged copy
 // could arrive by replication and sit beside the real one — and every reader picks newest-wins. This check has
 // no such gap because it holds no state: it is a property of the event, true at every door, on every relay,
 // after every restart, and for any entry point added later.
 //
-// Returns true when the id carries no owner prefix — a request from a build that predates this. Those fall
-// back to CAREREQ_OWNER, exactly as idOwnerOk falls back to first-writer-wins for an id with no embedded
-// owner, so a member whose app has not updated can still ask for help.
+// An id with no owner prefix is REFUSED, not waved through. See the note above on why the fallback had to go.
 function carereqIdOk(e, d) {
   if (!d.startsWith(CAREREQ_D)) return true;
   const m = ID_OWNER_RE.exec(d.slice(CAREREQ_D.length));
-  if (!m) return true;                                   // no embedded owner → the map decides
+  if (!m) return false;                                  // ONE RULE: an id that names nobody names nobody
   return String(e.pubkey || '').startsWith(m[1]);        // the id names them, so only they may write here
 }
 function idOwnerOk(owner, e, id) {
@@ -1022,14 +1027,6 @@ function rebuildMinors() { MINORS.clear(); for (const s of MINORS_BY.values()) f
 // deliberately allows them. hydrateMaps() therefore replays kind 0 explicitly. It did not, originally, and
 // this comment claimed it did; the claim was never checked and an audit disproved it with a restart probe.
 const CHILD_PHOTOS_OK = new Set();
-// WHO OWNS A CARE-REQUEST ID. Addressable events are per (author, kind, d-tag), so two members can both hold a
-// copy of `carereq:<id>` and every reader has to choose between them — and they choose newest-wins. That let a
-// member publish a NEWER request at somebody else's id: it replaced the real one in the steward's triage list,
-// so the steward's reply sealed to the forger and the asker got nothing. The client-side author check added
-// for this took its idea of "the asker" from that same list, which made the check circular. Audit, 2026-08-28.
-// Fixed the way group: and roster: ids were fixed after AUDIT-2026-07-24: refuse at the door once an id has an
-// owner. First writer takes it; nobody else may ever write there.
-const CAREREQ_OWNER = new Map();   // carereq id -> the pubkey that first published it
 
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
 const APPROVED = new Set();
@@ -1374,7 +1371,7 @@ function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS,
-                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, CAREREQ_OWNER]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
@@ -1558,10 +1555,6 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(MINORS_D) && CHURCH_PUBS.has(cp = d.slice(MINORS_D.length)) && e.pubkey === cp) {   // safeguarding: church's minors list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     MINORS_BY.set(cp, set); if (!_hydrating) rebuildMinors();
-  }
-  else if (d.startsWith(CAREREQ_D)) {   // first writer owns this request id, for ever — see CAREREQ_OWNER
-    const rid = d.slice(CAREREQ_D.length);
-    if (rid && !CAREREQ_OWNER.has(rid)) CAREREQ_OWNER.set(rid, e.pubkey);
   }
   else if (d.startsWith(APPROVED_D) && CHURCH_PUBS.has(cp = d.slice(APPROVED_D.length)) && e.pubkey === cp) {   // safeguarding: church's cleared-adults list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
@@ -2010,12 +2003,7 @@ function accept(e) {
     // member's request id, replace it in every reader's newest-wins list, and redirect the reply away from the
     // person who asked. Enforced HERE because the clients cannot tell the two copies apart: whichever one they
     // trust to name the asker is the one an attacker controls.
-    if (d.startsWith(CAREREQ_D)) {
-      if (!carereqIdOk(e, d)) return false;              // the id names somebody else
-      const rid = d.slice(CAREREQ_D.length);
-      const owner = rid && CAREREQ_OWNER.get(rid);
-      if (owner && owner !== e.pubkey) return false;     // …or an older, prefix-less id already claimed
-    }
+    if (d.startsWith(CAREREQ_D) && !carereqIdOk(e, d)) return false;
     // a message in a request's shared care-team↔asker thread. Member-writable (so the asker can reply); must
     // name its church, then falls to the member rule + per-member cap. The content is sealed to the care team +
     // asker, so a non-audience write is unreadable garbage the recipients' client filters out on decryption.
@@ -4463,7 +4451,19 @@ wss.on('connection', (ws, req) => {
       // forge events under any pubkey (church/steward/member) — fake announcements, fake funds (with a
       // hostile lud16 to redirect giving), or flood forged events to evict real ones (MAX_EVENTS DoS).
       if (!verifyEvent(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: signature failed'])); return; }
-      if (!accept(evt)) { rejectLog(evt, ws, 'not a member or not permitted for this group'); ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
+      // SAY WHICH REFUSAL THIS IS when the app can act on it. A care request whose id does not name its asker
+      // comes from a build that predates self-naming ids, and the generic "not a member or not permitted"
+      // sends that person off to check their connection when the truth is their app is too old. This is the
+      // one screen where a misleading failure is least acceptable: somebody asking for help.
+      if (!accept(evt)) {
+        const _rd = dtag(evt);
+        const _stale = evt.kind === 30078 && _rd.startsWith(CAREREQ_D) && !ID_OWNER_RE.test(_rd.slice(CAREREQ_D.length));
+        rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids' : 'not a member or not permitted for this group');
+        ws.send(JSON.stringify(['OK', evt.id, false, _stale
+          ? 'blocked: please update the app to ask for help — this version cannot send a request'
+          : 'blocked: not a member or not permitted for this group']));
+        return;
+      }
       // was this pubkey ALREADY a known member of the church it's posting to? MEMBER_DOCS is rebuilt from stored
       // docs, so this survives relay restarts — a boot re-announce won't re-alert the steward. Captured before note().
       const _mdD = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
