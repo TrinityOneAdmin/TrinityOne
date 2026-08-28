@@ -286,6 +286,18 @@ called time on it, correctly.
   `subscribeMyServingRequests` in the app) still decide by arrival order and delete by id. Concretely: a
   DELEGATED steward withdrawing a "can you serve?" never clears it from anyone's phone — the member honours a
   withdrawal only from the church key. A stale ask card, for ever.
+  **VERIFIED ON DEVICE 2026-08-28** — live relay, OPPO, a real delegated steward (church-signed `stewards:`
+  doc granting `content`). Two cases, and they differ, which the original note did not distinguish:
+    - The steward asks, then withdraws his OWN ask: the card stays in the live session but IS gone after an
+      app restart. Not "for ever" — the tombstone REPLACED his own copy, so there is nothing left to re-add
+      it. The member's reader never honoured the withdrawal; the relay simply has nothing to serve.
+    - The CHURCH asks and the delegated steward withdraws: **the card survives the withdrawal, the restart,
+      and everything after it.** Confirmed on the phone at every step. The relay holds both copies at the one
+      d-tag — the steward's tombstone and the church's live ask — because addressable events are per author.
+      `subscribeMyServingRequests` deletes only on `e.pubkey === churchPub`, so it ignores the tombstone, and
+      the church's copy re-adds the card on every reconnect. THIS is the "for ever" case, and it is the
+      ordinary one: the church creates the rota ask, the delegated steward is the person who withdraws it.
+  So the finding is real and the note was right, but the reason is the two-author split, not the reader alone.
 - **Sealed group events render blank in the console's group window** — **VERIFIED ON DEVICE 2026-08-28,
   exactly as described.** Live console + live relay + the OPPO. A steward scheduled "SEAL CHECK — group event"
   in the Prayer group's window: it published fine (`trinityone/event:evtmtcldwo51i35ua`, content
