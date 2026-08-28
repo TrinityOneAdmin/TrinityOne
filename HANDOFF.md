@@ -213,6 +213,30 @@ one shown to the CLEARED ADULT about a child's request.
 **5. WITHDRAWN.** This slot held a claim that the child/adult DM gate was never holding and that any approved
 member may message a child. It is false — see the false-alarm section above. The gate is enforced and correct.
 
+## WHY THE BACKWARDS-COMPATIBILITY RULE EXISTS — demonstrated on a device, 2026-08-28
+
+Worth keeping, because it is the clearest evidence for the owner's standing rule that everything must be
+backwards compatible once the pilot starts.
+
+a8 was updated to the self-naming care-request id rule while the OPPO still ran the previous build. A member
+asked for help. Measured at both ends:
+
+    relay refused:  "blocked: please update the app to ask for help — this version cannot send a request"
+    she was shown:  "Couldn't send — check your connection and try again."
+    on the relay:   nothing
+
+The relay said exactly the right thing. The app could not render it, because the code that maps that reason to
+a message shipped in the SAME release that started refusing her. An update prompt can never help an app that is
+already out of date — only the next one. So a breaking relay change, post-pilot, leaves existing members with a
+message that sends them to look at their wifi and no route forward at all.
+
+Two consequences worth holding on to:
+  - The stale-app message added here is insurance for the NEXT change, not this one. That was stated when it
+    was built and is now demonstrated rather than argued.
+  - If a breaking change ever becomes unavoidable after go-live, it needs an app-side version check that runs
+    BEFORE the write — not a reason string on the refusal. `apk-latest.json` already exists for the updater;
+    nothing currently consults it on this path.
+
 ## VERIFIED ON DEVICE, 2026-08-28 — what the branch's member-app fixes actually do on hardware
 
 OPPO + live a8 relay + the branch APK (debug-signed; testing signing until go-live). Each proved on the phone,
