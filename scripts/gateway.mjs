@@ -1027,6 +1027,14 @@ function rebuildMinors() { MINORS.clear(); for (const s of MINORS_BY.values()) f
 // deliberately allows them. hydrateMaps() therefore replays kind 0 explicitly. It did not, originally, and
 // this comment claimed it did; the claim was never checked and an audit disproved it with a restart probe.
 const CHILD_PHOTOS_OK = new Set();
+// Churches that have switched member photos OFF entirely (features.memberPhotos === false). The PARENT of the
+// children's switch above, and until now it had exactly the bug the child one had before 2026-08-28: it lived
+// only in the client, so a church that had turned photos off still had them accepted and served. Measured on
+// the live relay: with the switch off, an adult's photograph was stored without complaint.
+// Note the polarity — member photos are ON by default and a church opts OUT, so this records the churches
+// that said no, whereas CHILD_PHOTOS_OK records the ones that said yes.
+const MEMBER_PHOTOS_OFF = new Set();
+
 
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
 const APPROVED = new Set();
@@ -1123,6 +1131,14 @@ function childPhotoBlocked(pub) {
   const cps = minorGoverningChurches(pub);
   if (!cps.length) return false;
   for (const cp of cps) if (!CHILD_PHOTOS_OK.has(cp)) return true;
+  return false;
+}
+// A CHURCH THAT SWITCHED PHOTOS OFF MEANT IT. If ANY church this person belongs to has turned member photos
+// off, their photograph does not land — the same shape as childPhotoBlocked, and deliberately the same
+// direction of travel: the strictest church a member belongs to decides, because the alternative is that
+// joining a second church quietly undoes the first one's decision.
+function memberPhotoBlocked(pub) {
+  for (const cp of churchesOf(pub)) if (MEMBER_PHOTOS_OFF.has(cp)) return true;
   return false;
 }
 function safeguardAllows(minorPub, other) {
@@ -1376,7 +1392,7 @@ function clearDerivedMaps() {
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
   // flag that lets minors read a room.
-  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK]) { try { s.clear(); } catch {} }
+  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK, MEMBER_PHOTOS_OFF]) { try { s.clear(); } catch {} }
 }
 let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
@@ -1471,9 +1487,14 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   // wasn't relay-enforced". It was not the only one.
   if (e.kind === 0) {
     if (CHURCH_PUBS.has(e.pubkey)) {
-      let allow = false;
-      try { const c = JSON.parse(e.content || '{}'); allow = !!(c && c.features && c.features.childPhotos === true); } catch {}
+      let allow = false, photosOff = false;
+      try {
+        const c = JSON.parse(e.content || '{}');
+        allow = !!(c && c.features && c.features.childPhotos === true);
+        photosOff = !!(c && c.features && c.features.memberPhotos === false);   // opt-OUT: absent means allowed
+      } catch {}
       if (allow) CHILD_PHOTOS_OK.add(e.pubkey); else CHILD_PHOTOS_OK.delete(e.pubkey);
+      if (photosOff) MEMBER_PHOTOS_OFF.add(e.pubkey); else MEMBER_PHOTOS_OFF.delete(e.pubkey);
     }
     return;
   }
@@ -1682,7 +1703,7 @@ function accept(e) {
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     // …but a minor's photograph is refused whatever their membership, unless their church allows it. Placed
     // FIRST so it cannot be fallen through: the member rule below returns true unconditionally.
-    if (childPhotoBlocked(e.pubkey) && _profileHasPhoto(e.content)) return false;
+    if ((childPhotoBlocked(e.pubkey) || memberPhotoBlocked(e.pubkey)) && _profileHasPhoto(e.content)) return false;
     if (isMember) return true;                                   // members/leaders: always
     if (store.query({ kinds: [0], authors: [e.pubkey], limit: 1 }).length) return true;  // a stranger updating their own
     // SECURITY-AUDIT-2026-07-06 M6: reject in O(cap) once the stranger cap is reached, instead of scanning +

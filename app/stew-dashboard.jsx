@@ -5731,6 +5731,12 @@ function DashFeaturesPanel({ church }) {
     setConfirmEnc(false);
     const failed = [], partial = [];
     for (const g of allGroups) {
+      // Teams are skipped DELIBERATELY — they have no encryption control of their own, and encRecips() below
+      // would seal a team room to every member of the church rather than to its roster, which is the wrong
+      // audience for a serving team's private channel. The confirmation now says so out loud: it used to
+      // promise "every group's messages will be sealed", which was more than this does. Found by a device
+      // sweep, 2026-08-28: with the switch ON, a team room was still storing messages in clear, exactly as
+      // this line intends and the copy denied.
       if (g.kind === 'team' || g.encrypted) continue;
       let r = null;
       try { r = await window.Steward.sealGroup(g, encRecips(g)); } catch (e) { r = null; }
@@ -5815,7 +5821,7 @@ function DashFeaturesPanel({ church }) {
           <span style={{ position: 'absolute', top: 3, left: encOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
-      {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body="Every group’s messages will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default too." onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
+      {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body="Every group and broadcast room will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new rooms will be sealed by default too.\n\nServing team rooms are not included: they don’t have an encryption control of their own, so this leaves them as they are." onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
