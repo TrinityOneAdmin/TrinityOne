@@ -38,8 +38,20 @@ test('every store.put is either accept-gated or carries the id check', () => {
   for (const i of sites) {
     // include the line ITSELF: the negentropy path is a one-liner that verifies, checks and puts in sequence,
     // so a window of preceding lines alone reports it unguarded when it is not.
-    const before = LINES.slice(Math.max(0, i - 14), i + 1).join('\n');
-    const guarded = /carereqIdOk\(/.test(before);
+    //
+    // AND THE CALL MUST GATE THE WRITE, not merely appear near it. Two defeats found by audit, 2026-08-28,
+    // both leaving this green while a door stood open:
+    //   `if (carereqIdOk(e, dtag(e))) { }`            — the token is there, the effect is not
+    //   `// carereqIdOk() is applied upstream`         — a comment, in a new door with no call at all
+    // So: ignore comment lines, and require the refusal shape — a NEGATED call that returns, continues or
+    // increments-and-continues. That is the only form that actually stops the put underneath it.
+    const window = LINES.slice(Math.max(0, i - 14), i + 1)
+      .filter(l => !l.trim().startsWith('//'))
+      .join('\n');
+    // Deliberately not bracket-counting: the argument is `dtag(e)`, so the call nests a paren and a regex that
+    // counts them is wrong in a way that reads as the app being broken. Require the NEGATED call and a bail-out
+    // close behind it.
+    const guarded = /!\s*carereqIdOk\([\s\S]{0,60}?(return|continue|\+\+)/.test(window);
     // Exactly ONE site may rely on accept() — the live publish path — and it is named, not guessed at. A
     // proximity search for "accept(" in the preceding lines matched unrelated prose and let an unguarded
     // /import through: the escape hatch was wider than the rule it was excusing.
