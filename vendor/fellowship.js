@@ -7535,7 +7535,29 @@
   }
   var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
   var _noPhoto = /* @__PURE__ */ new Set();
+  var _photosOffChurches = /* @__PURE__ */ new Set();
+  function _notePhotoPolicy(churchPub, content) {
+    const f = content && content.features;
+    const off = !!(f && f.memberPhotos === false);
+    const had = _photosOffChurches.has(churchPub);
+    if (off) _photosOffChurches.add(churchPub);
+    else _photosOffChurches.delete(churchPub);
+    if (had !== off) {
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: {} }));
+      } catch (e) {
+      }
+    }
+  }
+  function _churchPhotosOff() {
+    return _photosOffChurches.size > 0;
+  }
+  function _stripPhoto(pubkey, av) {
+    if (!av || av.kind !== "photo") return av;
+    return { kind: "symbol", color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
+  }
   function _avSuppressPhoto(pubkey, av) {
+    if (_churchPhotosOff()) av = _stripPhoto(pubkey, av);
     return suppressPhotoAv(pubkey, av, _noPhoto, (pk) => AV_SYMBOLS[hashStr(pk || "") % AV_SYMBOLS.length]);
   }
   function displayFor(pubkey) {
@@ -8710,6 +8732,10 @@
         picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
       };
       if (meta.av || prev.av) p.av = meta.av || prev.av;
+      if (_churchPhotosOff()) {
+        p.picture = "";
+        if (p.av) p.av = _stripPhoto(pub, p.av);
+      }
       const hidden = meta.hidden != null ? meta.hidden : prev.hidden;
       if (hidden) p.hidden = true;
       const wire = { about: p.about, picture: p.picture };
@@ -11075,11 +11101,15 @@
       }
       let latest = 0;
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pubk] }], {
+        // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
+        // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
         onevent(e) {
           if (e.created_at < latest) return;
           latest = e.created_at;
           try {
-            onProfile(JSON.parse(e.content));
+            const c = JSON.parse(e.content);
+            _notePhotoPolicy(pubk, c);
+            onProfile(c);
           } catch {
           }
         },

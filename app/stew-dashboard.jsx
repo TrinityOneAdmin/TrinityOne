@@ -5718,6 +5718,10 @@ function DashFeaturesPanel({ church }) {
   // seals them — because a church shown a protection it does not have is the one failure this project cannot
   // afford. Teams are excluded: the encrypt control is not offered for them (see the group list).
   const encUnsealed = (allGroups || []).filter(g => g && g.kind !== 'team' && !g.encrypted);
+  // …and the switch must SAY so. The confirmation was corrected to name the exclusion; the always-visible
+  // row above it still read “every group sealed end-to-end”, which is the claim a steward actually lives
+  // with. Only shown to a church that HAS a serving team, so nobody is warned about a room they don't have.
+  const encTeams = (allGroups || []).filter(g => g && g.kind === 'team');
   const encOn = f.encryptComms !== false && encUnsealed.length === 0;
   const [confirmEnc, setConfirmEnc] = React.useState(false);
   const encRecips = (g) => g.visibility === 'invite' ? (g.members || []) : allMembers.map(m => m.pubkey);
@@ -5815,13 +5819,13 @@ function DashFeaturesPanel({ church }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Encrypt all group chat</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? 'On — every group sealed end-to-end; the relay can’t read them.' : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? ('On — every group and broadcast room sealed end-to-end; the relay can’t read them.' + (encTeams.length ? ' Serving team rooms are not included.' : '')) : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
         </div>
-        <button onClick={toggleEncryptAll} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group’s messages end-to-end so not even the relay can read them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={toggleEncryptAll} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group and broadcast room end-to-end so not even the relay can read them — serving team rooms are not included" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: encOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
-      {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body="Every group and broadcast room will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new rooms will be sealed by default too.\n\nServing team rooms are not included: they don’t have an encryption control of their own, so this leaves them as they are." onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
+      {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body={'Every group and broadcast room will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default.\n\nNew broadcast rooms are not sealed by default — a broadcast is the church’s own voice to everyone. You can seal one from the Groups list.\n\nServing team rooms are not included: they don’t have an encryption control of their own, so this leaves them as they are.'} onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>

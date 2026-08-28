@@ -1667,7 +1667,40 @@ const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 
 // subscribeChurchSafeguard (owner-only). The member can't be forced to change their key, but this
 // church's clients won't *show* the photo — they fall back to the member's symbol/initial.
 let _noPhoto = new Set();
+// A CHURCH THAT SAYS "NO MEMBER PHOTOS" MEANS IT — ONE RULE, BOTH DOORS.
+//
+// The relay refuses a kind-0 carrying a photograph once a church switches member photos off. That gate was
+// right and the client did not know about it, which broke two things at once:
+//
+//   publishing — setProfile carries the PREVIOUS photo forward into every kind-0 it writes, so after the
+//     switch a name change, an "about" edit, or the hide-me-from-the-directory toggle all still carried the
+//     now-forbidden photo. The relay refused the whole event; the app toasted "Profile saved", kept the
+//     change on the phone and told nobody. Margaret changes her surname, her phone shows the new one for
+//     ever and the church shows the old one for ever.
+//
+//   rendering — turning the switch off stopped NEW photos and uncovered none of the old ones. Every
+//     photograph already on the relay carried on being shown to everyone, under a console that said
+//     "colour, initial or symbol only".
+//
+// So: a photo this church forbids is not carried into what we publish, and is not rendered. Strictest wins
+// across churches, exactly as the relay does it — belonging to one church that allows photos does not undo
+// another church's decision.
+const _photosOffChurches = new Set();
+function _notePhotoPolicy(churchPub, content) {
+  const f = content && content.features;
+  const off = !!(f && f.memberPhotos === false);
+  const had = _photosOffChurches.has(churchPub);
+  if (off) _photosOffChurches.add(churchPub); else _photosOffChurches.delete(churchPub);
+  // a steward flipping the switch must repaint the avatars that are already on screen
+  if (had !== off) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: {} })); } catch (e) {} }
+}
+function _churchPhotosOff() { return _photosOffChurches.size > 0; }
+function _stripPhoto(pubkey, av) {
+  if (!av || av.kind !== 'photo') return av;
+  return { kind: 'symbol', color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] };
+}
 function _avSuppressPhoto(pubkey, av) {
+  if (_churchPhotosOff()) av = _stripPhoto(pubkey, av);
   // The rule itself now lives in scripts/trinity-rules.mjs so the console cannot disagree with it. The symbol
   // table stays here because it is this app's, not a shared rule.
   return suppressPhotoAv(pubkey, av, _noPhoto, (pk) => AV_SYMBOLS[hashStr(pk || '') % AV_SYMBOLS.length]);
@@ -2717,6 +2750,12 @@ window.Fellowship = {
       picture: (meta.picture != null ? meta.picture : (prev.picture || '')).trim(),
     };
     if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar
+    // THE PUBLISH DOOR (see _churchPhotosOff above). Carrying the old photo forward is what made every later
+    // edit unpublishable once a church switched member photos off — the relay refused the whole event, so the
+    // name change or the directory opt-out that the member actually came here to make never landed either.
+    // Drop the photo instead: the church has said it does not want one, and a saved name beats a saved photo
+    // that is refused. The member's symbol/initial takes its place, which is what they would have been shown.
+    if (_churchPhotosOff()) { p.picture = ''; if (p.av) p.av = _stripPhoto(pub, p.av); }
     const hidden = (meta.hidden != null ? meta.hidden : prev.hidden);   // opt out of the member directory
     if (hidden) p.hidden = true;
     // NO AUTO-CLAIMED HANDLE FOR A MEMBER. This used to derive <name>@<relay-host> from the display name and
@@ -4468,7 +4507,9 @@ window.Fellowship = {
     if (!pubk) { onProfile(null); return () => {}; }
     let latest = 0;
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pubk] }], {
-      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { onProfile(JSON.parse(e.content)); } catch {} },
+      // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
+      // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const c = JSON.parse(e.content); _notePhotoPolicy(pubk, c); onProfile(c); } catch {} },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };

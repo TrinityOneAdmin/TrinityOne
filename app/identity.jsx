@@ -1390,6 +1390,10 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           {needFull ? <div style={{ fontSize: 12.5, color: name.trim() && !twoWords(name) ? 'var(--clay-ink)' : 'var(--ink-3)', margin: '8px 2px 0', lineHeight: 1.45 }}>{(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real <b>first and last name</b> so people can recognise you.</div> : null}
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 12px' }}>YOUR MARK</label>
           {ctx && ctx.safeguard && ctx.safeguard.photoBlocked && ctx.church && !(ctx.church.features && ctx.church.features.memberPhotos === false) ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 12px', lineHeight: 1.45 }}>A steward has turned off photos for your account. You can still choose a symbol or your initial.</div> : null}
+          {/* A member who HAD a photo watches it disappear the first time they open this sheet after the church
+              switches photos off — the app now drops it rather than publishing an update the relay will refuse.
+              Say why. Without this the change looks like the app losing their picture. */}
+          {ctx && ctx.church && ctx.church.features && ctx.church.features.memberPhotos === false ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 12px', lineHeight: 1.45 }}>{(ctx.church.name || 'Your church')} doesn’t use photographs — everyone here is shown as a symbol or their initial.</div> : null}
           <AvatarPicker value={av} name={name} onChange={setAv} allowPhoto={allowPhoto} />
         </div>
       </Overlay>

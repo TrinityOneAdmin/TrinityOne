@@ -48,6 +48,31 @@ const BODY = grabMethod(FELLOWSHIP, 'async setProfile(meta)');
 const FE_NAME = (BODY.match(/\bfinalizeEvent\d*\b/) || [])[0];
 assert.ok(FE_NAME, 'setProfile no longer signs an event — re-anchor this test');
 
+// setProfile also consults the church-wide member-photo policy before it publishes. Those helpers live at
+// module scope in the bundle, so the lifted method cannot see them — lift the REAL ones in beside it rather
+// than stubbing, or this file would be testing a setProfile that is not the shipped one.
+// With no church policy loaded, _photosOffChurches is empty and the strip is a no-op — exactly production's
+// state for a member whose church has not turned photos off, which is what every case below assumes.
+function grabFn(src, name) {
+  const re = new RegExp('\\n  function ' + name + '\\([\\s\\S]*?\\n  \\}');
+  const m = re.exec(src);
+  assert.ok(m, 'could not lift ' + name + ' from the shipped bundle — re-anchor this test, do not delete it');
+  return m[0];
+}
+function grabVar(src, name) {
+  const re = new RegExp('\\n  (?:var|let|const) ' + name + ' = [\\s\\S]*?;');
+  const m = re.exec(src);
+  assert.ok(m, 'could not lift ' + name + ' from the shipped bundle — re-anchor this test, do not delete it');
+  return m[0];
+}
+const HELPERS = [
+  grabVar(FELLOWSHIP, 'AV_SYMBOLS'),
+  grabVar(FELLOWSHIP, '_photosOffChurches'),
+  grabFn(FELLOWSHIP, 'hashStr'),
+  grabFn(FELLOWSHIP, '_churchPhotosOff'),
+  grabFn(FELLOWSHIP, '_stripPhoto'),
+].join('\n');
+
 // A member-side scope we control: a relay that never answers unless we say so, and a wire we can inspect.
 function memberSide({ seen = false, cached = {}, answerAfterMs = null } = {}) {
   const sk = generateSecretKey(), pub = getPublicKey(sk);
@@ -81,7 +106,7 @@ function memberSide({ seen = false, cached = {}, answerAfterMs = null } = {}) {
   };
   scope.window.trinityToast = scope.window.trinityToast;   // the engine reaches it as window.trinityToast
   const args = Object.keys(scope);
-  const fn = new Function(...args, FE_NAME, `return ({ ${BODY} }).setProfile;`)
+  const fn = new Function(...args, FE_NAME, `${HELPERS}\nreturn ({ ${BODY} }).setProfile;`)
     (...args.map(k => scope[k]), finalizeEvent);
   return { call: (meta) => fn(meta), state, scope, pub };
 }

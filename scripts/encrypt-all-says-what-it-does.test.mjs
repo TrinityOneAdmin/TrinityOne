@@ -14,6 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 // Slices END on an anchor, never on a character count: scripts/test-windows.test.mjs rejects a fixed window
@@ -28,7 +29,7 @@ const between = (from, to) => {
 const dialog = between('title="Encrypt all group chat?"', 'onCancel=');
 
 test('the confirmation does not claim EVERY group is sealed', () => {
-  assert.doesNotMatch(dialog, /Every group’s messages will be sealed/,
+  assert.doesNotMatch(dialog, /every group['\u2019]s messages will be sealed/i,
     'the dialog promises every group is sealed while the sweep deliberately skips serving teams — a church ' +
     'is told it has a protection it does not have, on the one screen where that matters most');
 });
@@ -38,16 +39,104 @@ test('…and says plainly that team rooms are left alone', () => {
     'nothing tells the steward which rooms this misses, so they cannot know to check');
 });
 
-test('the sweep still skips teams — the behaviour is the part that was right', () => {
-  const fn = between('const doEncryptAll', 'const photosOn');
-  assert.match(fn, /g\.kind === 'team' \|\| g\.encrypted/,
-    'teams are now swept in. That is a real change of audience, not a copy fix: encRecips() seals a ' +
-    'non-invite group to EVERY member of the church, so a serving team\'s private room would be handed to ' +
-    'people who are not on it.');
+// ── RUN the sweep rather than read it. A previous version of this file asserted that the string
+// `g.kind === 'team' || g.encrypted` appeared in the function, which an added second loop, an `if (false &&`,
+// or the same words in a COMMENT all satisfy while teams get swept in anyway. So lift the real arrow function
+// out of the screen and execute it against stub groups. ──
+function runSweep(groups) {
+  const body = between('const doEncryptAll = async () =>', '\n  const toggleEncryptAll');
+  const sealed = [], published = [];
+  const ctx = {
+    allGroups: groups,
+    f: {},
+    setConfirmEnc() {},
+    encRecips: (g) => g.visibility === 'invite' ? (g.members || []) : ['m1', 'm2'],
+    window: {
+      dispatchEvent() {},
+      Steward: {
+        sealGroup: async (g) => { sealed.push(g.name); return { sealed: true, skipped: [] }; },
+        publishProfile: (x) => published.push(x),
+      },
+    },
+    CustomEvent: class { constructor(t, i) { this.type = t; this.detail = i && i.detail; } },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(body + '\nthis.run = doEncryptAll;', ctx);
+  return ctx.run().then(() => ({ sealed, published }));
+}
+
+test('the sweep seals groups and broadcasts and leaves serving teams alone', async () => {
+  // encRecips() seals a non-invite room to EVERY member of the church. For a serving team that is the wrong
+  // audience: its private channel would be handed to people who are not on it.
+  const { sealed } = await runSweep([
+    { name: 'Prayer',      kind: 'group' },
+    { name: 'Notices',     kind: 'broadcast' },
+    { name: 'Safeguarding', kind: 'team' },
+    { name: 'Youth',       kind: 'group', encrypted: true },
+  ]);
+  assert.deepEqual(sealed.sort(), ['Notices', 'Prayer'],
+    'the sweep sealed the wrong set — a serving team swept in hands its private room to the whole church, ' +
+    'and a room already sealed being re-sealed rotates a key for no reason');
 });
 
-test('and the switch still refuses to read ON while a room is unsealed', () => {
-  // The honesty guard that was already right, pinned so it stays.
-  assert.match(between('const encUnsealed', 'const [confirmEnc'), /encryptComms !== false && encUnsealed\.length === 0/,
-    'the switch can now read ON while rooms are still unsealed, which is the overclaim this file guards');
+test('the switch only claims ON once every sweepable room really sealed', async () => {
+  const ok = await runSweep([{ name: 'Prayer', kind: 'group' }]);
+  assert.equal(ok.published.length, 1, 'a clean sweep did not flip the flag, so the switch stays off for ever');
+  assert.equal(ok.published[0].features.encryptComms, true);
+});
+
+// ── and the switch's own reading, executed too: a hollowed-out filter (`.filter(g => false)`) still matches
+// the pinned formula, so match the formula AND run it. ──
+function readsOn(groups, features) {
+  const line = between('const encUnsealed', 'const [confirmEnc');
+  const ctx = { allGroups: groups, f: features, React: { useState: () => [] } };
+  vm.createContext(ctx);
+  vm.runInContext(line.replace(/const \[confirmEnc[\s\S]*$/, '') + '\nthis.on = encOn;', ctx);
+  return ctx.on;
+}
+
+test('the switch refuses to read ON while any room is unsealed', () => {
+  assert.equal(readsOn([{ name: 'Prayer', kind: 'group' }], {}), false,
+    'the switch reads ON over an unsealed room — a church shown a protection it does not have');
+  assert.equal(readsOn([{ name: 'Prayer', kind: 'group', encrypted: true }], {}), true,
+    'everything is sealed and the switch still reads OFF, which is the other way to lose a steward\'s trust');
+  assert.equal(readsOn([], { encryptComms: false }), false,
+    'a steward deliberately turned it off and it still reads ON');
+  assert.equal(readsOn([{ name: 'Safeguarding', kind: 'team' }], {}), true,
+    'a serving team — which has no encryption control at all — holds the switch OFF for ever');
+});
+
+// ── THE ROW ABOVE THE DIALOG. The confirmation was corrected and the always-visible settings row was not:
+// it still read "every group sealed end-to-end", which is the claim a steward actually lives with — the
+// dialog is seen once, this line every time they open Settings. The first version of this file could not see
+// these two lines at all, because its only window started at the dialog title. ──
+const row = between('const encUnsealed', 'title="Encrypt all group chat?"');
+
+test('the settings row does not claim more than the sweep does', () => {
+  assert.doesNotMatch(row, /On — every group sealed end-to-end/,
+    'the row claims every group is sealed while serving teams are deliberately skipped');
+  assert.doesNotMatch(row, /Seal every group['\u2019]s messages end-to-end so not even the relay can read them"/,
+    'the toggle\'s hover text still makes the old promise');
+});
+
+// Reading the row is not enough: `const encTeams = []` leaves every string in place and kills the caveat
+// stone dead. So BUILD the sentence the steward reads, from the real expressions, against real groups.
+function subtitle(groups) {
+  const teams = between('const encTeams', '\n  const encOn');
+  const m = /\{encOn \? ([\s\S]*?) : ('Off[^']*')\}/.exec(row);
+  assert.ok(m, 're-anchor: the encrypt-all subtitle is no longer a ternary on encOn');
+  const ctx = { allGroups: groups };
+  vm.createContext(ctx);
+  vm.runInContext(teams + '\nthis.text = (' + m[1] + ');', ctx);
+  return ctx.text;
+}
+
+test('the row names the exclusion, and only to a church that has one', () => {
+  const withTeam = subtitle([{ name: 'Prayer', kind: 'group' }, { name: 'Safeguarding', kind: 'team' }]);
+  assert.match(withTeam, /Serving team rooms are not included/,
+    'a church WITH a serving team is told its switch covers everything — the one case where it does not');
+  const without = subtitle([{ name: 'Prayer', kind: 'group' }]);
+  assert.doesNotMatch(without, /Serving team rooms are not included/,
+    'a church with no serving team is warned about a room it does not have, which is how a real warning ' +
+    'gets tuned out');
 });
