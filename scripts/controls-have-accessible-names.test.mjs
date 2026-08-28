@@ -20,14 +20,22 @@ const CHAT = read('app/screens-chat.jsx');
 const MEALS = read('app/stew-meals.jsx');
 const DASH = read('app/stew-dashboard.jsx');
 
-// A button is "named" if it carries aria-label or title. Icon-only buttons have no text to fall back on.
+// A button is "named" if it carries a NON-EMPTY aria-label or title. Merely CONTAINING the word aria-label is
+// not enough: `aria-label=""` passed the first version of this test while a screen reader announced nothing
+// but "button". An audit defeated it exactly that way, 2026-08-28.
+const namedBy = (line, attr) => {
+  const m = new RegExp(attr + '=(?:"([^"]*)"|\\{([^}]*)\\})').exec(line);
+  if (!m) return false;
+  const v = (m[1] !== undefined ? m[1] : m[2]) || '';
+  return v.trim().length > 0 && v.trim() !== '""' && v.trim() !== "''";
+};
 function unnamedIconButtons(src, iconName) {
   const lines = src.split('\n');
   const bad = [];
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     if (!l.includes('<button')) continue;
-    if (l.includes('aria-label') || l.includes('title')) continue;
+    if (namedBy(l, 'aria-label') || namedBy(l, 'title')) continue;
     if (!lines.slice(i, i + 4).join('\n').includes(`name="${iconName}"`)) continue;
     bad.push(i + 1);
   }
@@ -53,7 +61,12 @@ test('the giving switch reports whether it is on', () => {
   assert.ok(at > 0, 're-anchor: the giving toggle has moved');
   const btn = DASH.slice(at - 200, at + 200);
   assert.match(btn, /role="switch"/, 'the giving toggle is not announced as a switch');
-  assert.match(btn, /aria-checked=/, 'the giving toggle does not report its state');
+  // …and reports the REAL state. `aria-checked={false}` satisfied the old assertion while announcing "off"
+  // whatever the setting was — the audit's exact defeat.
+  assert.doesNotMatch(btn, /aria-checked=\{\s*(true|false)\s*\}/,
+    'the giving toggle announces a hard-coded state, so it is wrong half the time');
+  assert.match(btn, /aria-checked=\{[^}]*giving[^}]*\}/,
+    'the giving toggle does not report the actual setting');
 });
 
 test('the console’s care conversation is a real dialog, and Escape closes it', () => {
@@ -62,7 +75,12 @@ test('the console’s care conversation is a real dialog, and Escape closes it',
   const panel = MEALS.slice(at - 300, at + 100);
   assert.match(panel, /role="dialog"/, 'the panel is an anonymous div to a screen reader');
   assert.match(panel, /aria-modal="true"/, 'nothing tells assistive tech the rest of the page is inert');
-  assert.match(MEALS, /e\.key === 'Escape'/,
+  // …and the handler must actually CLOSE it. `if (e.key === 'Escape') {}` satisfied the old assertion while
+  // Escape did nothing at all — the audit's exact defeat.
+  const keyAt = MEALS.indexOf("e.key === 'Escape'");
+  assert.ok(keyAt > 0,
     'Escape does not close the care conversation — a keyboard user’s only way out is a mouse click on the ' +
     'backdrop, which is not a way out at all');
+  assert.match(MEALS.slice(keyAt, keyAt + 120), /onClose\(\)/,
+    'the Escape handler exists but does not close anything');
 });

@@ -349,9 +349,13 @@ called time on it, correctly.
   newest-wins but inconsistent tie-breaks, so two phones can disagree on an exact-second tie.
 
 **Environmental, not product**
-- `scripts/event-store-import.test.mjs` fails on this dev box because a legacy `relay/relay-db.json` is
-  present and the test reads it if it exists. Moving it aside makes it pass. All three of its filters disagree
-  with a full scan on that data, which is worth its own look — it is not caused by any change this session.
+- ~~`scripts/event-store-import.test.mjs` fails on this dev box~~ **RESOLVED 2026-08-27.** It was never a relay
+  bug and never about the legacy `relay-db.json` being present. `store.query()` de-duplicates replaceable and
+  addressable events (newest wins, lower id on a tie) and the test compared its answer against a RAW full
+  scan — so any corpus containing a superseded copy disagreed. The synthetic corpus had none, which is why it
+  held for a year; the first real dump left on a box had 61 superseded documents and 3 profiles, exactly the
+  discrepancy. The test now de-duplicates the scan the same way before comparing, and passes with the legacy
+  file in place. Verified 2026-08-28: 1 pass, 0 fail, with `relay/relay-db.json` (425KB) still present.
 
 ---
 
