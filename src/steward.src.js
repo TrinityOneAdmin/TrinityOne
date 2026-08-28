@@ -5640,7 +5640,14 @@ window.Steward = {
         // recur/day/groupId/image MUST be carried: the event dialog opens from this list too, and editing
         // there re-publishes what it was handed. Omitting recur/day collapsed a weekly meeting into a single
         // dated entry; omitting groupId unlinked the event from the very group you edited it in. AUDIT 2026-07-26.
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
+        // _openChurchDoc, NOT JSON.parse — the same swap the church calendar reader above already made.
+        // publishEvent SEALS an event under the church name key, and this reader parsed the envelope as if it
+        // were the event: every field came back undefined, so the group window that had just posted the event
+        // showed no title, no date and no place. Broken since c592abb, 15 Aug; confirmed on the live console
+        // 2026-08-28, where members could see the event perfectly and the steward who created it could not.
+        // An event we cannot open is marked _locked rather than dropped, so a key that has not arrived yet
+        // leaves a placeholder instead of silently shortening the list.
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

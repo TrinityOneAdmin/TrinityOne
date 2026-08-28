@@ -19890,7 +19890,12 @@ zoo`.split("\n");
             return;
           }
           try {
-            const c = JSON.parse(e.content);
+            const c = _openChurchDoc(e.content);
+            if (c === null) {
+              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              emit();
+              return;
+            }
             _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, groupId: c.groupId || groupId, image: c.image || "", _by: e.pubkey, ts: e.created_at });
             emit();
           } catch {
