@@ -7,7 +7,7 @@ import { SimplePool } from 'nostr-tools/pool';
 // The SAME normaliser the pool keys its connection map by. Comparing raw URLs against that map is why a
 // perfectly healthy socket could read as unreachable — see relaysHealthy().
 import { normalizeURL } from 'nostr-tools/utils';
-import { _absorbById, _forgetById, _seedFromCache, _reduceAll } from './church-doc-store.src.js';
+import { _absorbById, _forgetById, _seedFromCache, _reduceAll, _tombstoneTargets } from './church-doc-store.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
@@ -3257,7 +3257,7 @@ window.Fellowship = {
         // AUDIT-2026-07-24 (groups): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
         // A DELETE IS A WRITE. It was keyed purely on the id, so a steward tidying away their own duplicate
         // removed the copy somebody else had published too — the round-9 disaster, reproduced by the cleanup.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) }); emit(); } return; }
         try {
           const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey }, _trust); _noteGroupLeaders(pubk, id, c, e.pubkey);
           // SECURITY-AUDIT-2026-07-06 M3: we belong to an invite-only group → we legitimately need NIP-42 auth to
@@ -3291,7 +3291,7 @@ window.Fellowship = {
         if (!d.startsWith(CATEGORY_D)) return;
         const id = d.slice(CATEGORY_D.length);
         // AUDIT-2026-07-24 (categories): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) }); emit(); } return; }
         try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey }, _trust); emit(); } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs   // re-filter once the steward roster lands (steward-authored categories)
@@ -3532,7 +3532,7 @@ window.Fellowship = {
         if (!d.startsWith(PLAN_D)) return;
         const id = d.slice(PLAN_D.length);
         // AUDIT-2026-07-24 (plans): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) }); emit(); } return; }
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _trust); emit(); } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
@@ -3568,7 +3568,7 @@ window.Fellowship = {
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
         // AUDIT-2026-07-24 (devotionals): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) }); emit(); } return; }
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _trust); emit(); } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
@@ -3594,7 +3594,7 @@ window.Fellowship = {
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
         // AUDIT-2026-07-24 (services/rotas/rosters/rooms): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(pubk, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) }); emit(); } return; }
         try {
           const c = _openChurchDoc(pubk, e.content);
           // sealed, and this member has no key for it yet — keep it in the list as LOCKED so the screen can
@@ -4290,7 +4290,7 @@ window.Fellowship = {
         const gid = (e.tags.find(t => t[0] === 't' && groups.includes(t[1])) || [])[1] || '';
         const id = d.slice('trinityone/event:'.length);
         // AUDIT-2026-07-24 (group events): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); } return; }
         try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust); emit(); } catch {}
       },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path

@@ -6321,7 +6321,10 @@
     const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
   }
-  function _forgetById(versions, byId, id, by, ts, trusted) {
+  function _tombstoneTargets(e) {
+    return (e && e.tags || []).filter((t) => t[0] === "for").map((t) => String(t[1] || "")).filter(Boolean);
+  }
+  function _forgetById(versions, byId, id, by, ts, trusted, opts) {
     const vers = versions.get(id);
     if (!vers) {
       if (byId.has(id)) {
@@ -6330,11 +6333,20 @@
       }
       return false;
     }
-    const k = String(by || "");
-    const had = vers.get(k);
-    if (!had) return false;
-    if ((had.ts || 0) > (ts || 0)) return false;
-    vers.delete(k);
+    const keys = [String(by || "")];
+    const cp = String(opts && opts.churchPub || "");
+    const named = opts && opts.targets || [];
+    const mayName = !trusted || trusted({ _by: by });
+    if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
+    let did = false;
+    for (const k of keys) {
+      const had = vers.get(k);
+      if (!had) continue;
+      if ((had.ts || 0) > (ts || 0)) continue;
+      vers.delete(k);
+      did = true;
+    }
+    if (!did) return false;
     if (!vers.size) versions.delete(id);
     _reduceVersions(vers, byId, id, trusted);
     return true;
@@ -15306,6 +15318,9 @@ zoo`.split("\n");
     if (actingChurch && !(tmpl.tags || []).some((t) => t[0] === "church")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["church", actingChurch]] };
     }
+    if (actingChurch && (tmpl.tags || []).some((t) => t[0] === "deleted") && !(tmpl.tags || []).some((t) => t[0] === "for")) {
+      tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["for", actingChurch]] };
+    }
     return finalizeEvent2(_monotonic(tmpl), signer || sk);
   }
   var _PET_ADJ = ["Quiet", "Bright", "Gentle", "Steady", "Faithful", "Humble", "Joyful", "Kind", "Patient", "Bold", "Gracious", "Calm", "Glad", "Warm", "True", "Sure"];
@@ -17767,7 +17782,7 @@ zoo`.split("\n");
           const id = d.slice(FUND_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -17810,7 +17825,7 @@ zoo`.split("\n");
           const id = d.slice(CATEGORY_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19425,7 +19440,7 @@ zoo`.split("\n");
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19488,7 +19503,7 @@ zoo`.split("\n");
           if (!d.startsWith(PLAN_D)) return;
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19553,7 +19568,7 @@ zoo`.split("\n");
           if (!d.startsWith(DEVO_D)) return;
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19603,7 +19618,7 @@ zoo`.split("\n");
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19885,7 +19900,7 @@ zoo`.split("\n");
           if (e.pubkey !== pub && !e.tags.some((t) => (t[0] === "p" || t[0] === "church") && t[1] === pub)) return;
           const id = d.slice(EVENT_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }

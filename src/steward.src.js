@@ -17,7 +17,7 @@ import { SimplePool } from 'nostr-tools/pool';
 // lookup misses and the health check silently answers about nothing. Use the library's own function rather
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
-import { _absorbById, _forgetById, _seedFromCache } from './church-doc-store.src.js';
+import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -1012,6 +1012,17 @@ const stewardedChurches = new Map();   // cp(hex) -> { name } — churches whose
 function feChurch(tmpl, signer) {
   if (actingChurch && !(tmpl.tags || []).some(t => t[0] === 'church')) {
     tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['church', actingChurch]] };
+  }
+  // A DELEGATED STEWARD'S DELETE MUST NAME THE CHURCH'S COPY, OR IT WITHDRAWS NOTHING.
+  // In delegated mode our own key signs while `pub` is the church (see the mode switch below), so a
+  // tombstone is authored by the steward and binds only a version the steward never wrote. Members kept
+  // showing the group, rota or service for ever while this console showed it gone. `for` says whose copy is
+  // meant; the readers honour it for the church's copy alone, never a colleague's. Stamped HERE for the same
+  // reason the church tag is — fifteen call sites publish tombstones and every one of them comes through
+  // this function.
+  if (actingChurch && (tmpl.tags || []).some(t => t[0] === 'deleted')
+      && !(tmpl.tags || []).some(t => t[0] === 'for')) {
+    tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['for', actingChurch]] };
   }
   // Stamp HERE, where every church document is signed. The first attempt at this put it behind
   // _publishSigned() — which turned out to have exactly one caller, while forty-two paths call
@@ -3467,7 +3478,7 @@ window.Steward = {
         if (!d.startsWith(FUND_D)) return;
         const id = d.slice(FUND_D.length);
         const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) }); emit(); return; }
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
@@ -3497,7 +3508,7 @@ window.Steward = {
         if (!d.startsWith(CATEGORY_D)) return;
         const id = d.slice(CATEGORY_D.length);
         const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) }); emit(); return; }
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
@@ -5290,7 +5301,7 @@ window.Steward = {
         // was honoured by id with no author check at all — weaker than the member app. So the phones could be
         // made to agree with each other while the two people HOLDING THE PENS each saw a different rota, and
         // every correction flipped the winner church-wide. Round 9's collision started here.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) }); emit(); return; }
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
@@ -5325,7 +5336,7 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(PLAN_D)) return;
         const id = d.slice(PLAN_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) }); emit(); return; }
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
@@ -5365,7 +5376,7 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) }); emit(); return; }
         try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
       oneose() { emit(); },
@@ -5387,7 +5398,7 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) }); emit(); return; }
         // _openChurchDoc, not JSON.parse: the calendar documents are sealed under the church name key now
         // (cleartext ones written before that still open — it tries plain JSON first). A null means sealed
         // with a key this console does not hold, which must not silently become an empty calendar.
@@ -5636,7 +5647,7 @@ window.Steward = {
         if (!d.startsWith(EVENT_D)) return;
         if (e.pubkey !== pub && !e.tags.some(t => (t[0] === 'p' || t[0] === 'church') && t[1] === pub)) return;   // scope to this church (+ its stewards)
         const id = d.slice(EVENT_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) }); emit(); return; }
         // recur/day/groupId/image MUST be carried: the event dialog opens from this list too, and editing
         // there re-publishes what it was handed. Omitting recur/day collapsed a weekly meeting into a single
         // dated entry; omitting groupId unlinked the event from the very group you edited it in. AUDIT 2026-07-26.

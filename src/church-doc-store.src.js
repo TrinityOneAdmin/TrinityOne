@@ -105,20 +105,46 @@ export function _absorbById(versions, byId, id, rec, trusted) {
   const win = _reduceVersions(vers, byId, id, trusted);
   return !!win && win._by === by;                                 // did THIS write become what people see?
 }
+// WHICH COPIES A TOMBSTONE NAMES. A delete may say, in `for` tags, whose version it means to withdraw.
+// Absent — which is every tombstone written before 2026-08-28 — it means "my own", and nothing changes.
+export function _tombstoneTargets(e) {
+  return ((e && e.tags) || []).filter(t => t[0] === 'for').map(t => String(t[1] || '')).filter(Boolean);
+}
 // A DELETE BINDS ONLY ITS OWN AUTHOR'S COPY. Keyed purely on the id — which is what shipped — one steward
 // tidying up their duplicate removed everybody's, including the copy they had no authority over and could not
 // even see. Now it withdraws that author's version and the next-best is promoted, so the surviving rota comes
 // back rather than the Sunday going blank.
-export function _forgetById(versions, byId, id, by, ts, trusted) {
+//
+// ...WITH ONE NAMED EXCEPTION: THE CHURCH'S OWN COPY. A delegated steward signs with their own key while
+// acting in the church's context, so their delete withdrew a version that was never there — `vers.get(their
+// key)` is empty, this returned false, and the church-authored group, rota or service stayed on every phone
+// for ever. The console shows them the row vanish (it filters by nothing), so the steward is told it worked
+// and the congregation still sees it. That is the worst shape this product has: silent, and only visible to
+// somebody else.
+//
+// The narrow grant is deliberate. A trusted author may withdraw the CHURCH'S copy, and only the church's,
+// and only when the tombstone says so in a `for` tag. It cannot name another steward's copy — that is round
+// 9 exactly, one steward tidying their duplicate taking a colleague's rota with it — so the rule that fixed
+// round 9 is untouched for every author but the church itself.
+export function _forgetById(versions, byId, id, by, ts, trusted, opts) {
   const vers = versions.get(id);
   // Painted from an old cache and nothing live has arrived yet: we do not know whose it is, so any delete
   // binds it — which is what the old code did, and refusing would leave it on screen for ever.
   if (!vers) { if (byId.has(id)) { byId.delete(id); return true; } return false; }
-  const k = String(by || '');
-  const had = vers.get(k);
-  if (!had) return false;                                         // nothing of theirs to withdraw
-  if ((had.ts || 0) > (ts || 0)) return false;                    // a stale tombstone must not undo a newer edit
-  vers.delete(k);
+  const keys = [String(by || '')];
+  const cp = String((opts && opts.churchPub) || '');
+  const named = (opts && opts.targets) || [];
+  // `trusted` is absent on the console, which filters by nothing and is only ever looking at its own church.
+  const mayName = !trusted || trusted({ _by: by });
+  if (cp && mayName && named.some(t => t === cp) && !keys.includes(cp)) keys.push(cp);
+  let did = false;
+  for (const k of keys) {
+    const had = vers.get(k);
+    if (!had) continue;                                           // nothing of theirs to withdraw
+    if ((had.ts || 0) > (ts || 0)) continue;                       // a stale tombstone must not undo a newer edit
+    vers.delete(k); did = true;
+  }
+  if (!did) return false;
   if (!vers.size) versions.delete(id);
   _reduceVersions(vers, byId, id, trusted);
   return true;
