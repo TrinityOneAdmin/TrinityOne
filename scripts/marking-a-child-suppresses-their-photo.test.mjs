@@ -131,7 +131,7 @@ test('the comment explaining why it is one-way is still there', () => {
 // toggleMinor only helps from the day it ships. A church that marked its under-18s months ago is exactly the
 // population at risk and no mark action ever fires again for them. Found by audit after the first version of
 // this fix covered fresh marks only.
-function runReconcile({ minors, nophoto, kidPhotosAllowed, loaded = true, authed = true, twice = false }) {
+function runReconcile({ minors, nophoto, kidPhotosAllowed, loaded = true, authed = true, twice = false, failPublish = false, state = null }) {
   // Anchored on this effect's OWN wording. It is deliberately unlike the clearance back-fill's opening line,
   // because relay-clearance.test.mjs slices that one out by searching for `if (!sg.loaded) return` — writing
   // this effect with the same line handed four of those tests the wrong function to assert against.
@@ -141,53 +141,67 @@ function runReconcile({ minors, nophoto, kidPhotosAllowed, loaded = true, authed
   const win = { Steward: {
     churchPub: 'cp', actingChurch: null,
     relayAuthed: () => authed,
-    setNoPhoto: (l) => { published.push(l); },
+    setNoPhoto: (l) => { published.push(l); return failPublish ? Promise.reject(new Error('connection failure')) : Promise.resolve(true); },
   } };
   // `body` already starts at the effect's first guard and ends before its deps array, so it IS the statement
   // list — no trimming. The previous version hunted for `=>` and cut from there, which silently mangled the
   // slice the moment the anchor moved.
   const run = new Function('sg', 'nophotoSet', 'kidPhotosAllowed', 'window', '__state',
-    'let nophotoBackfillDone = __state.done;\nreturn function(){' + body + '\n__state.done = nophotoBackfillDone; };')(
-    sg, new Set(nophoto), kidPhotosAllowed, win, { done: '' });
+    'let nophotoBackfillDone = __state.done;\nreturn function(){' + body + '\n__state.done = nophotoBackfillDone; __state.read = function(){ return nophotoBackfillDone; }; };')(
+    sg, new Set(nophoto), kidPhotosAllowed, win, (state || { done: '' }));
   run(); if (twice) run();
-  return published;
+  // setNoPhoto is now called inside a promise chain, so the publish lands a microtask later — assert before
+  // that and every one of these passes against an empty array, which is how a test stops testing anything.
+  return new Promise(res => setTimeout(() => { if (state && state.read) state.done = state.read(); res(published); }, 0));
 }
 
-test('a child marked BEFORE this shipped is suppressed on the next console visit', () => {
-  const out = runReconcile({ minors: ['kid1', 'kid2'], nophoto: [], kidPhotosAllowed: false });
+test('a child marked BEFORE this shipped is suppressed on the next console visit', async () => {
+  const out = await runReconcile({ minors: ['kid1', 'kid2'], nophoto: [], kidPhotosAllowed: false });
   assert.equal(out.length, 1, 'a church that did its safeguarding before this build gets no protection at all');
   assert.deepEqual(out[0].sort(), ['kid1', 'kid2']);
 });
 
-test('an existing suppression entry is kept, not replaced', () => {
+test('an existing suppression entry is kept, not replaced', async () => {
   // setNoPhoto REPLACES the whole list, so dropping an entry here silently un-suppresses somebody a steward
   // switched off by hand.
-  const out = runReconcile({ minors: ['kid1'], nophoto: ['adultModerated'], kidPhotosAllowed: false });
+  const out = await runReconcile({ minors: ['kid1'], nophoto: ['adultModerated'], kidPhotosAllowed: false });
   assert.deepEqual(out[0].sort(), ['adultModerated', 'kid1'],
     'a steward’s own moderation entry was dropped from the list');
 });
 
-test('a church that ALLOWS children’s photos is left alone', () => {
-  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: true }).length, 0,
+test('a church that ALLOWS children’s photos is left alone', async () => {
+  assert.equal((await runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: true })).length, 0,
     'a church that deliberately permits children’s photos was overruled');
 });
 
-test('nothing is republished when there is nothing missing', () => {
-  assert.equal(runReconcile({ minors: ['kid1'], nophoto: ['kid1'], kidPhotosAllowed: false }).length, 0,
+test('nothing is republished when there is nothing missing', async () => {
+  assert.equal((await runReconcile({ minors: ['kid1'], nophoto: ['kid1'], kidPhotosAllowed: false })).length, 0,
     'republishes the whole list on every tick');
 });
 
-test('it does not fire before the lists have loaded, or before the relay authed', () => {
+test('it does not fire before the lists have loaded, or before the relay authed', async () => {
   // The minors document is served only to an authenticated reader, so an unauthenticated read looks exactly
   // like a church with no children — and acting on that would publish a wrong list.
-  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, loaded: false }).length, 0,
+  assert.equal((await runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, loaded: false })).length, 0,
     'acted on lists that had not arrived');
-  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, authed: false }).length, 0,
+  assert.equal((await runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, authed: false })).length, 0,
     'acted on an unauthenticated read, where an empty minors list is indistinguishable from no children');
 });
 
-test('running twice on the same state publishes once', () => {
-  assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, twice: true }).length, 1,
+test('A FAILED PUBLISH IS RETRIED — the claim is given back', async () => {
+  // setNoPhoto returns a promise and publish() THROWS on a connection failure. The first version wrapped the
+  // call in a bare try/catch, which catches only a synchronous error — so a failed send was recorded as done,
+  // nothing retried for the rest of the session, and a child's existing photo went on showing. Audit 2026-08-28.
+  const state = { done: '' };
+  const out = await runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, failPublish: true, state });
+  assert.equal(out.length, 1, 'it did not even attempt the publish');
+  assert.equal(state.done, '',
+    'the signature stayed claimed after the publish failed, so nothing will retry this session and the ' +
+    'child\'s photo keeps rendering on every other member\'s device');
+});
+
+test('running twice on the same state publishes once', async () => {
+  assert.equal((await runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, twice: true })).length, 1,
     'the lists re-emit on every tick, so this would republish forever');
 });
 

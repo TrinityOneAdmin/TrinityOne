@@ -1005,6 +1005,15 @@ function rebuildMinors() { MINORS.clear(); for (const s of MINORS_BY.values()) f
 // deliberately allows them. hydrateMaps() therefore replays kind 0 explicitly. It did not, originally, and
 // this comment claimed it did; the claim was never checked and an audit disproved it with a restart probe.
 const CHILD_PHOTOS_OK = new Set();
+// WHO OWNS A CARE-REQUEST ID. Addressable events are per (author, kind, d-tag), so two members can both hold a
+// copy of `carereq:<id>` and every reader has to choose between them — and they choose newest-wins. That let a
+// member publish a NEWER request at somebody else's id: it replaced the real one in the steward's triage list,
+// so the steward's reply sealed to the forger and the asker got nothing. The client-side author check added
+// for this took its idea of "the asker" from that same list, which made the check circular. Audit, 2026-08-28.
+// Fixed the way group: and roster: ids were fixed after AUDIT-2026-07-24: refuse at the door once an id has an
+// owner. First writer takes it; nobody else may ever write there.
+const CAREREQ_OWNER = new Map();   // carereq id -> the pubkey that first published it
+
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
 const APPROVED = new Set();
 function rebuildApproved() { APPROVED.clear(); for (const s of APPROVED_BY.values()) for (const p of s) APPROVED.add(p); }
@@ -1348,7 +1357,7 @@ function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS,
-                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, CAREREQ_OWNER]) { try { m.clear(); } catch {} }
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
@@ -1532,6 +1541,10 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(MINORS_D) && CHURCH_PUBS.has(cp = d.slice(MINORS_D.length)) && e.pubkey === cp) {   // safeguarding: church's minors list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     MINORS_BY.set(cp, set); if (!_hydrating) rebuildMinors();
+  }
+  else if (d.startsWith(CAREREQ_D)) {   // first writer owns this request id, for ever — see CAREREQ_OWNER
+    const rid = d.slice(CAREREQ_D.length);
+    if (rid && !CAREREQ_OWNER.has(rid)) CAREREQ_OWNER.set(rid, e.pubkey);
   }
   else if (d.startsWith(APPROVED_D) && CHURCH_PUBS.has(cp = d.slice(APPROVED_D.length)) && e.pubkey === cp) {   // safeguarding: church's cleared-adults list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
@@ -1976,6 +1989,15 @@ function accept(e) {
     // may open one. Must name a configured church; then falls through to the member rule so the per-member doc
     // cap (below) still bounds it against a flood of unique d-tags.
     if (d.startsWith(CAREREQ_D) && !namedChurch(e)) return false;
+    // …and only its owner may ever write there. Without this a member could publish a newer copy at another
+    // member's request id, replace it in every reader's newest-wins list, and redirect the reply away from the
+    // person who asked. Enforced HERE because the clients cannot tell the two copies apart: whichever one they
+    // trust to name the asker is the one an attacker controls.
+    if (d.startsWith(CAREREQ_D)) {
+      const rid = d.slice(CAREREQ_D.length);
+      const owner = rid && CAREREQ_OWNER.get(rid);
+      if (owner && owner !== e.pubkey) return false;
+    }
     // a message in a request's shared care-team↔asker thread. Member-writable (so the asker can reply); must
     // name its church, then falls to the member rule + per-member cap. The content is sealed to the care team +
     // asker, so a non-audience write is unreadable garbage the recipients' client filters out on decryption.

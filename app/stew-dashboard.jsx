@@ -3979,7 +3979,7 @@ let clearanceBackfillFailedAt = 0;
 // brake on the hot loop this very cooldown was added to stop — measured at 8 full-roster re-seals where the
 // pre-change behaviour did 1, on exactly the flapping thin link this product is built for. Releasing the
 // marker is already enough to force the next Members visit to re-read. AUDIT-9.
-try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; }); } catch (e) {}
+try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; nophotoBackfillDone = ''; }); } catch (e) {}
 
 let clearanceBackfillLastSig = '';   // which signature that failure belonged to — a CHANGED roster skips the wait
 const CLEARANCE_RETRY_MS = 60000;
@@ -4128,8 +4128,14 @@ function DashMembers() {
     const sig = [window.Steward.churchPub || '', minors.join(','), (sg.nophoto || []).join(',')].join('|');
     if (nophotoBackfillDone === sig) return;          // the lists re-emit on every tick
     nophotoBackfillDone = sig;                        // claim BEFORE publishing, like the back-fill below
-    try { window.Steward.setNoPhoto([...(sg.nophoto || []), ...missing]); }
-    catch (e) { nophotoBackfillDone = ''; }           // give the claim back so the next visit retries
+    // AND GIVE THE CLAIM BACK IF THE PUBLISH DID NOT LAND. setNoPhoto() returns a promise and publish()
+    // THROWS on a connection failure — so a bare try/catch around the call caught only a synchronous error
+    // and treated a failed send as done. The signature stayed claimed, nothing retried for the rest of the
+    // session, and a child's existing photo went on showing. Audit, 2026-08-28. Only ever clear our OWN
+    // claim: if the lists moved on, a later signature owns the marker and blanking it here would undo theirs.
+    Promise.resolve()
+      .then(() => window.Steward.setNoPhoto([...(sg.nophoto || []), ...missing]))
+      .catch(() => { if (nophotoBackfillDone === sig) nophotoBackfillDone = ''; });
   }, [kidPhotosAllowed, sg.loaded, sg.minors, sg.nophoto]);
 
   const toggleMinor = (pk) => {

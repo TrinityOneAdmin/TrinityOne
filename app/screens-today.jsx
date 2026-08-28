@@ -471,7 +471,12 @@ function CareRequests({ ctx }) {
     // PERSON · CONFIDENTIAL", with the safeguarding explainer above it. Measured on the OPPO, 2026-08-27.
     // Worse than the label: row() passes onApprove = null for anything marked as a child, so it could not be
     // actioned from that screen at all.
-    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' && String(r.from || '').toLowerCase() !== myPub)), ctx.church && ctx.church.npub); } catch (e) {}
+    // …but only the one I raised FOR MYSELF. A care admin often files a request on behalf of somebody
+    // housebound who is not on the app: that request is authored by the admin, so excluding everything they
+    // wrote hid it from the only screen where it can be approved into a need. In a church with a single admin
+    // nobody could action it at all. Audit, 2026-08-28. `forSelf` is false only when they picked "Someone
+    // else" on the form, and they can always open their own request, so the flag is readable here.
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' && !(String(r.from || '').toLowerCase() === myPub && r.forSelf !== false))), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub]);
   if (!(isCareAdmin || isCleared) || !reqs.length) return null;
