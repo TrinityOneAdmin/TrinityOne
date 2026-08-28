@@ -16,7 +16,7 @@ import { fnBody, stripComments } from './test-slice.mjs';
 const TODAY = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
 
 test('the Withdraw button opens a confirm rather than deleting on the tap', () => {
-  const fn = stripComments(fnBody(TODAY, 'function MyRequestRow({ r, onCancel, onMessage }) {'));
+  const fn = stripComments(fnBody(TODAY, 'function MyRequestRow('));
   // the button must NOT call onCancel directly any more…
   assert.doesNotMatch(fn, /Withdraw['"]?\s*>[^<]*<\/button>[\s\S]{0,4}: null[\s\S]{0,4}onClick=\{async[^}]*onCancel\(\)/,
     'the withdraw button still deletes on its own tap');
@@ -25,9 +25,14 @@ test('the Withdraw button opens a confirm rather than deleting on the tap', () =
 });
 
 test('the confirm is a real dialog that names what is lost, and only THEN cancels', () => {
-  const fn = stripComments(fnBody(TODAY, 'function MyRequestRow({ r, onCancel, onMessage }) {'));
+  const fn = stripComments(fnBody(TODAY, 'function MyRequestRow('));
   assert.match(fn, /role="dialog" aria-modal="true"/, 'a real dialog, not an in-place second tap');
-  assert.match(fn, /conversation with your care team/i, 'it must name the thread that also goes');
+  // Was /conversation with your care team/i. The phrase "care team" was removed from this dialog on
+  // 2026-08-27: a young person's request never goes to the care rota, it goes to the adults their church has
+  // cleared, so naming the care team told them their words had reached a group they did not choose to tell.
+  // The ASSERTION's intent is unchanged — the dialog must still say the conversation goes with the request —
+  // so it now pins that meaning rather than the old wording.
+  assert.match(fn, /conversation[^<]*will be removed/i, 'it must name the thread that also goes');
   assert.match(fn, /can’t be undone/i, 'and that it is irreversible');
   // the safe option first, and onCancel reached ONLY from the destructive button inside the dialog
   assert.match(fn, />Keep it</, 'the safe choice must be a real button');

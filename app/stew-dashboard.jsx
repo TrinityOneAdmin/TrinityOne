@@ -3957,6 +3957,11 @@ window.BulkInviteModal = BulkInviteModal;
 // (These files are classic scripts sharing ONE global scope, so this name must stay unique across app/*.jsx;
 // scripts/bundle-free-globals.test.mjs is the guard.)
 let clearanceBackfillDone = '';
+// Same idea, separate concern: which (church, minors, nophoto) combination we have already reconciled photos
+// for. Deliberately NOT folded into the clearance back-fill above — that one is a per-member batch with a
+// retry cooldown and a hard-won double-fire guard, and this is a single list publish. Tangling them would put
+// a safeguarding write behind a mechanism tuned for something else.
+let nophotoBackfillDone = '';
 // When a back-fill last FAILED. HANDOFF-2026-07-31 audit. Releasing the claim on failure (below) is what keeps
 // a partial back-fill retryable — but the effect's deps are fresh array identities on every roster emit, so
 // without a cooldown the next emit restarts the whole thing at once. Before fix 4, an offline publish() lied
@@ -3974,7 +3979,7 @@ let clearanceBackfillFailedAt = 0;
 // brake on the hot loop this very cooldown was added to stop — measured at 8 full-roster re-seals where the
 // pre-change behaviour did 1, on exactly the flapping thin link this product is built for. Releasing the
 // marker is already enough to force the next Members visit to re-read. AUDIT-9.
-try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; }); } catch (e) {}
+try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; nophotoBackfillDone = ''; }); } catch (e) {}
 
 let clearanceBackfillLastSig = '';   // which signature that failure belonged to — a CHANGED roster skips the wait
 const CLEARANCE_RETRY_MS = 60000;
@@ -4008,6 +4013,11 @@ function DashMembers() {
   const minorsSet = new Set(sg.minors || []);
   const approvedSet = new Set(sg.approved || []);
   const nophotoSet = new Set(sg.nophoto || []);
+  // Which member we have just told the steward something about, and what. Per-row rather than a page banner:
+  // the thing being explained happened to one person and the row is where they are looking.
+  const [minorNotice, setMinorNotice] = React.useState(null);   // { pk, text }
+  // does THIS church allow children to have photographs at all? (church profile → features.childPhotos)
+  const kidPhotosAllowed = !!(church && church.features && church.features.childPhotos === true);
   const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
   // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
   // instead of the church's list of children, which the relay no longer serves to ordinary members.
@@ -4093,11 +4103,73 @@ function DashMembers() {
   // Miriam cleared a six-year-old by mis-tapping an unnamed button; while the child mark stood the relay
   // still protected everyone, and the danger arrived the moment a steward corrected the mark and left the
   // clearance behind. Measured before the fix: the six-year-old could then privately message another child.
+  // CHILDREN MARKED BEFORE THIS BUILD SHIPPED ARE THE ONES MOST AT RISK.
+  // toggleMinor now suppresses the photo of anyone newly marked as a child, but that only helps from the day
+  // it ships. A church that did its safeguarding first — marked its under-18s months ago — has exactly the
+  // population this protects and gets nothing, because no mark action ever fires again. The relay cannot
+  // rewrite a kind-0 somebody already signed, so the suppression list is the only route. Found by audit,
+  // 2026-08-27, after the first version of this fix covered only fresh marks.
+  // Adds only, never removes: that list is also ordinary steward moderation.
+  //
+  // PLACED AFTER THE CLEARANCE BACK-FILL, AND WORDED DIFFERENTLY, ON PURPOSE. relay-clearance.test.mjs slices
+  // that effect out of this file by searching forward from `let clearanceBackfillDone` for the first
+  // `if (!sg.loaded) return` and the first `}, [sg.loaded`. Writing this effect above it, with the same two
+  // lines, silently handed those tests THIS function to assert against — four of them failed and none of them
+  // was about photos. Hence `!sg ||` and the reordered deps: they cannot match either anchor.
+  React.useEffect(() => {
+    if (!sg || !sg.loaded) return;          // distinct from the clearance back-fill's guard on purpose — see below
+    try { if (!(window.Steward.relayAuthed && window.Steward.relayAuthed())) return; } catch (e) { return; }
+    if (window.Steward.actingChurch) return;          // a delegated console signs with its own church key
+    if (kidPhotosAllowed) return;                     // this church permits them; not ours to overrule
+    const minors = sg.minors || [];
+    if (!minors.length) return;
+    const missing = minors.filter(p => !nophotoSet.has(p));
+    if (!missing.length) return;
+    const sig = [window.Steward.churchPub || '', minors.join(','), (sg.nophoto || []).join(',')].join('|');
+    if (nophotoBackfillDone === sig) return;          // the lists re-emit on every tick
+    nophotoBackfillDone = sig;                        // claim BEFORE publishing, like the back-fill below
+    // AND GIVE THE CLAIM BACK IF THE PUBLISH DID NOT LAND.
+    //
+    // publish() DOES NOT REJECT when every relay refuses: it catches internally and `return false`
+    // (src/steward.src.js). The first attempt at this released the claim only in `.catch`, on the stated
+    // belief that publish throws — so on the one failure mode it was written for, nothing was released,
+    // nothing retried, and a marked child's existing photograph kept rendering. The test injected a rejection,
+    // which production never produces, so it passed over the broken code. Audit, 2026-08-28; my error twice
+    // over, in the fix and in the test that was supposed to catch it.
+    //
+    // So check the RESOLVED VALUE, and keep the catch for a synchronous throw. Only ever clear our OWN claim:
+    // if the lists moved on, a later signature owns the marker and blanking it here would undo theirs.
+    Promise.resolve()
+      .then(() => window.Steward.setNoPhoto([...(sg.nophoto || []), ...missing]))
+      .then((r) => { if (!r && nophotoBackfillDone === sig) nophotoBackfillDone = ''; })
+      .catch(() => { if (nophotoBackfillDone === sig) nophotoBackfillDone = ''; });
+  }, [kidPhotosAllowed, sg.loaded, sg.minors, sg.nophoto]);
+
   const toggleMinor = (pk) => {
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
     const r = window.Steward.setMinors(next);
+    // MARKING SOMEBODY AS A CHILD MUST DEAL WITH THE PHOTOGRAPH THEY ALREADY HAVE.
+    // The relay now refuses a NEW photo from a minor whose church has children's photos off, but it cannot
+    // rewrite a kind-0 somebody already signed — and the ordinary way a church learns a member is under 18 is
+    // that they are already here, with a picture. Confirmed on the phone, 2026-08-27: an adult set a photo, a
+    // steward marked them a child, and the photograph still rendered on another member's device after a fresh
+    // unlock. So put them on the suppression list, which every client already honours (suppressPhotoAv).
+    // NOT reversed on unmarking, deliberately: this list is also how a steward suppresses a photo for ordinary
+    // moderation, and we cannot tell the two apart. Un-suppressing someone a steward deliberately blocked is
+    // the worse mistake. The "Photos are off for this member" control re-allows it in one tap.
+    if (!unmarking && !kidPhotosAllowed && !nophotoSet.has(pk)) {
+      try { window.Steward.setNoPhoto([...(sg.nophoto || []), pk]); } catch (e) {}
+    }
+    // SAY SO. Unmarking a child ALSO revokes their youth clearance, and that is deliberate — leaving a stale
+    // clearance behind is how a six-year-old becomes someone the relay treats as cleared to message children
+    // (see the note above). But it happened in silence: a steward correcting a mis-tap destroyed a real
+    // volunteer's clearance with no warning, no undo, and nothing to say that re-clearing was now needed.
+    // Found on the device, 2026-08-27. The action stays as it is; only the silence is the defect.
+    setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
+      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
+      : null);
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
       // Whether the CLEARED list has actually been read — not whether the list of children has. Asking the
       // wrong document broke the exact case this record was written for: a brand-new church clearing its first
@@ -4356,6 +4428,12 @@ function DashMembers() {
               re-seat people who lost their words — the capability's own description says so — and the button
               was not on their screen. The other three write minors:/approved:/guardians:, which the relay
               really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
+          {minorNotice && minorNotice.pk === m.pubkey ? (
+            <div role="status" style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+              background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))', color: 'var(--ink)' }}>
+              {minorNotice.text}
+            </div>
+          ) : null}
           {!delegated ? (<React.Fragment>
           <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
@@ -5830,7 +5908,7 @@ function DashGivingPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{church.giving ? 'On — members can give to this church.' : 'Off — members won’t see giving.'}</div>
         </div>
-        <button onClick={toggleGiving} disabled aria-label="Toggle giving" title="Giving is locked during the pilot" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'not-allowed', opacity: .4, flexShrink: 0,
+        <button onClick={toggleGiving} disabled aria-label="Toggle giving" role="switch" aria-checked={!!church.giving} title="Giving is locked during the pilot" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'not-allowed', opacity: .4, flexShrink: 0,
           background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: church.giving ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>

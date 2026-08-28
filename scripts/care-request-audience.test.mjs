@@ -352,3 +352,31 @@ test('the FORM does not promise a child it reaches the care team', () => {
   // …and the ordinary path must be untouched.
   assert.match(TODAY, /: 'This goes privately to your care team/, 'an adult is no longer told who receives their request');
 });
+
+// ── an out-of-date app is told to update, not to check its connection ───────────────────────────────────────
+// The relay refuses a care request whose id does not name its asker — a build that predates self-naming ids.
+// Swallowing that reason turned it into "check your connection", which sends somebody asking for help off to
+// look at their wifi. This build cannot produce that refusal itself (it always mints a naming id), so these
+// guard the WIRING for the next time the relay has to refuse an old app.
+test('the send keeps a reason the member can act on', () => {
+  const fn = stripComments(readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8'));
+  const at = fn.indexOf('async publishCareRequest(');
+  assert.ok(at > 0, 're-anchor: publishCareRequest has moved');
+  const body = fn.slice(at, fn.indexOf('subscribeCareRequests(', at));
+  assert.match(body, /update the app/i,
+    'the relay\'s "your app is too old" reason is swallowed, so the member is told their connection failed');
+  assert.match(body, /error: 'stale-app'/,
+    'the reason is not turned into something the screen can render');
+  assert.match(body, /return null;/,
+    'every other failure must still return null — callers test truthiness, and a truthy error reads as success');
+});
+
+test('and the screen has words for it', () => {
+  const today = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
+  const at = today.indexOf('const CARE_SEND_REFUSAL');
+  const map = today.slice(at, today.indexOf('};', at));
+  assert.match(map, /'stale-app':/, 'the refusal has no message, so it falls back to a generic try-again');
+  assert.match(map, /update the app/i, 'the message does not say what to do');
+  assert.match(map, /speak to a leader/i,
+    'it does not offer the one route that always works when the app cannot help');
+});

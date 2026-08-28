@@ -127,3 +127,65 @@ test('the actions stay together and keep their size', () => {
   assert.equal(acts.props.style.marginLeft, 'auto',
     'once wrapped onto their own line the actions drift to the left edge instead of staying with the row');
 });
+
+// ── nothing on this screen tells a young person their words went to the care team ───────────────────────────
+// Their request never reaches the care rota; it reaches the adults their church has cleared. Naming the care
+// team tells a child their words went to a group they did not choose to tell — and the audit found the label
+// in four places at once: the submit button, the row left behind, the conversation, and the tab framing.
+// Confirmed on the OPPO, 2026-08-27, all four visible to a real 15-year-old's account.
+// flatten() reports {name, props}; the visible words are string CHILDREN, which live on node.kids. Collect
+// those, or every assertion below passes against an empty string — which is how a wording test quietly
+// stops testing wording.
+const textOf = (n, out = []) => {
+  if (typeof n === 'string') { out.push(n); return out; }
+  if (!n || typeof n !== 'object') return out;
+  for (const k of (n.kids || [])) textOf(k, out);
+  return out;
+};
+const rowText = (props) => textOf(renderRow('MyRequestRow', props)).join(' ');
+
+test('a young person is never told "care team" on their own request row', () => {
+  for (const status of ['open', 'approved', 'declined', 'handled']) {
+    const txt = rowText({ r: { id: 'r1', status, type: 'visits', forSelf: true, recipients: 4 },
+      isMinor: true, onCancel() {}, onMessage() {} });
+    assert.ok(!/care team/i.test(txt),
+      `the "${status}" row still says "care team" to a child — their request did not go there`);
+  }
+});
+
+test('an adult is still told exactly who has it', () => {
+  const txt = rowText({ r: { id: 'r1', status: 'open', type: 'visits', forSelf: true, recipients: 4 },
+    isMinor: false, onCancel() {}, onMessage() {} });
+  assert.match(txt, /your care team will be in touch/i,
+    'the ordinary path stopped naming the care team — an adult should know who has their request');
+  // …and the OTHER statuses, which are built from a different string. Without these, replacing that shared
+  // word with the child wording for everyone passed: the open row does not use it.
+  for (const [status, want] of [['approved', /Your care team set it up/i],
+                                ['declined', /Your care team has closed this one/i],
+                                ['handled',  /Your care team is on it/i]]) {
+    const t = rowText({ r: { id: 'r1', status, type: 'visits', forSelf: true, recipients: 4 },
+      isMinor: false, onCancel() {}, onMessage() {} });
+    assert.match(t, want, `an adult's "${status}" row no longer says who is dealing with it`);
+  }
+});
+
+test('the narrow-audience line still overrides both', () => {
+  // recipients <= 2 means only the church leader and the asker hold a key, whoever is asking.
+  const txt = rowText({ r: { id: 'r1', status: 'open', type: 'visits', forSelf: true, recipients: 2 },
+    isMinor: false, onCancel() {}, onMessage() {} });
+  assert.match(txt, /only your church leader can open this/i,
+    'a request that reached nobody but the leader is again described as reaching a team');
+});
+
+test('the send button does not promise a child a care team either', () => {
+  // Rendered, not matched: the button is the one control a young person must press, and a string test on this
+  // very file was defeated once by moving the wording into an unused variable.
+  const { render: renderForm } = loadJsx('app/screens-today.jsx', ['AskForHelpForm'], { win });
+  const ctx = { safeguard: { isMinor: true }, church: { npub: 'np' }, care: { settings: { enabled: true } }, toast() {} };
+  const kid = textOf(renderForm('AskForHelpForm', { ctx, onClose() {}, onSent() {} })).join(' ');
+  assert.ok(!/Send to care team/.test(kid),
+    'the one button a young person must press still reads "Send to care team"');
+  const adult = textOf(renderForm('AskForHelpForm',
+    { ctx: { ...ctx, safeguard: { isMinor: false } }, onClose() {}, onSent() {} })).join(' ');
+  assert.match(adult, /Send to care team/, 'an adult is no longer told where their request goes');
+});

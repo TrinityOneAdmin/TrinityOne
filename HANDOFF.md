@@ -7,6 +7,33 @@ current state is here at the top.
 
 ---
 
+## AN ADULT'S REQUEST IS FILED UNDER "FROM A YOUNG PERSON" (found 2026-08-27, NOT FIXED)
+
+Surfaced by the regression run after the care-chat fix; it is NOT caused by that fix and predates it.
+
+`app/screens-today.jsx:465`:
+
+    const fromChild = (r) => (isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true);
+
+For anyone who is not a care admin, **every** request is treated as coming from a child. Measured on the
+device: Bram, a cleared adult, opened an ordinary request for himself and his own screen filed it under
+"FROM A YOUNG PERSON · 2 · CONFIDENTIAL", with the safeguarding explainer above it.
+
+The default is defensible as a fail-safe — a cleared adult who is not on the care rota is only served
+children's requests by the relay, so treating what they see as confidential is the safe way round. It stops
+being defensible when they are ALSO an ordinary member with their own requests, which is the case here and
+will be the case in any small church. `isCareAdmin` is false whenever the church has no care team
+(`adminGroupId: ""`), which is the default configuration, so this is not a corner.
+
+Two consequences beyond the wrong label: `row(r, child)` passes `onApprove = null` for anything marked as a
+child, so a cleared adult cannot action an adult's request at all; and the confidential explainer misdescribes
+what they are looking at, which is the opposite of the honesty this seam is being rebuilt for.
+
+The fix is to decide "is this from a child" from something the reader can actually establish — the requester's
+own membership of the minors list where they can read it, and otherwise the fact that the request was NOT
+addressed to the care team. Do not simply flip the default to false: that would show a cleared adult a child's
+disclosure with no confidentiality framing at all, which is the worse error.
+
 ## "WHO CAN OPEN NEEDS -> ANY MEMBER" HAS NO MEMBER-FACING SURFACE (found 2026-08-27, NOT FIXED)
 
 The console's Practical care section offers "Who opens needs: Stewards + care team | Any member". Selecting
@@ -37,12 +64,14 @@ answer is "never built", note the plumbing is already in place and only the cont
 
 ## TWO MORE FROM THE CONFIGURATION PASS, 2026-08-27 — NOT FIXED
 
-**A. Marking someone as a child silently strips their youth clearance, and unmarking does not give it back.**
+**A. CORRECTED, AND NOW FIXED. UNmarking a child revokes their youth clearance — not marking, as this entry originally said.**
 Measured. Bram was cleared for youth; a steward marked him as a child; the cleared list went from
 `{"pubkeys":["d14d2a62…"]}` to `{"pubkeys":[],"cleared":{}}`. Unmarking him as a child left it empty — the
-clearance is gone, silently, and the console says nothing about it either way. Revoking on mark is arguably
-right (the gateway comment at `approvedIn` warns loudly about stale clearance surviving on someone who is
-later unmarked, and this is the code avoiding exactly that). What is wrong is that it is invisible: a steward
+clearance is gone, silently, and the console says nothing about it either way. The direction was wrong in my note: `toggleMinor` reads
+`unmarking ? (sg.approved||[]).filter(...) : (sg.approved||[])`, so marking leaves clearances alone and
+UNMARKING removes them. That is deliberate and correct — the gateway comment at `approvedIn` warns at length
+that a stale clearance surviving on someone who is later unmarked turns a six-year-old into an adult the relay
+treats as cleared to message children. What was wrong is only that it was invisible: a steward
 who mis-taps "Child" on an adult destroys that adult's clearance and gets no warning, no undo, and no notice
 that re-clearing is now required. At minimum say so at the moment of the tap.
 
@@ -184,6 +213,31 @@ one shown to the CLEARED ADULT about a child's request.
 **5. WITHDRAWN.** This slot held a claim that the child/adult DM gate was never holding and that any approved
 member may message a child. It is false — see the false-alarm section above. The gate is enforced and correct.
 
+## VERIFIED ON DEVICE, 2026-08-28 — what the branch's member-app fixes actually do on hardware
+
+OPPO + live a8 relay + the branch APK (debug-signed; testing signing until go-live). Each proved on the phone,
+not inferred:
+
+- **Child-facing wording.** Nothing on Today says "care team" to a 15-year-old any more. Her row reads
+  "Sent privately — someone at your church who can help will be in touch."
+- **The blank Serving pane.** She was on Serving → Care, a steward switched Practical care off, and the pane
+  now falls back: the Care tab disappears and **Serving is selected and populated** (692 characters of real
+  content) instead of an empty pane with no tab highlighted.
+- **The stale dead-end card.** Clearance revoked -> the card appears and the ask control hides; clearance
+  restored -> the card goes and the control returns. **Both without restarting the app**, which is the whole
+  point: a young person used to be told "your church hasn't set up who can help young people yet" and keep
+  being told it after the church fixed exactly that.
+
+**NOT device-verified, and why.** Three of the branch's fixes cannot be exercised against a8 yet:
+  - the relay's care-request id ownership and the children's-photo write gate live in `gateway.mjs`, which a8
+    does not run until the relay is updated;
+  - the console's photo-suppression reconcile, its `aria-checked` toggles and the Escape handler are served
+    FROM a8, so the browser console is still running the old code — measured: `aria-checked` on the
+    practical-care toggle reads `null` there, exactly as it did before the fix;
+  - the on-behalf triage filter needs a second care admin, and the only other client on this church is served
+    from a8 too. It is covered by six tests that run the shipped filter expression itself.
+All three are covered by tests that spawn a real relay or execute the shipped code; none is device-proven.
+
 ## OPEN AND SERIOUS — A CHILD'S REPLY IS SEALED TO THE WRONG PEOPLE (found 2026-08-27, NOT FIXED)
 
 Found by an independent audit of `ad24099`. Traced in code, not suspected. This is the highest-value open item
@@ -257,10 +311,26 @@ called time on it, correctly.
   `subscribeMyServingRequests` in the app) still decide by arrival order and delete by id. Concretely: a
   DELEGATED steward withdrawing a "can you serve?" never clears it from anyone's phone — the member honours a
   withdrawal only from the church key. A stale ask card, for ever.
-- **Sealed group events render blank in the console's group window**, and have since `c592abb` (15 Aug). The
-  console seals event documents; both group-event readers parse with bare `JSON.parse`, so a sealed event has
-  no title, date or place. Members are rescued by accident — the merged calendar dedups against the properly
-  unsealing church-calendar reader — which is luck, not design.
+  **VERIFIED ON DEVICE 2026-08-28** — live relay, OPPO, a real delegated steward (church-signed `stewards:`
+  doc granting `content`). Two cases, and they differ, which the original note did not distinguish:
+    - The steward asks, then withdraws his OWN ask: the card stays in the live session but IS gone after an
+      app restart. Not "for ever" — the tombstone REPLACED his own copy, so there is nothing left to re-add
+      it. The member's reader never honoured the withdrawal; the relay simply has nothing to serve.
+    - The CHURCH asks and the delegated steward withdraws: **the card survives the withdrawal, the restart,
+      and everything after it.** Confirmed on the phone at every step. The relay holds both copies at the one
+      d-tag — the steward's tombstone and the church's live ask — because addressable events are per author.
+      `subscribeMyServingRequests` deletes only on `e.pubkey === churchPub`, so it ignores the tombstone, and
+      the church's copy re-adds the card on every reconnect. THIS is the "for ever" case, and it is the
+      ordinary one: the church creates the rota ask, the delegated steward is the person who withdraws it.
+  So the finding is real and the note was right, but the reason is the two-author split, not the reader alone.
+- **Sealed group events render blank in the console's group window** — **VERIFIED ON DEVICE 2026-08-28,
+  exactly as described.** Live console + live relay + the OPPO. A steward scheduled "SEAL CHECK — group event"
+  in the Prayer group's window: it published fine (`trinityone/event:evtmtcldwo51i35ua`, content
+  `{"e":"Av29Q/dJ…"}` — the sealed envelope) and the group window that posted it showed **nothing at all** —
+  no title, no date, no upcoming block. The member's phone DOES show it under Events, confirming the
+  "rescued by accident" half too. So the person who schedules it is the one person who cannot see it.
+  `publishEvent` seals via `_sealChurchDoc` (src/steward.src.js:5605) and `subscribeGroupEvents` reads with a
+  bare `JSON.parse(e.content)` (:5643), so the fields come back undefined.
 - **The console does not filter by roster at all.** After `de6e05a` the phones promote the church's copy when a
   steward is revoked; the console still shows the revoked steward's. Pinned by a failing-if-changed test.
 - **A steward's SOLE work still vanishes on revocation** — nothing to promote. Needs the church to republish.
@@ -279,9 +349,13 @@ called time on it, correctly.
   newest-wins but inconsistent tie-breaks, so two phones can disagree on an exact-second tie.
 
 **Environmental, not product**
-- `scripts/event-store-import.test.mjs` fails on this dev box because a legacy `relay/relay-db.json` is
-  present and the test reads it if it exists. Moving it aside makes it pass. All three of its filters disagree
-  with a full scan on that data, which is worth its own look — it is not caused by any change this session.
+- ~~`scripts/event-store-import.test.mjs` fails on this dev box~~ **RESOLVED 2026-08-27.** It was never a relay
+  bug and never about the legacy `relay-db.json` being present. `store.query()` de-duplicates replaceable and
+  addressable events (newest wins, lower id on a tie) and the test compared its answer against a RAW full
+  scan — so any corpus containing a superseded copy disagreed. The synthetic corpus had none, which is why it
+  held for a year; the first real dump left on a box had 61 superseded documents and 3 profiles, exactly the
+  discrepancy. The test now de-duplicates the scan the same way before comparing, and passes with the legacy
+  file in place. Verified 2026-08-28: 1 pass, 0 fail, with `relay/relay-db.json` (425KB) still present.
 
 ---
 

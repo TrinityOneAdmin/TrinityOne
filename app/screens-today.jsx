@@ -239,7 +239,10 @@ const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No r
 // plus padding and gaps leave about 45px for the text, so "You asked for help · Visits" rendered one word per
 // line down a column while the buttons kept full width. Seen on the OPPO, 2026-08-27. flex-basis 150px means
 // the actions drop to their own line rather than crushing the text; on a wider screen nothing changes.
-function MyRequestRow({ r, onCancel, onMessage }) {
+// `isMinor` is passed in rather than read from a context this component does not receive. For a young person
+// none of these lines is true: their request never went to the care rota, it went to the adults their church
+// cleared. Naming the care team tells them their words reached a group they did not choose to tell.
+function MyRequestRow({ r, onCancel, onMessage, isMinor }) {
   const [busy, setBusy] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);   // Withdraw deletes the request AND its care-team thread — ask first
   const label = careTypeLabel(r);
@@ -247,16 +250,17 @@ function MyRequestRow({ r, onCancel, onMessage }) {
   // "Declined" must not read like help is coming. Someone who worked up the courage to ask, and is told the
   // team "has this in hand", waits — and loses the chance to ask someone else. Say it's closed, and make the
   // row a doorway (the Message button sits right beside this) rather than a wall.
-  const sub = st === 'approved' ? 'Your care team set it up — see Open needs below.'
-    : st === 'declined' ? 'Your care team has closed this one. If you still need help, message them or ask again.'
-    : st === 'handled' ? 'Your care team is on it.'
+  const who = isMinor ? 'Someone at your church' : 'Your care team';
+  const sub = st === 'approved' ? who + ' set it up — see Open needs below.'
+    : st === 'declined' ? who + ' has closed this one. If you still need help, message them or ask again.'
+    : st === 'handled' ? who + ' is on it.'
     // A REQUEST IS READ BY WHOEVER HOLDS A KEY TO IT, AND NOBODY ELSE. Measured on a phone, 2026-08-19: a
     // church with no care team roster sealed this to two people — the church key and the asker — and the row
     // still read "your care team will be in touch". The toast beside it had already been fixed to say who it
     // reached; this line, which stays on screen afterwards, had not. r.recipients counts the envelope's own
     // key list, so two means the leader and you.
     : (r.recipients && r.recipients <= 2) ? 'Sent privately — only your church leader can open this.'
-    : 'Sent privately — your care team will be in touch.';
+    : (isMinor ? 'Sent privately — someone at your church who can help will be in touch.' : 'Sent privately — your care team will be in touch.');
   const tint = st === 'open' ? 'var(--sage)' : st === 'declined' ? 'var(--ink-3)' : 'var(--sage)';
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 16, background: 'color-mix(in oklab, ' + tint + ' 8%, var(--surface))', border: '1px solid color-mix(in oklab, ' + tint + ' 24%, transparent)', marginBottom: 9 }}>
@@ -266,7 +270,7 @@ function MyRequestRow({ r, onCancel, onMessage }) {
         <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{sub}</div>
       </div>
       <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginLeft: 'auto' }}>
-        {onMessage ? <button onClick={onMessage} title="Message the care team about this" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="chat" size={13} color="currentColor" /> Message</button> : null}
+        {onMessage ? <button onClick={onMessage} title={isMinor ? 'Message the person helping you about this' : 'Message the care team about this'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="chat" size={13} color="currentColor" /> Message</button> : null}
         {st === 'open' ? <button onClick={() => setConfirming(true)} disabled={busy} title="Withdraw this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button> : null}
       </div>
       {/* WITHDRAW IS DESTRUCTIVE AND SILENT. It deletes the whole request and the care-team conversation
@@ -279,7 +283,7 @@ function MyRequestRow({ r, onCancel, onMessage }) {
           <div role="dialog" aria-modal="true" aria-label="Withdraw your request for help" onClick={e => e.stopPropagation()}
             style={{ width: 380, maxWidth: '100%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, marginBottom: 10 }}>Withdraw this request?</div>
-            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 8px' }}>Your ask for help, and the private conversation with your care team about it, will be removed. This can’t be undone — you’d start a fresh request.</p>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 8px' }}>Your ask for help, and the private conversation about it, will be removed. This can’t be undone — you’d start a fresh request.</p>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 18px' }}>If you just don’t need help right now, that’s fine — nobody is troubled by a request you close.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setConfirming(false)} style={{ flex: 1.2, padding: 12, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Keep it</button>
@@ -392,6 +396,11 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  // A FAILED SEND USED TO BE INVISIBLE. The text was restored to the box and nothing else happened, which
+  // reads as "I mistyped" rather than "that did not send". sendCareChat now refuses rather than falling back
+  // to the care rota when it cannot establish who the thread reaches, so silence here would hide exactly the
+  // case this round exists to fix.
+  const [err, setErr] = React.useState('');
   const endRef = React.useRef(null);
   React.useEffect(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeCareChat)) return;
@@ -402,22 +411,24 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }); } catch (e) {} }, [msgs.length]);
   const send = async () => {
     const t = text.trim(); if (!t || busy) return;
-    setText(''); setBusy(true);
+    setText(''); setBusy(true); setErr('');
     let ok = null;
     try { ok = await window.Fellowship.sendCareChat(reqId, requesterPub, t); } catch (e) {}
     setBusy(false);
-    if (!ok) setText(t);   // send failed → restore the text so it isn't silently lost
+    // truthy = sent, falsy = not sent. Deliberately NOT an {error} object: a truthy error would read as
+    // success to every `if (!ok)` caller, and there is more than one.
+    if (!ok) { setText(t); setErr('Couldn’t send — we couldn’t confirm who this conversation reaches. Check your connection and try again.'); }
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 65, background: 'rgba(34,28,22,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: '100%', maxWidth: 500, height: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 18px', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
           <Icon name="heart" size={19} color="var(--clay)" />
-          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title || 'Care conversation'}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>Private — you and the care team</div></div>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title || 'Care conversation'}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>Private — only the people helping you</div></div>
           <button onClick={onClose} aria-label="Close" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 4, display: 'flex' }}><Icon name="x" size={20} color="currentColor" /></button>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {msgs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto', maxWidth: 250, lineHeight: 1.5 }}>No messages yet. Anything here stays between you and the care team.</div> : null}
+          {msgs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto', maxWidth: 250, lineHeight: 1.5 }}>No messages yet. Anything here stays between you and the people helping you.</div> : null}
           {msgs.map(m => (
             <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
               {!m.mine ? <div style={{ fontSize: 11, color: 'var(--ink-3)', margin: '0 0 2px 11px' }}>{careName(m.from, '')}</div> : null}
@@ -426,6 +437,7 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
           ))}
           <div ref={endRef} />
         </div>
+        {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', padding: '10px 14px', flexShrink: 0 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 8, padding: '12px 14px calc(12px + env(safe-area-inset-bottom))', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
           <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
           <button onClick={send} disabled={busy || !text.trim()} aria-label="Send" style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 999, border: 'none', background: text.trim() ? 'var(--clay)' : 'var(--surface-2)', color: text.trim() ? '#fff' : 'var(--ink-3)', cursor: text.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="send" size={18} color="currentColor" /></button>
@@ -452,9 +464,21 @@ function CareRequests({ ctx }) {
   React.useEffect(() => {
     if (!(isCareAdmin || isCleared) || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
-    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open')), ctx.church && ctx.church.npub); } catch (e) {}
+    // NOT MY OWN REQUEST. This is the queue of requests I am handling FOR OTHER PEOPLE; the one I made for
+    // myself already has its own row, from AskForHelp, a few lines down the same screen. Leaving it here put
+    // it through fromChild() below, which answers "yes" for anyone who is not a care admin — so a cleared
+    // youth worker who asked for help himself found his own ordinary request filed under "FROM A YOUNG
+    // PERSON · CONFIDENTIAL", with the safeguarding explainer above it. Measured on the OPPO, 2026-08-27.
+    // Worse than the label: row() passes onApprove = null for anything marked as a child, so it could not be
+    // actioned from that screen at all.
+    // …but only the one I raised FOR MYSELF. A care admin often files a request on behalf of somebody
+    // housebound who is not on the app: that request is authored by the admin, so excluding everything they
+    // wrote hid it from the only screen where it can be approved into a need. In a church with a single admin
+    // nobody could action it at all. Audit, 2026-08-28. `forSelf` is false only when they picked "Someone
+    // else" on the form, and they can always open their own request, so the flag is readable here.
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' && !(String(r.from || '').toLowerCase() === myPub && r.forSelf !== false))), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
-  }, [isCareAdmin, isCleared, ctx.church && ctx.church.npub]);
+  }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub]);
   if (!(isCareAdmin || isCleared) || !reqs.length) return null;
   // WHICH OF THESE CAME FROM A YOUNG PERSON. A care admin is served the church's list of children and can
   // simply look. A cleared adult who is NOT a care admin is not served that list — and does not need it: the
@@ -462,6 +486,9 @@ function CareRequests({ ctx }) {
   // absence of the list as "no children here" is what would put a child's disclosure in the ordinary queue,
   // beside the button that publishes it to the whole congregation.
   const _kids = new Set(((ctx.safeguard && ctx.safeguard.minors) || []).map(x => String(x || '').toLowerCase()));
+  // Anyone who is not a care admin is served ONLY children's requests by the relay (their clearance is what
+  // grants it), so "assume confidential" is the right default for what remains here — but it is a default, not
+  // knowledge. My own request is excluded upstream, which is the case it used to get wrong.
   const fromChild = (r) => (isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true);
   const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
   const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
@@ -501,6 +528,11 @@ const CARE_SEND_REFUSAL = {
   'no-one-cleared': 'Your church hasn’t set up who can help young people yet. Please speak to a leader in person — they can sort this out for you.',
   'unknown-audience': 'We couldn’t check who can help you right now. Try again in a moment, or speak to a leader in person.',
   'unknown-clearance': 'We couldn’t check your account with your church yet. Try again in a moment, or speak to a leader in person.',
+  // The relay refuses a request from a build that predates self-naming request ids. Without this the member is
+  // told to check their connection, which sends them looking in the wrong place on the one screen where that
+  // matters most. This build cannot itself produce that refusal — it always mints a naming id — so it is
+  // insurance for the NEXT time the relay has to refuse an old app, not for this change.
+  'stale-app': 'Please update the app to ask for help — this version can’t send a request. If you can’t update right now, speak to a leader in person.',
 };
 function careSentWording(res) {
   // A YOUNG PERSON DID NOT WRITE TO THE CARE TEAM. Their request goes to the adults their church has cleared,
@@ -581,7 +613,7 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Sending…' : 'Send to care team'}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Sending…' : (_isMinor ? 'Send' : 'Send to care team')}</button>
         </div>
       </div>
     </div>
@@ -612,6 +644,14 @@ function AskForHelp({ ctx, linkOnly }) {
   // For a child working up to telling someone something difficult, that is the worst thing the app can do.
   const isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
   const [audience, setAudience] = React.useState(undefined);
+  // WHO IS CLEARED CHANGES WHILE A CHILD IS LOOKING AT THIS SCREEN, and this used to be fetched once.
+  // Measured on the OPPO, 2026-08-27: with nobody cleared, a young person is correctly told "your church
+  // hasn't set up who can help young people yet — please speak to a leader". They do. The leader clears
+  // somebody. The card keeps saying it, and keeps the ask control hidden, until the app is restarted. That is
+  // the worst possible moment for a stale screen: the child did the one thing it asked of them and the app
+  // still says there is nobody. A joined string, not the array, because subscribeChurchSafeguard emits a
+  // fresh identity on every tick and depending on that would refetch forever.
+  const _clearedKey = (((ctx.safeguard && ctx.safeguard.approved) || []).join(','));
   React.useEffect(() => {
     if (!isMinor || !ctx.church || !(window.Fellowship && window.Fellowship.childCareAudience)) { setAudience(undefined); return; }
     let live = true;
@@ -619,7 +659,7 @@ function AskForHelp({ ctx, linkOnly }) {
       .then(a => { if (live) setAudience(a); })
       .catch(() => { if (live) setAudience(null); });
     return () => { live = false; };
-  }, [isMinor, ctx.church && ctx.church.npub]);
+  }, [isMinor, ctx.church && ctx.church.npub, _clearedKey]);
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
@@ -629,7 +669,7 @@ function AskForHelp({ ctx, linkOnly }) {
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>
-      {mine.map(r => <MyRequestRow key={r.id} r={r} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: 'Your care team' }); }} />)}
+      {mine.map(r => <MyRequestRow key={r.id} r={r} isMinor={isMinor} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: (isMinor ? 'Your church' : 'Your care team') }); }} />)}
       {!linkOnly && chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
       {isMinor && (audience !== undefined) && (!audience || !audience.length) ? (
         // NO FORM. Not a disabled button either — a greyed-out control invites tapping it and reads as a fault
@@ -768,6 +808,8 @@ function CareAvailability({ ctx, part }) {
 
 function CareCard({ ctx, embedded }) {
   const care = ctx.care || {};
+  // The Care tab's own framing is read by children too, and for them "your care team" is not who receives it.
+  const _minorHere = !!(ctx.safeguard && ctx.safeguard.isMinor);
   const s = care.settings || {};
   const [openId, setOpenId] = React.useState(() => (embedded && ctx.careFocus) || null);   // deep-link: auto-open the focused need
   if (!s.enabled) return null;
@@ -836,10 +878,10 @@ function CareCard({ ctx, embedded }) {
     return (
       <React.Fragment>
         <CareRequests ctx={ctx} />
-        <CareSection id="need" icon="heart" title="If you need help" sub="Ask your care team, or reach someone who’s offered">
+        <CareSection id="need" icon="heart" title="If you need help" sub={_minorHere ? "Tell someone at your church, or reach someone who’s offered" : "Ask your care team, or reach someone who’s offered"}>
           <AskForHelp ctx={ctx} />
           <CareAvailability ctx={ctx} part="others" />
-          {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>Nobody else has listed themselves as available yet — asking your care team above reaches them directly.</div> : null}
+          {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>{_minorHere ? 'Nobody else has listed themselves as available yet — asking above reaches the people at your church who can help.' : 'Nobody else has listed themselves as available yet — asking your care team above reaches them directly.'}</div> : null}
         </CareSection>
         <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={live.length}>
           <CareAvailability ctx={ctx} part="mine" />

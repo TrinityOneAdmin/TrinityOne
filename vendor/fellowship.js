@@ -6241,6 +6241,25 @@
     if (approved === null && roster === null && !_relayAuthedAt) return null;
     return [...new Set([...approved || [], ...roster || []].filter(Boolean))];
   }
+  async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
+    if (!cp || !reqId || !requesterPub) return null;
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CAREREQ_D + reqId] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (e.pubkey !== requesterPub) continue;
+        if (!best || e.created_at > best.created_at) best = e;
+      }
+      if (!best) return null;
+      const o = JSON.parse(best.content || "{}");
+      const list = o && o.keys && typeof o.keys === "object" ? Object.keys(o.keys).filter(Boolean) : null;
+      if (!list || !list.length) return null;
+      const mode = ((best.tags || []).find((t) => t[0] === "aud") || [])[1] || "";
+      return { pubs: list, team: mode === "team" };
+    } catch (e) {
+      return null;
+    }
+  }
   function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
     const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
@@ -10165,12 +10184,13 @@
         } catch (e) {
         }
       }
-      const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
-      const evt = finalizeEvent2({ kind: 30078, created_at: body.at, tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp]], content: JSON.stringify({ keys, enc }) }, sk);
+      const id = pub.slice(0, 16) + "-" + _hex(crypto.getRandomValues(new Uint8Array(8)));
+      const evt = finalizeEvent2({ kind: 30078, created_at: body.at, tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp], ["aud", childish ? "cleared" : "team"]], content: JSON.stringify({ keys, enc }) }, sk);
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care request publish failed", e);
+        if (/update the app/i.test(String(e && e.message || ""))) return { error: "stale-app" };
         return null;
       }
       return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };
@@ -10359,8 +10379,10 @@
       }
       const body = String(text || "").trim();
       if (!sk || !cp || !reqId || !body) return null;
-      const team = await _fetchCareTeam(cp);
-      const sealed = _sealToPubs([cp, pub, requesterPub, ...team], { text: body, by: pub, at: Math.floor(Date.now() / 1e3) });
+      const audience = await _fetchCareThreadAudience(cp, reqId, requesterPub);
+      if (!audience) return null;
+      const extra = audience.team ? await _fetchCareTeam(cp) || [] : [];
+      const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1e3) });
       if (!sealed) return null;
       const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
       const tags = [["d", CARECHAT_D + reqId + ":" + msgId], ["t", NET], ["t", "carechat"], ["church", cp]];

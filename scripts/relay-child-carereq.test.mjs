@@ -30,6 +30,10 @@ const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:', CARETEAM_D = 'trinityone/careteam:';
 const CARESTATUS_D = 'trinityone/carereqstatus:', CARECHAT_D = 'trinityone/carechat:';
 const MINORS_D = 'trinityone/minors:', APPROVED_D = 'trinityone/approved:', STEWARDS_D = 'trinityone/stewards:';
+// A CARE REQUEST ID NAMES ITS ASKER — `<first16 of their pubkey>-<tail>` — and the relay refuses one that
+// does not, so these fixtures mint them the way the app does. Before that rule the id was random and any
+// author could write at it; that is what let a forged request replace a real one in the steward's queue.
+const rid = (who, tail) => who.pub.slice(0, 16) + '-' + tail;
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -87,67 +91,67 @@ before(async () => {
   })))[0], true, 'steward roster with capabilities');
   assert.equal((await publish(pub, doc(church, CARETEAM_D + cp, { pubs: [ray.pub, church.pub] })))[0], true, 'care team');
   await sleep(150);
-  assert.equal((await publish(pub, carereq(ellie, 'kid1')))[0], true, 'the child could not open a request at all');
-  assert.equal((await publish(pub, carereq(edith, 'adult1')))[0], true, 'an adult could not open a request');
+  assert.equal((await publish(pub, carereq(ellie, rid(ellie, 'kid1'))))[0], true, 'the child could not open a request at all');
+  assert.equal((await publish(pub, carereq(edith, rid(edith, 'adult1'))))[0], true, 'an adult could not open a request');
   await sleep(120);
 });
 after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
 test('THE CLEARED YOUTH WORKER CAN READ IT — she holds no care role, and that is the point', async () => {
-  assert.equal(await canFetch(grace, CAREREQ_D + 'kid1'), true,
+  assert.equal(await canFetch(grace, CAREREQ_D + rid(ellie, 'kid1')), true,
     'Grace is the person Ellie’s phone encrypted this for, and the relay will not hand it to her. Nobody comes.');
 });
 
 test('the safeguarding steward can read it', async () => {
-  assert.equal(await canFetch(hannah, CAREREQ_D + 'kid1'), true,
+  assert.equal(await canFetch(hannah, CAREREQ_D + rid(ellie, 'kid1')), true,
     'the steward the church gave the safeguarding job to receives nothing');
 });
 
 test('the church’s own console can read it', async () => {
-  assert.equal(await canFetch(church, CAREREQ_D + 'kid1'), true, 'the office is a child’s route of last resort');
+  assert.equal(await canFetch(church, CAREREQ_D + rid(ellie, 'kid1')), true, 'the office is a child’s route of last resort');
 });
 
 test('the child reads her own request back', async () => {
-  assert.equal(await canFetch(ellie, CAREREQ_D + 'kid1'), true, 'she cannot see her own message');
+  assert.equal(await canFetch(ellie, CAREREQ_D + rid(ellie, 'kid1')), true, 'she cannot see her own message');
 });
 
 test('THE CARE STEWARD CANNOT — a meal-train rota is not a vetting check', async () => {
-  assert.equal(await canFetch(ray, CAREREQ_D + 'kid1'), false,
+  assert.equal(await canFetch(ray, CAREREQ_D + rid(ellie, 'kid1')), false,
     'Ray runs the meal trains and his church has not cleared him to be near children. Ellie’s disclosure is ' +
     'not his business, and the relay is handing it to him.');
 });
 
 test('…nor can an ordinary member, nor anyone at all unauthenticated', async () => {
-  assert.equal(await canFetch(edith, CAREREQ_D + 'kid1'), false, 'any member of the church can read it');
-  assert.equal(await canFetch(null, CAREREQ_D + 'kid1'), false, 'it is served to an anonymous observer');
+  assert.equal(await canFetch(edith, CAREREQ_D + rid(ellie, 'kid1')), false, 'any member of the church can read it');
+  assert.equal(await canFetch(null, CAREREQ_D + rid(ellie, 'kid1')), false, 'it is served to an anonymous observer');
 });
 
 test('the private reply thread follows the same rule', async () => {
-  assert.equal((await publish(pub, chat(grace, 'kid1', 'm1', ellie)))[0], true, 'the cleared adult cannot even reply');
-  assert.equal(await canFetch(grace, CARECHAT_D + 'kid1:m1'), true, 'she cannot read the thread she is having');
-  assert.equal(await canFetch(ray, CARECHAT_D + 'kid1:m1'), false, 'the uncleared care steward reads the thread');
+  assert.equal((await publish(pub, chat(grace, rid(ellie, 'kid1'), 'm1', ellie)))[0], true, 'the cleared adult cannot even reply');
+  assert.equal(await canFetch(grace, CARECHAT_D + rid(ellie, 'kid1') + ':m1'), true, 'she cannot read the thread she is having');
+  assert.equal(await canFetch(ray, CARECHAT_D + rid(ellie, 'kid1') + ':m1'), false, 'the uncleared care steward reads the thread');
 });
 
 test('and so does the resolution, which names the child', async () => {
-  assert.equal((await publish(pub, status(grace, 'kid1', ellie, 'handled')))[0], true, 'a cleared adult cannot resolve it');
-  assert.equal(await canFetch(ray, CARESTATUS_D + 'kid1'), false,
+  assert.equal((await publish(pub, status(grace, rid(ellie, 'kid1'), ellie, 'handled')))[0], true, 'a cleared adult cannot resolve it');
+  assert.equal(await canFetch(ray, CARESTATUS_D + rid(ellie, 'kid1')), false,
     '"handled" on a child’s request tells an uncleared reader that that child asked for help');
-  assert.equal(await canFetch(ellie, CARESTATUS_D + 'kid1'), true, 'the child cannot see her own request was answered');
+  assert.equal(await canFetch(ellie, CARESTATUS_D + rid(ellie, 'kid1')), true, 'the child cannot see her own request was answered');
 });
 
 test('an uncleared care steward cannot WRITE over a child’s resolution either', async () => {
   // He cannot read the request — but these documents replace in place, so without this he could publish
   // "declined" over it blind, and Ellie's own app would show her plea refused by somebody her church never
   // cleared to touch children's matters.
-  assert.equal((await publish(pub, status(ray, 'kid1', ellie, 'declined')))[0], false,
+  assert.equal((await publish(pub, status(ray, rid(ellie, 'kid1'), ellie, 'declined')))[0], false,
     'the care steward overwrote the resolution of a child’s request');
 });
 
 test('NONE OF THIS TOUCHES AN ADULT’S REQUEST — the care team works exactly as before', async () => {
-  assert.equal(await canFetch(ray, CAREREQ_D + 'adult1'), true,
+  assert.equal(await canFetch(ray, CAREREQ_D + rid(edith, 'adult1')), true,
     'ordinary care broke: the care steward can no longer see a grown-up asking for a lift');
-  assert.equal((await publish(pub, status(ray, 'adult1', edith, 'handled')))[0], true,
+  assert.equal((await publish(pub, status(ray, rid(edith, 'adult1'), edith, 'handled')))[0], true,
     'the care steward can no longer resolve an ordinary request');
-  assert.equal(await canFetch(grace, CAREREQ_D + 'adult1'), false,
+  assert.equal(await canFetch(grace, CAREREQ_D + rid(edith, 'adult1')), false,
     'being cleared for youth work now grants access to every adult’s private request as well');
 });

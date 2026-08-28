@@ -938,6 +938,28 @@ function idNamesOwner(id) {
   for (const cp of CHURCH_PUBS) if (cp.startsWith(m[1])) return cp;
   return '';                                     // names a church this relay does not carry — not our business
 }
+// A CARE REQUEST ID NAMES ITS ASKER — `<askerpubprefix>-<random>`, checked with nothing remembered.
+//
+// ONE RULE, NOT TWO. This began as a map of who-claimed-which-id, and when the id check was added the map
+// stayed on as a fallback for ids minted before it. That fallback was not free: the map was only ever
+// consulted in accept(), so a request with no owner prefix had protection at ONE door out of four — the very
+// bypass the id check exists to close, preserved inside the thing that replaced it. An id that names nobody is
+// now refused outright. Decided with the owner, 2026-08-28: this lands before the pilot, so no member is
+// running an app old enough to mint one.
+//
+// The first attempt was a map of who-claimed-which-id, and it only ever guarded accept(). accept() is the live
+// write door; /import and relay-to-relay sync call store.put() directly and never reach it, so a forged copy
+// could arrive by replication and sit beside the real one — and every reader picks newest-wins. This check has
+// no such gap because it holds no state: it is a property of the event, true at every door, on every relay,
+// after every restart, and for any entry point added later.
+//
+// An id with no owner prefix is REFUSED, not waved through. See the note above on why the fallback had to go.
+function carereqIdOk(e, d) {
+  if (!d.startsWith(CAREREQ_D)) return true;
+  const m = ID_OWNER_RE.exec(d.slice(CAREREQ_D.length));
+  if (!m) return false;                                  // ONE RULE: an id that names nobody names nobody
+  return String(e.pubkey || '').startsWith(m[1]);        // the id names them, so only they may write here
+}
 function idOwnerOk(owner, e, id) {
   const cp = namedChurch(e) || e.pubkey;
   if (!owner) {
@@ -999,6 +1021,13 @@ function rebuildMembers() {
 const MINORS_BY = new Map();   // churchpub -> Set(minor pubkeys)
 const MINORS = new Set();
 function rebuildMinors() { MINORS.clear(); for (const s of MINORS_BY.values()) for (const p of s) MINORS.add(p); }
+// Which churches ALLOW a child to publish a photograph (features.childPhotos on the church's own kind-0).
+// DEFAULT-DENY: a church absent from this set does not allow it. That is the safe direction — but it is only
+// SAFE, not correct, if the set is actually populated: an empty set silently refuses photos for a church that
+// deliberately allows them. hydrateMaps() therefore replays kind 0 explicitly. It did not, originally, and
+// this comment claimed it did; the claim was never checked and an audit disproved it with a restart probe.
+const CHILD_PHOTOS_OK = new Set();
+
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
 const APPROVED = new Set();
 function rebuildApproved() { APPROVED.clear(); for (const s of APPROVED_BY.values()) for (const p of s) APPROVED.add(p); }
@@ -1077,6 +1106,25 @@ function minorGoverningChurches(pub) {
 }
 // May `other` exchange DMs with `minorPub`? Clearance must come from EVERY church that governs the child —
 // so one church's lax list can never override another's. Returns true when the child is a minor nowhere.
+// Does this profile carry a photograph? Both shapes: av.kind==='photo' is what identity-avatar.jsx renders,
+// and a bare `picture` is what any other Nostr client would show. Block both — the point is that no viewer
+// anywhere ends up with a child's photograph, not that one renderer happens to ignore one field.
+function _profileHasPhoto(content) {
+  try {
+    const c = JSON.parse(content || '{}');
+    if (c && c.av && c.av.kind === 'photo' && c.av.photo) return true;
+    return !!(c && typeof c.picture === 'string' && c.picture.trim());
+  } catch { return false; }
+}
+// A CHILD'S PHOTOGRAPH IS NOT A UI PREFERENCE. If ANY church that governs this person as a minor has not
+// switched children's photos on, the photo does not land. Scoped exactly like safeguardAllows: a church may
+// only make this judgement about its own children.
+function childPhotoBlocked(pub) {
+  const cps = minorGoverningChurches(pub);
+  if (!cps.length) return false;
+  for (const cp of cps) if (!CHILD_PHOTOS_OK.has(cp)) return true;
+  return false;
+}
 function safeguardAllows(minorPub, other) {
   const cps = minorGoverningChurches(minorPub);
   if (!cps.length) return true;
@@ -1328,7 +1376,7 @@ function clearDerivedMaps() {
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
   // flag that lets minors read a room.
-  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE]) { try { s.clear(); } catch {} }
+  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK]) { try { s.clear(); } catch {} }
 }
 let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
@@ -1356,6 +1404,14 @@ function hydrateMaps() {
     // itself". Two passes: grant-conferring documents, then everything. note() is idempotent for these, and
     // the extra ASC pass is boot-time only.
     const dOf = (e) => ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    // CHURCH PROFILES TOO. The passes below replay kind 30078 only, and a church's safeguarding switches live
+    // on its kind-0 (features.childPhotos). Without this CHILD_PHOTOS_OK is empty after every boot, and since
+    // that gate default-denies, a church which deliberately switched children's photos ON had its teenagers'
+    // profile updates refused after any restart — and this relay self-updates and restarts on its own, so
+    // "after any restart" means "one day, by itself". Found by audit, 2026-08-27, and proven with a restart
+    // probe; the comment where the gate is defined asserted the opposite and had never been checked.
+    // note() short-circuits on CHURCH_PUBS.has(e.pubkey) before parsing, so this costs a scan and nothing more.
+    store.eachKind([0], note);
     store.eachKind([30078], (e) => { const d = dOf(e); if (d.startsWith(STEWARDS_D) || d.startsWith(NETWORK_D)) note(e); });
     store.eachKind([30078], note);                     // uncapped ASC iteration — no 10k truncation of old docs
   }
@@ -1406,7 +1462,22 @@ function persistChurches() { try {
   const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
 } catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
-  if (!CHURCH_PUBS.size || e.kind !== 30078) return;
+  if (!CHURCH_PUBS.size) return;
+  // A CHURCH'S OWN PROFILE CARRIES ITS SAFEGUARDING SWITCHES, and until 2026-08-27 this relay never read them.
+  // `childPhotos` lived only in app/identity.jsx and app/stew-dashboard.jsx, where it decided whether to OFFER
+  // the control — so the setting was a UI preference. Measured with it switched OFF: a minor's kind-0 carrying
+  // av.kind:'photo' was accepted here and rendered, 44px and visible, by another member's STOCK app. The same
+  // shape as the child-safe-groups bug whose own comment claimed it was "the one safeguarding control that
+  // wasn't relay-enforced". It was not the only one.
+  if (e.kind === 0) {
+    if (CHURCH_PUBS.has(e.pubkey)) {
+      let allow = false;
+      try { const c = JSON.parse(e.content || '{}'); allow = !!(c && c.features && c.features.childPhotos === true); } catch {}
+      if (allow) CHILD_PHOTOS_OK.add(e.pubkey); else CHILD_PHOTOS_OK.delete(e.pubkey);
+    }
+    return;
+  }
+  if (e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
   let cp;   // the church a <cp>-keyed admin doc is for — author is the church itself OR one of its rostered stewards
   if (d.startsWith(MEMBER_D) && CHURCH_PUBS.has(d.slice(MEMBER_D.length))) {   // asked to join / joined one of our churches
@@ -1609,6 +1680,9 @@ function accept(e) {
   if (BLOCKED.has(e.pubkey) && !(isAnyChurch || isNetwork)) return false;   // a blocked member can't write anything
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
+    // …but a minor's photograph is refused whatever their membership, unless their church allows it. Placed
+    // FIRST so it cannot be fallen through: the member rule below returns true unconditionally.
+    if (childPhotoBlocked(e.pubkey) && _profileHasPhoto(e.content)) return false;
     if (isMember) return true;                                   // members/leaders: always
     if (store.query({ kinds: [0], authors: [e.pubkey], limit: 1 }).length) return true;  // a stranger updating their own
     // SECURITY-AUDIT-2026-07-06 M6: reject in O(cap) once the stranger cap is reached, instead of scanning +
@@ -1925,6 +1999,11 @@ function accept(e) {
     // may open one. Must name a configured church; then falls through to the member rule so the per-member doc
     // cap (below) still bounds it against a flood of unique d-tags.
     if (d.startsWith(CAREREQ_D) && !namedChurch(e)) return false;
+    // …and only its owner may ever write there. Without this a member could publish a newer copy at another
+    // member's request id, replace it in every reader's newest-wins list, and redirect the reply away from the
+    // person who asked. Enforced HERE because the clients cannot tell the two copies apart: whichever one they
+    // trust to name the asker is the one an attacker controls.
+    if (d.startsWith(CAREREQ_D) && !carereqIdOk(e, d)) return false;
     // a message in a request's shared care-team↔asker thread. Member-writable (so the asker can reply); must
     // name its church, then falls to the member rule + per-member cap. The content is sealed to the care team +
     // asker, so a non-audience write is unreadable garbage the recipients' client filters out on decryption.
@@ -2089,6 +2168,11 @@ function canRead(e, authed) {
       return !!authed && (authed === e.pubkey || authed === pHex || authed === cp || stewardCan(authed, cp, 'care') || careAdmin(authed, cp));
     }
     if (d.startsWith(CAREREQ_D)) {   // a member's private ask-for-help — CARE-TEAM ONLY (mirror SAFE_D), never served to the whole church
+      // AND NEVER A COPY WRITTEN AT SOMEBODY ELSE'S ID. The write gates above stop one being stored, but this
+      // relay may already hold one from an older build, and a reader picks newest-wins between two copies at
+      // one id. Refusing to SERVE it makes anything already on disk inert, so the fix does not depend on
+      // having caught it on the way in.
+      if (!carereqIdOk(e, d)) return false;
       const cp = owningChurch(e, d);
       if (!authed || !cp) return false;
       // SAFEGUARDING: A CHILD'S DISCLOSURE IS NOT CARE-TEAM BUSINESS. The follow-up thread (CARECHAT_D, just
@@ -3024,6 +3108,10 @@ function serveStatic(req, res) {
           if (e && e._manifest) continue;                            // the archive's manifest header line
           let ok = false; try { ok = !!(e && e.id && e.sig && verifyEvent(e)); } catch { ok = false; }   // verifyEvent can THROW on malformed input — one bad line must never kill the whole import (→ hang → 502)
           if (!ok) { invalid++; continue; }
+          // A CARE REQUEST'S ID NAMES ITS ASKER, AND THAT HOLDS AT EVERY DOOR — not just accept(). These paths write
+          // straight to the store, so without this a forged request arrives by import or by relay-to-relay sync, sits
+          // beside the genuine one (addressable events are per author), and every reader picks newest-wins.
+          if (!carereqIdOk(e, dtag(e))) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
             if (r === 'stored') imported++;
@@ -4082,6 +4170,7 @@ async function syncChurchFromPeer(cp, peerBase) {
     await forEachNdjsonLine(r, MAX_IMPORT, (s) => {   // stream the corpus line-by-line (bounded memory)
       let e; try { e = JSON.parse(s); } catch { return; }
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
+      if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
       const put = store.put(e, cp);
       if (put === 'stored') { imported++; note(e); }
       if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
@@ -4145,7 +4234,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }
@@ -4362,7 +4451,23 @@ wss.on('connection', (ws, req) => {
       // forge events under any pubkey (church/steward/member) — fake announcements, fake funds (with a
       // hostile lud16 to redirect giving), or flood forged events to evict real ones (MAX_EVENTS DoS).
       if (!verifyEvent(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: signature failed'])); return; }
-      if (!accept(evt)) { rejectLog(evt, ws, 'not a member or not permitted for this group'); ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
+      // SAY WHICH REFUSAL THIS IS when the app can act on it. A care request whose id does not name its asker
+      // comes from a build that predates self-naming ids, and the generic "not a member or not permitted"
+      // sends that person off to check their connection when the truth is their app is too old. This is the
+      // one screen where a misleading failure is least acceptable: somebody asking for help.
+      if (!accept(evt)) {
+        // `|| ''` — dtag() returns undefined for a validly-signed 1-element ["d"] tag, which nostr-tools
+        // permits. A blocked member's event is refused before `d` is ever read, so this line was the first to
+        // touch it: .startsWith on undefined threw, the process-level handler swallowed it, and the sender got
+        // NO reply at all where the old code sent a refusal. Audit, 2026-08-28.
+        const _rd = dtag(evt) || '';
+        const _stale = evt.kind === 30078 && _rd.startsWith(CAREREQ_D) && !ID_OWNER_RE.test(_rd.slice(CAREREQ_D.length));
+        rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids' : 'not a member or not permitted for this group');
+        ws.send(JSON.stringify(['OK', evt.id, false, _stale
+          ? 'blocked: please update the app to ask for help — this version cannot send a request'
+          : 'blocked: not a member or not permitted for this group']));
+        return;
+      }
       // was this pubkey ALREADY a known member of the church it's posting to? MEMBER_DOCS is rebuilt from stored
       // docs, so this survives relay restarts — a boot re-announce won't re-alert the steward. Captured before note().
       const _mdD = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';

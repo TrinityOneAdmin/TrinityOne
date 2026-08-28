@@ -378,6 +378,51 @@ async function _fetchChildCareAudience(cp) {
   if (approved === null && roster === null && !_relayAuthedAt) return null;
   return [...new Set([...(approved || []), ...(roster || [])].filter(Boolean))];
 }
+// WHO A REPLY REACHES IS DECIDED BY THE REQUEST, NOT BY WHOEVER IS TYPING.
+//
+// sendCareChat used to seal every message to the care rota. For an adult's request that is right by accident;
+// for a young person's it is wrong twice over. Measured on a phone against the live relay, 2026-08-27: a
+// cleared youth worker who is not also on the care rota messaged a child, the child read it and replied, and
+// her reply was sealed to the rota — so the relay served him the event, he held no key, and subscribeCareChat
+// dropped it as though it had never been said. The child answers and nobody comes. The same seal also wrapped
+// her words, in openable form, for the very group the feature exists to keep out.
+//
+// The branch cannot key off the sender: publishCareRequest asks `_sgSelf.isMinor`, which is the ASKER's own
+// status, and here the sender is usually the adult. So do not detect a child at all. `_sealToPubs` writes
+// `{ keys: { pubkey: wrapped }, enc }` and the request's envelope has the identical shape, so the recipient
+// list is sitting in the event in clear. Reuse it: a reply reaches exactly whoever the request reached, by
+// construction, for adult and child threads alike, and it keeps following if the request's audience rules
+// ever change again.
+//
+// DELIBERATELY NOT WIDENED: an adult cleared AFTER the request was made is not in that list and will not see
+// the thread. Adding them would broaden a child's disclosure without the church having chosen to, and that is
+// not this function's call to make. Owner asked, 2026-08-27; left narrow on purpose.
+//
+// AND ONLY THE ASKER'S OWN COPY COUNTS. The first version of this took the newest event at that d-tag with no
+// author check, and the relay's write gate lets an ordinary member publish a `carereq:` at somebody else's
+// d-tag — proven by audit, 2026-08-27: a member published at a child's request id and it was accepted. A
+// hostile member who learns the id could then plant a newer request whose key list contains only themselves,
+// and a steward answering from the console (which reads every request, so always receives the forgery) would
+// seal their reply away from the child and from the cleared adult. That is the same "child answers and nobody
+// comes" failure this function exists to prevent, re-opened from the other end. Nothing legitimately publishes
+// a request on somebody else's behalf, so the asker is the only author whose copy may decide the audience.
+async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
+  if (!cp || !reqId || !requesterPub) return null;
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CAREREQ_D + reqId] }]);
+    let best = null;
+    for (const e of (evs || [])) {
+      if (e.pubkey !== requesterPub) continue;                        // a forgery, or somebody else's thread
+      if (!best || e.created_at > best.created_at) best = e;
+    }
+    if (!best) return null;
+    const o = JSON.parse(best.content || '{}');
+    const list = (o && o.keys && typeof o.keys === 'object') ? Object.keys(o.keys).filter(Boolean) : null;
+    if (!list || !list.length) return null;
+    const mode = ((best.tags || []).find(t => t[0] === 'aud') || [])[1] || '';
+    return { pubs: list, team: mode === 'team' };     // absent tag → narrow, the safe default
+  } catch (e) { return null; }
+}
 // Which write wins when two authors publish one church document — see src/church-doc-store.src.js.
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
@@ -3801,9 +3846,44 @@ window.Fellowship = {
     let enc; try { enc = nip44e(JSON.stringify(body), keyBytes); } catch (e) { return null; }
     const keys = {};
     for (const p of recips) { try { keys[p] = nip44e(keyHex, nip44ck(sk, p)); } catch (e) {} }
-    const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
-    const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp]], content: JSON.stringify({ keys, enc }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request publish failed', e); return null; }
+    // THE ID SAYS WHOSE REQUEST THIS IS. Addressable events are per (author, kind, d-tag), so two members can
+    // both hold a copy at one id and every reader has to choose between them — they choose newest-wins. That
+    // let a member publish a newer copy at somebody else's request id, become "the asker" in the steward's
+    // triage list, and redirect the reply away from the person who actually asked. Guarding it with a map of
+    // who-claimed-what only worked on the door that map was checked at; import and relay-to-relay sync store
+    // events without passing it.
+    //
+    // So make the id prove its own owner, the way `group:` and `roster:` ids already do
+    // (`ID_OWNER_RE = /^([0-9a-f]{8,64})-/` in scripts/gateway.mjs). `<asker>-<random>` can be checked by
+    // anyone, at any door, on any relay, after any restart, with nothing remembered — a forged request stops
+    // being something to catch and becomes something you cannot construct.
+    //
+    // No new disclosure: the event is SIGNED by the asker, so their key was always on it.
+    // There is no fallback: the relay REFUSES an id that names nobody, and answers with "please update the
+    // app to ask for help" so a member on an older build is told what to do rather than to check their wifi.
+    // The fallback existed briefly and had to go — it was consulted at only one of the four doors into the
+    // relay, which preserved the exact bypass this id is here to close.
+    const id = pub.slice(0, 16) + '-' + _hex(crypto.getRandomValues(new Uint8Array(8)));
+    // WHICH RULE PICKED THIS AUDIENCE, said out loud. A reply reuses the request's recipient list, which is
+    // right for a young person — but for an ordinary adult it froze the care rota as it stood that day, so a
+    // care member who joined afterwards could no longer read new replies on a live thread. "Any care member
+    // can pick up the thread" is the point of the adult flow. It cannot be inferred: a cleared adult may also
+    // sit on the care rota, so "does the audience overlap the rota?" would widen a CHILD's thread to the rota.
+    // So the asker says so. A new tag, never a repurposed one — the relay rehydrates all history on update.
+    // Requests written before this simply lack the tag and stay narrow, which is the safe direction.
+    // The tag carries no more than the relay already knows: it holds the minors list itself, and only the
+    // sealed audience is ever served this event.
+    const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['aud', childish ? 'cleared' : 'team']], content: JSON.stringify({ keys, enc }) }, sk);
+    // KEEP THE RELAY'S REASON when it is one the member can act on. _publishAny throws with the relay's own
+    // message; swallowing it turned "your app is too old" into "check your connection", which sends somebody
+    // asking for help off to look at their wifi. Everything else still returns null, so no existing caller
+    // changes behaviour.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) {
+      console.warn('[fellowship] care request publish failed', e);
+      if (/update the app/i.test(String((e && e.message) || ''))) return { error: 'stale-app' };
+      return null;
+    }
     // The caller must be able to tell the member the truth about who has this. `narrowed` = we could not
     // establish the team, so only the church leader holds a key to it; teamCount 0 with narrowed false = the
     // church has genuinely named nobody. Either way "Sent to your care team" is not a true sentence.
@@ -3922,8 +4002,16 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     const body = String(text || '').trim();
     if (!sk || !cp || !reqId || !body) return null;
-    const team = await _fetchCareTeam(cp);
-    const sealed = _sealToPubs([cp, pub, requesterPub, ...team], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
+    // See _fetchCareThreadAudience. NO FALLBACK TO THE CARE TEAM: falling back is the bug this replaces, and
+    // a silent wide seal on a child's thread is worse than a send that visibly fails.
+    const audience = await _fetchCareThreadAudience(cp, reqId, requesterPub);
+    if (!audience) return null;
+    // An ADULT's thread also reaches whoever is on the care rota NOW, so somebody who joined the team after
+    // the request was opened can still pick it up. A young person's does not, and must not: their audience is
+    // the adults the church cleared, and widening it to the rota is the whole defect this file was written
+    // for. Only the request's own `aud` tag may authorise the widening.
+    const extra = audience.team ? ((await _fetchCareTeam(cp)) || []) : [];
+    const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
     if (!sealed) return null;
     const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];
