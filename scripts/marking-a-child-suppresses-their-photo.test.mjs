@@ -32,16 +32,16 @@ const slice = (from, to) => {
 };
 
 // Run the SHIPPED toggleMinor with everything it touches injected, and record what it publishes.
-function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, pk = 'kidpub' }) {
+function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared = false, pk = 'kidpub' }) {
   const body = slice('const toggleMinor = (pk) => {', '\n  };') + '\n  };';
-  const calls = { minors: [], approved: [], nophoto: [], reseal: [] };
+  const calls = { minors: [], approved: [], nophoto: [], reseal: [], notice: [] };
   const sg = {
     minors: marking ? [] : [pk],
-    approved: [],
+    approved: cleared ? [pk] : [],
     nophoto: alreadySuppressed ? [pk] : [],
     clearedKnown: true,
   };
-  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'calls',
+  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls',
     body + '\nreturn toggleMinor;')(
     sg,
     new Set(sg.minors),
@@ -53,6 +53,7 @@ function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, pk = 'kidpub'
       setNoPhoto: (l) => { calls.nophoto.push(l); },
     } },
     (...a) => calls.reseal.push(a),
+    (n) => calls.notice.push(n),
     calls,
   );
   fn(pk);
@@ -188,4 +189,29 @@ test('it does not fire before the lists have loaded, or before the relay authed'
 test('running twice on the same state publishes once', () => {
   assert.equal(runReconcile({ minors: ['kid1'], nophoto: [], kidPhotosAllowed: false, twice: true }).length, 1,
     'the lists re-emit on every tick, so this would republish forever');
+});
+
+// ── unmarking a child also revokes their clearance, and must SAY SO ─────────────────────────────────────────
+// The revocation itself is deliberate: leaving a stale clearance behind is how a six-year-old becomes someone
+// the relay treats as cleared to privately message children. What was wrong is that it happened in silence, so
+// a steward correcting a mis-tap destroyed a real volunteer's clearance with no warning and no hint that
+// re-clearing was needed. Found on the device, 2026-08-27.
+test('unmarking a CLEARED child tells the steward their clearance went with it', () => {
+  const c = runToggle({ marking: false, kidPhotosAllowed: false, cleared: true });
+  assert.equal(c.approved.length, 1, 'the clearance was NOT revoked — a stale clearance on a former child is ' +
+    'the exact hazard the surrounding code exists to prevent');
+  const said = c.notice.filter(Boolean);
+  assert.equal(said.length, 1, 'the clearance was revoked in silence');
+  assert.match(said[0].text, /clearance/i, 'the message does not mention the clearance that was removed');
+  assert.match(said[0].text, /Clear for youth/, 'it does not say how to put it back');
+});
+
+test('unmarking someone who was NOT cleared says nothing', () => {
+  const c = runToggle({ marking: false, kidPhotosAllowed: false, cleared: false });
+  assert.deepEqual(c.notice.filter(Boolean), [], 'it claims a clearance was removed when there was none');
+});
+
+test('MARKING says nothing about clearances — it removes none', () => {
+  const c = runToggle({ marking: true, kidPhotosAllowed: false, cleared: false });
+  assert.deepEqual(c.notice.filter(Boolean), [], 'marking someone as a child reported a clearance removal');
 });

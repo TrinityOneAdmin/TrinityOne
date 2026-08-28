@@ -4013,6 +4013,9 @@ function DashMembers() {
   const minorsSet = new Set(sg.minors || []);
   const approvedSet = new Set(sg.approved || []);
   const nophotoSet = new Set(sg.nophoto || []);
+  // Which member we have just told the steward something about, and what. Per-row rather than a page banner:
+  // the thing being explained happened to one person and the row is where they are looking.
+  const [minorNotice, setMinorNotice] = React.useState(null);   // { pk, text }
   // does THIS church allow children to have photographs at all? (church profile → features.childPhotos)
   const kidPhotosAllowed = !!(church && church.features && church.features.childPhotos === true);
   const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
@@ -4146,6 +4149,14 @@ function DashMembers() {
     if (!unmarking && !kidPhotosAllowed && !nophotoSet.has(pk)) {
       try { window.Steward.setNoPhoto([...(sg.nophoto || []), pk]); } catch (e) {}
     }
+    // SAY SO. Unmarking a child ALSO revokes their youth clearance, and that is deliberate — leaving a stale
+    // clearance behind is how a six-year-old becomes someone the relay treats as cleared to message children
+    // (see the note above). But it happened in silence: a steward correcting a mis-tap destroyed a real
+    // volunteer's clearance with no warning, no undo, and nothing to say that re-clearing was now needed.
+    // Found on the device, 2026-08-27. The action stays as it is; only the silence is the defect.
+    setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
+      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
+      : null);
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
       // Whether the CLEARED list has actually been read — not whether the list of children has. Asking the
       // wrong document broke the exact case this record was written for: a brand-new church clearing its first
@@ -4404,6 +4415,12 @@ function DashMembers() {
               re-seat people who lost their words — the capability's own description says so — and the button
               was not on their screen. The other three write minors:/approved:/guardians:, which the relay
               really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
+          {minorNotice && minorNotice.pk === m.pubkey ? (
+            <div role="status" style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+              background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))', color: 'var(--ink)' }}>
+              {minorNotice.text}
+            </div>
+          ) : null}
           {!delegated ? (<React.Fragment>
           <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
