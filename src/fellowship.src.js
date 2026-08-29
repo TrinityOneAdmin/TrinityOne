@@ -3485,10 +3485,29 @@ window.Fellowship = {
     const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
     // join BEFORE the sealed name: the relay only accepts a name document from someone it already knows is a
     // member of that church, so the reverse order would have the name silently refused.
-    for (const e of [k0, join, childNameDoc, req]) { if (!e) continue; try { await _publishAny(window.Fellowship.relays, e); } catch (err) { console.warn('[fellowship] child setup publish failed', err); } }
-    _saveChildLink({ child: childPub, name, churchPub: cp, ts });     // remember locally so the parent sees their children
+    // PUBLISH FIRST, REVEAL SECOND. This used to console.warn each failure and return the twelve words
+    // regardless. On a bad link a parent wrote them down, set up the child's phone, and there was no join
+    // document, no sealed name and nothing for the steward — the row said "Waiting for steward to confirm"
+    // for ever and nothing retried. The words are shown once and stored nowhere, so "it looked like it
+    // worked" IS the failure. AUDIT-2026-08-29.
+    //
+    // Nothing but the join/name order matters, so the other three go together rather than serially:
+    // _publishAny has no timeout and four rounds of it can leave a parent watching "Setting up…" for the
+    // better part of a minute.
+    const sent = async (e) => { if (!e) return false; try { await _publishAny(window.Fellowship.relays, e); return true; } catch (err) { console.warn('[fellowship] child publish failed', err); return false; } };
+    const published = { join: await sent(join) };
+    const rest = await Promise.all([sent(k0), sent(childNameDoc), sent(req)]);
+    published.k0 = rest[0]; published.name = rest[1]; published.req = rest[2];
+    // WHICH TWO MATTER. The join is what makes the child a member at all; the sealed name is what the steward
+    // reads when confirming the link, and without it they are asked to approve a bare npub — the console
+    // deliberately will not resolve a requester-supplied name. The kind-0 is an empty profile now and costs
+    // nothing if it is late; the guardian request re-sends when the screen is reopened.
+    const ok = !!(published.join && published.name);
+    // Only remember a link there is something to remember. Saving it regardless left a ghost row reading
+    // "Waiting for steward to confirm" for an account no relay had ever heard of.
+    if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
     _needAuth = true;   // M3: now a guardian — must NIP-42-auth to read the church's confirmation of this link (connTick reconnects with auth)
-    return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name };
+    return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name, published, ok };
   },
   // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
   myChildren(churchNpub) {

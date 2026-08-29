@@ -9672,17 +9672,25 @@
       }
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
       const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
-      for (const e of [k0, join2, childNameDoc, req]) {
-        if (!e) continue;
+      const sent = async (e) => {
+        if (!e) return false;
         try {
           await _publishAny(window.Fellowship.relays, e);
+          return true;
         } catch (err) {
-          console.warn("[fellowship] child setup publish failed", err);
+          console.warn("[fellowship] child publish failed", err);
+          return false;
         }
-      }
-      _saveChildLink({ child: childPub, name, churchPub: cp, ts });
+      };
+      const published = { join: await sent(join2) };
+      const rest = await Promise.all([sent(k0), sent(childNameDoc), sent(req)]);
+      published.k0 = rest[0];
+      published.name = rest[1];
+      published.req = rest[2];
+      const ok = !!(published.join && published.name);
+      if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
       _needAuth = true;
-      return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name };
+      return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name, published, ok };
     },
     // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
     myChildren(churchNpub) {

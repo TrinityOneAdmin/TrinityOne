@@ -359,8 +359,15 @@ test('a child’s name is not published in the clear either', () => {
   // The most sensitive instance: a child's name in a world-shaped cleartext profile, published by the parent's
   // own app at setup. And the guardian request beside it carried the child's name AND the parent's, in a
   // document any member of the church could read.
+  // BOUNDED BY THE NEXT FUNCTION, not by a magic number. This sliced a fixed 3000 chars, which was fine when
+  // it was written and became wrong twice over: the function grew towards the limit, and then a rebuild made
+  // it SHORTER than the window, so the slice ran 587 chars into `myChildren` and an assertion here could be
+  // satisfied by a neighbour's code. Anchors that slide are how a test starts passing for the wrong reason.
   const at = FELLOWSHIP.indexOf('createChildAccount');
-  const fn = FELLOWSHIP.slice(at, at + 3000);
+  assert.notEqual(at, -1, 'createChildAccount is gone from the bundle — re-anchor this test');
+  const end = FELLOWSHIP.indexOf('myChildren', at);
+  assert.ok(end > at, 'the function after createChildAccount has been renamed — re-anchor this test');
+  const fn = FELLOWSHIP.slice(at, end);
   assert.match(fn, /childProfile = \{\}/, 'a child’s kind-0 still carries their name');
   assert.doesNotMatch(fn, /parentName:/, 'the guardian request still carries the parent’s name in the clear');
   assert.doesNotMatch(fn, /childName: name/, 'the guardian request still carries the child’s name in the clear');

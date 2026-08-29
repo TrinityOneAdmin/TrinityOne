@@ -1650,7 +1650,21 @@ function FamilySheet({ open, onClose, ctx }) {
   const create = async () => {
     const n = name.trim(); if (!n) { setErr('Enter the child’s name.'); return; }
     setBusy(true); setErr('');
-    try { const r = await F.createChildAccount(ctx.church.npub, n); setMade(r); setStage('reveal'); refreshKids(); }
+    try {
+      const r = await F.createChildAccount(ctx.church.npub, n);
+      // DO NOT REVEAL TWELVE WORDS FOR AN ACCOUNT THAT DOES NOT EXIST. The engine now says which of its
+      // documents actually landed. On a bad link the parent used to copy the words down, set up the child's
+      // phone, and find a row reading "Waiting for steward to confirm" for ever — the words are shown once
+      // and stored nowhere, so a false success is unrecoverable. AUDIT-2026-08-29.
+      if (r && r.ok === false) {
+        setErr(!r.published || !r.published.join
+          ? 'Couldn’t reach your church’s relay, so the account wasn’t created. Check you’re online and try again — nothing has been set up yet.'
+          : 'The account was created but your church can’t see who it belongs to yet. Try again in a moment — your steward needs the name to confirm it.');
+        setBusy(false);
+        return;
+      }
+      setMade(r); setStage('reveal'); refreshKids();
+    }
     catch (e) { setErr((e && e.message) || 'Couldn’t set up the account — please try again.'); }
     setBusy(false);
   };
