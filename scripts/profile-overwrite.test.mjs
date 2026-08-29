@@ -74,7 +74,7 @@ const HELPERS = [
 ].join('\n');
 
 // A member-side scope we control: a relay that never answers unless we say so, and a wire we can inspect.
-function memberSide({ seen = false, cached = {}, answerAfterMs = null } = {}) {
+function memberSide({ seen = false, cached = {}, answerAfterMs = null, photosOff = '' } = {}) {
   const sk = generateSecretKey(), pub = getPublicKey(sk);
   const state = { published: [], toasts: [], sealedSynced: 0, requested: 0, saved: {} };
   const scope = {
@@ -106,7 +106,10 @@ function memberSide({ seen = false, cached = {}, answerAfterMs = null } = {}) {
   };
   scope.window.trinityToast = scope.window.trinityToast;   // the engine reaches it as window.trinityToast
   const args = Object.keys(scope);
-  const fn = new Function(...args, FE_NAME, `${HELPERS}\nreturn ({ ${BODY} }).setProfile;`)
+  // Seed the church's photo policy INSIDE the lifted scope — _photosOffChurches is module state in the
+  // bundle, so this is the only way to exercise the publish door rather than assert that its source exists.
+  const seed = photosOff ? `_photosOffChurches.add(${JSON.stringify(photosOff)});` : '';
+  const fn = new Function(...args, FE_NAME, `${HELPERS}\n${seed}\nreturn ({ ${BODY} }).setProfile;`)
     (...args.map(k => scope[k]), finalizeEvent);
   return { call: (meta) => fn(meta), state, scope, pub };
 }
@@ -196,4 +199,31 @@ test('the directory opt-out is never cleared by an unread profile', async () => 
   await m.call({ name: 'Maria' });
   assert.deepEqual(m.state.published, [],
     'a member who had opted OUT of the member directory was silently republished as visible');
+});
+
+// ── AUDIT 2026-08-29: the publish door was asserted, never executed ──────────────────────────────────────
+// The two photo tests in church-photos-off-means-off.test.mjs are greps over the source and compare indexOf
+// positions. An auditor changed the door to `if (false && _churchPhotosOff())` and every one of them stayed
+// green — so "a forbidden photo is stripped before publishing" had never actually been run. This file lifts
+// the real setProfile and inspects the wire, so it is the right place to prove it.
+//
+// What the regression costs: the relay REFUSES a kind-0 carrying a photo the church has switched off
+// (gateway.mjs accept), so the whole profile update is rejected — and the member's NAME CHANGE and their
+// directory opt-out go with it, while the app says the profile was saved.
+test('a photo the church has turned off never reaches the wire', async () => {
+  const m = memberSide({ seen: true, cached: { name: 'Maria' }, photosOff: 'churchpub' });
+  await m.call({ name: 'Maria', picture: 'data:image/webp;base64,AAAA', av: { kind: 'photo', photo: 'p', color: 'c' } });
+  assert.equal(m.state.published.length, 1, 'nothing was published at all');
+  const k0 = JSON.parse(m.state.published[0].content);
+  assert.equal(k0.picture || '', '', 'the forbidden photo went out on the wire — the relay refuses the whole ' +
+    'event, so the member’s name change and directory opt-out are lost with it');
+  assert.notEqual(k0.av && k0.av.kind, 'photo', 'the photo survived as an avatar instead');
+});
+
+test('…and with no such policy the same photo travels normally', async () => {
+  const m = memberSide({ seen: true, cached: { name: 'Maria' } });
+  await m.call({ name: 'Maria', picture: 'data:image/webp;base64,AAAA' });
+  const k0 = JSON.parse(m.state.published[0].content);
+  assert.equal(k0.picture, 'data:image/webp;base64,AAAA',
+    'a church that allows photographs just lost them for everybody');
 });

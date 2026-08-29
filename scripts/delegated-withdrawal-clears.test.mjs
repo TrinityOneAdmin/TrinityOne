@@ -374,3 +374,66 @@ test('the console does not blank its own church while it waits for the roster', 
   assert.equal(known({ _by: STRANGER }), false, 'a revoked or forged author is still shown once we know');
   assert.equal(known({ _by: CHURCH }), true, 'the church’s own copy is filtered out');
 });
+
+// ── THE MEMBER APP'S OWN READER ───────────────────────────────────────────────────────────────────────────
+// The console reader above is driven end to end; the six fellowship call sites were not, and an auditor
+// stripped `{ churchPub, targets }` from all of them with the whole suite green. That reverts the member-app
+// half of the fix entirely — the console shows the delete working while every phone in the congregation
+// keeps the group for ever, which IS the original defect.
+function memberGroupReader({ roster = [GORDON] } = {}) {
+  let handlers = null, rows = [];
+  const scope = {
+    toPub: (x) => (x === 'npub1church' ? CHURCH : ''),
+    GROUP_D: 'trinityone/group:',
+    pub: 'm'.repeat(64),
+    _needAuth: false,
+    // the church key, or a steward on the church's signed roster — the member app's real rule
+    _churchVoice: (cp, rec) => { const by = String((rec && rec._by) || ''); return by === cp || roster.includes(by); },
+    _noteGroupLeaders: () => {},
+    loadDocCache: () => [],
+    saveDocCache: () => {},
+    _coalesce: (fn) => fn,
+    _onChurchDocs: (_cp, h) => { handlers = h; return () => {}; },
+    console: { warn() {} },
+  };
+  const body = [lift(FELLOWSHIP, '_pickWinner'), lift(FELLOWSHIP, '_reduceVersions'), lift(FELLOWSHIP, '_absorbById'),
+                lift(FELLOWSHIP, '_forgetById'), lift(FELLOWSHIP, '_tombstoneTargets'), lift(FELLOWSHIP, '_reduceAll'),
+                lift(FELLOWSHIP, '_seedFromCache')].join('\n');
+  const args = Object.keys(scope);
+  const fn = new Function(...args, `${body}\nreturn ({ ${grabMethod(FELLOWSHIP, 'subscribeChurchGroups(churchNpub, onGroups)')} }).subscribeChurchGroups;`)
+    (...args.map(k => scope[k]));
+  fn('npub1church', (list) => { rows = list; });
+  assert.ok(handlers, 'the member-app group reader never registered with the docs hub');
+  handlers.oneose && handlers.oneose();
+  return {
+    deliver: (e) => handlers.onevent(e, (e.tags.find(t => t[0] === 'd') || [])[1] || ''),
+    names: () => rows.map(r => r.name).filter(Boolean),
+  };
+}
+const gDoc = (by, ts, extra = []) => ({ pubkey: by, created_at: ts, content: JSON.stringify({ name: 'Tuesday Prayer' }),
+  tags: [['d', 'trinityone/group:g1'], ...extra] });
+const gTomb = (by, ts, forWhom, extra = []) => ({ pubkey: by, created_at: ts, content: '',
+  tags: [['d', 'trinityone/group:g1'], ['deleted', '1'], ...extra, ...forWhom.map(f => ['for', f])] });
+
+test('MEMBER APP: a delegated steward’s delete of the church’s group actually clears it', () => {
+  const r = memberGroupReader();
+  r.deliver(gDoc(CHURCH, 100));
+  assert.deepEqual(r.names(), ['Tuesday Prayer'], 'the church’s group never appeared');
+  r.deliver(gTomb(GORDON, 200, [CHURCH]));
+  assert.deepEqual(r.names(), [],
+    'the group is still on every phone after the steward deleted it — the console says it is gone');
+});
+
+test('MEMBER APP: an untargeted tombstone still binds only its own author', () => {
+  const r = memberGroupReader();
+  r.deliver(gDoc(CHURCH, 100));
+  r.deliver(gTomb(GORDON, 200, []));
+  assert.deepEqual(r.names(), ['Tuesday Prayer'], 'an old tombstone withdrew a copy it never wrote');
+});
+
+test('MEMBER APP: someone off the roster cannot withdraw the church’s copy by naming it', () => {
+  const r = memberGroupReader({ roster: [] });
+  r.deliver(gDoc(CHURCH, 100));
+  r.deliver(gTomb(STRANGER, 200, [CHURCH]));
+  assert.deepEqual(r.names(), ['Tuesday Prayer'], 'a revoked or forged author deleted a church document');
+});

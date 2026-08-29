@@ -43,7 +43,12 @@ test('…and says plainly that team rooms are left alone', () => {
 // `g.kind === 'team' || g.encrypted` appeared in the function, which an added second loop, an `if (false &&`,
 // or the same words in a COMMENT all satisfy while teams get swept in anyway. So lift the real arrow function
 // out of the screen and execute it against stub groups. ──
-function runSweep(groups) {
+// `seal` decides what the relay does with each room's key envelope. Hardcoding `{ sealed: true }` — which is
+// what this did — meant the test named "the switch only claims ON once every sweepable room really sealed"
+// never produced a room that failed to seal. The case it exists for was unreachable, and an auditor changed
+// `if (!r || !r.sealed)` to `if (!r)` with the whole suite green: encryptComms would flip ON, the settings
+// row would read "On", and the rooms would be in clear. That is a church shown a protection it does not have.
+function runSweep(groups, seal) {
   const body = between('const doEncryptAll = async () =>', '\n  const toggleEncryptAll');
   const sealed = [], published = [];
   const ctx = {
@@ -54,7 +59,7 @@ function runSweep(groups) {
     window: {
       dispatchEvent() {},
       Steward: {
-        sealGroup: async (g) => { sealed.push(g.name); return { sealed: true, skipped: [] }; },
+        sealGroup: async (g) => { sealed.push(g.name); return (seal ? seal(g) : { sealed: true, skipped: [] }); },
         publishProfile: (x) => published.push(x),
       },
     },
@@ -139,4 +144,21 @@ test('the row names the exclusion, and only to a church that has one', () => {
   assert.doesNotMatch(without, /Serving team rooms are not included/,
     'a church with no serving team is warned about a room it does not have, which is how a real warning ' +
     'gets tuned out');
+});
+
+// ── AUDIT 2026-08-29 (test-integrity round) ─────────────────────────────────────────────────────────────
+test('a room the relay refused to seal is NOT counted as sealed', async () => {
+  // sealGroup answers { sealed: false } when the relay refuses the key envelope — the case the code writes an
+  // operator alert for. Before this, nothing produced that answer.
+  const r = await runSweep(
+    [{ name: 'Prayer', kind: 'group' }, { name: 'Youth', kind: 'group' }],
+    (g) => (g.name === 'Youth' ? { sealed: false, skipped: [] } : { sealed: true, skipped: [] }));
+  assert.deepEqual(r.published, [],
+    'the switch flipped ON while a room the relay refused to seal is still in clear — the church is shown a ' +
+    'protection it does not have');
+});
+
+test('…and when every room really seals, it does flip on', async () => {
+  const r = await runSweep([{ name: 'Prayer', kind: 'group' }], () => ({ sealed: true, skipped: [] }));
+  assert.equal(r.published.length, 1, 'a clean sweep no longer turns the setting on');
 });
