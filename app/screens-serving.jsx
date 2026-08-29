@@ -14,7 +14,7 @@ function svTodayIso() { return svIsoLocal(new Date()); }
 // next n Sundays as LOCAL dates (toISOString shifts to UTC and can land on Saturday in +TZ zones)
 function svNextSundays(n) { const out = []; const d = new Date(); d.setHours(0, 0, 0, 0); let guard = 0; while (out.length < n && guard < 60) { if (d.getDay() === 0) { const iso = svIsoLocal(d); out.push({ iso, ...svParts(iso) }); } d.setDate(d.getDate() + 1); guard++; } return out; }
 const svIcsEsc = s => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
-function svDownloadICS(it, churchName) {
+async function svDownloadICS(it, churchName) {
   const dt = (it.date || '').replace(/-/g, ''); const [hh, mm] = (it.time || '10:00').split(':');
   const start = dt + 'T' + (hh || '10') + (mm || '00') + '00';
   const ch = String(churchName || '').trim();
@@ -29,7 +29,37 @@ function svDownloadICS(it, churchName) {
     'BEGIN:VEVENT', 'UID:' + uid, 'DTSTAMP:' + stamp, 'SUMMARY:' + svIcsEsc(summary), 'DTSTART:' + start,
     'DESCRIPTION:' + svIcsEsc((it.service || '') + (ch ? (it.service ? ' · ' : '') + ch : '')),
     'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
-  try { const u = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })); window.open(u, '_blank'); } catch (e) {}
+  // WRITES NOTHING IN THE APK. `window.open(objectURL)` is inert inside a WebView — measured on the OPPO,
+  // 2026-08-29: no throw, no navigation, no new file in Downloads, nothing in logcat — and all three callers
+  // toasted success on the next line. app/backup.jsx already learned this ("a no-op inside a WebView, so
+  // refuse there rather than claim it worked") and hard-throws; this button, fifteen lines from the comment
+  // written to stamp the pattern out, was missed.
+  //
+  // So reuse the chain that works: Filesystem to DOCUMENTS, else CACHE plus a share sheet, and an honest
+  // error when the phone will do neither. Returns the same shape saveFile does; THROWS on failure, which is
+  // what makes a caller unable to claim success by accident.
+  // A filename a member can recognise in their Downloads or a share sheet.
+  const fname = 'serving-' + (it.date || 'event') + '.ics';
+  const B = window.TrinityBackup;
+  if (B && B.saveFile) return B.saveFile(fname, ics, 'share', { mime: 'text/calendar', title: 'Add to your calendar', blurb: 'Open this to add it to your calendar' });
+  const Cap = window.Capacitor;
+  if (Cap && Cap.isNativePlatform && Cap.isNativePlatform()) throw new Error('This app can’t save the file here. Update the app and try again.');
+  const u = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+  window.open(u, '_blank');
+  setTimeout(() => URL.revokeObjectURL(u), 1000);
+  return { saved: true, where: 'downloads' };
+}
+
+// SAY WHAT ACTUALLY HAPPENED. All three "add to calendar" controls toasted success on the line after a
+// call that wrote nothing in the APK. One helper now, so they cannot drift apart again: a share sheet the
+// member dismissed is not a save, and a phone that will not write the file has to say so.
+async function svAddToCalendar(ctx, it) {
+  try {
+    const r = await svDownloadICS(it, ctx.church && ctx.church.name);
+    ctx.toast(r && r.where === 'shared' ? 'Saved — choose where to keep it' : 'Downloaded — open the file to add it to your phone’s calendar');
+  } catch (e) {
+    ctx.toast((e && e.message) || 'Couldn’t save the calendar file.');
+  }
 }
 
 // ── who else is on a service (from the church's published rota + rosters); marks "me" ──
@@ -210,7 +240,7 @@ function SwapSheet({ open, item, onClose, ctx }) {
 function ManageSheet({ open, item, onClose, onSwap, ctx }) {
   if (!item) return null;
   const rows = [
-    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { svDownloadICS(item, ctx.church && ctx.church.name); ctx.toast('Downloaded — open the file to add it to your phone’s calendar'); onClose(); } },
+    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => svAddToCalendar(ctx, item) },
     { ic: 'swap', t: 'Ask someone to swap', s: 'Send a friendly ask to a teammate', go: () => onSwap(item) },
     { ic: 'calendar', t: 'I’m away — take me off', s: 'Let your leader know you can’t make it', go: () => svRespond(ctx, item, 'decline', '', 'Taken off — thanks for letting us know', onClose) },
   ];
@@ -713,7 +743,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   ) : null}
 
                   <div style={{ display: 'flex', gap: 9, marginTop: 16 }}>
-                    <button onClick={() => { svDownloadICS(next, ctx.church && ctx.church.name); ctx.toast('Downloaded — open the file to add it to your phone’s calendar'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={17} color="#3C6E57" /> Add to calendar</button>
+                    <button onClick={() => svAddToCalendar(ctx, next)} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={17} color="#3C6E57" /> Add to calendar</button>
                     <button onClick={() => setSheet({ kind: 'manage', item: next })} style={{ flexShrink: 0, padding: '13px 16px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,.2)', color: '#fff', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, backdropFilter: 'blur(4px)' }}><Icon name="swap" size={17} color="#fff" /> Change</button>
                   </div>
                   {(ctx.churchRunsheets || []).some(r => r.service === next.serviceId && (r.items || []).length) ? (
@@ -880,7 +910,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{s.name || 'Sunday Gathering'}</div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}><Icon name="clock" size={13} color="var(--ink-3)" /> {s.time || ''}</div>
                         </div>
-                        <button onClick={() => { svDownloadICS({ date: s.date, time: s.time, teamName: s.name || 'Gathering', role: '', service: s.name || '' }, ctx.church && ctx.church.name); ctx.toast('Added to your calendar'); }} title="Add to calendar" style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="calPlus" size={18} /></button>
+                        <button onClick={() => svAddToCalendar(ctx, { date: s.date, time: s.time, teamName: s.name || 'Gathering', role: '', service: s.name || '' })} title="Add to calendar" style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="calPlus" size={18} /></button>
                       </div>
                     ))}
                   </div>

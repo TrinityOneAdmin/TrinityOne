@@ -213,7 +213,12 @@
   // can be written at all, this throws — a caller must not be able to turn "nothing happened" into "saved".
   //
   // mode 'local' = device only, no sheet. Anything else = device + offer to share.
-  async function saveFile(filename, text, mode) {
+  // `opts` lets a non-backup caller reuse this chain rather than reinventing the half of it that works.
+  // Defaults keep every existing call identical.
+  async function saveFile(filename, text, mode, opts) {
+    const _mime = (opts && opts.mime) || 'application/json';
+    const _title = (opts && opts.title) || 'TrinityOne backup';
+    const _blurb = (opts && opts.blurb) || 'Save this somewhere safe (Drive, OneDrive…)';
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
     const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
     const native = !!(P && P.Filesystem && isNative);
@@ -221,7 +226,7 @@
     // claim it worked. `saved: false` is not enough — every caller treats a returned object as success.
     const anchorSave = () => {
       if (isNative) throw new Error('This app can’t write the file here. Update the app, or use “Save to device”.');
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: _mime }));
       a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
       return { saved: true, where: 'downloads' };
     };
@@ -247,7 +252,7 @@
         // really does leave them with nothing.
         if (!P.Share) throw new Error('This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.');
         const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-        await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
+        await P.Share.share({ title: _title, text: _blurb, url: c.uri });
         return { saved: true, where: 'shared', uri: c.uri,
           warn: 'This phone wouldn’t let the app save the file itself, so it was handed to whatever you chose. If you closed that without saving it, no copy was kept — please try again and save it somewhere.' };
       }
@@ -257,7 +262,7 @@
         // already written, so that is a choice, not a failure.
         try {
           const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-          await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
+          await P.Share.share({ title: _title, text: _blurb, url: c.uri });
         } catch (e) {}
       }
       // Report which BUTTON was pressed, not only where the bytes landed. Both modes now write to DOCUMENTS,
