@@ -1545,13 +1545,13 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'color-mix(in oklab, ' + ac + ' 15%, var(--surface))', color: ac, border: '1px solid color-mix(in oklab, ' + ac + ' 35%, transparent)', padding: '5px 8px 5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
               <Icon name={flag.icon} size={13} color={ac} /> {flag.label}
-              <button onClick={() => setFlag(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: ac, display: 'flex', padding: 0 }}><Icon name="x" size={14} /></button>
+              <button onClick={() => setFlag(null)} aria-label="Clear this tag" title="Clear this tag" style={{ border: 'none', background: 'none', cursor: 'pointer', color: ac, display: 'flex', padding: 0 }}><Icon name="x" size={14} /></button>
             </span>
           </div>
         ); })() : null}
         {pollOpen ? (
           <div style={{ marginBottom: 8, padding: 11, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 8 }}><Icon name="sliders" size={13} color="var(--clay)" /> NEW POLL<button onClick={() => setPollOpen(false)} style={{ marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={15} /></button></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 8 }}><Icon name="sliders" size={13} color="var(--clay)" /> NEW POLL<button onClick={() => setPollOpen(false)} aria-label="Close the poll" title="Close the poll" style={{ marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={15} /></button></div>
             <input value={pollQ} onChange={e => setPollQ(e.target.value)} placeholder="Ask a question…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', background: 'var(--surface)', color: 'var(--ink)', outline: 'none', marginBottom: 7 }} />
             {pollOpts.map((o, i) => (
               <input key={i} value={o} onChange={e => setPollOpts(prev => prev.map((x, j) => j === i ? e.target.value : x))} placeholder={'Option ' + (i + 1)} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', background: 'var(--surface)', color: 'var(--ink)', outline: 'none', marginBottom: 6 }} />

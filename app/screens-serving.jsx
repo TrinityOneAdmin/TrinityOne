@@ -443,9 +443,9 @@ function MyMonth({ ctx, onManage, onRunsheet }) {
     <React.Fragment>
       {/* month nav */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <button onClick={() => step(-1)} style={{ width: 36, height: 36, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}><Icon name="chevL" size={18} /></button>
+        <button onClick={() => step(-1)} aria-label="Previous month" title="Previous month" style={{ width: 36, height: 36, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}><Icon name="chevL" size={18} /></button>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][view.m]} {view.y}</div>
-        <button onClick={() => step(1)} style={{ width: 36, height: 36, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}><Icon name="chevR" size={18} /></button>
+        <button onClick={() => step(1)} aria-label="Next month" title="Next month" style={{ width: 36, height: 36, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}><Icon name="chevR" size={18} /></button>
       </div>
       {/* grid */}
       <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: '14px 12px', marginBottom: 18 }}>
@@ -605,7 +605,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
     <Overlay open={open} onClose={onClose} docked={docked}>
       <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 12px' }}>
-          <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+          <button onClick={onClose} aria-label="Close" title="Close" style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, lineHeight: 1.05 }}>Serving</div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ctx.church ? ctx.church.name : 'Your church'}</div>

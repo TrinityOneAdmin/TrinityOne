@@ -42,17 +42,50 @@ const namedBy = (line, attr) => {
   // hardening: non-empty by length, silent to a screen reader.
   return t.length > 0 && t !== '""' && t !== "''" && t !== "' '" && t !== '" "' && /[^\s'"{}]/.test(t);
 };
-// VISIBLE TEXT IS AN ACCESSIBLE NAME TOO. The first version of this only looked at aria-label/title, so it
-// reported two buttons reading "Not now" and "Post to the church" as unnamed — they sit near a send icon and
-// are perfectly well named by their own words. A scanner that cries wolf gets its findings dismissed, which
-// is worse than not having one. Only genuinely icon-only controls count.
-function hasVisibleText(line) {
-  const open = line.indexOf('<button');
-  const body = line.slice(line.indexOf('>', open) + 1);
-  const withoutTags = body.replace(/<[^>]*>/g, ' ');
-  // a bare word, or a string inside a JSX expression like {busy ? 'Posting…' : 'Post to the church'}
-  return /[A-Za-z]{2,}/.test(withoutTags.replace(/\{[^}]*\}/g, m => (m.match(/'[^']*'|"[^"]*"/g) || []).join(' ')));
+// VISIBLE TEXT IS AN ACCESSIBLE NAME TOO — but only when we can actually SEE the text.
+// The first version looked only at aria-label/title, so it reported two buttons reading "Not now" and
+// "Post to the church" as unnamed. The second version fixed that by slicing after the first `>` — and a
+// `>` appears inside `onClick={() => …}` long before the tag ends, and never at all when the opening tag
+// wraps across lines. Measured: 63 of 66 buttons in screens-chat.jsx were skipped, and removing
+// `aria-label="Send"` from the member app's chat send button — the defect this file was written for —
+// left every test green. A scanner that cries wolf gets ignored; one that never barks is worse.
+//
+// So find the real end of the opening tag: the `>` that is not inside a string and not inside a JSX
+// expression. If the tag does not close on this line we cannot tell what its body is, and UNKNOWN MUST
+// FAIL TOWARDS REPORTING — a missed control is the thing this file exists to catch.
+function tagEnd(line, from) {
+  let depth = 0, q = '';
+  for (let i = from; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === q && line[i - 1] !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') depth--;
+    else if (c === '>' && depth === 0) return i;
+  }
+  return -1;
 }
+// A button's opening tag and its body routinely span several lines in this codebase, so read forward until
+// the tag closes and then until </button>. Returning "unknown" for every wrapped tag was safe but useless —
+// it flagged 61 controls, most of which say their own name two lines further down.
+function buttonText(lines, i) {
+  let joined = lines[i], end = tagEnd(joined, joined.indexOf('<button') + 7), n = i;
+  while (end === -1 && n - i < 12 && n + 1 < lines.length) { joined += '\n' + lines[++n]; end = tagEnd(joined, joined.indexOf('<button') + 7); }
+  if (end === -1) return null;                                  // genuinely cannot tell
+  let body = joined.slice(end + 1), m = n;
+  while (!body.includes('</button>') && m - i < 12 && m + 1 < lines.length) body += '\n' + lines[++m];
+  return body.slice(0, body.indexOf('</button>') === -1 ? body.length : body.indexOf('</button>'));
+}
+function hasVisibleText(lines, i) {
+  const body = buttonText(lines, i);
+  if (body === null) return false;                              // unknown must fail towards reporting
+  // Everything here is BODY, past the opening tag, so a brace holds content rather than attributes — and
+  // content is what a person reads, whether it is a literal, a variable, or a ternary of both. Tags are
+  // stripped first so a nested <Icon/> or fragment cannot masquerade as words.
+  const withoutTags = body.replace(/<[^>]*>/g, ' ').replace(/[{}]/g, ' ');
+  return /[A-Za-z]{2,}/.test(withoutTags);
+}
+
 function unnamedIconButtons(src, iconName) {
   const lines = src.split('\n');
   const bad = [];
@@ -60,7 +93,7 @@ function unnamedIconButtons(src, iconName) {
     const l = lines[i];
     if (!l.includes('<button')) continue;
     if (namedBy(l, 'aria-label') || namedBy(l, 'title')) continue;
-    if (hasVisibleText(l)) continue;
+    if (hasVisibleText(lines, i)) continue;
     if (!lines.slice(i, i + 4).join('\n').includes(`name="${iconName}"`)) continue;
     bad.push(i + 1);
   }
