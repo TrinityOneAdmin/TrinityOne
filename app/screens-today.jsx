@@ -233,6 +233,9 @@ function careTypeLabel(r) {
   return names.length ? names.join(' \u00b7 ') : 'Help';
 }
 const CARE_WHEN = [['once', 'Just once'], ['ongoing', 'For a while'], ['unsure', 'Not sure yet']];
+// Same list the console offers when the care team opens a need, so a need reads the same whoever opened it.
+const CARE_DIET = ['Vegetarian', 'Vegan', 'Pescatarian', 'Gluten-free', 'Dairy-free', 'Nut-free'];
+const CARE_MEALS = [['breakfast', 'Breakfast'], ['lunch', 'Lunch'], ['dinner', 'Dinner']];
 const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No rush']];
 
 // The row wraps. On a 360px phone the icon (38) plus "Message" and "Withdraw" (neither shrinks, ~200 together)
@@ -538,6 +541,10 @@ function careSentWording(res) {
   // A YOUNG PERSON DID NOT WRITE TO THE CARE TEAM. Their request goes to the adults their church has cleared,
   // and telling them otherwise names a group of people they did not choose to tell — unsettling in itself, and
   // untrue. Kept deliberately vague about WHO: a child does not need a roster, they need to know it arrived.
+  // An OPENED need is not a message to anybody — it is a public thing people sign up to, and how public
+  // depends on the church's own visibility setting. Checked first: a need result carries no teamCount, so the
+  // "no care team is set up yet" line below would otherwise claim it went to a church leader.
+  if (res && res.need) return res.teamOnly ? 'Opened \u2014 your care team can see it and sign up' : 'Opened \u2014 your church can see it and sign up to help';
   if (res && res.toChildAudience) return 'Sent \u2014 someone at your church who can help will see this';
   if (res && res.narrowed) return 'Sent to your church leader \u2014 we couldn\u2019t reach the care team list';
   if (res && !res.teamCount) return 'Sent to your church leader \u2014 no care team is set up yet';
@@ -550,6 +557,19 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   // child-aware and the sheet had not, so one screen said "Tell someone at your church" and the sheet
   // directly beneath it said "This goes privately to your care team". Both were mine; I changed one.
   const _isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  // WHEN THE CHURCH HAS SAID MEMBERS MAY OPEN NEEDS, this sheet opens one instead of asking for one. Same
+  // button in the same place: a second control to go hunting for is exactly how the care page got lost before.
+  // A child never opens a need — the relay says so too — so they keep the private request they always had.
+  const _care = ctx.care || {};
+  const _opensNeed = !_isMinor && ((_care.settings && _care.settings.openedBy) === 'member');
+  const _teamOnly = (_care.settings && _care.settings.visibility) === 'team';
+  const [dates, setDates] = React.useState([]);
+  const [pick, setPick] = React.useState('');
+  const addDate = () => { if (pick && !dates.includes(pick)) setDates(d => [...d, pick].sort()); setPick(''); };
+  const [more, setMore] = React.useState(false);
+  const [meals, setMeals] = React.useState(['dinner']);
+  const [diet, setDiet] = React.useState([]);
+  const toggleMeal = (m) => setMeals(ms => ms.includes(m) ? (ms.length > 1 ? ms.filter(x => x !== m) : ms) : [...ms, m]);
   const [forSelf, setForSelf] = React.useState(true);
   const [forName, setForName] = React.useState('');
   const [types, setTypes] = React.useState([]);
@@ -563,9 +583,20 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' };
   const submit = async () => {
     if (!types.length) { setErr('Pick what would help.'); return; }
+    if (_opensNeed && !dates.length) { setErr('Pick at least one day people can help on.'); return; }
     setBusy(true); setErr('');
     let ok = null;
-    try { ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
+    try {
+      // A NEED IS PUBLIC AND A REQUEST IS NOT. publishCareNeed refuses for a child, and refuses when this
+      // church uses safeguarding and has not yet told this phone which this member is. Either way we fall
+      // back to the private request — the behaviour that already existed — rather than pressing on or
+      // stopping the member from asking at all.
+      if (_opensNeed) {
+        const r = await window.Fellowship.publishCareNeed({ types, forSelf, forName: forSelf ? '' : forName, note, dates, meals, dietary: diet });
+        if (r && !r.error) ok = { ...r, teamOnly: _teamOnly };
+      }
+      if (!ok) ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note });
+    } catch (e) {}
     setBusy(false);
     // A REFUSAL IS AN OBJECT TOO. publishCareRequest answers with a reason when it will not send a child's
     // request — it could not tell whether the sender is a child, could not establish who may receive it, or
@@ -580,7 +611,13 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
           <Icon name="heart" size={20} color="var(--clay)" />
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Ask for help</div>
         </div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 4px' }}>{_isMinor ? 'This goes privately to the people at your church who can help young people — no one else sees it. Tell them what would help.' : 'This goes privately to your care team — no one else sees it. Tell them what would help.'}</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 4px' }}>{_isMinor
+          ? 'This goes privately to the people at your church who can help young people — no one else sees it. Tell them what would help.'
+          : _opensNeed
+            ? (_teamOnly
+              ? 'Your church lets anyone open a need. Your care team will see this and can sign up to help — it is not private to them alone, so say only what you are happy for them to read.'
+              : 'Your church lets anyone open a need. Everyone at your church will see this and can sign up to help — so say only what you are happy for the church to read.')
+            : 'This goes privately to your care team — no one else sees it. Tell them what would help.'}</p>
 
         <div style={lbl}>Who's this for?</div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -596,6 +633,44 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
             return <button key={t} role="checkbox" aria-checked={on} onClick={() => setTypes(on ? types.filter(x => x !== t) : [...types, t])} style={chip(on)}><Icon name={on ? 'check' : CARE_TYPE_ICON[t]} size={14} color="currentColor" /> {CARE_TYPE_LABEL[t]}</button>;
           })}
         </div>
+
+        {_opensNeed ? (
+          <React.Fragment>
+            <div style={lbl}>Which days? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600, color: 'var(--ink-3)' }}>People sign up per day</span></div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="date" value={pick} min={todayISO()} onChange={e => setPick(e.target.value)} aria-label="Pick a day people can help on" style={{ flex: 1, boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
+              <button onClick={addDate} disabled={!pick} style={{ ...chip(false), opacity: pick ? 1 : .5, cursor: pick ? 'pointer' : 'default' }}>Add day</button>
+            </div>
+            {dates.length ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                {dates.map(d => <button key={d} onClick={() => setDates(ds => ds.filter(x => x !== d))} aria-label={'Remove ' + d} style={chip(true)}>{d} <Icon name="x" size={12} color="currentColor" /></button>)}
+              </div>
+            ) : null}
+
+            {/* EXPANDABLE, not a second screen. Everything below is optional detail the care team can fill in
+                afterwards; the need is already usable without it. Dietary sits here rather than in the short
+                form only because it is meals-only — it is the one field where an omission actually matters. */}
+            <button onClick={() => setMore(v => !v)} aria-expanded={more} style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13, color: 'var(--clay)' }}>
+              <Icon name={more ? 'chevD' : 'chevR'} size={14} color="currentColor" /> {more ? 'Fewer details' : 'Add details (optional)'}
+            </button>
+            {more ? (
+              <React.Fragment>
+                {types.indexOf('meals') >= 0 ? (
+                  <React.Fragment>
+                    <div style={lbl}>Which meals?</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {CARE_MEALS.map(([k, l]) => <button key={k} role="checkbox" aria-checked={meals.indexOf(k) >= 0} onClick={() => toggleMeal(k)} style={chip(meals.indexOf(k) >= 0)}>{l}</button>)}
+                    </div>
+                    <div style={lbl}>Anything they can't eat?</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {CARE_DIET.map(dd => <button key={dd} role="checkbox" aria-checked={diet.indexOf(dd) >= 0} onClick={() => setDiet(ds => ds.indexOf(dd) >= 0 ? ds.filter(x => x !== dd) : [...ds, dd])} style={chip(diet.indexOf(dd) >= 0)}>{dd}</button>)}
+                    </div>
+                  </React.Fragment>
+                ) : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>Nothing else to add for this kind of help — your care team can fill in the rest.</div>}
+              </React.Fragment>
+            ) : null}
+          </React.Fragment>
+        ) : null}
 
         <div style={lbl}>When?</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -613,7 +688,7 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Sending…' : (_isMinor ? 'Send' : 'Send to care team')}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? (_opensNeed ? 'Opening…' : 'Sending…') : (_isMinor ? 'Send' : _opensNeed ? 'Open this need' : 'Send to care team')}</button>
         </div>
       </div>
     </div>

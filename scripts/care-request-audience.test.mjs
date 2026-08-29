@@ -346,7 +346,11 @@ test('the FORM does not promise a child it reaches the care team', () => {
   const TODAY = stripComments(readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8'));
   assert.match(TODAY, /const _isMinor = !!\(ctx\.safeguard && ctx\.safeguard\.isMinor\)/,
     'the ask-for-help form does not know whether a child is asking, so it cannot describe who will receive it');
-  assert.match(TODAY, /_isMinor \? 'This goes privately to the people at your church who can help young people/,
+  // \s* only: the sheet now has THREE branches (a child, a member whose church lets them open a need, and
+  // everyone else), so the ternary wraps. What is asserted is unchanged — the _isMinor branch must still
+  // carry the child wording — and the sabotage that matters (giving a child the care-team sentence) still
+  // fails this line.
+  assert.match(TODAY, /_isMinor\s*\?\s*'This goes privately to the people at your church who can help young people/,
     'the form still tells a young person their request goes to the care team — it does not, and saying so ' +
     'names a group of people they did not choose to tell');
   // …and the ordinary path must be untouched.

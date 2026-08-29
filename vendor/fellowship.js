@@ -10383,6 +10383,65 @@
       await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
       return { id };
     },
+    // ── a member opens a need themselves, when the church has said they may ──────────────────────────────
+    // The church setting is `openedBy: 'member'`. Everything behind this was already built — the relay accepts
+    // a non-minor member's care: write when the church allows it, and the care key reaches every member for
+    // exactly this purpose ("so every member can open a need and volunteer", stew-dashboard) — but no control
+    // ever called it, so choosing "member" changed nothing anybody could see. SWEEP DEFECT 1.
+    //
+    // A NEED IS PUBLIC AND A REQUEST IS NOT. That is the whole difference from publishCareRequest above, and
+    // it is why the safeguarding test here is the same one, read the same way, and NEVER the screen's opinion:
+    // a screen is not a boundary. A child must never open a need — the relay says so too ("children never open
+    // needs") — and "we have not heard whether they are a child" is not "adult". Both refuse, and the caller
+    // falls back to sending a private request, which is the behaviour that already existed.
+    //
+    // The id carries no owner prefix on purpose. `idOwnerOk` reads `<hex>-` as "this church owns it", so an
+    // asker-prefixed id — the shape carereq: uses — would be refused here, where the author is a member and
+    // the named church is the church. Same mint as the care team's, so both routes produce one kind of need.
+    async publishCareNeed(fields) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch (e) {
+        }
+      }
+      if (!sk || !cp || !fields) return null;
+      const childish = _sgSelf.cp === cp && _sgSelf.isMinor;
+      if (childish) return { error: "minor-cannot-open" };
+      const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+      if (!sure) {
+        const audience = await _fetchChildCareAudience(cp);
+        if (audience === null) return { error: "unknown-clearance" };
+        if (audience.length) return { error: "unknown-clearance" };
+      }
+      if (!_carekeys[cp]) return { error: "no-care-key" };
+      const types = (Array.isArray(fields.types) ? fields.types : [fields.type]).map((t) => String(t || "").trim()).filter(Boolean);
+      const uniq = [...new Set(types)];
+      const type = uniq[0] || "other";
+      const forSelf = fields.forSelf !== false;
+      const who = forSelf ? (profiles[pub] || {}).name || "A member" : String(fields.forName || "").trim() || "A member";
+      const dates = [...new Set((Array.isArray(fields.dates) ? fields.dates : []).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
+      if (!dates.length) return { error: "no-dates" };
+      const meals = type === "meals" ? Array.isArray(fields.meals) && fields.meals.length ? fields.meals.filter(Boolean) : ["dinner"] : [];
+      const enc = _careSeal(cp, {
+        displayLabel: who,
+        recipient: forSelf ? pub : "",
+        notes: String(fields.note != null ? fields.note : "").trim(),
+        dietary: type === "meals" && Array.isArray(fields.dietary) ? fields.dietary.filter(Boolean) : []
+      });
+      if (!enc) return { error: "no-care-key" };
+      const id = "care" + _hex(crypto.getRandomValues(new Uint8Array(6)));
+      const body = { id, type, types: uniq.length ? uniq : [type], dates, startDate: dates[0] || "", endDate: dates[dates.length - 1] || "", meals, dayMeals: {}, enc, by: pub, openedByMember: true };
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + id], ["t", NET], ["church", cp], ["enc", "care1"]], content: JSON.stringify(body) }, sk);
+      try {
+        await _publishAny(churchRelays(), evt);
+      } catch (e) {
+        console.warn("[fellowship] member need publish failed", e);
+        return null;
+      }
+      return { id, need: true };
+    },
     // The person a need is FOR closes it themselves ("I'm sorted, thanks"). Dignity: someone who asked for help
     // shouldn't have to wait for a steward to stop the church organising around them. The relay's care: gate
     // means this only lands when the church allows member-opened needs OR they're a steward/care-admin; when it
