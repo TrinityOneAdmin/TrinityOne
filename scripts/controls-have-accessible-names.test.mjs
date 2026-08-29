@@ -42,6 +42,17 @@ const namedBy = (line, attr) => {
   // hardening: non-empty by length, silent to a screen reader.
   return t.length > 0 && t !== '""' && t !== "''" && t !== "' '" && t !== '" "' && /[^\s'"{}]/.test(t);
 };
+// VISIBLE TEXT IS AN ACCESSIBLE NAME TOO. The first version of this only looked at aria-label/title, so it
+// reported two buttons reading "Not now" and "Post to the church" as unnamed — they sit near a send icon and
+// are perfectly well named by their own words. A scanner that cries wolf gets its findings dismissed, which
+// is worse than not having one. Only genuinely icon-only controls count.
+function hasVisibleText(line) {
+  const open = line.indexOf('<button');
+  const body = line.slice(line.indexOf('>', open) + 1);
+  const withoutTags = body.replace(/<[^>]*>/g, ' ');
+  // a bare word, or a string inside a JSX expression like {busy ? 'Posting…' : 'Post to the church'}
+  return /[A-Za-z]{2,}/.test(withoutTags.replace(/\{[^}]*\}/g, m => (m.match(/'[^']*'|"[^"]*"/g) || []).join(' ')));
+}
 function unnamedIconButtons(src, iconName) {
   const lines = src.split('\n');
   const bad = [];
@@ -49,6 +60,7 @@ function unnamedIconButtons(src, iconName) {
     const l = lines[i];
     if (!l.includes('<button')) continue;
     if (namedBy(l, 'aria-label') || namedBy(l, 'title')) continue;
+    if (hasVisibleText(l)) continue;
     if (!lines.slice(i, i + 4).join('\n').includes(`name="${iconName}"`)) continue;
     bad.push(i + 1);
   }
@@ -103,61 +115,128 @@ test('the console’s care conversation is a real dialog, and Escape closes it',
 });
 
 
-// ── SWEEP DEFECT 4, 2026-08-28: the Groups and Rota tabs, measured on the console ─────────────────────────
-// Four separate gaps, none of which the checks above could catch, because a `title` counted as a name and
-// stew-schedule.jsx was never read at all:
-//   · the empty rota slot announced itself as "DoorAssign" — the role name and the word Assign are sibling
-//     divs inside one button, so they concatenate
-//   · five roster buttons said "Remove this role" / "Remove this person" without ever saying WHICH, so a
-//     list of six roles offered six identical controls
-//   · the rota-visibility button announced "Everyone" — its VALUE, with nothing saying what it governs
-//   · Child-safe? and Encrypt? are toggles that never reported whether they were on
+// ── SWEEP DEFECT 4, and the audit of it, 2026-08-29 ──────────────────────────────────────────────────────
+// The first version of this section asserted that an IDENTIFIER appeared on a line — `l.includes('r.name')`.
+// An auditor changed `'Remove the role ' + (r.name || '')` to `(r.name && '')`, which announces nothing at
+// all, and every one of these passed. Four realistic regressions shipped green, including a brand-new
+// unnamed button, because nothing here scanned for one.
+//
+// So these no longer look at the source shape. They pull the aria-label EXPRESSION out of the shipped file
+// and EVALUATE it, and assert the sentence a screen reader is actually handed. A comment cannot satisfy
+// that, and neither can dead code that merely mentions the right variable.
+function ariaExpr(src, marker) {
+  const line = src.split('\n').find(l => l.includes(marker) && l.includes('aria-label='));
+  assert.ok(line, `no aria-label on the line carrying ${marker} — re-anchor this test, do not delete it`);
+  const at = line.indexOf('aria-label={');
+  assert.notEqual(at, -1, `${marker}: aria-label is a static string; these controls must describe live state`);
+  let depth = 0, i = at + 'aria-label='.length, start = i;
+  for (; i < line.length; i++) {
+    if (line[i] === '{') depth++;
+    else if (line[i] === '}' && --depth === 0) return line.slice(start + 1, i);
+  }
+  assert.fail(`could not read the aria-label expression for ${marker}`);
+}
+// Evaluate it with the values the console would really have.
+const announce = (expr, vars) => new Function(...Object.keys(vars), `return (${expr});`)(...Object.values(vars));
 
 test('an empty rota slot says what it will assign, instead of running the role into the word Assign', () => {
-  const l = lineWith(SCHED_CODE, "aria-label={'Assign someone to ' + role.name}");
-  assert.ok(l.includes('<button'), 'the label is no longer on the slot button itself');
-  // The two sibling divs are still there — that is the layout. The point is that the button now overrides
-  // the name they would otherwise concatenate into.
-  assert.match(SCHED_CODE, /aria-label=\{'Assign someone to ' \+ role\.name\}/,
-    'the empty rota slot is announced as "DoorAssign" again');
+  const said = announce(ariaExpr(SCHED_CODE, "'Assign someone to '"), { role: { name: 'Door' } });
+  assert.equal(said, 'Assign someone to Door',
+    'the empty rota slot announced "' + said + '" — it used to run the role name into the word Assign');
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Assign someone to '"), { role: {} }), 'Assign someone to this role',
+    'a role document with no name makes the button announce the literal word "undefined"');
 });
 
 test('a filled rota slot names the role, the person and their reply', () => {
-  const l = lineWith(SCHED_CODE, 'Change who’s on this slot" aria-label=');
-  for (const part of ['role.name', 'a.name', 'vm.label']) {
-    assert.ok(l.includes(part), `the filled slot no longer announces ${part}`);
-  }
+  const e = ariaExpr(SCHED_CODE, 'Change who’s on this slot" aria-label=');
+  assert.equal(announce(e, { role: { name: 'Door' }, a: { name: 'Sam Reed' }, vm: { label: 'Declined' } }),
+    'Door: Sam Reed — Declined. Change who’s on this slot');
+  assert.equal(announce(e, { role: { name: 'Door' }, a: { name: 'Jo Ash' }, vm: { label: '' } }),
+    'Door: Jo Ash. Change who’s on this slot', 'a slot with no reply announces a dangling em-dash');
+  assert.equal(announce(e, { role: {}, a: { name: 'Jo Ash' }, vm: { label: '' } }),
+    'This role: Jo Ash. Change who’s on this slot');
 });
 
 test('every roster remove button says WHICH role, person or pod it removes', () => {
-  for (const [needle, ref] of [
-    ["aria-label={'Remove the role '", 'r.name'],
-    ["aria-label={'Remove ' + (pp.name", 'pp.name'],
-    ["aria-label={'Remove the pod '", 'pod.name'],
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Remove the role '"), { r: { name: 'Door' } }), 'Remove the role Door');
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Remove ' + (pp.name"), { pp: { name: 'Sam Reed' } }), 'Remove Sam Reed from the team');
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Remove the pod '"), { pod: { name: 'Pod A' } }), 'Remove the pod Pod A');
+  // …and a blank name must not produce a button that announces a bare verb. A steward can clear a pod's
+  // name through the shipped UI, and then the delete control said only "Remove the pod".
+  for (const [marker, vars, empty] of [
+    ["'Remove the role '", { r: { name: '' } }, 'Remove the role '],
+    ["'Remove the pod '", { pod: { name: '' } }, 'Remove the pod '],
   ]) {
-    const l = lineWith(SCHED_CODE, needle);
-    assert.ok(l.includes(ref),
-      `a roster remove button does not name what it removes (${ref}) — six identical controls in a row`);
+    const said = announce(ariaExpr(SCHED_CODE, marker), vars);
+    assert.notEqual(said, empty, `a nameless item announces "${empty}" — no cue at all as to what goes`);
   }
 });
 
-test('the rota-visibility button announces what it governs, not only its current value', () => {
-  const l = lineWith(SCHED_CODE, 'aria-haspopup="menu"');
-  assert.match(l, /aria-label=\{'Who can see the rota: '/,
-    'the visibility button is announced as "Everyone" — the value, with nothing saying what it sets');
-  assert.match(l, /aria-expanded=\{!!visMenu\}/, 'the menu button does not report whether the menu is open');
+test('the pods editor is not a column of blank comboboxes', () => {
+  assert.equal(announce(ariaExpr(SCHED_CODE, 'setPodFill(pod.id, r.id'), { r: { name: 'Door' }, pod: { name: 'Pod A' } }),
+    'Who fills Door in Pod A',
+    'a steward building a six-role pod tabs through six identical "combo box, blank"');
+  for (const marker of ['setPodName(pod.id', 'setLinkPub(e.target.value)']) {
+    const line = SCHED_CODE.split('\n').find(l => l.includes(marker));
+    assert.match(line, /aria-label="[^"]+"/, `${marker} has no accessible name`);
+  }
 });
 
-// Pinned to the exact expressions, exactly as the giving toggle above is: `aria-pressed={false}` and
+test('the rota-visibility button announces what it governs, and is not announced as a menu', () => {
+  const said = announce(ariaExpr(SCHED_CODE, 'aria-expanded={!!visMenu}'),
+    { ROTA_VIS_LABEL: { church: 'Everyone' }, rotaVis: 'church' });
+  assert.match(said, /^Who can see the rota: Everyone/,
+    'the visibility button announced "' + said + '" — its value, with nothing saying what it sets');
+  // It is two plain buttons, not a menu. Announcing one promises arrow-key navigation that does not exist.
+  assert.doesNotMatch(SCHED_CODE, /aria-haspopup="menu"/,
+    'a popup is announced as a menu again, but has no menu roles and no arrow-key handling');
+  // …and Escape must close it, or a keyboard steward is trapped.
+  assert.match(SCHED_CODE, /e\.key === 'Escape' && visMenu/, 'Escape no longer closes the visibility popup');
+  assert.match(SCHED_CODE, /visBtnRef\.current\.focus\(\)/, 'focus is not returned to the control that opened it');
+});
+
+// Pinned to the exact expressions, as the giving toggle above is: `aria-pressed={false}` and
 // `aria-pressed={!it.childsafe}` both mention the state and both announce the wrong one.
 test('the Child-safe and Encrypt toggles report their REAL state and name their group', () => {
   const cs = lineWith(DASH_CODE, 'childsafe: !it.childsafe');
   assert.match(cs, /aria-pressed=\{!!it\.childsafe\}/,
     'Child-safe does not announce whether it is on — check it is not negated or pinned to a constant');
-  assert.ok(cs.includes("(it.name || 'This group')"), 'Child-safe does not say which group it belongs to');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !it.childsafe'), { it: { name: 'Youth', childsafe: true } }),
+    'Youth — child-safe is on. Press to restrict it to adults');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !it.childsafe'), { it: { name: '', childsafe: false } }),
+    'This group — child-safe is off. Press to let members marked as a child join');
 
   const en = lineWith(DASH_CODE, 'onClick={() => toggleEncrypt(it)}');
   assert.match(en, /aria-pressed=\{!!it\.encrypted\}/,
     'Encrypt does not announce whether it is on — check it is not negated or pinned to a constant');
-  assert.ok(en.includes("(it.name || 'This group')"), 'Encrypt does not say which group it belongs to');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'onClick={() => toggleEncrypt(it)}'), { it: { name: 'Youth', encrypted: false } }),
+    'Youth — encryption is off. Press to seal it end-to-end');
+});
+
+test('selection in a row of chips is never carried by colour alone', () => {
+  // Three separate controls where the only cue was a coloured fill. The Repeat selector decides whether
+  // "Add a service" creates one service or thirteen; the Groups filter decides which rooms you are about to
+  // flip a child-safe switch on.
+  assert.match(lineWith(SCHED_CODE, 'onClick={() => setRepeat(v)}'), /aria-pressed=\{repeat === v\}/,
+    'the Repeat selector does not say which option is chosen');
+  assert.match(lineWith(DASH_CODE, 'onClick={() => setKindF(f.key)}'), /aria-pressed=\{on\}/,
+    'the Groups filter chips do not say which is selected');
+  assert.match(lineWith(SCHED_CODE, 'setFillMenu(v => !v)'), /aria-expanded=\{!!fillMenu\}/,
+    'Auto-fill opens a popup and reports nothing');
+});
+
+test('the console’s care conversation can be sent and closed by a screen reader', () => {
+  // The header of this file records the defect it was written for: the member app's send buttons had no
+  // accessible name. The console's own — on the screen where a steward answers somebody asking for help —
+  // had none either, and nothing here scanned that file for one.
+  const send = lineWith(MEALS, 'onClick={send}');
+  assert.match(send, /aria-label="[^"]+"/, 'a steward replying to a request for help hears only "button"');
+  const bad = unnamedIconButtons(MEALS, 'send');
+  assert.deepEqual(bad, [], `unnamed send buttons at app/stew-meals.jsx:${bad.join(', ')}`);
+});
+
+test('a roster save failure is announced, not just drawn', () => {
+  // Its text includes "anyone you removed CAN STILL READ IT until this succeeds".
+  assert.match(lineWith(SCHED_CODE, '{saveErr ? <div'), /role="alert"/,
+    'a security-relevant failure is never read out to a steward using a screen reader');
 });

@@ -421,7 +421,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="heart" size={17} color="var(--clay)" /><div style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{title || 'Care conversation'}</div><button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} color="currentColor" /></button></div>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="heart" size={17} color="var(--clay)" /><div style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{title || 'Care conversation'}</div><button onClick={onClose} aria-label="Close this conversation" title="Close this conversation" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} color="currentColor" /></button></div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 7 }}>
           {msgs.length === 0 ? <div style={{ margin: 'auto', color: 'var(--ink-3)', fontSize: 13 }}>No messages yet.</div> : null}
           {msgs.map(m => <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>)}
@@ -430,7 +430,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '10px 14px', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--ink)' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)' }}>
           <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
-          <button onClick={send} className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
+          <button onClick={send} aria-label="Send this reply" title="Send this reply" className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
         </div>
       </div>
     </div>

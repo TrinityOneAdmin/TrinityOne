@@ -492,7 +492,18 @@ function CareRequests({ ctx }) {
   // Anyone who is not a care admin is served ONLY children's requests by the relay (their clearance is what
   // grants it), so "assume confidential" is the right default for what remains here — but it is a default, not
   // knowledge. My own request is excluded upstream, which is the case it used to get wrong.
-  const fromChild = (r) => (isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true);
+  // MY OWN REQUEST IS NEVER FROM A CHILD — I know who I am, whatever list I am or am not served.
+  // 78531b1 excluded all of my own requests from this queue; 744e459 rightly narrowed that, because a care
+  // admin filing on behalf of somebody housebound must still see it to approve it. But the narrowing only
+  // kept back requests I raised FOR MYSELF, and `fromChild` answers "yes" unconditionally for anyone who is
+  // not a care admin. So a cleared youth worker asking for help for a neighbour found their own request
+  // under "FROM A YOUNG PERSON · CONFIDENTIAL" with the safeguarding explainer — and row() passes
+  // onApprove = null for anything marked as a child, so it could not be actioned from the only screen that
+  // shows it. Audit, 2026-08-29.
+  const fromChild = (r) => {
+    if (String(r.from || '').toLowerCase() === myPub) return false;
+    return isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true;
+  };
   const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
   const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
   return (
@@ -544,7 +555,7 @@ function careSentWording(res) {
   // An OPENED need is not a message to anybody — it is a public thing people sign up to, and how public
   // depends on the church's own visibility setting. Checked first: a need result carries no teamCount, so the
   // "no care team is set up yet" line below would otherwise claim it went to a church leader.
-  if (res && res.need) return res.teamOnly ? 'Opened \u2014 your care team can see it and sign up' : 'Opened \u2014 your church can see it and sign up to help';
+  if (res && res.need) return res.teamOnly ? 'Opened \u2014 your care team is shown it and can sign up' : 'Opened \u2014 your church can see it and sign up to help';
   if (res && res.toChildAudience) return 'Sent \u2014 someone at your church who can help will see this';
   if (res && res.narrowed) return 'Sent to your church leader \u2014 we couldn\u2019t reach the care team list';
   if (res && !res.teamCount) return 'Sent to your church leader \u2014 no care team is set up yet';
@@ -631,7 +642,7 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
           ? 'This goes privately to the people at your church who can help young people — no one else sees it. Tell them what would help.'
           : _opensNeed
             ? (_teamOnly
-              ? 'Your church lets anyone open a need. Your care team will see this and can sign up to help — it is not private to them alone, so say only what you are happy for them to read.'
+              ? 'Your church lets anyone open a need. Your care team is shown this and can sign up to help — but it is not sealed to them, and anyone at your church could read it. Say only what you are happy for the church to read.'
               : 'Your church lets anyone open a need. Everyone at your church will see this and can sign up to help — so say only what you are happy for the church to read.')
             : 'This goes privately to your care team — no one else sees it. Tell them what would help.'}</p>
 

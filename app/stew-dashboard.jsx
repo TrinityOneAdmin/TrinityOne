@@ -2208,7 +2208,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
       {filters && filters.length && items.length ? (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, flexShrink: 0 }}>
           {[{ key: 'all', label: 'All' }, ...filters].map(f => { const on = kindF === f.key; return (
-            <button key={f.key} onClick={() => setKindF(f.key)} style={{ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{f.label}</button>
+            <button key={f.key} onClick={() => setKindF(f.key)} aria-pressed={on} style={{ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{f.label}</button>
           ); })}
         </div>
       ) : null}

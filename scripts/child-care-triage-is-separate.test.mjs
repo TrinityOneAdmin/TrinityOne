@@ -248,3 +248,41 @@ test('MEMBER APP: the CARD itself refuses to draw the button, not just the calle
     'the card draws "Set up help" on a child’s request whenever a caller forgets to withhold it. Buttons: ' + draw(true));
   assert.match(draw(false), /Set up help/, 'the ordinary card lost its button');
 });
+
+// ── AUDIT 2026-08-29: my own request is never from a child ────────────────────────────────────────────────
+// 78531b1 kept ALL of my own requests out of this queue. 744e459 rightly narrowed that — a care admin filing
+// on behalf of somebody housebound has to see it to approve it — but the narrowing only held back requests I
+// raised FOR MYSELF, while fromChild() answers "yes" unconditionally for anyone who is not a care admin. So a
+// cleared youth worker asking for help for a neighbour found their OWN request under "FROM A YOUNG PERSON ·
+// CONFIDENTIAL", and unactionable, because row() passes onApprove = null for anything marked as a child.
+const myOnBehalf = { id: 'mine1', from: 'me', status: 'open', type: 'meals', forSelf: false, forName: 'Doris' };
+
+test('MEMBER APP: a cleared adult’s own request for a neighbour is not filed as a child’s disclosure', () => {
+  const r = renderMemberTriage({ minors: [], cleared: true, careAdmin: false, reqs: [myOnBehalf] });
+  const mine = r.cards.find(c => c.r.id === 'mine1');
+  assert.ok(mine, 'the request vanished from the only screen that shows it');
+  assert.equal(mine.child, false,
+    'a cleared volunteer’s own request for a neighbour is labelled as coming from a young person');
+  assert.doesNotMatch(r.all, /FROM A YOUNG PERSON/,
+    'the confidential heading was drawn over a request the viewer raised themselves');
+  assert.equal(typeof mine.onApprove, 'function',
+    'the request cannot be actioned from the only phone screen that shows it');
+});
+
+test('MEMBER APP: a care admin’s own on-behalf request stays actionable too (744e459’s case)', () => {
+  const r = renderMemberTriage({ minors: [], cleared: false, careAdmin: true, reqs: [myOnBehalf] });
+  const mine = r.cards.find(c => c.r.id === 'mine1');
+  assert.ok(mine, 'a care admin filing for somebody housebound lost the only way to approve it');
+  assert.equal(mine.child, false);
+  assert.equal(typeof mine.onApprove, 'function');
+});
+
+test('MEMBER APP: …and a real child’s request is still confidential to a cleared adult', () => {
+  // The guard above must not become "nothing is ever a child's". A cleared non-admin is served only
+  // children's requests, so anything NOT authored by them stays confidential and unpublishable.
+  const r = renderMemberTriage({ minors: [], cleared: true, careAdmin: false, reqs: [kidReq, myOnBehalf] });
+  const kid = r.cards.find(c => c.r.id === 'k1');
+  assert.equal(kid.child, true, 'a child’s disclosure stopped being treated as one');
+  assert.equal(kid.onApprove, null, 'a child’s disclosure can now be published to the congregation');
+  assert.match(r.all, /FROM A YOUNG PERSON/);
+});
