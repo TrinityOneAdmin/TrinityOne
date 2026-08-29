@@ -6506,6 +6506,27 @@
   var _needAuth = true;
   var _relayAuthedAt = 0;
   var _sgSelf = { cp: "", isMinor: false, known: false };
+  var SG_ASSUME_KEY = "trinityone.sgassume.";
+  async function _assumeMinor(cp) {
+    if (!cp) return false;
+    if (_sgSelf.cp === cp && _sgSelf.known) {
+      const v = _sgSelf.isMinor ? "1" : "0";
+      try {
+        if (localStorage.getItem(SG_ASSUME_KEY + cp) !== v) localStorage.setItem(SG_ASSUME_KEY + cp, v);
+      } catch (e) {
+      }
+      return !!_sgSelf.isMinor;
+    }
+    try {
+      const v = localStorage.getItem(SG_ASSUME_KEY + cp);
+      if (v === "0") return false;
+      if (v === "1") return true;
+    } catch (e) {
+    }
+    const audience = await _fetchChildCareAudience(cp);
+    if (audience === null) return true;
+    return audience.length > 0;
+  }
   async function _careNeedRefusal(cp) {
     if (_sgSelf.cp === cp && _sgSelf.isMinor) return "minor-cannot-open";
     const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
@@ -10419,6 +10440,16 @@
     //
     // Returns '' when a need may be opened, or the reason it may not — see _careNeedRefusal at module scope.
     // What the sheet asks before it promises anything. Starts from the same guard, so there is no second copy.
+    // What a screen asks before it shows a child a room the church marked adults-only. The relay withholds a
+    // group's MESSAGES from a minor, but not the group DEFINITION — so the names are the client's to hide.
+    async assumeMinor(churchNpub) {
+      const cp = toPub(churchNpub) || window.Fellowship.churchPub;
+      try {
+        return await _assumeMinor(cp);
+      } catch (e) {
+        return true;
+      }
+    },
     async canOpenCareNeed() {
       const cp = window.Fellowship.churchPub;
       if (!sk) {

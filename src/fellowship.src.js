@@ -725,6 +725,33 @@ let _needAuth = true;
 // actually matters is whether the relay answered us AFTER it knew who we were.
 let _relayAuthedAt = 0;
 let _sgSelf = { cp: '', isMinor: false, known: false };
+const SG_ASSUME_KEY = 'trinityone.sgassume.';
+// MUST THIS APP TREAT ME AS POSSIBLY A CHILD? Three answers, and the third is not the second — the same
+// shape publishCareRequest uses, and for the same reason. `clearanceKnown` alone is NOT a usable gate: it is
+// set only by this member's OWN sealed clearance, and a church that has never used safeguarding publishes
+// none for anybody, so in that church it never becomes true. Gating on its absence would hide every
+// adults-only room from every member of such a church for ever, with no message — a silent blank screen,
+// which is worse than the disclosure being prevented.
+//
+// So ask the second question with a real answer: does this church clear anyone at all?
+//   null  — could not ask (offline, unauthenticated): assume, rather than guess
+//   []    — this church clears nobody, so there is no child audience to get wrong: do not gate
+//   [..]  — safeguarding is in use here and we have not heard about this member: assume
+async function _assumeMinor(cp) {
+  if (!cp) return false;
+  if (_sgSelf.cp === cp && _sgSelf.known) {
+    // Remember it HERE, where it is also read. The write used to live back in the subscription, which meant
+    // a test could only assert that the line existed — and a line can be present and unreachable. Reading
+    // and writing in one function is what makes "is the answer remembered?" an executable question.
+    const v = _sgSelf.isMinor ? '1' : '0';
+    try { if (localStorage.getItem(SG_ASSUME_KEY + cp) !== v) localStorage.setItem(SG_ASSUME_KEY + cp, v); } catch (e) {}
+    return !!_sgSelf.isMinor;                                          // the church has told us outright
+  }
+  try { const v = localStorage.getItem(SG_ASSUME_KEY + cp); if (v === '0') return false; if (v === '1') return true; } catch (e) {}
+  const audience = await _fetchChildCareAudience(cp);
+  if (audience === null) return true;
+  return audience.length > 0;
+}
 // MAY THIS PERSON OPEN A PUBLIC NEED? Module scope, not a method, so publishCareNeed reaches the real rule
 // rather than whatever `window.Fellowship` happens to be — and so a test that lifts the publisher lifts this
 // with it instead of stubbing the one decision that matters.
@@ -4067,6 +4094,12 @@ window.Fellowship = {
   //
   // Returns '' when a need may be opened, or the reason it may not — see _careNeedRefusal at module scope.
   // What the sheet asks before it promises anything. Starts from the same guard, so there is no second copy.
+  // What a screen asks before it shows a child a room the church marked adults-only. The relay withholds a
+  // group's MESSAGES from a minor, but not the group DEFINITION — so the names are the client's to hide.
+  async assumeMinor(churchNpub) {
+    const cp = toPub(churchNpub) || window.Fellowship.churchPub;
+    try { return await _assumeMinor(cp); } catch (e) { return true; }
+  },
   async canOpenCareNeed() {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }

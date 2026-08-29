@@ -331,7 +331,27 @@ function ChatScreen({ ctx }) {
   // real, steward-defined groups when the church has them; otherwise the sample set for this church.
   // invite-only groups are hidden unless I'm on their member list (the relay also enforces posting).
   const myPub = window.Fellowship && window.Fellowship.myPubkey;
-  const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);   // safeguarding: a child sees only child-safe groups
+  // SAFEGUARDING: a child sees only child-safe groups. `isMinor` alone is not enough to decide that here.
+  // It has no cache, defaults to FALSE, and waits on a 1.2s timer plus a relay round-trip — while this list
+  // paints from its own cache immediately ("paint cached groups before the shared hub replays/answers"), so
+  // a returning child had every adults-only room on screen, by name, before the app knew who was reading.
+  // Verified 2026-08-29: the relay withholds a group's MESSAGES from a minor but serves the DEFINITION, so
+  // the names are ours to hide. Transient on a good link; on a thin one, or offline, it lasts the session —
+  // and thin links are what this product is for.
+  //
+  // So ask the engine, which distinguishes "this church says they are not a child" from "we have not heard",
+  // and remembers the answer. Start from what we already know so nothing flickers.
+  const [assumeMinor, setAssumeMinor] = React.useState(false);
+  React.useEffect(() => {
+    let live = true;
+    const np = ctx.church && ctx.church.npub;
+    if (!np || !(window.Fellowship && window.Fellowship.assumeMinor)) return;
+    Promise.resolve(window.Fellowship.assumeMinor(np))
+      .then(v => { if (live) setAssumeMinor(!!v); })
+      .catch(() => { if (live) setAssumeMinor(true); });
+    return () => { live = false; };
+  }, [ctx.church && ctx.church.npub, ctx.safeguard && ctx.safeguard.clearanceKnown, ctx.safeguard && ctx.safeguard.isMinor]);
+  const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor) || assumeMinor;
   const churchGroups = React.useMemo(() => realGroups.length   // P8: don't re-map the group list on every render (e.g. member-count ticks) — only when its inputs change
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
@@ -351,7 +371,7 @@ function ChatScreen({ ctx }) {
           // Open groups carry no number and render "open to your church" instead.
           members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : null,
           openToChurch: g.visibility !== 'invite' && g.kind !== 'team' && g.kind !== 'Team' }))
-    : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, ctx.church]);   // eslint-disable-line
+    : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, assumeMinor, ctx.church]);   // eslint-disable-line
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
   const plainGroups = churchGroups.filter(g => !g.team);
