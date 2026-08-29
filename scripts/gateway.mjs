@@ -1274,8 +1274,19 @@ function maybePushMessage(evt) {
       const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
         : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
         : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
+      // SAFEGUARDING: THE ROOM'S NAME IS THE PUSH TITLE. canRead already refuses a minor the MESSAGES of a
+      // room their church has not marked child-safe — and this pushed that same room's name to their lock
+      // screen, which is the disclosure the withholding exists to prevent, on a path no client filter can
+      // reach. Found 2026-08-29, on the same day the member app's own room-name leak was closed; fixing one
+      // without the other would have moved the leak rather than removed it.
+      //
+      // Same rule, same maps, same fallback as the read gate twelve hundred lines below — deliberately
+      // written to look identical, because two safeguarding rules that are meant to agree should be
+      // recognisable as the same rule.
+      const gcpSafe = gcp || idNamesOwner(gid);
       for (const r of recips) {
         if (!r || r === evt.pubkey) continue;
+        if (gcpSafe && !GROUP_CHILDSAFE.has(gid) && (MINORS_BY.get(gcpSafe) || new Set()).has(r)) continue;
         pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
       }
     }
