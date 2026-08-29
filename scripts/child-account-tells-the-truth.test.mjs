@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
+import { privateKeyFromSeedWords, generateSeedWords } from 'nostr-tools/nip06';
 import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
 
@@ -32,7 +32,8 @@ function grabMethod(src, sig) {
   }
   assert.fail('could not find the end of ' + sig);
 }
-const BODY = grabMethod(SRC, 'async createChildAccount(churchNpub, childName)');
+const BODY = grabMethod(SRC, 'async createChildAccount(churchNpub, childName, opts)');
+const REBUILD = grabMethod(SRC, 'function _rebuildFamily(churchNpub)');
 // esbuild renumbers the nostr-tools imports; bind whatever the body actually calls so a rebuild that renames
 // them fails loudly here rather than silently testing nothing.
 const nameFor = (base) => (BODY.match(new RegExp('\\b' + base + '\\d*\\b')) || [])[0] || base;
@@ -41,8 +42,11 @@ const CHURCH_SK = generateSecretKey(), CHURCH = getPublicKey(CHURCH_SK);
 const dOf = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
 
 // `fails` names which documents the relay refuses: 'join' | 'name' | 'k0' | 'req'.
-function parent({ fails = [] } = {}) {
-  const state = { published: [], order: [], saved: null };
+// `children` is the parent's local family list, shared with the _rebuildFamily run at the foot of this file.
+function parent({ fails = [], children = [] } = {}) {
+  // `order` = every document the function ATTEMPTED, in order; `published` = the ones the relay took;
+  // `relay` = the events actually sitting on the relay afterwards; `minted` = every key the engine minted.
+  const state = { published: [], order: [], saved: null, relay: [], minted: [], children };
   const kind = (e) => {
     const d = dOf(e);
     if (e.kind === 0) return 'k0';
@@ -52,18 +56,20 @@ function parent({ fails = [] } = {}) {
     return 'other';
   };
   const parentSk = generateSecretKey();
+  state.parentPub = getPublicKey(parentSk);
   const scope = {
     sk: parentSk,
-    pub: getPublicKey(parentSk),
+    pub: state.parentPub,
     toPub: () => CHURCH,
     NET: 'trinityone',
     _needAuth: false,
-    _saveChildLink: (rec) => { state.saved = rec; },
+    _saveChildLink: (rec) => { state.saved = rec; state.children.push(rec); },
     _publishAny: async (_relays, e) => {
       const k = kind(e);
       state.order.push(k);
       if (fails.includes(k)) throw new Error('relay refused ' + k);
       state.published.push(k);
+      state.relay.push(e);
     },
     [nameFor('finalizeEvent')]: finalizeEvent,
     [nameFor('getPublicKey')]: getPublicKey,
@@ -74,12 +80,14 @@ function parent({ fails = [] } = {}) {
     console: { warn() {} },
     window: {
       Fellowship: { relays: ['wss://test.invalid'], ready: Promise.resolve() },
-      TrinityIdentity: { makeInvite: () => ({ mnemonic: 'abandon '.repeat(11) + 'about', profile: {} }) },
+      // a REAL minter: every call returns a different key, so "the engine minted a second account" is
+      // visible as a different childPub rather than hidden behind one hard-coded phrase.
+      TrinityIdentity: { makeInvite: () => { const m = generateSeedWords(); state.minted.push(m); return { mnemonic: m, profile: {} }; } },
     },
   };
   const args = Object.keys(scope);
   const fn = new Function(...args, `return ({ ${BODY} }).createChildAccount;`)(...args.map(k => scope[k]));
-  return { call: () => fn('npub1church', 'Ellie'), state };
+  return { call: (opts) => fn('npub1church', 'Ellie', opts), state };
 }
 
 test('when nothing reaches the relay, the account is NOT reported as created', async () => {
@@ -129,6 +137,145 @@ test('the join is published BEFORE the sealed name, or the relay refuses the nam
 });
 
 
+// ── (a) THE GUARDIAN REQUEST IS PART OF SUCCESS ──────────────────────────────────────────────────────────
+// `ok` was `!!(published.join && published.name)`. The request is the ONLY document that ever asks a steward
+// to confirm the link, this function is its only publisher anywhere in the codebase, and nothing re-sends it
+// — so leaving it out of the check told the parent it had worked while the row read "Waiting for steward to
+// confirm" for ever. It is also the likeliest of the four to fail: it alone is signed by the PARENT's key,
+// so it alone counts against the parent's per-member document cap.
+test('a guardian request that never arrives is not a created account', async () => {
+  const p = parent({ fails: ['req'] });
+  const r = await p.call();
+  assert.equal(r.ok, false,
+    'the parent was handed the twelve words and told it worked, but no steward will ever be asked to ' +
+    'confirm the link — and nothing re-sends the request');
+  assert.equal(p.state.saved, null, 'a row reading "Waiting for steward to confirm" was saved for a request nobody has');
+});
+
+
+// ── (c) A FAILED JOIN STOPS THE REST ─────────────────────────────────────────────────────────────────────
+// The other three used to go out regardless, so a failed join left an orphan profile and a guardian request
+// on the relay for a pubkey that belongs to no church — while the screen said "nothing has been set up yet".
+test('when the join fails, NOTHING else is published', async () => {
+  const p = parent({ fails: ['join'] });
+  await p.call();
+  assert.deepEqual(p.state.order, ['join'],
+    'the child\'s profile / name / guardian request were sent for a pubkey that is not a member of anything: ' +
+    'attempted ' + JSON.stringify(p.state.order));
+  assert.equal(p.state.relay.length, 0, 'documents were left on the relay for an account that was never created');
+});
+
+test('the sealed name is not even attempted without the join, because the relay would refuse it', async () => {
+  // gateway.mjs accepts a `name:` document only from a pubkey it already knows is a member of that church.
+  const p = parent({ fails: ['join'] });
+  await p.call();
+  assert.ok(!p.state.order.includes('name'), 'a name document was sent that the relay is guaranteed to throw away');
+});
+
+test('a nameless account never asks a steward to approve a bare npub', async () => {
+  // The request carries no name by design (AUDIT-2026-07-27) and the console will not resolve a
+  // requester-supplied one (forgeable — SECURITY-AUDIT-2026-07-20 C1), so the sealed name is the ONLY way a
+  // steward can see whose link they are confirming.
+  const p = parent({ fails: ['name'] });
+  await p.call();
+  assert.ok(!p.state.order.includes('req'),
+    'the steward was asked to confirm a link they cannot read the name of');
+});
+
+
+// ── (b) ONE CHILD, ONE KEY ───────────────────────────────────────────────────────────────────────────────
+// makeInvite() used to be called INSIDE this function and the UI's only retry was to call it again, so a
+// second attempt minted a SECOND account for the same child — two guardian requests for a steward to judge,
+// and the first account permanently unrecoverable, because its sealed name can only be signed by a key the
+// parent was never shown.
+test('a retry with the caller\'s key finishes the SAME account', async () => {
+  const p = parent({ fails: ['req'] });
+  const first = await p.call();
+  assert.equal(first.ok, false);
+  const p2 = parent();                               // the relay is reachable this time
+  const second = await p2.call({ mnemonic: first.mnemonic });
+  assert.equal(second.ok, true);
+  assert.equal(second.childPub, first.childPub,
+    'the retry minted a SECOND child account: two guardian requests, and the first account unrecoverable');
+  assert.equal(p2.state.minted.length, 0, 'the function minted a key of its own over the one it was handed');
+});
+
+test('…and with no key handed in it still mints one, as it always did', async () => {
+  const p = parent();
+  const r = await p.call();
+  assert.ok(/^[0-9a-f]{64}$/.test(r.childPub), 'an omitted key no longer produces a working account');
+  assert.equal(p.state.minted.length, 1);
+  assert.equal(r.mnemonic, p.state.minted[0], 'the caller was handed different words from the key that was used');
+});
+
+test('which is exactly why the caller must hold the key: two bare calls are two children', async () => {
+  // Not a bug in this function — the demonstration of why the UI, not the engine, owns the key.
+  const p = parent();
+  const a = await p.call(), b = await p.call();
+  assert.notEqual(a.childPub, b.childPub);
+});
+
+
+// ── (d) THE GHOST ROW ON THE NEXT LAUNCH ─────────────────────────────────────────────────────────────────
+// `_rebuildFamily` runs once per session and rebuilds the family list from the parent's OWN guardreq
+// documents on the relay, saving each as `{ name: '' }`. So anything this function leaves behind after a
+// failed setup comes back as a blank-named "Waiting for steward to confirm" row on the next app start — the
+// exact row `if (ok)` exists to suppress. This runs BOTH shipped functions, one after the other, over one
+// relay: whatever createChildAccount really left there is what _rebuildFamily really reads.
+function nextLaunch({ relay, children, parentPub }) {
+  const scope = {
+    toPub: () => CHURCH,
+    pub: parentPub,
+    relaysForChurch: () => ['wss://test.invalid'],
+    _dtag: dOf,
+    _loadChildren: () => children,
+    _saveChildLink: (rec) => { children.push(rec); },
+    pool: {
+      subscribeMany(_relays, _filters, h) {
+        // asynchronously, like a real relay: oneose fires before `const sub` is assigned otherwise
+        setTimeout(() => { for (const e of relay) if (e.pubkey === parentPub) h.onevent(e); h.oneose(); }, 0);
+        return { close() {} };
+      },
+    },
+    // the real one arms a 9s fallback timer; don't hold the test process open for it
+    setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
+    Promise,
+  };
+  const args = Object.keys(scope);
+  return new Function(...args, REBUILD + '\nreturn _rebuildFamily;')(...args.map(k => scope[k]))('npub1church');
+}
+
+test('GHOST ROW: a setup that failed does not come back on the next launch', async () => {
+  for (const fails of [['join'], ['name'], ['name', 'k0'], ['req'], ['join', 'k0', 'name', 'req']]) {
+    const which = JSON.stringify(fails);
+    const children = [];
+    const p = parent({ fails, children });
+    const r = await p.call();
+    assert.equal(r.ok, false, 'fixture is wrong: ' + which + ' was reported as a success');
+    assert.deepEqual(children, [], 'the failed setup saved a local row itself (' + which + ')');
+    const added = await nextLaunch({ relay: p.state.relay, children, parentPub: p.state.parentPub });
+    assert.equal(added, 0,
+      'the next app start resurrected a blank-named "Waiting for steward to confirm" row from a guardian ' +
+      'request the failed setup left on the relay (' + which + ')');
+    assert.deepEqual(children, [], 'the ghost row is back (' + which + ')');
+  }
+});
+
+test('GHOST ROW: …but a setup that WORKED is still rebuilt after the local list is wiped', async () => {
+  // The rebuild exists because restoring an identity clears trinityone.family and a parent's children
+  // vanished from their phone (AUDIT-2026-07-28). A fix that simply stopped it finding anything would be
+  // worse than the bug it closes.
+  const children = [];
+  const p = parent({ children });
+  assert.equal((await p.call()).ok, true);
+  children.length = 0;                                  // the locked-boot wipe
+  const added = await nextLaunch({ relay: p.state.relay, children, parentPub: p.state.parentPub });
+  assert.equal(added, 1, 'a real child can no longer be recovered from the relay after a restore');
+  assert.equal(children[0].child, (await Promise.resolve(p.state.relay.find(e => dOf(e).startsWith('trinityone/guardreq:')))) &&
+    dOf(p.state.relay.find(e => dOf(e).startsWith('trinityone/guardreq:'))).slice('trinityone/guardreq:'.length));
+});
+
+
 // ── AND NOW THE POINT OF USE ─────────────────────────────────────────────────────────────────────────────
 // CLAUDE.md rule 1. Everything above tests the ENGINE. `createChildAccount` still RETURNS the child's
 // mnemonic when `ok` is false — deliberately, so the caller has everything it needs — which means the only
@@ -153,27 +300,48 @@ const CREATE = fnBody(FAMILY, 'const create = async () => {', 'FamilySheet.creat
 
 // Run the shipped handler with a stubbed sheet around it. Everything here is scaffolding; the handler's own
 // logic is untouched.
-function sheet({ result, throws }) {
-  const seen = { made: undefined, stage: 'name', err: '', busy: null, refreshed: 0 };
-  const scope = {
-    name: 'Ellie',
-    setName: () => {},
-    setErr: (m) => { seen.err = m; },
-    setBusy: (b) => { seen.busy = b; },
-    setMade: (m) => { seen.made = m; },
-    setStage: (s) => { seen.stage = s; },
-    refreshKids: () => { seen.refreshed++; },
-    F: { createChildAccount: async () => { if (throws) throw throws; return result; } },
-    ctx: { church: { npub: 'npub1church' } },
-    Promise, console,
+//
+// The handler is REBUILT for every attempt, from the state the previous attempt left behind — which is what
+// React does on re-render, and the only way a "tap Create again" test can mean anything.
+function sheet({ result, throws, childName = 'Ellie' }) {
+  const seen = { made: undefined, stage: 'name', err: '', busy: null, refreshed: 0, calls: [], minted: [], pending: null };
+  let attempt = 0;
+  const run = (typed) => {
+    const scope = {
+      name: typed === undefined ? childName : typed,
+      pending: seen.pending,
+      setPending: (v) => { seen.pending = v; },
+      // a fresh key every time it is called, so "the screen minted a second account" shows up as a
+      // different key rather than hiding behind one constant
+      mintSeed: () => { const m = 'seed-' + (seen.minted.length + 1); seen.minted.push(m); return m; },
+      setName: () => {},
+      setErr: (m) => { seen.err = m; },
+      setBusy: (b) => { seen.busy = b; },
+      setMade: (m) => { seen.made = m; },
+      setStage: (s) => { seen.stage = s; },
+      refreshKids: () => { seen.refreshed++; },
+      F: {
+        createChildAccount: async (_npub, n, opts) => {
+          seen.calls.push({ name: n, mnemonic: opts && opts.mnemonic });
+          if (throws) throw throws;
+          const r = typeof result === 'function' ? result(attempt++) : result;
+          // the real engine hands back the key it actually used, whoever minted it
+          return r ? { ...r, mnemonic: (opts && opts.mnemonic) || r.mnemonic } : r;
+        },
+      },
+      ctx: { church: { npub: 'npub1church' } },
+      Promise, console,
+    };
+    const args = Object.keys(scope);
+    const fn = new Function(...args, CREATE + '\nreturn create;')(...args.map(k => scope[k]));
+    return fn();
   };
-  const args = Object.keys(scope);
-  const fn = new Function(...args, CREATE + '\nreturn create;')(...args.map(k => scope[k]));
-  return { run: () => fn(), seen };
+  return { run, seen };
 }
 
 // exactly what the engine hands back when nothing landed: ok false, and the words still present
 const FAILED = { ok: false, published: {}, mnemonic: 'abandon '.repeat(11) + 'about', childPub: 'c'.repeat(64), npub: 'npub1child', name: 'Ellie' };
+const MADE = { ok: true, published: { join: true, name: true, req: true }, mnemonic: 'abandon '.repeat(11) + 'about', childPub: 'c'.repeat(64), npub: 'npub1child', name: 'Ellie' };
 
 test('POINT OF USE: a parent is never shown the twelve words for an account that was not created', async () => {
   const s = sheet({ result: FAILED });
@@ -200,11 +368,71 @@ test('POINT OF USE: an unreachable relay and a half-landed account are told apar
   assert.equal(partial.seen.made, undefined);
 });
 
-test('POINT OF USE: …and a real account still reveals its words', async () => {
-  const ok = { ok: true, published: { join: true, name: true, req: true }, mnemonic: 'abandon '.repeat(11) + 'about', childPub: 'c'.repeat(64), npub: 'npub1child', name: 'Ellie' };
-  const s = sheet({ result: ok });
+// ── (a), at the point of use ─────────────────────────────────────────────────────────────────────────────
+// The engine now calls a missing guardian request a failure. That only reaches the parent if this screen
+// still reports it, AND reports it as its own case: the account IS set up, so "nothing has been set up yet"
+// would be a lie, and "your steward needs the name" points at the wrong missing piece.
+test('POINT OF USE: a missing guardian request is reported, and as its own case', async () => {
+  const s = sheet({ result: { ...FAILED, published: { join: true, name: true } } });
   await s.run();
-  assert.equal(s.seen.made, ok, 'a working account never reaches the screen that hands over the words');
+  assert.equal(s.seen.made, undefined, 'the words were revealed for a link no steward will ever be asked to confirm');
+  assert.notEqual(s.seen.stage, 'reveal');
+  assert.match(s.seen.err, /steward/i, 'the parent is not told what is missing');
+  assert.doesNotMatch(s.seen.err, /nothing has been set up/i,
+    'the parent is told nothing was set up, but the child IS joined — starting over would mint a second account');
+
+  const nameless = sheet({ result: { ...FAILED, published: { join: true } } });
+  await nameless.run();
+  assert.notEqual(s.seen.err, nameless.seen.err,
+    'a missing name and a missing guardian request read identically, so the parent cannot tell them apart');
+});
+
+// ── (b), at the point of use — THE ONE THAT MINTED A SECOND CHILD ────────────────────────────────────────
+// The engine will happily mint a key when handed none, so moving the minting out of it changes nothing on
+// its own: the retry is only safe if THIS screen holds the key across attempts. Delete `pending` and every
+// engine test above still passes.
+test('POINT OF USE: tapping Create again finishes the same child, it does not mint a second', async () => {
+  const s = sheet({ result: (n) => (n === 0 ? { ...FAILED, published: { join: true, name: true } } : MADE) });
+  await s.run();                                    // fails: the guardian request did not get through
+  assert.equal(s.seen.made, undefined);
+  await s.run();                                    // the parent taps "Create the account" again
+  assert.equal(s.seen.calls.length, 2);
+  assert.equal(s.seen.calls[1].mnemonic, s.seen.calls[0].mnemonic,
+    'the retry created a SECOND account for the same child: two guardian requests for the steward to judge, ' +
+    'and the first account unrecoverable because its words were never shown');
+  assert.equal(s.seen.minted.length, 1, 'a second key was minted for a child who already has one');
+  assert.equal(s.seen.stage, 'reveal', 'the successful retry never reached the words');
+});
+
+test('POINT OF USE: a DIFFERENT child never inherits the first child’s key', async () => {
+  // Two children sharing one key is worse than the bug being fixed: one account, two people.
+  const s = sheet({ result: { ...FAILED, published: { join: true, name: true } } });
+  await s.run('Ellie');
+  await s.run('Sam Carter');
+  assert.equal(s.seen.calls.length, 2);
+  assert.notEqual(s.seen.calls[1].mnemonic, s.seen.calls[0].mnemonic,
+    'a second child was set up with the first child’s key — one account for two people');
+});
+
+test('POINT OF USE: after a success the key is let go, so the next child gets their own', async () => {
+  const s = sheet({ result: MADE });
+  await s.run('Ellie');
+  assert.equal(s.seen.pending, null, 'the finished child’s key is still held, and the next child would reuse it');
+  await s.run('Ellie');        // the same name again — a sibling, a correction, whatever
+  assert.notEqual(s.seen.calls[1].mnemonic, s.seen.calls[0].mnemonic);
+});
+
+test('POINT OF USE: the key handed to the engine is a real one, not undefined', async () => {
+  const s = sheet({ result: MADE });
+  await s.run();
+  assert.match(String(s.seen.calls[0].mnemonic || ''), /\S/,
+    'the screen passed no key at all, so the engine minted its own and a retry would mint another');
+});
+
+test('POINT OF USE: …and a real account still reveals its words', async () => {
+  const s = sheet({ result: MADE });
+  await s.run();
+  assert.equal(s.seen.made && s.seen.made.childPub, MADE.childPub, 'a working account never reaches the screen that hands over the words');
   assert.equal(s.seen.stage, 'reveal');
   assert.equal(s.seen.refreshed, 1, 'the new child does not appear in the list until a reload');
 });

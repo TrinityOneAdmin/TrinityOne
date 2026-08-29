@@ -3483,16 +3483,25 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
 
-  // ── safeguarding v2: a parent creates a child account they own (mints a fresh key, sets the child up
-  // in the church, and asks the steward to confirm the link). Returns { childPub, mnemonic, npub, name }
-  // so the UI can show the child's recovery words + a one-scan login QR (handoff to the child's device).
-  // The mnemonic is NOT persisted (paper stays foundational) — the parent saves it at creation. ──
-  async createChildAccount(churchNpub, childName) {
+  // ── safeguarding v2: a parent creates a child account they own (sets the child up in the church and asks
+  // the steward to confirm the link). Returns { childPub, mnemonic, npub, name, published, ok } so the UI can
+  // show the child's recovery words + a one-scan login QR (handoff to the child's device).
+  // The mnemonic is NOT persisted (paper stays foundational) — the parent saves it at creation.
+  // `opts.mnemonic` — the child's key, OWNED BY THE CALLER so that a retry finishes the same child's account
+  // instead of minting a second one. Omit it and a fresh key is minted here, as it always was. ──
+  async createChildAccount(churchNpub, childName, opts) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) throw new Error('Join a church first.');
     const name = String(childName || '').trim(); if (!name) throw new Error('Enter the child’s name.');
-    const inv = window.TrinityIdentity.makeInvite();                 // { mnemonic, profile } — vetted key minter
-    const childSk = privateKeyFromSeedWords(inv.mnemonic);
+    // THE KEY COMES FROM THE CALLER, so "try again" finishes THIS child rather than starting another. It was
+    // minted here, and the UI's only retry was to call this function again: one child, TWO accounts, two
+    // guardian requests for a steward to judge, and the first account permanently unrecoverable — its sealed
+    // name can only ever be signed by a key the parent was never shown. Every document below is REPLACEABLE
+    // (a kind 0, or a kind-30078 with a fixed d-tag), so re-running with the same key overwrites rather than
+    // duplicates — that is what makes a retry safe. AUDIT-2026-08-29.
+    // Still mints one when the caller has none: an older caller, or a UI that could not reach the key minter.
+    const mnemonic = (opts && opts.mnemonic) || window.TrinityIdentity.makeInvite().mnemonic;   // vetted key minter
+    const childSk = privateKeyFromSeedWords(mnemonic);
     const childPub = getPublicKey(childSk);
     const ts = Math.floor(Date.now() / 1000);
     // The child's kind-0 profile. NO auto-claimed handle — this mirrored publishProfile, and it is the most
@@ -3521,31 +3530,45 @@ window.Fellowship = {
     // renders the name IT resolved from the roster instead, precisely because a requester-supplied name is
     // forgeable (SECURITY-AUDIT-2026-07-20 C1). So they are simply gone. AUDIT-2026-07-27.
     const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
-    // join BEFORE the sealed name: the relay only accepts a name document from someone it already knows is a
-    // member of that church, so the reverse order would have the name silently refused.
     // PUBLISH FIRST, REVEAL SECOND. This used to console.warn each failure and return the twelve words
     // regardless. On a bad link a parent wrote them down, set up the child's phone, and there was no join
     // document, no sealed name and nothing for the steward — the row said "Waiting for steward to confirm"
     // for ever and nothing retried. The words are shown once and stored nowhere, so "it looked like it
     // worked" IS the failure. AUDIT-2026-08-29.
-    //
-    // Nothing but the join/name order matters, so the other three go together rather than serially:
-    // _publishAny has no timeout and four rounds of it can leave a parent watching "Setting up…" for the
-    // better part of a minute.
     const sent = async (e) => { if (!e) return false; try { await _publishAny(window.Fellowship.relays, e); return true; } catch (err) { console.warn('[fellowship] child publish failed', err); return false; } };
-    const published = { join: await sent(join) };
-    const rest = await Promise.all([sent(k0), sent(childNameDoc), sent(req)]);
-    published.k0 = rest[0]; published.name = rest[1]; published.req = rest[2];
-    // WHICH TWO MATTER. The join is what makes the child a member at all; the sealed name is what the steward
-    // reads when confirming the link, and without it they are asked to approve a bare npub — the console
-    // deliberately will not resolve a requester-supplied name. The kind-0 is an empty profile now and costs
-    // nothing if it is late; the guardian request re-sends when the screen is reopened.
-    const ok = !!(published.join && published.name);
+    const published = { join: false, k0: false, name: false, req: false };
+    // A GATE, NOT A BATCH. The other three used to go out whatever became of the join. The join is what makes
+    // the child a member, and the relay will not accept a name document from a pubkey it does not already know
+    // is a member — so on a failed join the name was guaranteed to be refused, while the kind-0 and the
+    // guardian request still landed for a pubkey that belongs to no church. The screen meanwhile told the
+    // parent "nothing has been set up yet". AUDIT-2026-08-29.
+    published.join = await sent(join);
+    if (published.join) {
+      // the empty kind-0 has no ordering constraint of its own, so it rides alongside the name rather than
+      // costing a fourth round trip — _publishAny has no timeout and a parent is watching "Setting up…".
+      const both = await Promise.all([sent(k0), sent(childNameDoc)]);
+      published.k0 = both[0]; published.name = both[1];
+      // AND THE REQUEST ONLY ONCE THE STEWARD CAN READ IT. The console deliberately will not resolve a
+      // requester-supplied name (it is forgeable — SECURITY-AUDIT-2026-07-20 C1), so a request that arrives
+      // without the sealed name asks a real person to approve a bare npub. It is also the one document
+      // _rebuildFamily reads back on the next launch, so sending it over a failed name is exactly what
+      // resurrects a blank-named "Waiting for steward to confirm" row for a setup that never finished.
+      if (published.name) published.req = await sent(req);
+    }
+    // WHAT "CREATED" MEANS: all three of join, name and request. The join makes the child a member; the sealed
+    // name is what the steward reads when confirming the link; the REQUEST is the only thing that ever asks
+    // them to. `ok` left the request out, so a parent whose request alone failed was told it had worked and
+    // the row read "Waiting for steward to confirm" for ever — nothing re-sends it, and this function is the
+    // only publisher of `guardreq:` in the codebase. It is also the likeliest of the four to fail: it alone is
+    // signed by the PARENT's key, so it alone counts against the parent's per-member document cap. The kind-0
+    // is an empty profile by design (AUDIT-2026-07-27) and costs nothing if it is late, so it is not counted.
+    const ok = !!(published.join && published.name && published.req);
     // Only remember a link there is something to remember. Saving it regardless left a ghost row reading
     // "Waiting for steward to confirm" for an account no relay had ever heard of.
     if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
     _needAuth = true;   // M3: now a guardian — must NIP-42-auth to read the church's confirmation of this link (connTick reconnects with auth)
-    return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name, published, ok };
+    // The mnemonic comes back even when ok is false, ON PURPOSE: it is how the caller retries the SAME child.
+    return { childPub, mnemonic, npub: npubEncode(childPub), name, published, ok };
   },
   // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
   myChildren(churchNpub) {

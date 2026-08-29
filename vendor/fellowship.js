@@ -9673,18 +9673,20 @@
         }
       };
     },
-    // ── safeguarding v2: a parent creates a child account they own (mints a fresh key, sets the child up
-    // in the church, and asks the steward to confirm the link). Returns { childPub, mnemonic, npub, name }
-    // so the UI can show the child's recovery words + a one-scan login QR (handoff to the child's device).
-    // The mnemonic is NOT persisted (paper stays foundational) — the parent saves it at creation. ──
-    async createChildAccount(churchNpub, childName) {
+    // ── safeguarding v2: a parent creates a child account they own (sets the child up in the church and asks
+    // the steward to confirm the link). Returns { childPub, mnemonic, npub, name, published, ok } so the UI can
+    // show the child's recovery words + a one-scan login QR (handoff to the child's device).
+    // The mnemonic is NOT persisted (paper stays foundational) — the parent saves it at creation.
+    // `opts.mnemonic` — the child's key, OWNED BY THE CALLER so that a retry finishes the same child's account
+    // instead of minting a second one. Omit it and a fresh key is minted here, as it always was. ──
+    async createChildAccount(churchNpub, childName, opts) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !sk) throw new Error("Join a church first.");
       const name = String(childName || "").trim();
       if (!name) throw new Error("Enter the child\u2019s name.");
-      const inv = window.TrinityIdentity.makeInvite();
-      const childSk = privateKeyFromSeedWords(inv.mnemonic);
+      const mnemonic = opts && opts.mnemonic || window.TrinityIdentity.makeInvite().mnemonic;
+      const childSk = privateKeyFromSeedWords(mnemonic);
       const childPub = getPublicKey2(childSk);
       const ts = Math.floor(Date.now() / 1e3);
       const childProfile = {};
@@ -9709,15 +9711,18 @@
           return false;
         }
       };
-      const published = { join: await sent(join2) };
-      const rest = await Promise.all([sent(k0), sent(childNameDoc), sent(req)]);
-      published.k0 = rest[0];
-      published.name = rest[1];
-      published.req = rest[2];
-      const ok = !!(published.join && published.name);
+      const published = { join: false, k0: false, name: false, req: false };
+      published.join = await sent(join2);
+      if (published.join) {
+        const both = await Promise.all([sent(k0), sent(childNameDoc)]);
+        published.k0 = both[0];
+        published.name = both[1];
+        if (published.name) published.req = await sent(req);
+      }
+      const ok = !!(published.join && published.name && published.req);
       if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
       _needAuth = true;
-      return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name, published, ok };
+      return { childPub, mnemonic, npub: npubEncode(childPub), name, published, ok };
     },
     // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
     myChildren(churchNpub) {

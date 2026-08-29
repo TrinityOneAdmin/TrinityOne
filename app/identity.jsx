@@ -1646,6 +1646,15 @@ function FamilySheet({ open, onClose, ctx }) {
   const [busy, setBusy] = useId(false);
   const [err, setErr] = useId('');
   const [made, setMade] = useId(null);          // { childPub, mnemonic, npub, name }
+  // ONE KEY PER CHILD, HOWEVER MANY ATTEMPTS IT TAKES. The child's key used to be minted inside
+  // createChildAccount, and the only retry this screen offered was to call it again — so a parent who tapped
+  // "Create the account" a second time after a failed publish got a SECOND account for the same child: two
+  // guardian requests for the steward to judge, and the first account unrecoverable, because its recovery
+  // words were never shown. The key is minted here and held across attempts instead. AUDIT-2026-08-29.
+  // Keyed by the name that was typed, so retrying the same child reuses it while a genuinely different child
+  // gets their own key — two children must never share one.
+  const [pending, setPending] = useId(null);    // { name, mnemonic } — the key for the attempt in progress
+  const mintSeed = () => { try { return (window.TrinityIdentity.makeInvite() || {}).mnemonic || ''; } catch (e) { return ''; } };
   const guardians = (ctx.safeguard && ctx.safeguard.guardians) || {};
   // a link is "done" if the steward initiated it (viaSteward — the notice IS the confirmation) OR the church's
   // guardians map lists me (my own self-request was confirmed). Only a still-pending SELF-request shows "waiting".
@@ -1658,18 +1667,31 @@ function FamilySheet({ open, onClose, ctx }) {
     const n = name.trim(); if (!n) { setErr('Enter the child’s name.'); return; }
     setBusy(true); setErr('');
     try {
-      const r = await F.createChildAccount(ctx.church.npub, n);
+      // reuse the key from a failed attempt at this same child; mint one only for a child we have not tried yet
+      const seed = (pending && pending.name === n && pending.mnemonic) ? pending.mnemonic : mintSeed();
+      const r = await F.createChildAccount(ctx.church.npub, n, { mnemonic: seed });
       // DO NOT REVEAL TWELVE WORDS FOR AN ACCOUNT THAT DOES NOT EXIST. The engine now says which of its
       // documents actually landed. On a bad link the parent used to copy the words down, set up the child's
       // phone, and find a row reading "Waiting for steward to confirm" for ever — the words are shown once
       // and stored nowhere, so a false success is unrecoverable. AUDIT-2026-08-29.
       if (r && r.ok === false) {
-        setErr(!r.published || !r.published.join
+        // HOLD THE KEY, so "try again" finishes this same account instead of starting another. (Belt and
+        // braces: if the engine had to mint its own — no key minter on this device — keep the one it used.)
+        setPending({ name: n, mnemonic: (r && r.mnemonic) || seed });
+        const p = r.published || {};
+        setErr(!p.join
           ? 'Couldn’t reach your church’s relay, so the account wasn’t created. Check you’re online and try again — nothing has been set up yet.'
-          : 'The account was created but your church can’t see who it belongs to yet. Try again in a moment — your steward needs the name to confirm it.');
+          : !p.name
+            ? 'The account was created but your church can’t see who it belongs to yet — your steward needs the child’s name to confirm the link. Try again in a moment; this finishes the same account rather than starting another.'
+            // The request is the ONLY thing that ever asks a steward to confirm the link, nothing re-sends it,
+            // and it is the likeliest of the documents to fail — it alone is signed by the parent's key. Left
+            // out of the success check, this case told the parent it had worked and the row then read
+            // "Waiting for steward to confirm" for ever. AUDIT-2026-08-29.
+            : 'Your child’s account is set up, but your steward hasn’t been asked to confirm you as their parent yet. Try again in a moment; this finishes the same account rather than starting another.');
         setBusy(false);
         return;
       }
+      setPending(null);   // this child is done — the next one gets a key of their own
       setMade(r); setStage('reveal'); refreshKids();
     }
     catch (e) { setErr((e && e.message) || 'Couldn’t set up the account — please try again.'); }
