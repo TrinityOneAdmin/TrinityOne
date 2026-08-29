@@ -1340,7 +1340,18 @@ function App() {
   // pass saw an empty list, returned before ensurePerm(), and notification permission was never requested.
   // Do NOT hoist ensurePerm above that guard — reminders.jsx documents why it sits where it does; fixing the
   // deps is what makes the prompt happen. AUDIT-2026-08-29.
-  useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servConfirmed, servReqs, servReplies, churchRotas, churchServices, churchRosters, churchTeams]);
+  // …AND THEN THE FIX FOR THAT RAN IT ON EVERY RENDER. `servConfirmed` is rebuilt in the component body, so
+  // it is a new array identity each time and React compares deps with Object.is — the effect fired on every
+  // toast, every arriving message, every tab change. sync() re-asks for notification permission until it is
+  // GRANTED (reminders.jsx: `perm` is only ever set true on a grant), so a member who declined was asked
+  // again and again, and on the granted path it re-read and re-parsed localStorage on the app's root every
+  // render, on the low-end hardware this product targets. Measured: 26 renders, 26 permission prompts.
+  //
+  // Depend on a stable DESCRIPTION of the slots instead of the array holding them. It changes exactly when
+  // the scheduler's input changes — which is what publishing a rota does, through myRotaSlots — and not when
+  // React merely re-renders. AUDIT-2026-08-29.
+  const servKey = servConfirmed.map(s => s.serviceId + '|' + s.teamId + '|' + s.roleId + '|' + (s.date || '')).join(',');
+  useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   useAE(() => { const pk = window.Fellowship && window.Fellowship.myPubkey; if (pk && window.TrinityReminders && window.TrinityReminders.registerPush) window.TrinityReminders.registerPush(pk); }, [servReqs, activeChurch]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);

@@ -115,19 +115,29 @@ const REMINDER_EFFECT = (() => {
   assert.match(rest.slice(0, 40), /^\s*useAE\(/, 'the reminder call has moved out of its effect — re-anchor');
   return stmt(rest, 'useAE(', 'the reminder effect');
 })();
+// The line that decides WHEN it re-runs. Kept with the effect deliberately — see reminderEffect below.
+const REMINDER_KEY = (() => {
+  const l = APP.split('\n').find(x => x.includes('const servKey ='));
+  assert.ok(l, 'the reminder effect no longer computes a stable key — re-anchor this test only after ' +
+    'checking it does not depend on an array rebuilt on every render');
+  return l;
+})();
 
-function reminderEffect({ reminders }) {
+const SLOT = { serviceId: 'sun', teamId: 'welcome', roleId: 'door', date: '2026-09-06' };
+// The effect is lifted WITH the line above it that computes its dependency key, because the two are one
+// decision: what makes this re-run. Taking the useAE alone would let the key be anything.
+function reminderEffect({ reminders, slots = [SLOT] }) {
   const seen = { calls: [], deps: null };
   const scope = {
     useAE: (fn, deps) => { seen.deps = deps; fn(); },
     window: { TrinityReminders: reminders },
-    servConfirmed: [{ id: 'rota:sun:1' }],
+    servConfirmed: slots,
     servReqs: ['req'], servReplies: {}, churchRotas: ['rota'], churchServices: ['svc'],
     churchRosters: ['roster'], churchTeams: ['team'],
     console,
   };
   const args = Object.keys(scope);
-  new Function(...args, REMINDER_EFFECT)(...args.map(k => scope[k]));
+  new Function(...args, REMINDER_KEY + '\n' + REMINDER_EFFECT)(...args.map(k => scope[k]));
   return { seen, scope };
 }
 
@@ -146,19 +156,35 @@ test('…and it survives a phone with no reminder plugin at all', () => {
   assert.doesNotThrow(() => reminderEffect({ reminders: undefined }));
 });
 
-test('the reminder scheduler re-runs when a rota is published', () => {
-  // Executed, not read: assert the values the effect was ACTUALLY given as dependencies, so a dep list that
-  // merely names the right variables in a comment or a dead branch cannot satisfy it.
-  const r = reminderEffect({ reminders: { sync: () => {} } });
-  assert.ok(Array.isArray(r.seen.deps), 'the effect has no dependency array, so it re-runs on every render');
-  for (const dep of ['servConfirmed', 'churchRotas', 'churchServices', 'churchRosters', 'churchTeams']) {
-    assert.ok(r.seen.deps.includes(r.scope[dep]),
-      `the effect does not re-run when ${dep} changes, so "we'll remind you the ` +
-      'day before you serve" never fires for a rota published after launch');
-  }
+test('the reminder scheduler re-runs when the slots change, and NOT on a bare re-render', () => {
+  // THE FIX FOR THE MISSING DEPS INTRODUCED THE OPPOSITE BUG. servConfirmed is rebuilt in the component
+  // body, so depending on the array itself fired the effect on every toast and every arriving message —
+  // and sync() re-asks for notification permission until it is granted, so a member who declined was asked
+  // again and again. Assert the DEPENDENCY VALUES, which is what React actually compares.
+  const same = reminderEffect({ reminders: { sync: () => {} } });
+  const rerender = reminderEffect({ reminders: { sync: () => {} }, slots: [{ ...SLOT }] });
+  assert.ok(Array.isArray(same.seen.deps) && same.seen.deps.length,
+    'the effect has no dependency array, so it re-runs on every render');
+  // COMPARE THE WAY REACT DOES. The first version of this used deepEqual, which compares by VALUE — so two
+  // freshly-built arrays holding the same slots looked identical to the test and different to React, and the
+  // sabotage that reintroduced the every-render bug passed. React uses Object.is: identity, per element.
+  const sameDeps = same.seen.deps.length === rerender.seen.deps.length
+    && same.seen.deps.every((d, i) => Object.is(d, rerender.seen.deps[i]));
+  assert.ok(sameDeps,
+    're-rendering with the same slots produces dependencies React sees as CHANGED, so the effect fires on ' +
+    'every render — and sync() re-asks for notification permission until it is granted, so a member who ' +
+    'declined is asked again and again');
+
+  const published = reminderEffect({ reminders: { sync: () => {} }, slots: [SLOT, { ...SLOT, roleId: 'welcome' }] });
+  assert.ok(!published.seen.deps.every((d, i) => Object.is(d, same.seen.deps[i])),
+    'publishing a rota does not re-run the scheduler, so "we’ll remind you the day before you serve" never ' +
+    'fires for anything scheduled after launch');
+
+  const moved = reminderEffect({ reminders: { sync: () => {} }, slots: [{ ...SLOT, date: '2026-09-13' }] });
+  assert.ok(!moved.seen.deps.every((d, i) => Object.is(d, same.seen.deps[i])),
+    'a slot moving to another date does not reschedule it');
 });
 
-// ── the directory opt-out ────────────────────────────────────────────────────────────────────────────────
 test('the directory switch does not assert a change that has not happened yet', () => {
   const l = line(IDENT, 'const flip = () =>');
   assert.doesNotMatch(l, /'Hidden from the church directory'/,
