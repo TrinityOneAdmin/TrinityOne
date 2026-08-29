@@ -38,6 +38,13 @@ function grabMethod(src, sig) {
 }
 
 const BODY = grabMethod(SRC, 'async publishCareNeed(fields)');
+// The safeguarding guard lives at module scope and is lifted WITH the publisher, so these tests drive the
+// real decision rather than a stub of it — that decision is the entire reason this file exists.
+const GUARD = (() => {
+  const m = /\n  async function _careNeedRefusal\(cp\)[\s\S]*?\n  \}/.exec(SRC);
+  assert.ok(m, 'could not lift _careNeedRefusal — re-anchor this test, do not delete it');
+  return m[0];
+})();
 // esbuild renumbers the nostr-tools import. Bind whatever the body actually calls, so a rebuild that renames
 // it fails loudly here rather than silently testing nothing.
 const FE = (BODY.match(/\bfinalizeEvent\d*\b/) || [])[0];
@@ -67,7 +74,7 @@ function member({ isMinor = false, known = true, cpKnown = true, cleared = [], c
     window: { Fellowship: { churchPub: CHURCH, ready: Promise.resolve() } },
   };
   const args = Object.keys(scope);
-  const fn = new Function(...args, `return ({ ${BODY} }).publishCareNeed;`)(...args.map(k => scope[k]));
+  const fn = new Function(...args, `${GUARD}\nreturn ({ ${BODY} }).publishCareNeed;`)(...args.map(k => scope[k]));
   return { call: (f) => fn(f), state };
 }
 
@@ -211,13 +218,24 @@ const SUBMIT = grabArrow(TODAY.slice(FORM_AT), 'const submit = async () => {');
 
 // The sheet decides this once, at the top, and everything below reads it. Lifted so the four combinations
 // are checked against the real expression rather than a restatement of it.
-const OPENS = /const _opensNeed = ([^;]+);/.exec(TODAY);
-assert.ok(OPENS, '_opensNeed has moved — re-anchor this test');
+// The church-level half. The engine's half is asked asynchronously and tested through the engine itself;
+// what matters here is that the screen still refuses a child and still honours the setting.
+const OPENS = /const _churchAllowsNeeds = ([^;]+);/.exec(TODAY);
+assert.ok(OPENS, '_churchAllowsNeeds has moved — re-anchor this test');
 
 function opensNeed(ctx, isMinor) {
   return new Function('ctx', '_isMinor', `const _care = ctx.care || {}; return ${OPENS[1]};`)(ctx, isMinor);
 }
 const settings = (openedBy, visibility = 'all') => ({ care: { settings: { enabled: true, openedBy, visibility } } });
+
+test('the screen never decides on its own — the engine has to agree', () => {
+  // The screen used to BE the rule (`!_isMinor && openedBy === 'member'`), which is how a child saw the
+  // public-need wording during the boot window. It must now start closed and wait to be told.
+  assert.match(TODAY, /const _opensNeed = _churchAllowsNeeds && _engineAllows;/,
+    'the sheet decides for itself again, so it can promise what the engine will refuse');
+  assert.match(TODAY, /React\.useState\(false\)[\s\S]{0,400}?canOpenCareNeed/,
+    'the sheet does not start from the private wording, so it over-promises until the answer arrives');
+});
 
 test('the sheet opens a need only when the church says members may, and never for a child', () => {
   assert.equal(opensNeed(settings('member'), false), true, 'the church allows it and an adult still cannot');
@@ -283,4 +301,48 @@ test('the confirmation tells the member how public this is', async () => {
   await s.run();
   assert.equal(s.calls.find(c => c[0] === 'sent')[1].teamOnly, true,
     'a need the whole church can read would be described as care-team-only, or the reverse');
+});
+
+// ── AUDIT 2026-08-29 ─────────────────────────────────────────────────────────────────────────────────────
+// Two findings the tests above could not see, both confirmed against the shipped bundle by the auditor.
+
+test('a nut allergy survives whichever chip the member tapped first', () => {
+  // The sheet asks about meals whenever Meals is AMONG the kinds; the engine kept the answers only when
+  // Meals was uniq[0] — the kind tapped first. So Rides-then-Meals discarded a declared allergy while the
+  // member watched themselves enter it, and volunteers cooked with nuts.
+  const first = member(), second = member();
+  return Promise.all([
+    first.call({ ...ADULT, types: ['meals', 'rides'], meals: ['lunch'], dietary: ['Nut-free'] }),
+    second.call({ ...ADULT, types: ['rides', 'meals'], meals: ['lunch'], dietary: ['Nut-free'] }),
+  ]).then(() => {
+    for (const [who, m] of [['Meals first', first], ['Rides first', second]]) {
+      assert.deepEqual(JSON.parse(m.state.published[0].content).meals, ['lunch'], `${who}: meals dropped`);
+      assert.deepEqual(m.state.sealed.body.dietary, ['Nut-free'], `${who}: THE ALLERGY WAS DROPPED`);
+    }
+  });
+});
+
+test('every kind the member picked is published, not just the first', () => {
+  const m = member();
+  return m.call({ ...ADULT, types: ['meals', 'rides', 'visits'] }).then(() => {
+    const body = JSON.parse(m.state.published[0].content);
+    assert.deepEqual(body.types, ['meals', 'rides', 'visits'],
+      'the need remembers one kind of help, so "Pick as many as you need" was a lie');
+    assert.equal(body.type, 'meals', 'the first kind must STAY first — every older reader keys off `type`');
+  });
+});
+
+test('the console’s own normaliser carries the kinds through', () => {
+  // Both need re-maps build a NEW object from an explicit field list, so anything not named is dropped.
+  // This one is self-contained, so it can be lifted and run rather than grepped.
+  const MEALS_BUNDLE = readFileSync(new URL('../vendor/steward-meals.js', import.meta.url), 'utf8');
+  // Brace-matched, not regex-matched: a non-greedy /\n\s*\}/ stops at the first inner closure and hands you
+  // half a function, which fails as a syntax error and reads like a broken test.
+  const body = grabMethod(MEALS_BUNDLE, 'function _normNeed(n)');
+  const norm = new Function(`${body}\nreturn _normNeed;`)();
+  const out = norm({ displayLabel: 'The Okonkwos', type: 'meals', types: ['meals', 'rides'], dates: ['2026-09-01'] });
+  assert.deepEqual(out.types, ['meals', 'rides'], 'the console re-map drops the kinds on every edit');
+  assert.equal(out.type, 'meals');
+  const legacy = norm({ displayLabel: 'x', type: 'rides', dates: ['2026-09-01'] });
+  assert.deepEqual(legacy.types, ['rides'], 'a need written before `types` existed must still read as its kind');
 });

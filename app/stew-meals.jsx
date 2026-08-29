@@ -648,7 +648,7 @@ function MealsNeedCard({ need, slots, skips, onOpen }) {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 15, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)', fontStyle: need._sealed ? 'italic' : 'normal' }}>{needTitle(need)}</div>
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{mealsTypeLabel(need)} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
       </div>
       <div style={{ textAlign: 'right' }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: coverTone[cover.tone] }}>{filledCount}/{dates.length}</div>
@@ -683,7 +683,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)', fontStyle: need._sealed ? 'italic' : 'normal' }}>{needTitle(need)}</div>
-            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{mealsTypeLabel(need)} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
           </div>
           {/* Sealed = we couldn't decrypt this need's name/notes. Two VERY different causes, and telling them
               apart matters: no key on this device is a sync problem that fixes itself, whereas holding the key

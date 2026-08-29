@@ -3,6 +3,7 @@
   function _pickWinner(vers, trusted) {
     let best = null;
     for (const rec of vers.values()) {
+      if (rec && rec._tomb) continue;
       if (trusted && !trusted(rec)) continue;
       if (!best) {
         best = rec;
@@ -20,7 +21,7 @@
       return null;
     }
     const winKey = String(win._by || "");
-    const others = [...vers.keys()].filter((k) => k !== winKey);
+    const others = [...vers.keys()].filter((k) => k !== winKey && !(vers.get(k) || {})._tomb);
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
@@ -32,6 +33,7 @@
     }
     const by = String(rec._by || "");
     const had = vers.get(by);
+    if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
@@ -137,6 +139,9 @@
       return {
         displayLabel: String(n.displayLabel || "").trim(),
         type,
+        // One situation is one need, and a member may name several kinds of help for it. `type` stays FIRST
+        // and stays the key every existing reader uses; `types` is added beside it, never in place of it.
+        types: (Array.isArray(n.types) && n.types.length ? n.types : [type]).map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8),
         dates: days,
         meals,
         dayMeals,

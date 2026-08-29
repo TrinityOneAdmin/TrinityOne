@@ -724,7 +724,22 @@ let _needAuth = true;
 // the post-auth refetch, so a boolean would still be satisfied by the pre-auth EOSE. The question that
 // actually matters is whether the relay answered us AFTER it knew who we were.
 let _relayAuthedAt = 0;
-let _sgSelf = { cp: '', isMinor: false, known: false };   // what MY OWN sealed clearance says about me — see subscribeChurchSafeguard
+let _sgSelf = { cp: '', isMinor: false, known: false };
+// MAY THIS PERSON OPEN A PUBLIC NEED? Module scope, not a method, so publishCareNeed reaches the real rule
+// rather than whatever `window.Fellowship` happens to be — and so a test that lifts the publisher lifts this
+// with it instead of stubbing the one decision that matters.
+async function _careNeedRefusal(cp) {
+  if (_sgSelf.cp === cp && _sgSelf.isMinor) return 'minor-cannot-open';
+  const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+  if (!sure) {
+    // Exactly the second question publishCareRequest asks, and for the same reason: a church that has never
+    // used safeguarding has cleared nobody, and refusing on that alone would block every ordinary adult.
+    const audience = await _fetchChildCareAudience(cp);
+    if (audience === null) return 'unknown-clearance';   // could not even ask
+    if (audience.length) return 'unknown-clearance';     // safeguarding is in use here — do not guess
+  }
+  return '';
+}   // what MY OWN sealed clearance says about me — see subscribeChurchSafeguard
 pool.automaticallyAuth = () => async (authEvent) => {
   if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }
@@ -3753,7 +3768,7 @@ window.Fellowship = {
           let s2 = null, sealed = false;
           if (c.enc) { s2 = _careOpen(pubk, c.enc); sealed = !s2; }
           const f = s2 ? { ...c, ...s2 } : c;
-          _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || '', displayLabel: f.displayLabel || '', type: f.type || 'meals', startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, ts: e.created_at }, _trust); emit();
+          _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || '', displayLabel: f.displayLabel || '', type: f.type || 'meals', types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || 'meals'], startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, ts: e.created_at }, _trust); emit();
         } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
@@ -4022,6 +4037,23 @@ window.Fellowship = {
     await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
     return { id };
   },
+  // MAY THIS PERSON OPEN A PUBLIC NEED? One rule, asked at two doors — the engine below, and the sheet that
+  // fronts it. The sheet used to restate it as `!ctx.safeguard.isMinor`, and that is not the same question:
+  // `isMinor` has no cache, defaults to false, and its subscription waits on a 1.2s timer plus a relay
+  // round-trip, while the `openedBy` setting beside it is restored from localStorage instantly. So on every
+  // cold start there was a window in which a CHILD was shown "Everyone at your church will see this" over a
+  // button reading "Open this need". Nothing leaked — this engine and the relay both refuse — but a child
+  // working up to a disclosure was told, on the one screen where it matters, that the congregation would
+  // read it. Asking here instead means the screen cannot drift from the rule again.
+  //
+  // Returns '' when a need may be opened, or the reason it may not — see _careNeedRefusal at module scope.
+  // What the sheet asks before it promises anything. Starts from the same guard, so there is no second copy.
+  async canOpenCareNeed() {
+    const cp = window.Fellowship.churchPub;
+    if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }
+    if (!sk || !cp) return false;
+    try { return (await _careNeedRefusal(cp)) === ''; } catch (e) { return false; }
+  },
   // ── a member opens a need themselves, when the church has said they may ──────────────────────────────
   // The church setting is `openedBy: 'member'`. Everything behind this was already built — the relay accepts
   // a non-minor member's care: write when the church allows it, and the care key reaches every member for
@@ -4041,16 +4073,8 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }
     if (!sk || !cp || !fields) return null;
-    const childish = _sgSelf.cp === cp && _sgSelf.isMinor;
-    if (childish) return { error: 'minor-cannot-open' };
-    const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
-    if (!sure) {
-      // Exactly the second question publishCareRequest asks, and for the same reason: a church that has never
-      // used safeguarding has cleared nobody, and refusing on that alone would block every ordinary adult.
-      const audience = await _fetchChildCareAudience(cp);
-      if (audience === null) return { error: 'unknown-clearance' };   // could not even ask
-      if (audience.length) return { error: 'unknown-clearance' };     // safeguarding is in use here — do not guess
-    }
+    const refusal = await _careNeedRefusal(cp);
+    if (refusal) return { error: refusal };
     if (!_carekeys[cp]) return { error: 'no-care-key' };
     const types = (Array.isArray(fields.types) ? fields.types : [fields.type]).map(t => String(t || '').trim()).filter(Boolean);
     const uniq = [...new Set(types)];
@@ -4059,14 +4083,20 @@ window.Fellowship = {
     const who = forSelf ? (((profiles[pub] || {}).name) || 'A member') : (String(fields.forName || '').trim() || 'A member');
     const dates = [...new Set((Array.isArray(fields.dates) ? fields.dates : []).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
     if (!dates.length) return { error: 'no-dates' };
-    const meals = type === 'meals'
+    // ASK AND KEEP MUST AGREE. The sheet reveals "Which meals?" and "Anything they can't eat?" whenever
+    // Meals is among the kinds picked (screens-today.jsx), but this kept them only when `type` — which is
+    // uniq[0], the kind tapped FIRST — was 'meals'. So tapping Rides then Meals silently discarded a
+    // declared nut allergy while the member watched themselves enter it. Measured against the shipped
+    // bundle, 2026-08-29. One situation is one need, so the presence of the kind is what decides.
+    const wantsMeals = uniq.includes('meals');
+    const meals = wantsMeals
       ? ((Array.isArray(fields.meals) && fields.meals.length) ? fields.meals.filter(Boolean) : ['dinner'])
       : [];
     const enc = _careSeal(cp, {
       displayLabel: who,
       recipient: forSelf ? pub : '',
       notes: String(fields.note != null ? fields.note : '').trim(),
-      dietary: type === 'meals' && Array.isArray(fields.dietary) ? fields.dietary.filter(Boolean) : [],
+      dietary: wantsMeals && Array.isArray(fields.dietary) ? fields.dietary.filter(Boolean) : [],
     });
     if (!enc) return { error: 'no-care-key' };
     const id = 'care' + _hex(crypto.getRandomValues(new Uint8Array(6)));

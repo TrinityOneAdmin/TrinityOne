@@ -86,7 +86,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
         <div style={{ width: 40, height: 40, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: accent }}><Icon name={CARE_TYPE_ICON[need.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{CARE_TYPE_LABEL[need.type] || 'Care'} · {cover.text}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{careTypeLabel(need)} · {cover.text}</div>
         </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: cover.done ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>
         <Icon name={expanded ? 'chevD' : 'chevR'} size={16} color="var(--ink-3)" />
@@ -561,7 +561,23 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   // button in the same place: a second control to go hunting for is exactly how the care page got lost before.
   // A child never opens a need — the relay says so too — so they keep the private request they always had.
   const _care = ctx.care || {};
-  const _opensNeed = !_isMinor && ((_care.settings && _care.settings.openedBy) === 'member');
+  // The church's setting is NECESSARY and never SUFFICIENT. `isMinor` has no cache, defaults to false, and
+  // waits on a 1.2s timer plus a relay round-trip, while `openedBy` beside it is restored from localStorage
+  // instantly — so restating the rule as `!_isMinor && openedBy === 'member'` showed a CHILD the public-need
+  // wording for the first seconds of every cold start. Ask the engine, which distinguishes "not a child" from
+  // "we have not heard yet", and start from the private wording until it answers. Never over-promise, then
+  // settle; the reverse is the harm.
+  const _churchAllowsNeeds = !_isMinor && ((_care.settings && _care.settings.openedBy) === 'member');
+  const [_engineAllows, setEngineAllows] = React.useState(false);
+  React.useEffect(() => {
+    if (!_churchAllowsNeeds) { setEngineAllows(false); return; }
+    let live = true;
+    Promise.resolve(window.Fellowship && window.Fellowship.canOpenCareNeed ? window.Fellowship.canOpenCareNeed() : false)
+      .then(ok => { if (live) setEngineAllows(!!ok); })
+      .catch(() => { if (live) setEngineAllows(false); });
+    return () => { live = false; };
+  }, [_churchAllowsNeeds]);
+  const _opensNeed = _churchAllowsNeeds && _engineAllows;
   const _teamOnly = (_care.settings && _care.settings.visibility) === 'team';
   const [dates, setDates] = React.useState([]);
   const [pick, setPick] = React.useState('');
@@ -765,7 +781,9 @@ function AskForHelp({ ctx, linkOnly }) {
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>{isMinor ? 'Tell someone at your church what would help — privately.' : 'Tell your care team what would help — privately.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>{isMinor ? 'Tell someone at your church what would help — privately.'
+              : (care.settings && care.settings.openedBy) === 'member' ? 'Tell your church what would help.'
+              : 'Tell your care team what would help — privately.'}</div>
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
@@ -885,6 +903,9 @@ function CareCard({ ctx, embedded }) {
   const care = ctx.care || {};
   // The Care tab's own framing is read by children too, and for them "your care team" is not who receives it.
   const _minorHere = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  // The church-level setting only. Enough to stop the section promising privacy it may not deliver; the
+  // sheet below asks the engine whether THIS person may actually open one.
+  const _needsOpenToMembers = !_minorHere && ((ctx.care && ctx.care.settings && ctx.care.settings.openedBy) === 'member');
   const s = care.settings || {};
   const [openId, setOpenId] = React.useState(() => (embedded && ctx.careFocus) || null);   // deep-link: auto-open the focused need
   if (!s.enabled) return null;
@@ -953,7 +974,7 @@ function CareCard({ ctx, embedded }) {
     return (
       <React.Fragment>
         <CareRequests ctx={ctx} />
-        <CareSection id="need" icon="heart" title="If you need help" sub={_minorHere ? "Tell someone at your church, or reach someone who’s offered" : "Ask your care team, or reach someone who’s offered"}>
+        <CareSection id="need" icon="heart" title="If you need help" sub={_minorHere ? "Tell someone at your church, or reach someone who’s offered" : _needsOpenToMembers ? "Tell your church, or reach someone who’s offered" : "Ask your care team, or reach someone who’s offered"}>
           <AskForHelp ctx={ctx} />
           <CareAvailability ctx={ctx} part="others" />
           {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>{_minorHere ? 'Nobody else has listed themselves as available yet — asking above reaches the people at your church who can help.' : 'Nobody else has listed themselves as available yet — asking your care team above reaches them directly.'}</div> : null}

@@ -45,6 +45,7 @@
 export function _pickWinner(vers, trusted) {
   let best = null;
   for (const rec of vers.values()) {
+    if (rec && rec._tomb) continue;                               // a withdrawal we are remembering, not a document
     if (trusted && !trusted(rec)) continue;                       // revoked author — never the one on show
     if (!best) { best = rec; continue; }
     const a = best.ts || 0, b = rec.ts || 0;
@@ -62,7 +63,7 @@ export function _reduceVersions(vers, byId, id, trusted) {
   // no author field while its key is '', so filtering on `win._by` left the winner in its own list of
   // competitors — `_alt` came back as ["", <the winner>], which is nonsense a banner would have printed.
   const winKey = String(win._by || '');
-  const others = [...vers.keys()].filter(k => k !== winKey);
+  const others = [...vers.keys()].filter(k => k !== winKey && !(vers.get(k) || {})._tomb);
   byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
   return win;
 }
@@ -100,6 +101,10 @@ export function _absorbById(versions, byId, id, rec, trusted) {
   let vers = versions.get(id); if (!vers) { vers = new Map(); versions.set(id, vers); }
   const by = String(rec._by || '');
   const had = vers.get(by);
+  // A REMEMBERED WITHDRAWAL OUTRANKS A RE-DELIVERY AT THE SAME SECOND. `>` alone let a document whose
+  // created_at equalled its own tombstone's walk back in, and a delete published in the same second as the
+  // edit it removes is ordinary.
+  if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
   if (had && (had.ts || 0) > (rec.ts || 0)) return false;        // an author's own older copy, replayed late
   vers.set(by, rec);
   const win = _reduceVersions(vers, byId, id, trusted);
@@ -127,27 +132,62 @@ export function _tombstoneTargets(e) {
 // 9 exactly, one steward tidying their duplicate taking a colleague's rota with it — so the rule that fixed
 // round 9 is untouched for every author but the church itself.
 export function _forgetById(versions, byId, id, by, ts, trusted, opts) {
-  const vers = versions.get(id);
-  // Painted from an old cache and nothing live has arrived yet: we do not know whose it is, so any delete
-  // binds it — which is what the old code did, and refusing would leave it on screen for ever.
-  if (!vers) { if (byId.has(id)) { byId.delete(id); return true; } return false; }
-  const keys = [String(by || '')];
+  const k0 = String(by || '');
   const cp = String((opts && opts.churchPub) || '');
   const named = (opts && opts.targets) || [];
-  // `trusted` is absent on the console, which filters by nothing and is only ever looking at its own church.
-  const mayName = !trusted || trusted({ _by: by });
+  // FAIL CLOSED WHEN NOBODY IS JUDGING. This used to read `!trusted || trusted(...)`, so a reader that
+  // passed no predicate — all seven on the console — granted the church-copy withdrawal to ANY author whose
+  // tombstone reached it. Two of those readers admit foreign authors (a `p` tag naming the church is enough),
+  // so a group leader could withdraw the church's own event there while it stayed on every member's phone:
+  // the defect this store was fixing, inverted. A grant this sharp needs someone to have said yes.
+  const mayName = typeof trusted === 'function' ? !!trusted({ _by: by }) : false;
+  const keys = [k0];
   if (cp && mayName && named.some(t => t === cp) && !keys.includes(cp)) keys.push(cp);
+
+  // A WITHDRAWAL IS REMEMBERED, NOT CONSUMED — and this is the half the first version got wrong.
+  //
+  // Before the `for` grant existed, forgetting was safe: a delete only ever bound its OWN author's copy, and
+  // the relay keeps one event per (author, d-tag), so an author's document and that author's tombstone can
+  // never both be in flight. Dropping the version was therefore final.
+  //
+  // The `for` grant broke that invariant. A delegated steward cannot sign as the church, so the CHURCH'S
+  // copy is never retracted on the relay: the document and the tombstone now coexist for ever, and every
+  // device has to re-derive the suppression from whatever order they happen to arrive in. Measured: the
+  // church's copy came back on a replay, and a tombstone that arrived first never took effect at all —
+  // so a rota deleted on Monday returned on Tuesday, or was gone on one phone and present on another.
+  // Three routine triggers: the calendar hub replays its buffer in raw Map order, a second relay may hold
+  // the document but have refused the steward's tombstone, and NIP-01's newest-first is what every relay
+  // other than ours serves.
+  //
+  // So keep the withdrawal AS a version, under the key it binds. _pickWinner skips it, _absorbById refuses
+  // to re-admit anything at or older than it, and the result no longer depends on arrival order. This is the
+  // same shape as subscribeCareNeeds' `tombs` map ("so it works whichever order the events arrive in"),
+  // which was already in this codebase and should have been reused the first time.
+  const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });
+
+  const vers = versions.get(id);
+  if (!vers) {
+    // Painted from an old cache and nothing live has arrived yet: we do not know whose it is, so any delete
+    // binds it — which is what the old code did, and refusing would leave it on screen for ever. Remember it
+    // too, or the copy we just hid walks back in on the next replay.
+    const had = byId.has(id);
+    const fresh = new Map();
+    for (const k of keys) fresh.set(k, tomb(k));
+    versions.set(id, fresh);
+    if (had) { byId.delete(id); return true; }
+    return false;
+  }
+
   let did = false;
   for (const k of keys) {
-    const had = vers.get(k);
-    if (!had) continue;                                           // nothing of theirs to withdraw
-    if ((had.ts || 0) > (ts || 0)) continue;                       // a stale tombstone must not undo a newer edit
-    vers.delete(k); did = true;
+    const held = vers.get(k);
+    if (held && !held._tomb && (held.ts || 0) > (ts || 0)) continue;   // a stale tombstone must not undo a newer edit
+    if (held && held._tomb && (held.ts || 0) >= (ts || 0)) continue;   // we already hold a withdrawal at least this new
+    if (held && !held._tomb) did = true;                               // something visible actually went
+    vers.set(k, tomb(k));
   }
-  if (!did) return false;
-  if (!vers.size) versions.delete(id);
   _reduceVersions(vers, byId, id, trusted);
-  return true;
+  return did;
 }
 
 // WHO IS TRUSTED CHANGES WHILE THE APP IS OPEN. A church's signed roster arrives after the documents do, and

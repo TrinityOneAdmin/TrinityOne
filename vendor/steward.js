@@ -6271,6 +6271,7 @@
   function _pickWinner(vers, trusted) {
     let best = null;
     for (const rec of vers.values()) {
+      if (rec && rec._tomb) continue;
       if (trusted && !trusted(rec)) continue;
       if (!best) {
         best = rec;
@@ -6288,7 +6289,7 @@
       return null;
     }
     const winKey = String(win._by || "");
-    const others = [...vers.keys()].filter((k) => k !== winKey);
+    const others = [...vers.keys()].filter((k) => k !== winKey && !(vers.get(k) || {})._tomb);
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
@@ -6316,6 +6317,7 @@
     }
     const by = String(rec._by || "");
     const had = vers.get(by);
+    if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
@@ -6325,31 +6327,35 @@
     return (e && e.tags || []).filter((t) => t[0] === "for").map((t) => String(t[1] || "")).filter(Boolean);
   }
   function _forgetById(versions, byId, id, by, ts, trusted, opts) {
+    const k0 = String(by || "");
+    const cp = String(opts && opts.churchPub || "");
+    const named = opts && opts.targets || [];
+    const mayName = typeof trusted === "function" ? !!trusted({ _by: by }) : false;
+    const keys = [k0];
+    if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
+    const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });
     const vers = versions.get(id);
     if (!vers) {
-      if (byId.has(id)) {
+      const had = byId.has(id);
+      const fresh = /* @__PURE__ */ new Map();
+      for (const k of keys) fresh.set(k, tomb(k));
+      versions.set(id, fresh);
+      if (had) {
         byId.delete(id);
         return true;
       }
       return false;
     }
-    const keys = [String(by || "")];
-    const cp = String(opts && opts.churchPub || "");
-    const named = opts && opts.targets || [];
-    const mayName = !trusted || trusted({ _by: by });
-    if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
     let did = false;
     for (const k of keys) {
-      const had = vers.get(k);
-      if (!had) continue;
-      if ((had.ts || 0) > (ts || 0)) continue;
-      vers.delete(k);
-      did = true;
+      const held = vers.get(k);
+      if (held && !held._tomb && (held.ts || 0) > (ts || 0)) continue;
+      if (held && held._tomb && (held.ts || 0) >= (ts || 0)) continue;
+      if (held && !held._tomb) did = true;
+      vers.set(k, tomb(k));
     }
-    if (!did) return false;
-    if (!vers.size) versions.delete(id);
     _reduceVersions(vers, byId, id, trusted);
-    return true;
+    return did;
   }
 
   // node_modules/nostr-tools/lib/esm/pure.js
@@ -15314,6 +15320,14 @@ zoo`.split("\n");
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
+  function _consoleChurchVoice(rec) {
+    const by = String(rec && rec._by || "");
+    if (!by) return false;
+    if (by === pub) return true;
+    if (!_careRosterKnown || !_careRoster.has(by)) return false;
+    const caps = _stewardCaps[by];
+    return !Array.isArray(caps) || caps.includes("content");
+  }
   function feChurch(tmpl, signer) {
     if (actingChurch && !(tmpl.tags || []).some((t) => t[0] === "church")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["church", actingChurch]] };
@@ -17782,7 +17796,7 @@ zoo`.split("\n");
           const id = d.slice(FUND_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -17825,7 +17839,7 @@ zoo`.split("\n");
           const id = d.slice(CATEGORY_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19440,7 +19454,7 @@ zoo`.split("\n");
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19503,7 +19517,7 @@ zoo`.split("\n");
           if (!d.startsWith(PLAN_D)) return;
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19568,7 +19582,7 @@ zoo`.split("\n");
           if (!d.startsWith(DEVO_D)) return;
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19618,7 +19632,7 @@ zoo`.split("\n");
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
@@ -19900,7 +19914,7 @@ zoo`.split("\n");
           if (e.pubkey !== pub && !e.tags.some((t) => (t[0] === "p" || t[0] === "church") && t[1] === pub)) return;
           const id = d.slice(EVENT_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
             emit();
             return;
           }
