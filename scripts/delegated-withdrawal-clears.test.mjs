@@ -317,3 +317,60 @@ test('READER: the church’s own delete still works, with no for tag at all', ()
   r.deliver(tombstone(CHURCH, 200, []));
   assert.deepEqual(r.titles(), [], 'the church could not delete its own event');
 });
+
+// ── AUDIT 2026-08-29 (2nd round): A DELETE MUST NOT RE-FILTER THE DISPLAY ────────────────────────────────
+// The first fix gave the console's delete path a trust predicate and left its _absorbById with none. One
+// versions map, two regimes, and which applied depended on whether the last event was a write or a delete.
+// Measured: a group leader posts an event, a steward tidies the wording, the steward deletes it — the
+// console showed NOTHING while every phone still showed the leader's original wording. That is the defect
+// this whole file exists for, inverted, and introduced by the fix for it.
+//
+// `trusted` is now the DISPLAY question and must match what that reader passes to _absorbById.
+// `opts.mayName` is the WITHDRAWAL question. For group events they genuinely differ: a leader the church
+// empowered may POST one and must never be able to WITHDRAW the church's copy of one.
+const LEADER = '9'.repeat(64);   // empowered for this group by eventPolicy; on no steward roster
+
+test('READER: a delete does not quietly re-filter what the console was already showing', () => {
+  const r = consoleReader();
+  r.deliver(evt(LEADER, { t: [['d', EVENT_D + 'e1'], ['t', 'grp1'], ['p', CHURCH]], _ts: 100 },
+    JSON.stringify({ title: 'Youth walk' })));
+  assert.deepEqual(r.titles(), ['Youth walk'], 'the console never showed the leader’s event at all');
+  r.deliver(churchEvent(200));
+  r.deliver(tombstone(GORDON, 300, [CHURCH]));
+  assert.deepEqual(r.titles(), ['Youth walk'],
+    'the console dropped the leader’s copy on somebody else’s delete — every phone still shows it, and the ' +
+    'steward is told the event is gone');
+});
+
+test('READER: the leader still cannot withdraw the church’s own copy', () => {
+  // The relaxation is to DISPLAY only. Authority is judged separately and stays church-or-roster-steward.
+  const r = consoleReader();
+  r.deliver(churchEvent(100));
+  r.deliver(tombstone(LEADER, 200, [CHURCH], [['p', CHURCH]]));
+  assert.deepEqual(r.titles(), ['Carol Service'],
+    'a group leader withdrew the church’s own event from the console');
+});
+
+// _consoleDisplay is what the console's SIX plain readers pass to absorb, seed and delete alike. The
+// group-events reader deliberately does not use it (a leader may author there), so it has to be driven
+// directly — an earlier version of this test drove the group reader and therefore asserted nothing.
+function consoleDisplay({ roster = [], rosterKnown = true, caps = {} } = {}) {
+  const scope = { pub: CHURCH, churchPub: GORDON, _careRoster: new Set(roster), _careRosterKnown: rosterKnown, _stewardCaps: caps };
+  const args = Object.keys(scope);
+  return new Function(...args, lift(STEWARD, '_consoleChurchVoice') + '\n' + lift(STEWARD, '_consoleDisplay') + '\nreturn _consoleDisplay;')(...args.map(k => scope[k]));
+}
+
+test('the console does not blank its own church while it waits for the roster', () => {
+  // Starting closed would hide every steward-authored document — the console's own rotas, groups and
+  // services — on a cold start or a slow link, with no message. That is this codebase's worst failure
+  // class. Tightening once the roster lands only ever removes a revoked author's copy, which is safe.
+  const waiting = consoleDisplay({ roster: [], rosterKnown: false });
+  assert.equal(waiting({ _by: GORDON }), true,
+    'a steward’s own documents vanish from the console until the roster arrives');
+  assert.equal(waiting({ _by: STRANGER }), true, 'the wait must be permissive for everyone, or it is arbitrary');
+
+  const known = consoleDisplay({ roster: [GORDON], rosterKnown: true });
+  assert.equal(known({ _by: GORDON }), true, 'a roster steward is filtered out once the roster is known');
+  assert.equal(known({ _by: STRANGER }), false, 'a revoked or forged author is still shown once we know');
+  assert.equal(known({ _by: CHURCH }), true, 'the church’s own copy is filtered out');
+});

@@ -3560,7 +3560,8 @@
     const k0 = String(by || "");
     const cp = String(opts && opts.churchPub || "");
     const named = opts && opts.targets || [];
-    const mayName = typeof trusted === "function" ? !!trusted({ _by: by }) : false;
+    const _authority = opts && typeof opts.mayName === "function" ? opts.mayName : trusted;
+    const mayName = typeof _authority === "function" ? !!_authority({ _by: by }) : false;
     const keys = [k0];
     if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
     const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });

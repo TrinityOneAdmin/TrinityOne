@@ -6330,7 +6330,8 @@
     const k0 = String(by || "");
     const cp = String(opts && opts.churchPub || "");
     const named = opts && opts.targets || [];
-    const mayName = typeof trusted === "function" ? !!trusted({ _by: by }) : false;
+    const _authority = opts && typeof opts.mayName === "function" ? opts.mayName : trusted;
+    const mayName = typeof _authority === "function" ? !!_authority({ _by: by }) : false;
     const keys = [k0];
     if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
     const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });
@@ -15320,6 +15321,10 @@ zoo`.split("\n");
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
+  function _consoleDisplay(rec) {
+    if (!_careRosterKnown) return true;
+    return _consoleChurchVoice(rec);
+  }
   function _consoleChurchVoice(rec) {
     const by = String(rec && rec._by || "");
     if (!by) return false;
@@ -17796,12 +17801,12 @@ zoo`.split("\n");
           const id = d.slice(FUND_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -17839,12 +17844,12 @@ zoo`.split("\n");
           const id = d.slice(CATEGORY_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19439,7 +19444,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onGroups(cached);
         }
       } catch {
@@ -19454,12 +19459,12 @@ zoo`.split("\n");
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19506,7 +19511,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onPlans(cached);
         }
       } catch {
@@ -19517,12 +19522,12 @@ zoo`.split("\n");
           if (!d.startsWith(PLAN_D)) return;
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19571,7 +19576,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onDevos(cached);
         }
       } catch {
@@ -19582,13 +19587,13 @@ zoo`.split("\n");
           if (!d.startsWith(DEVO_D)) return;
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19613,7 +19618,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onItems(cached);
         }
       } catch {
@@ -19632,18 +19637,18 @@ zoo`.split("\n");
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
             const c = _openChurchDoc(e.content);
             if (c === null) {
-              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19914,7 +19919,7 @@ zoo`.split("\n");
           if (e.pubkey !== pub && !e.tags.some((t) => (t[0] === "p" || t[0] === "church") && t[1] === pub)) return;
           const id = d.slice(EVENT_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleChurchVoice, { churchPub: pub, targets: _tombstoneTargets(e) });
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }

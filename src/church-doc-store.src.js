@@ -135,12 +135,17 @@ export function _forgetById(versions, byId, id, by, ts, trusted, opts) {
   const k0 = String(by || '');
   const cp = String((opts && opts.churchPub) || '');
   const named = (opts && opts.targets) || [];
-  // FAIL CLOSED WHEN NOBODY IS JUDGING. This used to read `!trusted || trusted(...)`, so a reader that
-  // passed no predicate — all seven on the console — granted the church-copy withdrawal to ANY author whose
-  // tombstone reached it. Two of those readers admit foreign authors (a `p` tag naming the church is enough),
-  // so a group leader could withdraw the church's own event there while it stayed on every member's phone:
-  // the defect this store was fixing, inverted. A grant this sharp needs someone to have said yes.
-  const mayName = typeof trusted === 'function' ? !!trusted({ _by: by }) : false;
+  // WHO MAY BE SHOWN AND WHO MAY WITHDRAW ARE TWO DIFFERENT QUESTIONS, and conflating them is what the
+  // 2026-08-29 audit caught. `trusted` answers the first and MUST be the same predicate this reader passes
+  // to _absorbById/_seedFromCache — pass a stricter one here and a delete silently re-filters the display,
+  // so the console dropped a group leader's event it had been showing a moment earlier while every phone
+  // kept it. `opts.mayName` answers the second, and defaults to `trusted` only when a reader has not said
+  // otherwise. Both fail closed: no predicate, no church-copy grant.
+  //
+  // They genuinely differ for group events: a leader the church empowered may POST one (so they must be
+  // shown) and must never be able to WITHDRAW THE CHURCH'S copy of one.
+  const _authority = (opts && typeof opts.mayName === 'function') ? opts.mayName : trusted;
+  const mayName = typeof _authority === 'function' ? !!_authority({ _by: by }) : false;
   const keys = [k0];
   if (cp && mayName && named.some(t => t === cp) && !keys.includes(cp)) keys.push(cp);
 
