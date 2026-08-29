@@ -113,3 +113,136 @@ test('the group list actually consults it', () => {
   assert.match(CHAT, /\.catch\(\(\) => \{ if \(live\) setAssumeMinor\(true\); \}\)/,
     'a failure to ask is treated as "not a child"');
 });
+
+
+// ── AND NOW THE POINT OF USE ─────────────────────────────────────────────────────────────────────────────
+// CLAUDE.md rule 1, written because of this exact file. Everything above tests the ENGINE that answers "is
+// this reader a child?". Nothing above it required anything to ASK. An auditor deleted the single line in
+// app/screens-chat.jsx that consumes the answer —
+//     .filter(g => !iAmMinor || g.childsafe)
+// — and all eight tests here stayed green, along with the rest of the suite. A well-tested engine nobody is
+// required to consult is not a feature, and this one is the only thing in the product that keeps the NAMES
+// of adults-only rooms off a young person's screen (the relay withholds their messages and serves their
+// definitions, so the names are ours to hide).
+//
+// The test above it — "the group list actually consults it" — matches text in an app/*.jsx file, which
+// rule 3 forbids for exactly this reason: those files ship unbundled, so `false && ` in front of a condition
+// leaves every word of it in place. It is kept only as a re-anchoring aid; the tests below are the guard.
+//
+// So: RENDER THE SHIPPED ChatScreen. A miniature hook runtime runs its real effects — which is what makes
+// window.Fellowship.assumeMinor actually get called — and then re-renders, so what we assert on is the room
+// list a young person's phone would draw. Every stub below is scaffolding; the component's own logic, and
+// the whole filter chain from realGroups to the rendered card, is untouched.
+import { transformSync } from 'esbuild';
+import { fnBody } from './test-slice.mjs';
+
+const CHAT_SRC = readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8');
+const CHURCH = 'n'.repeat(64);
+
+function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } = {}) {
+  const src = transformSync(fnBody(CHAT_SRC, 'function ChatScreen({ ctx })', 'ChatScreen'),
+    { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
+  let nodes = [];
+  // a miniature hook runtime: state cells persist across passes, and effects run between them — without
+  // this the group list never leaves its empty initial state and the test would assert on nothing.
+  const cells = []; let ci = 0; const effects = [];
+  const useState_ = (v) => { const i = ci++; if (!(i in cells)) cells[i] = typeof v === 'function' ? v() : v;
+    return [cells[i], (nv) => { cells[i] = typeof nv === 'function' ? nv(cells[i]) : nv; }]; };
+  const useRef_ = (v) => { const i = ci++; if (!(i in cells)) cells[i] = { current: v }; return cells[i]; };
+  const useEffect_ = (fn) => { effects.push(fn); };
+  const h = (type, props, ...kids) => {
+    const node = { type: typeof type === 'function' ? (type.name || 'fn') : type, props: props || {},
+      kids: kids.flat(Infinity).filter(x => x != null) };
+    nodes.push(node); return node;
+  };
+  const stub = (name) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: name }); return f; };
+  const asked = [];
+  const scope = {
+    h, Frag: 'Frag',
+    React: { useState: useState_, useEffect: useEffect_, useRef: useRef_, useMemo: (fn) => fn(), Fragment: 'Fragment' },
+    useC: useState_, useCE: useEffect_, useCR: useRef_,
+    location: { search: '' },
+    window: {
+      TrinityData: { RELAYS: [], GROUPS: [] },
+      Fellowship: {
+        myPubkey: 'me', relays: [],
+        subscribeGroups: () => () => {},
+        subscribeChurchGroups: (np, cb) => { cb(groups); return () => {}; },
+        subscribeChurchCategories: () => () => {},
+        assumeMinor: async (np) => { asked.push(np); return assumeMinor; },
+        displayFor: () => ({ handle: 'x' }),
+      },
+      addEventListener: () => {}, removeEventListener: () => {},
+    },
+    // the list paints from its own cache before any relay answers — this is the window the fix exists to close
+    lsGet: (k, d) => (k.startsWith('trinityone.groups.') ? groups : d),
+    lsSet: () => {},
+    useIdentity: () => ({ handle: 'me' }),
+    myAvatar: () => ({}), myName: () => 'Me', hasName: () => true, myChosenName: () => 'Me',
+    readChatSeen: () => ({}), writeChatSeen: () => {},
+    avOf: () => ({}), relTime: () => '', searchableText: () => '',
+    safeCssColor: (c) => c,
+    Icon: stub('Icon'), IconBtn: stub('IconBtn'), UserAvatar: stub('UserAvatar'),
+    ChurchPill: stub('ChurchPill'), NostrSheet: stub('NostrSheet'), ServingEntry: stub('ServingEntry'),
+    GivingView: stub('GivingView'), ChatRoom: stub('ChatRoom'),
+    SectionLabel: function SectionLabel(p, ...k) { return h('SectionLabel', p, ...k); },
+    ScreenScroll: function ScreenScroll(p, ...k) { return h('ScreenScroll', p, ...k); },
+    console, Promise, Set, Map, JSON, Date, Math, Array, Object, String, Number, Boolean, RegExp,
+    URLSearchParams, setTimeout, clearTimeout, CustomEvent: class {},
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('needs a stub for ' + String(k)); },
+  });
+  const fn = new Function('scope', `with (scope) { ${src}; return ChatScreen; }`)(proxy);
+  const props = { ctx: { church: { npub: CHURCH, name: 'St Mary' }, safeguard: { isMinor },
+    joinState: { loaded: true }, churchNetworks: [], dmThreads: [] } };
+  const pass = () => { ci = 0; effects.length = 0; nodes = []; fn(props); };
+  pass();
+  return {
+    asked,
+    async draw() {
+      effects.forEach(e => { try { e(); } catch (x) {} });
+      await new Promise(r => setTimeout(r, 0));
+      pass();
+      return nodes.flatMap(n => n.kids.filter(k => typeof k === 'string')).join(' | ');
+    },
+  };
+}
+
+const ROOMS = [
+  { id: 'g1', name: 'Sunday Club', childsafe: true, visibility: 'open' },
+  { id: 'g2', name: 'Addiction Recovery', childsafe: false, visibility: 'open' },
+];
+
+test('POINT OF USE: a young person is not shown the NAME of an adults-only room', async () => {
+  const r = renderChatScreen({ isMinor: true, groups: ROOMS });
+  const shown = await r.draw();
+  assert.ok(!/Addiction Recovery/.test(shown),
+    'the chat list drew the name of a room the church marked adults-only to a member marked as a child. ' +
+    'Rendered: ' + shown);
+  assert.match(shown, /Sunday Club/,
+    'the child-safe room vanished too — the filter is now hiding everything, which is a blank screen, ' +
+    'the worse failure');
+});
+
+test('POINT OF USE: …and the engine’s answer alone is enough to hide it', async () => {
+  // isMinor is FALSE here. This is the real-world case the whole fix is about: a returning child whose
+  // clearance has not arrived yet, painting from cache. If nothing consumes assumeMinor, this passes only
+  // because of luck, so assert the engine was actually consulted as well.
+  const r = renderChatScreen({ isMinor: false, assumeMinor: true, groups: ROOMS });
+  const shown = await r.draw();
+  assert.deepEqual(r.asked, [CHURCH], 'nothing asked the engine who is reading');
+  assert.ok(!/Addiction Recovery/.test(shown),
+    'a child whose clearance is still in flight was shown every adults-only room, by name. Rendered: ' + shown);
+  assert.match(shown, /Sunday Club/);
+});
+
+test('POINT OF USE: an adult still sees every room, so this is not a blank screen for everyone', async () => {
+  const r = renderChatScreen({ isMinor: false, assumeMinor: false, groups: ROOMS });
+  const shown = await r.draw();
+  assert.match(shown, /Sunday Club/);
+  assert.match(shown, /Addiction Recovery/,
+    'the ordinary member lost their rooms — gating everybody is not a fix, it is a silent blank screen');
+});
