@@ -240,3 +240,89 @@ test('a roster save failure is announced, not just drawn', () => {
   assert.match(lineWith(SCHED_CODE, '{saveErr ? <div'), /role="alert"/,
     'a security-relevant failure is never read out to a steward using a screen reader');
 });
+
+// ── A HEADING THAT IS NOT ATTACHED TO ITS BOX IS DECORATION ───────────────────────────────────────────────
+// The console's house pattern is a small styled div — NAME, DATE, TIME — above an input. Obvious to look at,
+// and invisible to a screen reader, which reads the box and not the decoration around it: a steward hears
+// "edit text, blank" and has to guess by counting. This sweep is self-maintaining: it re-derives the pairs
+// from the source, so a NEW heading-and-box added without a name fails here rather than shipping.
+const SCHED_RAW = read('app/stew-schedule.jsx');
+const MEALS_RAW = read('app/stew-meals.jsx');
+const LBL = 'style=\\{(?:schLbl|mealsLbl|roomLbl|lbl)[^}]*\\}>([^<{]+)</div>';
+function unnamedLabelledFields(src) {
+  const lines = src.split('\n');
+  const bad = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const m = /<(input|select|textarea)\b/.exec(l);
+    if (!m) continue;
+    if (l.includes('aria-label') || l.includes('aria-labelledby')) continue;
+    if (l.includes('type="checkbox"') || l.includes('type="radio"')) continue;
+    let heading = null;
+    // (a) the heading sits on the SAME line, immediately before the field
+    const before = l.slice(0, m.index);
+    const same = [...before.matchAll(new RegExp(LBL, 'g'))];
+    if (same.length && before.slice(same[same.length - 1].index + same[same.length - 1][0].length).trim() === '') {
+      heading = same[same.length - 1][1];
+    }
+    // (b) the whole preceding line is nothing but the heading
+    if (!heading && i > 0) {
+      const prev = new RegExp('^\\s*<div ' + LBL + '\\s*$').exec(lines[i - 1]);
+      if (prev) heading = prev[1];
+    }
+    if (heading) bad.push(`${i + 1} (${heading.trim()})`);
+  }
+  return bad;
+}
+test('every console field with a heading above it carries that heading as its name', () => {
+  for (const [file, src] of [['app/stew-schedule.jsx', SCHED_RAW], ['app/stew-dashboard.jsx', DASH], ['app/stew-meals.jsx', MEALS_RAW]]) {
+    const bad = unnamedLabelledFields(src);
+    assert.deepEqual(bad, [],
+      `${file}: a heading sits above these fields and is not attached to them, so a screen reader ` +
+      `announces "edit text, blank" — ${bad.join('; ')}`);
+  }
+});
+
+test('the two PIN boxes do not announce identically', () => {
+  // They sat under one heading, so naming them from it would have given a steward two identical fields.
+  const a = lineWith(DASH_CODE, 'value={pinA}'), b = lineWith(DASH_CODE, 'value={pinB}');
+  const nameOf = (l) => (/aria-label="([^"]+)"/.exec(l) || [])[1];
+  assert.ok(nameOf(a) && nameOf(b), 'a PIN box has no accessible name');
+  assert.notEqual(nameOf(a), nameOf(b), 'both PIN boxes announce the same thing — which is which?');
+});
+
+// ── REORDERING WITHOUT A MOUSE ───────────────────────────────────────────────────────────────────────────
+test('groups can be reordered from the keyboard, and by the right index', () => {
+  const up = lineWith(DASH_CODE, 'move(ri, -1)'), down = lineWith(DASH_CODE, 'move(ri, 1)');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'move(ri, -1)'), { it: { name: 'Youth' } }), 'Move Youth up');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'move(ri, 1)'), { it: { name: 'Youth' } }), 'Move Youth down');
+  assert.match(up, /disabled=\{first\}/, 'the first row can be moved above itself');
+  assert.match(down, /disabled=\{last\}/, 'the last row can be moved below itself');
+  // THE INDEX MUST COME FROM `items`, NOT THE ROW'S POSITION. `list` can be a filtered or mid-drag
+  // permutation, so moving by the rendered index moves a different group — silently, and on a screen whose
+  // whole purpose is "this is the order your members see".
+  assert.match(DASH_CODE, /const ri = items\.indexOf\(it\);/,
+    'the move buttons take the row’s position instead of the item’s real index');
+});
+
+// ── CONTRAST, COMPUTED FROM THE REAL TOKENS ──────────────────────────────────────────────────────────────
+// Not a static assertion about a hex value: this reads the palette, mixes the tint the control actually
+// uses, and computes the ratio — so changing a brand colour later is checked rather than assumed.
+const BRAND = read('brand.css');
+const tok = (n) => { const m = new RegExp('--' + n + ':\\s*(#[0-9a-fA-F]{6})').exec(BRAND); assert.ok(m, `--${n} is gone from brand.css`); return m[1]; };
+const chan = (h) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+const lum = (h) => { const [r, g, b] = chan(h).map(c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+const tint = (a, b, p) => '#' + chan(a).map((v, i) => Math.round((v * p + chan(b)[i] * (1 - p)) * 255).toString(16).padStart(2, '0')).join('');
+
+test('the Child-safe and Encrypt toggles are legible in the state that protects someone', () => {
+  // The ON states are the ones that matter — "yes, this room is safe for under-18s" has to read at a glance —
+  // and they were the ones failing, at 3.5:1 and 3.9:1 against a 4.5:1 minimum for small bold text.
+  for (const [what, ink, base] of [['Child-safe', 'sage-ink', 'sage'], ['Encrypt', 'clay-ink', 'clay']]) {
+    const bg = tint(tok(base), tok('surface'), 0.08);
+    const r = contrast(tok(ink), bg);
+    assert.ok(r >= 4.5, `${what} ON is ${r.toFixed(2)}:1 on its own tint — WCAG AA needs 4.5:1`);
+  }
+  assert.match(lineWith(DASH_CODE, 'childsafe: !it.childsafe'), /var\(--sage-ink\)/, 'Child-safe ON went back to the unreadable sage');
+  assert.match(lineWith(DASH_CODE, 'toggleEncrypt(it)'), /var\(--clay-ink\)/, 'Encrypt ON went back to the unreadable clay');
+});

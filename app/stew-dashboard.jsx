@@ -766,7 +766,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>CHURCH NAME</div>
-      <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="Your church’s name" style={fld} />
+      <input aria-label="Church name" autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="Your church’s name" style={fld} />
     </WizShell>
   );
 
@@ -895,9 +895,9 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={savePin} disabled={pinBusy || !pinA || !pinB} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (pinBusy || !pinA || !pinB) ? .5 : 1 }}>{pinBusy ? 'Setting…' : 'Set a PIN'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>PIN OR PASSPHRASE</div>
-      <input type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 — digits are fine" autoComplete="new-password" style={fld} />
+      <input aria-label="PIN or passphrase" type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 — digits are fine" autoComplete="new-password" style={fld} />
       <div style={{ ...lbl, marginTop: 12 }}>CONFIRM</div>
-      <input type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" autoComplete="new-password" style={fld} />
+      <input aria-label="Repeat the PIN or passphrase" type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" autoComplete="new-password" style={fld} />
       {pinErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', marginTop: 9, fontWeight: 600 }}>{pinErr}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Security</b>.</div>
     </WizShell>
@@ -953,7 +953,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>FIRST TEAM (OPTIONAL)</div>
-      <input value={teamName} onChange={e => setTeamName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTeam(); }} placeholder="e.g. Welcome Team" style={fld} />
+      <input aria-label="First team (optional)" value={teamName} onChange={e => setTeamName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTeam(); }} placeholder="e.g. Welcome Team" style={fld} />
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.5 }}>You’ll add who’s on the team and build the schedule from the Rota tab.</div>
     </WizShell>
   );
@@ -2225,6 +2225,24 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
             style={{ display: 'flex', flexDirection: 'column', gap: 11, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
               {canDrag ? <div title="Drag to reorder" style={{ cursor: 'grab', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, touchAction: 'none' }}><Icon name="dots" size={18} color="currentColor" /></div> : null}
+              {/* REORDERING WITHOUT A MOUSE. move() has been defined in this component since it was written
+                  and nothing ever called it: the only way to set the order members see was to drag. Both
+                  sibling lists in this file (categories, devotionals) already ship these, so this was an
+                  omission rather than a house style. The index is taken from `items` by identity, never from
+                  the row's position — `list` can be a filtered or mid-drag permutation, and moving by that
+                  index moves a different group. canDrag already excludes an active search or type filter,
+                  where "up" has no honest meaning. */}
+              {canDrag && items.length > 1 ? (() => {
+                const ri = items.indexOf(it);
+                const mv = (off) => ({ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '2px 5px', cursor: off ? 'default' : 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, opacity: off ? .35 : 1 });
+                const first = ri <= 0, last = ri < 0 || ri >= items.length - 1;
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexShrink: 0 }}>
+                    <button onClick={() => move(ri, -1)} disabled={first} title="Move up" aria-label={'Move ' + (it.name || 'this one') + ' up'} style={mv(first)}><Icon name="chevU" size={13} color="currentColor" /></button>
+                    <button onClick={() => move(ri, 1)} disabled={last} title="Move down" aria-label={'Move ' + (it.name || 'this one') + ' down'} style={mv(last)}><Icon name="chevD" size={13} color="currentColor" /></button>
+                  </div>
+                );
+              })() : null}
               <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>
               <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>
               {renderAside ? <div style={{ flexShrink: 0 }}>{renderAside(it)}</div> : null}
@@ -2316,12 +2334,12 @@ function NewGroupModal({ open, onClose }) {
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>New group</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>A chat room (or a broadcast channel) for your church. It’s published as a signed event your members can join.</div>
           <div style={lbl}>NAME</div>
-          <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sunday Service" style={{ ...fld, fontWeight: 600, marginBottom: 16 }} />
+          <input aria-label="Name" autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sunday Service" style={{ ...fld, fontWeight: 600, marginBottom: 16 }} />
           <div style={lbl}>TYPE</div>
           <SkToggle value={kind} onChange={setKind} options={[{ value: 'group', label: 'Group chat', icon: 'chat' }, { value: 'broadcast', label: 'Broadcast', icon: 'send' }]} style={{ marginBottom: 6 }} />
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '6px 0 16px', lineHeight: 1.45 }}>{kind === 'broadcast' ? 'Only stewards post; everyone reads. Good for announcements.' : 'Everyone in the group can post and reply.'}</div>
           <div style={lbl}>DESCRIPTION</div>
-          <input value={sub} onChange={e => setSub(e.target.value)} placeholder="Optional — e.g. Whole church" style={{ ...fld, fontSize: 14.5 }} />
+          <input aria-label="Description" value={sub} onChange={e => setSub(e.target.value)} placeholder="Optional — e.g. Whole church" style={{ ...fld, fontSize: 14.5 }} />
           {cats.length ? (
             <React.Fragment>
               <div style={{ ...lbl, margin: '16px 0 7px' }}>CATEGORY</div>
@@ -2797,8 +2815,8 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => window.Steward.publishGroup({ ...it, childsafe: !it.childsafe })} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
-            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
+            <button onClick={() => window.Steward.publishGroup({ ...it, childsafe: !it.childsafe })} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
+            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
             {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
@@ -2961,11 +2979,11 @@ function NewTeamModal({ open, onClose }) {
           })}
         </div>
         <div style={lbl}>Name</div>
-        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Worship Team" style={fld} />
+        <input aria-label="Name" value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Worship Team" style={fld} />
         <div style={lbl}>Roles to fill (one per line)</div>
-        <textarea value={roles} onChange={e => setRoles(e.target.value)} rows={5} placeholder={'Lead\nVocals\nKeys\nSound'} style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+        <textarea aria-label="Roles to fill (one per line)" value={roles} onChange={e => setRoles(e.target.value)} rows={5} placeholder={'Lead\nVocals\nKeys\nSound'} style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
         <div style={lbl}>What's it for (optional)</div>
-        <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
+        <input aria-label="What's it for (optional)" value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
         <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
           <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create team</button>

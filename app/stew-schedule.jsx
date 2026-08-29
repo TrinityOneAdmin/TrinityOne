@@ -328,7 +328,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil }) {
           <button key={v} onClick={() => setRepeat(v)} aria-pressed={repeat === v} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
         ))}
       </div>
-      {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
+      {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
     </React.Fragment>
   );
 }
@@ -348,10 +348,10 @@ function SchAddServiceModal({ onClose }) {
   return (
     <SchModal title="Add a service" onClose={onClose} width={420}>
       <div style={schLbl}>Name</div>
-      <input value={name} onChange={e => setName(e.target.value)} style={schFld} />
+      <input aria-label="Name" value={name} onChange={e => setName(e.target.value)} style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
-        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
@@ -821,10 +821,10 @@ function SchEventModal({ day, onClose }) {
         </React.Fragment>
       ) : null}
       <div style={schLbl}>Title</div>
-      <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
+      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
-        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
@@ -833,7 +833,7 @@ function SchEventModal({ day, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
-      <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
+      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
       <div style={schLbl}>Type</div>
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
@@ -866,7 +866,7 @@ function SchEventModal({ day, onClose }) {
         </label>
       )}
       <div style={schLbl}>Note (optional)</div>
-      <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+      <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
@@ -1103,30 +1103,30 @@ function SchEventEdit({ event, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Name</div>
-      <input value={title} onChange={ev => setTitle(ev.target.value)} style={schFld} autoFocus />
+      <input aria-label="Name" value={title} onChange={ev => setTitle(ev.target.value)} style={schFld} autoFocus />
       {series ? (
         <React.Fragment>
           <div style={schLbl}>Day</div>
-          <select value={day} onChange={ev => setDay(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+          <select aria-label="Day" value={day} onChange={ev => setDay(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => <option key={i} value={i}>{d}</option>)}
           </select>
           <div style={schLbl}>Repeats</div>
-          <select value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+          <select aria-label="Repeats" value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             <option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option>
           </select>
         </React.Fragment>
       ) : (
         <React.Fragment>
           <div style={schLbl}>Date</div>
-          <input type="date" value={date} onChange={ev => setDate(ev.target.value)} style={schFld} />
+          <input aria-label="Date" type="date" value={date} onChange={ev => setDate(ev.target.value)} style={schFld} />
         </React.Fragment>
       )}
       <div style={schLbl}>Time</div>
-      <input type="time" value={time} onChange={ev => setTime(ev.target.value)} style={schFld} />
+      <input aria-label="Time" type="time" value={time} onChange={ev => setTime(ev.target.value)} style={schFld} />
       <div style={schLbl}>Where</div>
-      <input value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
+      <input aria-label="Where" value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
       <div style={schLbl}>Details</div>
-      <textarea value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
+      <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>
@@ -1298,13 +1298,13 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
         <div style={{ padding: '20px 24px 6px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{bk.id ? 'Edit booking' : 'Book a room'}</div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 24px' }}>
           <div style={roomLbl}>ROOM</div>
-          <select value={roomId} onChange={e => setRoomId(e.target.value)} style={{ ...roomFld, appearance: 'auto', marginBottom: 12 }}>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
+          <select aria-label="Room" value={roomId} onChange={e => setRoomId(e.target.value)} style={{ ...roomFld, appearance: 'auto', marginBottom: 12 }}>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
           <div style={roomLbl}>WHAT FOR</div>
-          <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Youth group, Wedding rehearsal" style={{ ...roomFld, marginBottom: 12 }} />
+          <input aria-label="What for" autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Youth group, Wedding rehearsal" style={{ ...roomFld, marginBottom: 12 }} />
           <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1.2 }}><div style={roomLbl}>DATE</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={roomFld} /></div>
-            <div style={{ flex: 1 }}><div style={roomLbl}>FROM</div><input type="time" value={start} onChange={e => setStart(e.target.value)} style={roomFld} /></div>
-            <div style={{ flex: 1 }}><div style={roomLbl}>TO</div><input type="time" value={end} onChange={e => setEnd(e.target.value)} style={roomFld} /></div>
+            <div style={{ flex: 1.2 }}><div style={roomLbl}>DATE</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={roomFld} /></div>
+            <div style={{ flex: 1 }}><div style={roomLbl}>FROM</div><input aria-label="From" type="time" value={start} onChange={e => setStart(e.target.value)} style={roomFld} /></div>
+            <div style={{ flex: 1 }}><div style={roomLbl}>TO</div><input aria-label="To" type="time" value={end} onChange={e => setEnd(e.target.value)} style={roomFld} /></div>
           </div>
           {badTime ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 10 }}>The end time needs to be after the start time.</div> : null}
           {clashes.length ? (
@@ -1313,7 +1313,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>{(roomById[roomId] || {}).name || 'That room'} is already booked then</b> — {clashes.map(c => (c.title || 'a booking') + ' ' + c.start + '–' + c.end).join('; ')}. Pick another time or room.</div>
             </div>
           ) : null}
-          <div style={{ marginTop: 12 }}><div style={roomLbl}>NOTE (OPTIONAL)</div><input value={note} onChange={e => setNote(e.target.value)} placeholder="optional" style={roomFld} /></div>
+          <div style={{ marginTop: 12 }}><div style={roomLbl}>NOTE (OPTIONAL)</div><input aria-label="Note (optional)" value={note} onChange={e => setNote(e.target.value)} placeholder="optional" style={roomFld} /></div>
         </div>
         {!title.trim() ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '0 24px 4px', lineHeight: 1.4 }}>Add what the room’s for above to book it.</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '14px 24px 20px' }}>

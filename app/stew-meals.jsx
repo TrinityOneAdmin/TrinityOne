@@ -479,8 +479,8 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
         <p style={{ fontSize: 13, color: 'var(--ink-2)', margin: '6px 0 14px', lineHeight: 1.5 }}>Opens a need the church can sign up for. Pick the dates.</p>
         {!dates.length ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', margin: '0 0 10px', lineHeight: 1.45 }}>Pick the days first — a need with no days is one nobody can sign up to.</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
-          <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
-          <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input aria-label="From" type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input aria-label="To" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
         </div>
         <div style={{ ...mealsLbl, marginTop: 12 }}>NOTES</div>
         <textarea value={notes} onChange={e => setNotes(e.target.value)} style={{ ...fld, minHeight: 64, resize: 'vertical' }} />
@@ -796,7 +796,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         </div>
 
         <div style={mealsLbl}>WHO IS THIS FOR?</div>
-        <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Sarah Jones, or “a family in our church”" autoFocus style={{ ...mealsFld, marginBottom: 6 }} />
+        <input aria-label="Who is this for?" type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Sarah Jones, or “a family in our church”" autoFocus style={{ ...mealsFld, marginBottom: 6 }} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>You decide what reads right. A real name brings the church closer; a discreet label protects dignity. Up to you.</div>
 
         <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
@@ -860,7 +860,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
 
         <div style={mealsLbl}>NOTES (OPTIONAL)</div>
-        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />
+        <textarea aria-label="Notes (optional)" value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />
 
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
 
