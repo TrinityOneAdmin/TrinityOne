@@ -354,8 +354,12 @@ test('READER: the leader still cannot withdraw the church’s own copy', () => {
 // _consoleDisplay is what the console's SIX plain readers pass to absorb, seed and delete alike. The
 // group-events reader deliberately does not use it (a leader may author there), so it has to be driven
 // directly — an earlier version of this test drove the group reader and therefore asserted nothing.
-function consoleDisplay({ roster = [], rosterKnown = true, caps = {} } = {}) {
-  const scope = { pub: CHURCH, churchPub: GORDON, _careRoster: new Set(roster), _careRosterKnown: rosterKnown, _stewardCaps: caps };
+// `rosterSeen` = a roster DOCUMENT was actually read, as opposed to an EOSE that told us nothing. Defaults
+// to rosterKnown, which is what every case here means. The two empties are separated in
+// scripts/console-shows-what-the-relay-serves.test.mjs; this file only needs the flag to be in scope.
+function consoleDisplay({ roster = [], rosterKnown = true, rosterSeen = null, caps = {} } = {}) {
+  const scope = { pub: CHURCH, churchPub: GORDON, _careRoster: new Set(roster), _careRosterKnown: rosterKnown,
+    _careRosterSeen: rosterSeen === null ? rosterKnown : rosterSeen, _stewardCaps: caps };
   const args = Object.keys(scope);
   return new Function(...args, lift(STEWARD, '_consoleChurchVoice') + '\n' + lift(STEWARD, '_consoleDisplay') + '\nreturn _consoleDisplay;')(...args.map(k => scope[k]));
 }

@@ -272,6 +272,12 @@ let _careRoster = new Set();     // the church's current steward pubkeys — who
 // Set only when a roster DOCUMENT has been read — not on the React round-trip through setCareRoster, whose
 // initial value is [] and which therefore cannot distinguish the two. AUDIT-8 (2026-08-01).
 let _careRosterKnown = false;
+// …AND DID THAT ANSWER COME FROM A DOCUMENT, or from an EOSE that told us nothing? `_careRosterKnown` cannot
+// tell the difference: it is also set from subscribeStewards' oneose, and a relay that CLOSEs counts towards
+// that EOSE, so a church WITH stewards can be recorded as having none. This is set only where a roster
+// document was actually read, and only _consoleDisplay uses it — see the note there for why an unread empty
+// roster must not be allowed to filter the console's own documents off the screen. (2026-08-29)
+let _careRosterSeen = false;
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
 let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
@@ -1028,10 +1034,48 @@ const stewardedChurches = new Map();   // cp(hex) -> { name } — churches whose
 // Permissive until the roster lands, because the alternative is a console that blanks its own church while
 // it waits. Tightening later only ever REMOVES a revoked author's copy, which is the safe direction; the
 // withdrawal grant below stays strict and fails closed, because that one destroys something.
+//
+// IT ASKS 'ANY CAPABILITY', NOT 'CONTENT', and that is the whole point of it being a separate function.
+// The first version of this delegated straight to _consoleChurchVoice, which is the WITHDRAWAL question, so
+// the console's display filter demanded the content capability. The relay does not — scripts/gateway.mjs
+// draws the same distinction in the same two places:
+//   • the WRITE gate (gateway.mjs:1927) is `stewardCan(pubkey, cp, 'content')` — which is what
+//     _consoleChurchVoice mirrors, correctly, for "may you withdraw the church's copy";
+//   • the RETRACTION gate (gateway.mjs:2341), which decides what still gets SERVED, is deliberately
+//     `'any'`, "so that narrowing a delegate to Finance does not make every group they ever created stop
+//     being served to the congregation".
+// Measured against the shipped bundles: an owner unticking "Groups, rotas, services, events, posts" for an
+// existing steward — one ordinary checkbox — emptied their own console of every group, rota, service, plan,
+// devotional and event that steward had ever authored, while the relay kept serving all of them and every
+// phone kept showing them. Console ["Sunday Prayer"], phones ["Sunday Prayer","Youth","Mums & Tots"].
+// `caps.length > 0` is exactly the relay's `'any'`: an EXPLICIT empty list still means "nothing".
+//
+// AN EMPTY ROSTER WE NEVER READ IS A WRONG ANSWER, NOT AN ANSWER. `_careRosterKnown` is set from
+// subscribeStewards' oneose whenever ANY relay is authenticated — and in SimplePool a relay that CLOSEs
+// (or fails to connect) counts towards that EOSE, so a second relay that served nothing turns "we asked and
+// got nothing" into "this church has no stewards". There is no _reduceAll in this bundle, so that answer is
+// never revisited for the rest of the session, and each reader writes the filtered list back to
+// localStorage, where it survives into the next cold start. Before the capability defect above was fixed
+// that could only leave a revoked steward's document on screen; with a real filter it removes legitimate
+// ones. So distinguish the two empties: `_careRosterSeen` is set only when a roster DOCUMENT was actually
+// read. Not seen and empty → show everything, exactly as while we are still waiting.
+//
+// Deliberately NOT `!_careRoster.size` on its own. A church that revokes its last steward publishes a real,
+// empty roster; the relay then stops serving that ex-steward's documents to the congregation, and a console
+// that ignored an empty-but-read roster would go on showing the office documents the members had lost —
+// which is the disagreement two-authors-one-document.test.mjs records as the known gap, reintroduced.
 function _consoleDisplay(rec) {
   if (!_careRosterKnown) return true;
-  return _consoleChurchVoice(rec);
+  const by = String((rec && rec._by) || '');
+  if (!by) return true;                   // an old cache entry with no author recorded — paint it, let it be superseded
+  if (by === pub) return true;            // the church itself — in delegated mode `pub` IS the church
+  if (!_careRosterSeen && !_careRoster.size) return true;
+  if (!_careRoster.has(by)) return false;
+  const caps = _stewardCaps[by];
+  return !Array.isArray(caps) || caps.length > 0;   // the relay's 'any' — see gateway.mjs:2341
 }
+// WHO MAY WITHDRAW THE CHURCH'S OWN COPY. Strict on purpose: this one destroys something, so it keeps the
+// content capability and the fail-closed unknown-roster branch. Do NOT fold it back into _consoleDisplay.
 function _consoleChurchVoice(rec) {
   const by = String((rec && rec._by) || '');
   if (!by) return false;
@@ -1042,8 +1086,8 @@ function _consoleChurchVoice(rec) {
   // one holding the pen is not authority; the church's signed roster is.
   if (!_careRosterKnown || !_careRoster.has(by)) return false;
   // A steward the church narrowed to Finance does not get to withdraw its rotas. No caps entry means every
-  // capability, which is what every roster written before capabilities existed means — and the relay reads
-  // it the same way.
+  // capability, which is what every roster written before capabilities existed means — and the relay's WRITE
+  // gate (gateway.mjs:1927) reads it the same way. Its retraction gate does not; see _consoleDisplay.
   const caps = _stewardCaps[by];
   return !Array.isArray(caps) || caps.includes('content');
 }
@@ -1122,7 +1166,7 @@ function _resetChurchScopedState() {
   lastProfile = {}; _profileLoaded = false;
   _clearedTrail = { cp: '', map: {}, list: [], loaded: false };   // safeguarding: whose clearance record this is
   _clearanceSent.clear();
-  _careRoster = new Set(); _careRosterKnown = false;
+  _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
   // church A's blocks must not suppress church B's members from B's envelopes (item B)
   _localBlocked = new Set();
@@ -4856,6 +4900,7 @@ window.Steward = {
         // moment this is knowable. AUDIT-8.
         _careRoster = new Set(cur.filter(Boolean));
         _careRosterKnown = true;
+        _careRosterSeen = true;   // a real roster DOCUMENT, as opposed to the oneose below — see _consoleDisplay
         onList(cur);
       },
       oneose() {
@@ -5988,7 +6033,7 @@ window.Steward = {
     // dismissing the ones it did. Cleared to UNKNOWN rather than empty, so the back-fill defaults to answering
     // a competing copy instead of silently skipping it until B's own roster arrives. AUDIT-8, same family as
     // the name-key note below.
-    _careRoster = new Set(); _careRosterKnown = false;
+    _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name

@@ -14606,6 +14606,7 @@ zoo`.split("\n");
   var _careKeyChecked = false;
   var _careRoster = /* @__PURE__ */ new Set();
   var _careRosterKnown = false;
+  var _careRosterSeen = false;
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   var _mediaKeyRing = [];
@@ -15323,7 +15324,13 @@ zoo`.split("\n");
   var stewardedChurches = /* @__PURE__ */ new Map();
   function _consoleDisplay(rec) {
     if (!_careRosterKnown) return true;
-    return _consoleChurchVoice(rec);
+    const by = String(rec && rec._by || "");
+    if (!by) return true;
+    if (by === pub) return true;
+    if (!_careRosterSeen && !_careRoster.size) return true;
+    if (!_careRoster.has(by)) return false;
+    const caps = _stewardCaps[by];
+    return !Array.isArray(caps) || caps.length > 0;
   }
   function _consoleChurchVoice(rec) {
     const by = String(rec && rec._by || "");
@@ -15379,6 +15386,7 @@ zoo`.split("\n");
     _clearanceSent.clear();
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
+    _careRosterSeen = false;
     _nameKeyRing = [];
     _nameKeyDocKeys = null;
     _nameKeyChecked = false;
@@ -18953,6 +18961,7 @@ zoo`.split("\n");
           }
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
+          _careRosterSeen = true;
           onList(cur);
         },
         oneose() {
@@ -20405,6 +20414,7 @@ zoo`.split("\n");
       _clearanceSent.clear();
       _careRoster = /* @__PURE__ */ new Set();
       _careRosterKnown = false;
+      _careRosterSeen = false;
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;
