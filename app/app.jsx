@@ -1333,7 +1333,14 @@ function App() {
   const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
   const servNext = servConfirmed[0] || null;
   // schedule local reminders for confirmed slots (the day before) + register web-push (PWA)
-  useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servReqs, servReplies]);
+  // THE DEPS DID NOT INCLUDE WHAT servConfirmed IS MADE OF. It derives from churchRotas/Services/Rosters/
+  // Teams, none of which were listed, so publishing a rota — the thing the screen promises a reminder for —
+  // never re-ran the scheduler. And for a member with no serving request, servReqs never changes identity
+  // after mount (its subscription's oneose is deliberately sticky), so nothing re-ran it at all: the first
+  // pass saw an empty list, returned before ensurePerm(), and notification permission was never requested.
+  // Do NOT hoist ensurePerm above that guard — reminders.jsx documents why it sits where it does; fixing the
+  // deps is what makes the prompt happen. AUDIT-2026-08-29.
+  useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servConfirmed, servReqs, servReplies, churchRotas, churchServices, churchRosters, churchTeams]);
   useAE(() => { const pk = window.Fellowship && window.Fellowship.myPubkey; if (pk && window.TrinityReminders && window.TrinityReminders.registerPush) window.TrinityReminders.registerPush(pk); }, [servReqs, activeChurch]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);

@@ -8802,6 +8802,12 @@
         } catch (e) {
           sent = false;
           console.warn("[fellowship] profile publish failed", e);
+          if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+            try {
+              if (window.trinityToast) window.trinityToast(meta && meta.hidden != null ? "Couldn\u2019t reach your church\u2019s relay \u2014 you are still listed in the directory for now. It will save when you\u2019re back online." : "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.");
+            } catch (x) {
+            }
+          }
         }
       } else {
         console.warn("[fellowship] profile publish withheld \u2014 our own kind-0 has not arrived, publishing now would blank it");

@@ -1344,9 +1344,15 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   };
   // ── moderation (group leaders): pin a message, or remove (hide) it. Steward console can do both too. ──
   const canModerate = isLeader && !!churchNpub && !!(window.Fellowship && window.Fellowship.pinPost);
-  const doPin = (m) => { window.Fellowship.pinPost(churchNpub, group.id, m); setMenuFor(null); ctx.toast('Pinned'); };
-  const doUnpin = () => { window.Fellowship.unpin(churchNpub, group.id); ctx.toast('Unpinned'); };
-  const doRemove = (m) => { window.Fellowship.hideMessage(churchNpub, group.id, m.id); setMenuFor(null); ctx.toast('Message removed'); };
+  // ALL THREE DISCARDED THE RESULT. Each returns the event on success and null on failure, and each swallows
+  // its own publish error — so a leader removing a phone number a child had posted saw "Message removed" and
+  // it was still there for the whole group. Nothing retried and nothing queued. AUDIT-2026-08-29.
+  const _moderated = (p, done, failed) => Promise.resolve(p)
+    .then(evt => ctx.toast(evt ? done : failed))
+    .catch(() => ctx.toast(failed));
+  const doPin = (m) => { setMenuFor(null); _moderated(window.Fellowship.pinPost(churchNpub, group.id, m), 'Pinned', 'Couldn’t pin that — it’s still as it was.'); };
+  const doUnpin = () => _moderated(window.Fellowship.unpin(churchNpub, group.id), 'Unpinned', 'Couldn’t unpin that — it’s still pinned.');
+  const doRemove = (m) => { setMenuFor(null); _moderated(window.Fellowship.hideMessage(churchNpub, group.id, m.id), 'Message removed', 'Couldn’t remove that — it’s still visible to the group.'); };
   const hideSet = hidden || new Set();
   // perf #6: memoize the visible set on [msgs, hidden] so it's a STABLE reference. It was rebuilt every render, and
   // the `bubbles` useMemo below lists it in its deps — so that memo recomputed on EVERY render (incl. each composer
@@ -1704,8 +1710,15 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   };
   const sendToPerson = (m) => {
     if (!FS || !FS.sendDM) { ctx.toast('Messaging isn’t available'); return; }
-    FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : ''));
-    ctx.toast('Sent to ' + (m.name || 'them')); onClose();
+    // sendDM reports BOTH outcomes and this ignored them: a send the relay permanently refused — a child
+    // appears in this list because safeguard.minors is empty on a member device by design — was announced as
+    // "Sent to Anna". Its sibling twelve lines up was fixed for exactly this and carries the reason: losing
+    // something quietly while claiming it worked is the worst failure this app can produce. Reuse
+    // dmFailWording rather than invent copy: _delivered === false means QUEUED, not lost.
+    Promise.resolve(FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : '')))
+      .then(evt => { ctx.toast(evt && (evt._refused || evt._delivered === false) ? dmFailWording(evt) : 'Sent to ' + (m.name || 'them')); })
+      .catch(() => ctx.toast('Couldn’t send — please try again.'));
+    onClose();
   };
   const lblStyle = { fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' };
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' };

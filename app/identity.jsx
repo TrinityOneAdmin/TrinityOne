@@ -1317,7 +1317,14 @@ function DirectoryToggle({ identity, onSave, ctx }) {
   const [hidden, setHidden] = useId(!!identity.hidden);
   useIdE(() => { setHidden(!!identity.hidden); }, [identity]);
   const visible = !hidden;
-  const flip = () => { const nv = !hidden; setHidden(nv); onSave({ hidden: nv }); ctx.toast(nv ? 'Hidden from the church directory' : 'Visible in the church directory'); };
+  // TOASTED BEFORE onSave RAN, AND onSave IS FIRE-AND-FORGET. This claimed the directory opt-out had taken
+  // effect the instant it was tapped; the publish that carries it can be withheld (our own kind-0 has not
+  // arrived) or simply refused, and the engine writes the change to this device either way. So the switch
+  // sat in its new position, the member believed they were hidden, and the church went on seeing them.
+  // The engine now speaks up on both failures — 0-6s later, after this has auto-cleared — so the wording
+  // here stops asserting a finished fact. Awaiting the save instead would freeze the toggle for up to ~17s
+  // (a six-second busy-wait plus an untimed publish), which is a worse answer. AUDIT-2026-08-29.
+  const flip = () => { const nv = !hidden; setHidden(nv); onSave({ hidden: nv }); ctx.toast(nv ? 'Hiding you from the church directory…' : 'Making you visible in the church directory…'); };
   // THE ROW IS THE TARGET, not just the toggle. I named this switch and left its row inert, and the very
   // next person to try it — Ronald, a churchwarden — hit the same wall the three before him did:
   // "I tapped 'Show me in the directory' to turn it off and it stayed on; I couldn't reach the small

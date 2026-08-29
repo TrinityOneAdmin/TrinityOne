@@ -2838,7 +2838,18 @@ window.Fellowship = {
     if (known) {
       evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
       sent = true;
-      try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { sent = false; console.warn('[fellowship] profile publish failed', e); }
+      try { await _publishAny(window.Fellowship.relays, evt); }
+      catch (e) {
+        sent = false; console.warn('[fellowship] profile publish failed', e);
+        // SAY SO. The withheld branch below already tells the member, and this one — the publish we DID
+        // attempt and that no relay accepted — said nothing at all, while the change was still written to
+        // this device. So the switch sat in its new position and the church went on seeing the old profile.
+        // `hidden` is the one that matters: it is a privacy control, and a member told they are hidden from
+        // the directory while still being listed has been misled about something they chose deliberately.
+        if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+          try { if (window.trinityToast) window.trinityToast(meta && meta.hidden != null ? 'Couldn’t reach your church’s relay — you are still listed in the directory for now. It will save when you’re back online.' : 'Couldn’t save your profile details — this phone can’t reach your church’s relay right now.'); } catch (x) {}
+        }
+      }
     } else {
       // A silent refusal is the console's publishProfile bug in a new place: the sheet closes, the change
       // never reached the network, and nothing said so. Only speak up about a field that actually travels in
