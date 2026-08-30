@@ -1637,6 +1637,26 @@ window.AppVersion = AppVersion;
 // Minting the child's key, joining them to the church, and asking the steward to confirm the link all
 // happen in Fellowship.createChildAccount. Here we collect the child's name, then reveal their 12-word
 // recovery phrase + a one-scan login QR so the parent can hand the account to the child's device.
+// THE HALF-MADE CHILD'S KEY, HELD OUTSIDE THE SHEET THAT MINTED IT.
+//
+// It was held in FamilySheet state, and FamilySheet is CONDITIONALLY MOUNTED (`{family ? <FamilySheet …`),
+// so closing the sheet destroyed it. Measured on the shipped handler: retry without closing → one key;
+// retry after closing → two. The failure copy said "Try again in a moment", which is an invitation to do
+// exactly that. The second account is a member of the church with recovery words nobody has ever seen, no
+// guardian request, and — because the engine saves the local row only on success — no row in the parent's
+// Children list. Invisible, unrecoverable, and the steward gets two requests for one child. AUDIT-2026-08-30.
+//
+// WHY MEMORY AND NOT DISK. Making the promise true across an app RESTART means writing a child's twelve
+// words to storage and leaving them there until the parent comes back — which may be never. The pilot's
+// threat model is seizure and lawful compulsion, localStorage is not the Keystore, and a stored child seed
+// is a safeguarding-grade credential. A module global is destroyed with the page and costs nothing at rest,
+// and it covers the whole of the reported failure: closing the sheet, closing the You sheet, moving around
+// the app. What it does not cover is a restart, so the copy below promises exactly that much and no more
+// (CLAUDE.md rule 4 — this claim has already been made falsely once).
+//
+// KEYED BY CHURCH AS WELL AS NAME. Same name, different church, is a different child; handing church B's
+// "Sam" the key minted for church A's would be one account for two people, which is worse than the bug.
+const _familyPendingKey = { church: '', name: '', mnemonic: '' };
 function FamilySheet({ open, onClose, ctx }) {
   const F = window.Fellowship;
   const me = (F && F.myPubkey) || null;
@@ -1651,9 +1671,8 @@ function FamilySheet({ open, onClose, ctx }) {
   // "Create the account" a second time after a failed publish got a SECOND account for the same child: two
   // guardian requests for the steward to judge, and the first account unrecoverable, because its recovery
   // words were never shown. The key is minted here and held across attempts instead. AUDIT-2026-08-29.
-  // Keyed by the name that was typed, so retrying the same child reuses it while a genuinely different child
-  // gets their own key — two children must never share one.
-  const [pending, setPending] = useId(null);    // { name, mnemonic } — the key for the attempt in progress
+  // It is held in the MODULE global above, not in this component's state: this sheet is unmounted the moment
+  // it is closed, and component state took the key with it. See the note there. AUDIT-2026-08-30.
   const mintSeed = () => { try { return (window.TrinityIdentity.makeInvite() || {}).mnemonic || ''; } catch (e) { return ''; } };
   const guardians = (ctx.safeguard && ctx.safeguard.guardians) || {};
   // a link is "done" if the steward initiated it (viaSteward — the notice IS the confirmation) OR the church's
@@ -1668,7 +1687,9 @@ function FamilySheet({ open, onClose, ctx }) {
     setBusy(true); setErr('');
     try {
       // reuse the key from a failed attempt at this same child; mint one only for a child we have not tried yet
-      const seed = (pending && pending.name === n && pending.mnemonic) ? pending.mnemonic : mintSeed();
+      const cp = (ctx.church && ctx.church.npub) || '';
+      const held = (_familyPendingKey.church === cp && _familyPendingKey.name === n && _familyPendingKey.mnemonic) ? _familyPendingKey.mnemonic : '';
+      const seed = held || mintSeed();
       const r = await F.createChildAccount(ctx.church.npub, n, { mnemonic: seed });
       // DO NOT REVEAL TWELVE WORDS FOR AN ACCOUNT THAT DOES NOT EXIST. The engine now says which of its
       // documents actually landed. On a bad link the parent used to copy the words down, set up the child's
@@ -1677,21 +1698,33 @@ function FamilySheet({ open, onClose, ctx }) {
       if (r && r.ok === false) {
         // HOLD THE KEY, so "try again" finishes this same account instead of starting another. (Belt and
         // braces: if the engine had to mint its own — no key minter on this device — keep the one it used.)
-        setPending({ name: n, mnemonic: (r && r.mnemonic) || seed });
+        // In the module global, so closing this sheet does not throw the key away — see the note above it.
+        _familyPendingKey.church = cp;
+        _familyPendingKey.name = n;
+        _familyPendingKey.mnemonic = (r && r.mnemonic) || seed;
         const p = r.published || {};
+        // WHAT THE COPY MAY PROMISE. "This finishes the same account" is true for as long as the app is
+        // running, and false once it has been closed and reopened — the key is held in memory on purpose
+        // (see the module note). So the promise is stated with its boundary attached rather than flatly, and
+        // the parent is told what to do if they have already closed it. CLAUDE.md rule 4.
+        const RETRY = ' Try again in a moment — while the app stays open this finishes the same account rather than starting another. ' +
+          'If you have already closed the app since it failed, ask your steward before trying again: starting over would give your child a second account.';
         setErr(!p.join
+          // Nothing reached any relay, so there is no half-made account to finish and no promise to keep:
+          // a fresh attempt here is safe whether or not the app was restarted.
           ? 'Couldn’t reach your church’s relay, so the account wasn’t created. Check you’re online and try again — nothing has been set up yet.'
           : !p.name
-            ? 'The account was created but your church can’t see who it belongs to yet — your steward needs the child’s name to confirm the link. Try again in a moment; this finishes the same account rather than starting another.'
+            ? 'The account was created but your church can’t see who it belongs to yet — your steward needs the child’s name to confirm the link.' + RETRY
             // The request is the ONLY thing that ever asks a steward to confirm the link, nothing re-sends it,
             // and it is the likeliest of the documents to fail — it alone is signed by the parent's key. Left
             // out of the success check, this case told the parent it had worked and the row then read
             // "Waiting for steward to confirm" for ever. AUDIT-2026-08-29.
-            : 'Your child’s account is set up, but your steward hasn’t been asked to confirm you as their parent yet. Try again in a moment; this finishes the same account rather than starting another.');
+            : 'Your child’s account is set up, but your steward hasn’t been asked to confirm you as their parent yet.' + RETRY);
         setBusy(false);
         return;
       }
-      setPending(null);   // this child is done — the next one gets a key of their own
+      // this child is done — the next one gets a key of their own
+      _familyPendingKey.church = ''; _familyPendingKey.name = ''; _familyPendingKey.mnemonic = '';
       setMade(r); setStage('reveal'); refreshKids();
     }
     catch (e) { setErr((e && e.message) || 'Couldn’t set up the account — please try again.'); }

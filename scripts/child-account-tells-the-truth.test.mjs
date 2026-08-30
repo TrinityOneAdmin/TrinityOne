@@ -304,13 +304,16 @@ const CREATE = fnBody(FAMILY, 'const create = async () => {', 'FamilySheet.creat
 // The handler is REBUILT for every attempt, from the state the previous attempt left behind — which is what
 // React does on re-render, and the only way a "tap Create again" test can mean anything.
 function sheet({ result, throws, childName = 'Ellie' }) {
-  const seen = { made: undefined, stage: 'name', err: '', busy: null, refreshed: 0, calls: [], minted: [], pending: null };
+  const seen = { made: undefined, stage: 'name', err: '', busy: null, refreshed: 0, calls: [], minted: [] };
+  // The key is held in a MODULE global now, not in component state, because this sheet is unmounted the
+  // moment it is closed. This object stands in for it; that it really is OUTSIDE the component is what
+  // scripts/a-closed-sheet-must-not-mint-a-second-child.test.mjs proves, by rendering the real screen twice.
+  seen.pending = { church: '', name: '', mnemonic: '' };
   let attempt = 0;
   const run = (typed) => {
     const scope = {
       name: typed === undefined ? childName : typed,
-      pending: seen.pending,
-      setPending: (v) => { seen.pending = v; },
+      _familyPendingKey: seen.pending,
       // a fresh key every time it is called, so "the screen minted a second account" shows up as a
       // different key rather than hiding behind one constant
       mintSeed: () => { const m = 'seed-' + (seen.minted.length + 1); seen.minted.push(m); return m; },
@@ -417,7 +420,7 @@ test('POINT OF USE: a DIFFERENT child never inherits the first child’s key', a
 test('POINT OF USE: after a success the key is let go, so the next child gets their own', async () => {
   const s = sheet({ result: MADE });
   await s.run('Ellie');
-  assert.equal(s.seen.pending, null, 'the finished child’s key is still held, and the next child would reuse it');
+  assert.equal(s.seen.pending.mnemonic, '', 'the finished child’s key is still held, and the next child would reuse it');
   await s.run('Ellie');        // the same name again — a sibling, a correction, whatever
   assert.notEqual(s.seen.calls[1].mnemonic, s.seen.calls[0].mnemonic);
 });

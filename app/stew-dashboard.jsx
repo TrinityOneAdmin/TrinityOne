@@ -2863,14 +2863,43 @@ function GroupLeadersModal({ group, onClose }) {
   const [pol, setPol] = React.useState(() => (['leaders', 'stewards', 'everyone'].includes(group.eventPolicy) ? group.eventPolicy : 'leaders'));
   const [saving, setSaving] = React.useState(false);
   const [notTold, setNotTold] = React.useState([]);   // new leaders the "you're now a leader" DM never reached
+  const [saveErr, setSaveErr] = React.useState('');   // the leadership change itself did not reach any relay
+  // WHAT THE RELAY ACTUALLY HOLDS, and WHO HAS ACTUALLY BEEN TOLD — both of which move when Save succeeds,
+  // and neither of which the `group` PROP ever hears about. `before` was read from that prop, and this modal
+  // deliberately stays open after a partial success, so a second Save re-computed "newly added" from the
+  // leaders the group had when the modal opened: everyone promoted on the first press was messaged a second
+  // time, congratulating them again on a job they already had. AUDIT-2026-08-30.
+  const [savedLeaders, setSavedLeaders] = React.useState(() => new Set(group.leaders || []));
+  const [told, setTold] = React.useState(() => new Set());
   const toggle = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const save = async () => {
-    setSaving(true);
-    const before = new Set(group.leaders || []);
+    setSaving(true); setSaveErr(''); setNotTold([]);
+    const before = new Set(savedLeaders);
     // ONE publish, not two. publishGroup rebuilds the group document from scratch, and both setGroupLeaders
     // and setGroupEventPolicy spread the SAME `group` prop — so calling them in sequence would have the second
     // publish rebuild from the stale copy and silently undo the first. Set both fields together.
-    await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol });
+    //
+    // AND THE RESULT IS THE ONLY THING THAT KNOWS WHETHER IT SAVED. `publishGroup` returns null three ways —
+    // no signing key, every relay refused, or a PARTIAL write (it returns `accepted === targets.length ? evt
+    // : false`, deliberately, because a group rule that reached one relay of three is enforced on one of
+    // three). This discarded it. With no signing key it and sendDM return null TOGETHER, and the modal then
+    // rendered "The change is saved, but we couldn’t message Ronald…" over a change that was not saved; when
+    // the publish failed and the DMs went through, it closed silently with no error at all. That is the
+    // exact defect the commit titled "a control that failed no longer says it worked" was written to remove,
+    // one modal along. AUDIT-2026-08-30.
+    let saved = null;
+    try { saved = await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol }); }
+    catch (e) { saved = null; }
+    if (!saved) {
+      // NOTHING IS SENT AND NOBODY IS TOLD. Announcing leadership to people whose leadership did not save is
+      // worse than silence: they are told to go and post events the relay will refuse.
+      setSaveErr('This didn’t save. Your church’s relay didn’t accept the change — or accepted it on only some ' +
+        'of your relays, which would leave the rule enforced in some places and not others. Nobody has been ' +
+        'messaged. Check you’re online and press Save again.');
+      setSaving(false);
+      return;
+    }
+    setSavedLeaders(new Set(sel));
     // tell newly-added leaders, so they know they can now manage this group
     //
     // WHO WAS ACTUALLY TOLD. Steward.sendDM returns null on three paths — no signing key, no peer hex, or the
@@ -2880,13 +2909,17 @@ function GroupLeadersModal({ group, onClose }) {
     // the leader never posts an event because nobody ever told them they could. A QUEUED send is fine — it
     // returns the event with _queued and the console outbox flushes it — only a null is a real loss.
     // AUDIT-2026-08-30.
-    const added = [...sel].filter(pk => !before.has(pk));
+    // `before` is what the relay held BEFORE this press, and `told` is who has already had the message, so a
+    // second Save messages only people who are genuinely new and have genuinely not heard.
+    const added = [...sel].filter(pk => !before.has(pk) && !told.has(pk));
     const unTold = [];
+    const nowTold = new Set(told);
     for (const pk of added) {
       let ok = false;
       try { ok = !!(await window.Steward.sendDM(pk, `You’re now a leader of “${group.name}”. You can post events for it from your app — open the group and tap “Event”.`)); } catch {}
-      if (!ok) unTold.push(pk);
+      if (ok) nowTold.add(pk); else unTold.push(pk);
     }
+    setTold(nowTold);
     if (unTold.length) {
       // The leadership change itself DID publish; only the notification failed. Say exactly that much, and
       // stay open, so the steward can tell them another way rather than assuming it was handled.
@@ -2942,6 +2975,14 @@ function GroupLeadersModal({ group, onClose }) {
               );
             })}
         </div>
+        {/* THE SAVE ITSELF FAILED. Rendered ahead of the "couldn’t message" banner and never beside it: the
+            two are mutually exclusive, because a failed publish messages nobody. */}
+        {saveErr ? (
+          <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginTop: 14 }}>
+            <Icon name="alert" size={15} color="var(--clay)" />
+            <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>{saveErr}</div>
+          </div>
+        ) : null}
         {notTold.length ? (
           <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginTop: 14 }}>
             <Icon name="alert" size={15} color="var(--clay)" />

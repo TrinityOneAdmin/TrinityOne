@@ -1069,10 +1069,32 @@ function _consoleDisplay(rec) {
   const by = String((rec && rec._by) || '');
   if (!by) return true;                   // an old cache entry with no author recorded — paint it, let it be superseded
   if (by === pub) return true;            // the church itself — in delegated mode `pub` IS the church
-  if (!_careRosterSeen && !_careRoster.size) return true;
+  // NOT SEEN MEANS NOT SEEN, whatever `_careRoster` happens to hold. This read `!_careRosterSeen &&
+  // !_careRoster.size`, which assumes the roster can only be non-empty once a document has been read. It
+  // cannot: `setCareRoster` (the React round-trip) writes `_careRoster` and touches NEITHER flag, and the
+  // console's subscription hooks paint from a per-church localStorage cache before any relay answers
+  // (app/steward-root.jsx `_subCache`, read in the hook's useState initialiser and pushed straight into
+  // setCareRoster by app/stew-dashboard.jsx:439). So after a restore, or on any tab remount where the
+  // authenticated EOSE arrives with no roster document, the pair is `size > 0` with `seen` false — and the
+  // escape hatch that exists precisely for "we never read one" silently did not fire, enforcing a filter
+  // against a roster this session never saw. AUDIT-2026-08-30.
+  if (!_careRosterSeen) return true;
   if (!_careRoster.has(by)) return false;
+  const caps = _capsOf(by);
+  return !caps || caps.length > 0;   // the relay's 'any' — see gateway.mjs:2341
+}
+// WHAT THE RELAY THINKS THIS STEWARD HOLDS. `null` = unscoped = everything (no entry, or a `caps` value that
+// is not an array — gateway.mjs skips those, leaving the steward full authority). Otherwise the list AS THE
+// RELAY BUILDS IT: `new Set(v.filter(x => typeof x === 'string' && x).map(x => x.toLowerCase()))`,
+// gateway.mjs:1611. The console counted the RAW length instead, so `['']`, `[null]` and `[{}]` all read as
+// "one capability" here and as NOTHING at the relay — the console shows documents the relay has already
+// stopped serving to every phone. `['']` is not hypothetical: setStewards() below keeps any entry that is a
+// string, empty included. Case matters for the same reason: the relay lower-cases, so a `caps` entry of
+// 'Content' grants withdrawal at the relay while _consoleChurchVoice refuses it.
+function _capsOf(by) {
   const caps = _stewardCaps[by];
-  return !Array.isArray(caps) || caps.length > 0;   // the relay's 'any' — see gateway.mjs:2341
+  if (!Array.isArray(caps)) return null;
+  return caps.filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());
 }
 // WHO MAY WITHDRAW THE CHURCH'S OWN COPY. Strict on purpose: this one destroys something, so it keeps the
 // content capability and the fail-closed unknown-roster branch. Do NOT fold it back into _consoleDisplay.
@@ -1088,8 +1110,8 @@ function _consoleChurchVoice(rec) {
   // A steward the church narrowed to Finance does not get to withdraw its rotas. No caps entry means every
   // capability, which is what every roster written before capabilities existed means — and the relay's WRITE
   // gate (gateway.mjs:1927) reads it the same way. Its retraction gate does not; see _consoleDisplay.
-  const caps = _stewardCaps[by];
-  return !Array.isArray(caps) || caps.includes('content');
+  const caps = _capsOf(by);
+  return !caps || caps.includes('content');
 }
 function feChurch(tmpl, signer) {
   if (actingChurch && !(tmpl.tags || []).some(t => t[0] === 'church')) {
@@ -1167,6 +1189,16 @@ function _resetChurchScopedState() {
   _clearedTrail = { cp: '', map: {}, list: [], loaded: false };   // safeguarding: whose clearance record this is
   _clearanceSent.clear();
   _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
+  // …AND WHAT THAT ROSTER GRANTED EACH OF THEM. `_stewardCaps` is the roster's other half and was left out
+  // of both resets, so church A's capability map judged church B's authors: an owner who had scoped a
+  // delegate to nothing in A lost, from their own console, every group, rota, service, run sheet, room,
+  // booking, event and team roster that delegate authored IN B — and each reader writes its filtered list
+  // back to localStorage (subscribeGroups/Plans/Devos/Items all setItem(CACHE_KEY) from the filtered map),
+  // so it survives the next cold start while the relay goes on serving all of it to every phone.
+  // `_stewardNames` and `_stewardSince` belong to the same document and leak the same way: setStewards()
+  // CARRIES THEM FORWARD on every edit, so adding one steward in church B would have published church A's
+  // labels and join dates into B's roster. AUDIT-2026-08-30.
+  _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
   // church A's blocks must not suppress church B's members from B's envelopes (item B)
   _localBlocked = new Set();
@@ -4928,7 +4960,12 @@ window.Steward = {
     // Silent re-escalation, from a button that says Remove.
     const next = {};
     const src = (caps && typeof caps === 'object') ? caps : _stewardCaps;
-    for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter(c => typeof c === 'string');
+    // WRITE WHAT THE RELAY WILL READ. `filter(c => typeof c === 'string')` kept the empty string, so this
+    // console could publish `caps: { <pk>: [''] }` — which reads as one capability here and as NOTHING at
+    // gateway.mjs:1611, where the entry is dropped and the steward is refused everything. Normalise to the
+    // relay's own rule (non-empty strings, lower-cased) so the document means one thing. An owner who really
+    // means "nothing" still writes an empty array, which both sides read as nothing. AUDIT-2026-08-30.
+    for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());
     // The owner's labels ride along on the same terms: carried forward unless replaced, pruned with the
     // steward they belong to. Losing them on an unrelated edit would put the invented names back.
     const nextNames = {};
@@ -4984,8 +5021,10 @@ window.Steward = {
     if (!actingChurch) return null;                       // owner: no restriction
     // In delegated mode `pub` is the CHURCH's key and `churchPub` is this console's own — the naming is
     // historical (see setActiveIdentity). Our own key is what the roster grants capabilities to.
-    const c = _stewardCaps[churchPub];
-    return Array.isArray(c) ? c.slice() : null;           // null = unscoped = everything
+    // Read through _capsOf, so this console hides exactly what the relay will refuse and no more: the raw
+    // list can hold junk the relay drops ([''], [null]) and mixed case it lower-cases, and this value decides
+    // which tabs a delegated steward is shown. AUDIT-2026-08-30.
+    return _capsOf(churchPub);                            // null = unscoped = everything
   },
 
   // ---- encrypted church docs: NIP-44 self-encryption to the CHURCH key. Used by the optional Finance
@@ -6034,6 +6073,12 @@ window.Steward = {
     // a competing copy instead of silently skipping it until B's own roster arrives. AUDIT-8, same family as
     // the name-key note below.
     _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
+    // The capability map, the owner's labels and the join dates are the SAME DOCUMENT as that roster, and
+    // were the one part of it left behind. Carried across, church A's caps decide what church B's console
+    // will paint (an A-delegate scoped to nothing hides everything they authored in B, and the filtered list
+    // is written back to localStorage), and setStewards() would publish A's labels and dates into B's
+    // roster on the next edit. Same family as the roster note above. AUDIT-2026-08-30.
+    _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name

@@ -86,7 +86,10 @@ function consoleAt({ relayAuthed = true, cache = null, mountGroups = 'now' } = {
     _stewardCaps: {}, _stewardNames: {}, _stewardSince: {},
   };
   const body = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_tombstoneTargets',
-    '_seedFromCache', '_consoleDisplay', '_consoleChurchVoice'].map(n => lift(STEWARD, n)).join('\n');
+    // `_capsOf` is how both predicates read the capability list — it normalises it the way the relay does
+    // (gateway.mjs:1611: non-empty strings, lower-cased) instead of counting the raw length. Lift it with
+    // them, or they call a function that is not there.
+    '_seedFromCache', '_capsOf', '_consoleDisplay', '_consoleChurchVoice'].map(n => lift(STEWARD, n)).join('\n');
   const args = Object.keys(scope);
   const api = new Function(...args, `${body}\nreturn ({\n${grabMethod(STEWARD, 'subscribeStewards(onList)')},\n${grabMethod(STEWARD, 'subscribeGroups(onGroups)')}\n});`)
     (...args.map(k => scope[k]));

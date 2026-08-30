@@ -15327,18 +15327,23 @@ zoo`.split("\n");
     const by = String(rec && rec._by || "");
     if (!by) return true;
     if (by === pub) return true;
-    if (!_careRosterSeen && !_careRoster.size) return true;
+    if (!_careRosterSeen) return true;
     if (!_careRoster.has(by)) return false;
+    const caps = _capsOf(by);
+    return !caps || caps.length > 0;
+  }
+  function _capsOf(by) {
     const caps = _stewardCaps[by];
-    return !Array.isArray(caps) || caps.length > 0;
+    if (!Array.isArray(caps)) return null;
+    return caps.filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
   }
   function _consoleChurchVoice(rec) {
     const by = String(rec && rec._by || "");
     if (!by) return false;
     if (by === pub) return true;
     if (!_careRosterKnown || !_careRoster.has(by)) return false;
-    const caps = _stewardCaps[by];
-    return !Array.isArray(caps) || caps.includes("content");
+    const caps = _capsOf(by);
+    return !caps || caps.includes("content");
   }
   function feChurch(tmpl, signer) {
     if (actingChurch && !(tmpl.tags || []).some((t) => t[0] === "church")) {
@@ -15387,6 +15392,9 @@ zoo`.split("\n");
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
     _careRosterSeen = false;
+    _stewardCaps = {};
+    _stewardNames = {};
+    _stewardSince = {};
     _nameKeyRing = [];
     _nameKeyDocKeys = null;
     _nameKeyChecked = false;
@@ -18985,7 +18993,7 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       const next = {};
       const src = caps && typeof caps === "object" ? caps : _stewardCaps;
-      for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter((c) => typeof c === "string");
+      for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
       const nextNames = {};
       const nsrc = names && typeof names === "object" ? names : _stewardNames;
       for (const p of list) {
@@ -19056,8 +19064,7 @@ zoo`.split("\n");
     // not on the roster, so they are unrestricted by construction.
     myStewardCaps() {
       if (!actingChurch) return null;
-      const c = _stewardCaps[churchPub];
-      return Array.isArray(c) ? c.slice() : null;
+      return _capsOf(churchPub);
     },
     // ---- encrypted church docs: NIP-44 self-encryption to the CHURCH key. Used by the optional Finance
     // module so sensitive donor PII + ledger never hit the relay in plaintext — only the church key (held
@@ -20415,6 +20422,9 @@ zoo`.split("\n");
       _careRoster = /* @__PURE__ */ new Set();
       _careRosterKnown = false;
       _careRosterSeen = false;
+      _stewardCaps = {};
+      _stewardNames = {};
+      _stewardSince = {};
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;

@@ -258,7 +258,9 @@ function consoleReader({ roster = [GORDON], rosterKnown = true, caps = {} } = {}
   const body = [
     lift(STEWARD, '_pickWinner'), lift(STEWARD, '_reduceVersions'), lift(STEWARD, '_absorbById'),
     lift(STEWARD, '_forgetById'), lift(STEWARD, '_tombstoneTargets'),
-    lift(STEWARD, '_openChurchDoc'), lift(STEWARD, '_consoleChurchVoice'),
+    // `_capsOf` is how _consoleChurchVoice reads the capability list — normalised the way the relay does
+    // (gateway.mjs:1611) rather than counted raw — so it has to come along with it.
+    lift(STEWARD, '_openChurchDoc'), lift(STEWARD, '_capsOf'), lift(STEWARD, '_consoleChurchVoice'),
   ].join('\n');
   const args = Object.keys(scope);
   const fn = new Function(...args, `${body}\nreturn ({ ${grabMethod(STEWARD, 'subscribeGroupEvents(groupId, onEvents)')} }).subscribeGroupEvents;`)
@@ -361,7 +363,9 @@ function consoleDisplay({ roster = [], rosterKnown = true, rosterSeen = null, ca
   const scope = { pub: CHURCH, churchPub: GORDON, _careRoster: new Set(roster), _careRosterKnown: rosterKnown,
     _careRosterSeen: rosterSeen === null ? rosterKnown : rosterSeen, _stewardCaps: caps };
   const args = Object.keys(scope);
-  return new Function(...args, lift(STEWARD, '_consoleChurchVoice') + '\n' + lift(STEWARD, '_consoleDisplay') + '\nreturn _consoleDisplay;')(...args.map(k => scope[k]));
+  // `_capsOf` normalises the capability list the way the relay does (gateway.mjs:1611) and both predicates
+  // call it, so it has to come along.
+  return new Function(...args, lift(STEWARD, '_capsOf') + '\n' + lift(STEWARD, '_consoleChurchVoice') + '\n' + lift(STEWARD, '_consoleDisplay') + '\nreturn _consoleDisplay;')(...args.map(k => scope[k]));
 }
 
 test('the console does not blank its own church while it waits for the roster', () => {
