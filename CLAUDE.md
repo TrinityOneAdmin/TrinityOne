@@ -45,7 +45,18 @@ have been written already knowing what the first audit found.
 The suite passing is not the gate. Two of the three worst findings in the 2026-08-29 round were only
 provable by driving the app on the attached phone.
 
-## 7. Account for the test count every time it moves
+## 7. Check your real-world assumptions before designing, not after
+
+Read `reference/DOMAIN.md` before anything user-facing, and especially anything touching safeguarding.
+State your assumptions about how churches and families actually behave in one line and check them. When
+the owner corrects one, WRITE IT INTO THAT FILE so the next session does not need the same correction.
+
+*Why:* three corrections in one session, all the same failure — reasoning from the one code path in view
+instead of from how a church works. A child can reach this app by several routes, not just the one the
+family screen shows. A church may deliberately have no group rooms for its children. Neither is derivable
+from the code, and a fix built on the narrow reading looks complete and is not.
+
+## 8. Account for the test count every time it moves
 
 If the total went down, say which tests you removed and why. If you cannot, you did not remove them
 on purpose.
@@ -57,7 +68,7 @@ account for. A deleted test never fails, so the suite would have stayed green ov
 
 This is the cheapest guard in this file. Use it.
 
-## 8. Stop when the error rate climbs
+## 9. Stop when the error rate climbs
 
 Basic syntax errors in new files, and claims made without checking, cluster in the back half of a long
 session. Stopping is a control, not a failure of one.
