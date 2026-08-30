@@ -23,6 +23,11 @@ export function loadJsx(relPath, names, { win } = {}) {
       if (!(i in state.hooks)) state.hooks[i] = (typeof init === 'function' ? init() : init);
       return [state.hooks[i], (v) => { state.hooks[i] = (typeof v === 'function' ? v(state.hooks[i]) : v); }];
     },
+    // useMemo/useCallback recompute every call ON PURPOSE here, and only here: render() below re-seeds the
+    // hook state from its argument, so every render through this harness is a fresh MOUNT, not a redraw of a
+    // living component. React recomputes every memo on a mount too, so there is nothing for a dependency
+    // array to change. (The redrawing harnesses — render-jsx-screen.mjs and the two in-test ones — do honour
+    // deps; recomputing there hid a missing dependency, which is a real defect this could not have seen.)
     useEffect() {}, useMemo: (f) => f(), useRef: () => ({ current: null }), useCallback: (f) => f,
     Fragment: '#frag',
   };

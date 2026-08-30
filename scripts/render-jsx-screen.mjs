@@ -17,6 +17,10 @@
 //   · useEffect really runs (after the draw, deps-compared), because the group list, the pinned message and
 //     the removed-message set all arrive through effects — a harness that skipped them would be asserting
 //     about a screen no member ever sees;
+//   · useMemo and useCallback HONOUR THEIR DEPENDENCY ARRAYS, per call site, compared with Object.is. A
+//     harness that recomputed every draw would return the right value from a memo whose deps list is missing
+//     one of the values its body reads — and that stale-memo bug is invisible in output terms until a draw
+//     happens with a changed input, so a test only catches it if it re-renders after something changes;
 //   · everything is synchronous, so a "render" is a plain function call and the tree is a plain object.
 // It cannot reconcile, cannot render children of a stubbed component, and has no lifecycle. It is enough to
 // answer one question: what does this screen put in front of someone, in this state?
@@ -76,17 +80,34 @@ export function miniReact() {
       const s = cur, k = s.ei++;
       if (!(k in s.deps) || !sameDeps(s.deps[k], deps)) { s.deps[k] = deps; queued.push(fn); }
     },
-    // No memoization: recomputing every draw is always CORRECT, and a memo that went stale because this
-    // harness compared deps differently from React would be a defect this file invented.
-    useMemo: (f) => f(),
-    useCallback: (f) => f,
+    // MEMOIZE THE WAY REACT DOES — one slot per call site, recompute only when the dependency array changes
+    // (different length, or any element different by Object.is). It used to recompute on every draw, on the
+    // reasoning that "recomputing is always correct". The OUTPUT was indeed always right, and that was the
+    // problem: a memo whose deps list is MISSING one of the values its body reads is then indistinguishable
+    // from a correct one, so this harness structurally could not see the commonest React defect there is.
+    // Measured 2026-08-30: deleting `iAmMinor, assumeMinor` from the room-list memo in app/screens-chat.jsx —
+    // which is the whole of what keeps adults-only room names off a young person's screen — left every test
+    // that renders that screen green, while in real React the list would be computed once, while the app
+    // still believed the reader was an adult, and never computed again.
+    useMemo(f, deps) {
+      const s = cur, k = s.mi++;
+      const slot = s.memos[k];
+      // No deps array at all means "no memo" in React, and sameDeps() is false for undefined, so this
+      // recomputes every draw — same as React.
+      if (!slot || !sameDeps(slot.deps, deps)) s.memos[k] = { deps, v: f() };
+      return s.memos[k].v;
+    },
+    // useCallback(f, deps) IS useMemo(() => f, deps): it must hand back the SAME function identity until the
+    // deps change, or anything downstream that compares callback identity (a memo listing a handler in its
+    // own deps, a React.memo child) is being tested against a harness that can never reproduce the bug.
+    useCallback(f, deps) { return React.useMemo(() => f, deps); },
     createElement: (type, props, ...kids) => ({ type, props: props || {}, kids: kids.flat(Infinity) }),
     Fragment: 'Fragment',
   };
   const storeFor = (key) => {
     let s = stores.get(key);
-    if (!s) { s = { states: [], refs: [], deps: [] }; stores.set(key, s); }
-    s.si = 0; s.ri = 0; s.ei = 0;
+    if (!s) { s = { states: [], refs: [], deps: [], memos: [] }; stores.set(key, s); }
+    s.si = 0; s.ri = 0; s.ei = 0; s.mi = 0;
     return s;
   };
   function expand(node, key) {

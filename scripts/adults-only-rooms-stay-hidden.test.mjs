@@ -145,11 +145,26 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } 
   let nodes = [];
   // a miniature hook runtime: state cells persist across passes, and effects run between them — without
   // this the group list never leaves its empty initial state and the test would assert on nothing.
-  const cells = []; let ci = 0; const effects = [];
+  //
+  // useMemo HONOURS ITS DEPENDENCY ARRAY. It used to be `(fn) => fn()`, which recomputes every pass. That
+  // gives the right value every time, and that is precisely why it was useless as a guard: the room list is
+  // a memo whose deps carry `iAmMinor, assumeMinor` — the two values that decide whether a young person is
+  // shown adults-only rooms — and deleting both from that array left these tests green. Real React would
+  // then compute the list ONCE, while the app still believed the reader was an adult, and never recompute.
+  const cells = []; let ci = 0;
+  const effDeps = []; let ei = 0; let queued = [];
+  const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const useState_ = (v) => { const i = ci++; if (!(i in cells)) cells[i] = typeof v === 'function' ? v() : v;
     return [cells[i], (nv) => { cells[i] = typeof nv === 'function' ? nv(cells[i]) : nv; }]; };
   const useRef_ = (v) => { const i = ci++; if (!(i in cells)) cells[i] = { current: v }; return cells[i]; };
-  const useEffect_ = (fn) => { effects.push(fn); };
+  // deps-compared, as React does: an effect re-runs only when its own deps change, so re-rendering does not
+  // re-subscribe the whole screen.
+  const useEffect_ = (fn, deps) => { const i = ei++; if (!(i in effDeps) || !sameDeps(effDeps[i], deps)) { effDeps[i] = deps; queued.push(fn); } };
+  // one slot per call site; a missing dependency now shows up as a value that never updates.
+  const useMemo_ = (fn, deps) => { const i = ci++; const c = cells[i];
+    if (!c || !sameDeps(c.deps, deps)) cells[i] = { deps, v: fn() };
+    return cells[i].v; };
+  const useCallback_ = (fn, deps) => useMemo_(() => fn, deps);
   const h = (type, props, ...kids) => {
     const node = { type: typeof type === 'function' ? (type.name || 'fn') : type, props: props || {},
       kids: kids.flat(Infinity).filter(x => x != null) };
@@ -159,7 +174,7 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } 
   const asked = [];
   const scope = {
     h, Frag: 'Frag',
-    React: { useState: useState_, useEffect: useEffect_, useRef: useRef_, useMemo: (fn) => fn(), Fragment: 'Fragment' },
+    React: { useState: useState_, useEffect: useEffect_, useRef: useRef_, useMemo: useMemo_, useCallback: useCallback_, Fragment: 'Fragment' },
     useC: useState_, useCE: useEffect_, useCR: useRef_,
     location: { search: '' },
     window: {
@@ -198,14 +213,23 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } 
   const fn = new Function('scope', `with (scope) { ${src}; return ChatScreen; }`)(proxy);
   const props = { ctx: { church: { npub: CHURCH, name: 'St Mary' }, safeguard: { isMinor },
     joinState: { loaded: true }, churchNetworks: [], dmThreads: [] } };
-  const pass = () => { ci = 0; effects.length = 0; nodes = []; fn(props); };
+  const pass = () => { ci = 0; ei = 0; nodes = []; fn(props); };
+  const flush = () => { const q = queued; queued = []; q.forEach(e => { try { e(); } catch (x) {} }); };
   pass();
   return {
     asked,
+    // THREE PASSES, BECAUSE THE TWO THINGS ARRIVE AT DIFFERENT TIMES — and a stale memo is invisible unless
+    // a draw happens with only the missed dependency changed. On the phone the cached group list lands
+    // synchronously inside the effect, so React re-renders with the rooms while `assumeMinor` is still
+    // false; the engine's answer arrives a promise later and re-renders again. Collapsing those into one
+    // pass hid the bug this file exists to catch: `realGroups` changed in the same pass, so the room-list
+    // memo recomputed for that reason alone and picked up `assumeMinor` even when it was not in its deps.
     async draw() {
-      effects.forEach(e => { try { e(); } catch (x) {} });
-      await new Promise(r => setTimeout(r, 0));
-      pass();
+      flush();                                     // mount effects: cached rooms land, the engine is asked
+      pass();                                      // pass 2 — rooms on screen, answer still in flight
+      await new Promise(r => setTimeout(r, 0));    // the engine answers
+      flush();                                     // effects whose deps changed on pass 2
+      pass();                                      // pass 3 — ONLY assumeMinor changed since pass 2
       return nodes.flatMap(n => n.kids.filter(k => typeof k === 'string')).join(' | ');
     },
   };

@@ -166,6 +166,38 @@ test('a second tap during those seconds does not publish a second time', async (
     'the control never becomes usable again — one failed unpin would lock the banner for the session');
 });
 
+// THE CONTROLS INSIDE A BUBBLE FOLLOW THE BUSY STATE — AND STOP FOLLOWING IT WHEN IT ENDS.
+//
+// Added 2026-08-30 after the harness was taught to honour useMemo dependency arrays. The bubbles are built
+// by a memo whose deps end in `modBusy`; every other test here changes `menuFor` in the same breath (the
+// menu closes on the tap), so all five stayed green with `modBusy` deleted from that array. This is the one
+// sequence where `modBusy` moves on its own: the leader unpins from the BANNER, whose ✕ leaves the bubble
+// menus alone, and then opens a message's menu while that publish is still in flight. When the unpin lands,
+// nothing else about the thread has changed — so if the memo is not listening for it, the Pin and Remove
+// buttons under their thumb stay greyed out and dead over a room that is no longer busy at all.
+test('the in-bubble Pin and Remove controls follow the busy state, and are released when it ends', async () => {
+  const r = room({ pinned: { msgId: 'm1', text: 'call me on 07700 900123', by: 'themhex', ts: 1756500000 } });
+  const modItems = (tree) => find(tree, n => n.type === 'button' &&
+    /Pin message|Unpin message|Remove message/.test(texts(n).join(' ')));
+
+  // unpin from the banner: this sets the busy state WITHOUT touching which bubble menu is open
+  find(r.draw(), n => n.type === 'button' && n.props.title === 'Unpin')[0].props.onClick();
+  // …and now open a message's actions menu, mid-publish
+  find(r.draw(), n => n.type === 'button' && n.props.title === 'Message actions')[0].props.onClick();
+  const during = modItems(r.draw());
+  assert.equal(during.length, 2, 'the bubble menu no longer offers Pin and Remove — re-anchor this test');
+  assert.ok(during.every(b => b.props.disabled === true),
+    'a moderation publish is in flight and the controls in the message menu are still live — a second tap ' +
+    'from here publishes again, which is the regression this file exists for');
+
+  await r.finish({ id: 'tombstone' });
+  const after = modItems(r.draw());
+  assert.equal(after.length, 2, 'the bubble menu emptied when the unpin finished');
+  assert.ok(after.every(b => b.props.disabled === false),
+    'the unpin finished and the Pin/Remove controls in the open menu are still disabled and dimmed. The ' +
+    'thread is not busy any more; the leader is looking at dead buttons over a room that is working');
+});
+
 test('…and a moderation action that FAILED still says so, and lets them try again', async () => {
   for (const [what, settle] of [['a refusal', (r) => r.finish(null)], ['a thrown error', (r) => r.fail(new Error('timeout'))]]) {
     const r = room();

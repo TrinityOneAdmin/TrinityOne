@@ -156,18 +156,29 @@ async function loadConsoleComponent(name, anchor, extraGlobals = {}) {
 // keyed by call order, exactly as React does it, so a setter fired from a handler is visible on the redraw.
 function miniReact() {
   const states = [];
-  let i = 0;
+  const memos = [];
+  let i = 0, mi = 0;
+  const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, n) => Object.is(v, b[n]));
   const React = {
     useState(init) {
       const k = i++;
       if (!(k in states)) states[k] = typeof init === 'function' ? init() : init;
       return [states[k], (v) => { states[k] = typeof v === 'function' ? v(states[k]) : v; }];
     },
-    useEffect() {}, useRef: () => ({ current: null }), useMemo: (f) => f(), useCallback: (f) => f,
+    // Deps-honouring, like the other harnesses: this one redraws with state that has moved, so a memo that
+    // recomputed every draw would make a MISSING dependency undetectable. Neither component driven here uses
+    // useMemo today; the stub is correct so that the next one to do so is actually tested.
+    useMemo(f, deps) {
+      const k = mi++;
+      if (!memos[k] || !sameDeps(memos[k].deps, deps)) memos[k] = { deps, v: f() };
+      return memos[k].v;
+    },
+    useCallback(f, deps) { return React.useMemo(() => f, deps); },
+    useEffect() {}, useRef: () => ({ current: null }),
     createElement: (type, props, ...kids) => ({ type, props: props || {}, kids }),
     Fragment: 'Fragment',
   };
-  return { React, reset: () => { i = 0; } };
+  return { React, reset: () => { i = 0; mi = 0; } };
 }
 
 // Walk a rendered tree collecting every string, and every node matching a predicate.
