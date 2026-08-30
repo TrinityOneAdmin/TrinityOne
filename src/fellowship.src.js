@@ -2847,7 +2847,17 @@ window.Fellowship = {
         // `hidden` is the one that matters: it is a privacy control, and a member told they are hidden from
         // the directory while still being listed has been misled about something they chose deliberately.
         if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
-          try { if (window.trinityToast) window.trinityToast(meta && meta.hidden != null ? 'Couldn’t reach your church’s relay — you are still listed in the directory for now. It will save when you’re back online.' : 'Couldn’t save your profile details — this phone can’t reach your church’s relay right now.'); } catch (x) {}
+          // WHICH WAY THE SWITCH WAS MOVED DECIDES THE SENTENCE, and this branched on `meta.hidden != null`.
+          // `false != null` is TRUE, and `hidden: false` is exactly what DirectoryToggle.flip sends when a
+          // member asks to be listed again — so a member who tapped "show me in the directory", and whose
+          // publish was then refused, was told "you are still listed in the directory for now". They are not.
+          // The church still holds the OLD kind-0, the one carrying `hidden: true`, so they are still HIDDEN:
+          // the precise state they had just asked to leave, reported to them as its opposite. Wrong in the one
+          // direction that matters, on the one control here that is a privacy choice. AUDIT-2026-08-30.
+          let why = 'Couldn’t save your profile details — this phone can’t reach your church’s relay right now.';
+          if (meta && meta.hidden === true) why = 'Couldn’t reach your church’s relay — you are still listed in the directory for now. It will save when you’re back online.';
+          else if (meta && meta.hidden === false) why = 'Couldn’t reach your church’s relay — you are still hidden from the directory for now. It will save when you’re back online.';
+          try { if (window.trinityToast) window.trinityToast(why); } catch (x) {}
         }
       }
     } else {

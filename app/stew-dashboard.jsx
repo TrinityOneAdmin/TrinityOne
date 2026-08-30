@@ -2862,6 +2862,7 @@ function GroupLeadersModal({ group, onClose }) {
   const [sel, setSel] = React.useState(() => new Set(group.leaders || []));
   const [pol, setPol] = React.useState(() => (['leaders', 'stewards', 'everyone'].includes(group.eventPolicy) ? group.eventPolicy : 'leaders'));
   const [saving, setSaving] = React.useState(false);
+  const [notTold, setNotTold] = React.useState([]);   // new leaders the "you're now a leader" DM never reached
   const toggle = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const save = async () => {
     setSaving(true);
@@ -2871,9 +2872,27 @@ function GroupLeadersModal({ group, onClose }) {
     // publish rebuild from the stale copy and silently undo the first. Set both fields together.
     await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol });
     // tell newly-added leaders, so they know they can now manage this group
+    //
+    // WHO WAS ACTUALLY TOLD. Steward.sendDM returns null on three paths — no signing key, no peer hex, or the
+    // encrypt throwing — and every one of them is BEFORE the outbox push, so nothing was sent and nothing is
+    // waiting to be. This discarded the result entirely and closed, and the panel above promises in so many
+    // words "we’ll message them to let them know". So a steward believed every new leader had been told, and
+    // the leader never posts an event because nobody ever told them they could. A QUEUED send is fine — it
+    // returns the event with _queued and the console outbox flushes it — only a null is a real loss.
+    // AUDIT-2026-08-30.
     const added = [...sel].filter(pk => !before.has(pk));
+    const unTold = [];
     for (const pk of added) {
-      try { await window.Steward.sendDM(pk, `You’re now a leader of “${group.name}”. You can post events for it from your app — open the group and tap “Event”.`); } catch {}
+      let ok = false;
+      try { ok = !!(await window.Steward.sendDM(pk, `You’re now a leader of “${group.name}”. You can post events for it from your app — open the group and tap “Event”.`)); } catch {}
+      if (!ok) unTold.push(pk);
+    }
+    if (unTold.length) {
+      // The leadership change itself DID publish; only the notification failed. Say exactly that much, and
+      // stay open, so the steward can tell them another way rather than assuming it was handled.
+      setNotTold(unTold.map(pk => (members.find(m => m.pubkey === pk) || {}).name || 'a new leader'));
+      setSaving(false);
+      return;
     }
     onClose();
   };
@@ -2923,8 +2942,14 @@ function GroupLeadersModal({ group, onClose }) {
               );
             })}
         </div>
+        {notTold.length ? (
+          <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginTop: 14 }}>
+            <Icon name="alert" size={15} color="var(--clay)" />
+            <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>The change is saved, but we couldn’t message {notTold.join(', ')} — nothing was sent and nothing is waiting to send. Please tell {notTold.length > 1 ? 'them' : 'them'} another way.</div>
+          </div>
+        ) : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>{notTold.length ? 'Close' : 'Cancel'}</button>
           <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
@@ -6813,9 +6838,24 @@ function StewDmWindow({ peer, offset, onClose }) {
   const [min, setMin] = React.useState(false);
   const scRef = React.useRef(null);
   const [rxFor, setRxFor] = React.useState('');   // msg id whose emoji picker is open
+  const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey]);
   React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, min]);
-  const send = () => { if (!text.trim()) return; window.Steward.sendDM(peer.pubkey, text.trim()); setText(''); };
+  // NOTHING ON THIS SCREEN EVER RENDERED A FAILURE. The send was fire-and-forget, the composer was cleared
+  // regardless, and the thread below only shows what comes BACK off the relay — so when Steward.sendDM
+  // returned null (no key, no peer hex, or the encrypt threw, all of them before the outbox push) the
+  // steward's message was not sent, not queued, and not displayed, and they were told nothing at all. A
+  // vicar answering a member in distress had no way to know the reply never left the console.
+  // AUDIT-2026-08-30.
+  const send = () => {
+    if (!text.trim()) return;
+    const body = text.trim();
+    setErr('');
+    Promise.resolve(window.Steward.sendDM(peer.pubkey, body))
+      .then(evt => { if (!evt) { setText(t => t || body); setErr('Not sent — this message couldn’t be encrypted, so nothing was sent and nothing is waiting to send. Your words are still here.'); } })
+      .catch(() => { setText(t => t || body); setErr('Not sent — something went wrong sending this. Your words are still here.'); });
+    setText('');
+  };
   const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
@@ -6851,6 +6891,13 @@ function StewDmWindow({ peer, offset, onClose }) {
               </div>
             ))}
           </div>
+          {err ? (
+            <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 7, padding: '8px 11px', borderTop: '1px solid var(--line)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', flexShrink: 0 }}>
+              <Icon name="alert" size={14} color="var(--clay)" />
+              <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: 'var(--ink-2)' }}>{err}</div>
+              <button onClick={() => setErr('')} title="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 1, flexShrink: 0 }}><Icon name="x" size={13} /></button>
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
             <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} autoFocus placeholder="Message…" style={{ flex: 1, height: 38, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 13px', opacity: text.trim() ? 1 : 0.5 }}><Icon name="send" size={15} color="var(--on-clay)" /></button>

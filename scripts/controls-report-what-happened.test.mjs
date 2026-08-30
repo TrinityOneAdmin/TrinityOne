@@ -198,7 +198,14 @@ test('a profile publish that no relay accepted tells the member', () => {
   // old profile. `hidden` is the one that matters: it is a privacy control.
   const at = FELLOW.indexOf('profile publish failed');
   assert.notEqual(at, -1, 're-anchor: the failed-publish branch has moved');
-  const near = FELLOW.slice(at, at + 700);
+  // NOT a fixed-character window. This took 700 characters, and the branch outgrew that the moment it
+  // learned to tell the two directions of the directory switch apart — so the test went red over correct
+  // code, which is precisely the failure mode test-slice.mjs was written to cure. Bound it by the NEXT
+  // branch instead: it cannot silently stop covering the thing it names, and it cannot silently grow to
+  // cover the neighbour either. AUDIT-2026-08-30.
+  const end = FELLOW.indexOf('profile publish withheld', at);
+  assert.ok(end > at, 're-anchor: the withheld branch that used to follow this one has moved');
+  const near = FELLOW.slice(at, end);
   assert.match(near, /trinityToast/, 'a failed profile publish is still silent');
   assert.match(near, /still listed in the directory/, 'the member is not told the opt-out did not land');
 });
@@ -262,6 +269,20 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
     '— the switch sits in its new position and the church still lists them');
   assert.match(hidden[0], /still listed in the directory/,
     'the member was told something, but not the thing that is actually true of them right now');
+
+  // BOTH DIRECTIONS. Only the hidden:true case was ever driven here, and the branch that picked the wording
+  // was `meta.hidden != null` — which `false` satisfies. So a member turning visibility back ON, whose
+  // publish was refused, was told "you are still listed in the directory", the exact opposite of the truth:
+  // the church still holds their old kind-0 with `hidden: true`, so they are still hidden. This test passed
+  // 11/11 over that for as long as it only ever drove one direction. AUDIT-2026-08-30.
+  const shown = await run({ meta: { hidden: false } });
+  assert.equal(shown.length, 1,
+    'a member tapped "show me in the directory", no relay accepted it, and they were told nothing');
+  assert.doesNotMatch(shown[0], /still listed in the directory/,
+    'a member who asked to be LISTED, and whose publish was refused, is told they are still listed — they ' +
+    'are still HIDDEN, which is the state they just asked to leave');
+  assert.match(shown[0], /still hidden from the directory/,
+    'the member is not told the state they are actually in');
 
   // the wording must be specific to the opt-out, not the generic profile message
   const about = await run({ meta: { about: 'Hello' } });

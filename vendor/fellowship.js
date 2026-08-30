@@ -8803,8 +8803,11 @@
           sent = false;
           console.warn("[fellowship] profile publish failed", e);
           if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+            let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
+            if (meta && meta.hidden === true) why = "Couldn\u2019t reach your church\u2019s relay \u2014 you are still listed in the directory for now. It will save when you\u2019re back online.";
+            else if (meta && meta.hidden === false) why = "Couldn\u2019t reach your church\u2019s relay \u2014 you are still hidden from the directory for now. It will save when you\u2019re back online.";
             try {
-              if (window.trinityToast) window.trinityToast(meta && meta.hidden != null ? "Couldn\u2019t reach your church\u2019s relay \u2014 you are still listed in the directory for now. It will save when you\u2019re back online." : "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.");
+              if (window.trinityToast) window.trinityToast(why);
             } catch (x) {
             }
           }

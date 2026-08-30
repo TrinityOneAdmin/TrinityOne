@@ -1699,6 +1699,13 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // send began REFUSING to publish into an encrypted room without its key, that turned a leak into silent
     // loss wearing a confirmation: the verse was gone, the sheet closed, and the member was told it had been
     // shared. Losing something quietly while claiming it worked is the worst failure this app can produce.
+    // WHY THIS SIBLING NEEDS NO NULL GUARD, while sendToPerson twenty lines down does. Both read a falsy
+    // result into the success arm, but publishMessage cannot produce one: it has exactly three exits —
+    // { _refused: 'nokey' }, { _refused: 'sealfailed' }, and the finalised event — and never a bare null.
+    // sendDM does, from an encrypt step that runs before its outbox push. So this is latent only and is
+    // deliberately left as it is; the guard belongs where the null actually comes from. Checked, not
+    // assumed — see 'publishMessage has no null exit' in a-dm-that-never-sent-is-not-sent.test.mjs, which
+    // fails the day a fourth exit is added. AUDIT-2026-08-30.
     Promise.resolve(FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], { encrypted: !!g.encrypted }))
       .then(evt => {
         if (evt && evt._refused) { ctx.toast('Not shared — ' + g.name + ' is encrypted and your key hasn’t arrived yet. Try again shortly.'); return; }
@@ -1716,7 +1723,16 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // something quietly while claiming it worked is the worst failure this app can produce. Reuse
     // dmFailWording rather than invent copy: _delivered === false means QUEUED, not lost.
     Promise.resolve(FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : '')))
-      .then(evt => { ctx.toast(evt && (evt._refused || evt._delivered === false) ? dmFailWording(evt) : 'Sent to ' + (m.name || 'them')); })
+      .then(evt => {
+        // A NULL RETURN IS NOT A SEND. sendDM returns null when it cannot encrypt, and that step runs BEFORE
+        // it queues — so nothing reached the wire, nothing is in the outbox, and there is nothing to retry.
+        // `null` is falsy, so it fell straight into the success arm and the member read "Sent to Anna" over a
+        // message that never existed anywhere. Do NOT hand null to dmFailWording either: with no _refused it
+        // returns "we’ll send it as soon as you’re back online", which promises a retry that cannot happen.
+        // AUDIT-2026-08-30.
+        if (!evt) { ctx.toast('Couldn’t send to ' + (m.name || 'them') + ' — nothing was sent. Please try again.'); return; }
+        ctx.toast(evt._refused || evt._delivered === false ? dmFailWording(evt) : 'Sent to ' + (m.name || 'them'));
+      })
       .catch(() => ctx.toast('Couldn’t send — please try again.'));
     onClose();
   };
@@ -1900,8 +1916,22 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   // and, until now, nothing in the DM thread ever called it.
   const send = () => {
     if (!draft.trim() || !FS || !allowDM) return;
-    Promise.resolve(FS.sendDM(peer, draft.trim(), dmReply))
-      .then(evt => { if (evt && evt._refused && ctx && ctx.toast) ctx.toast(dmFailWording(evt)); })
+    const text = draft.trim();
+    Promise.resolve(FS.sendDM(peer, text, dmReply))
+      .then(evt => {
+        // NULL MEANS NOTHING WAS QUEUED EITHER, and that is what makes clearing the composer unsafe here.
+        // The comment above is right that a failed PUBLISH is queued — but sendDM returns null from its
+        // encrypt step, which runs BEFORE the _outbox.push. On that path the words are not on the wire, not
+        // in the outbox, and not on the screen: outboxForPeer has nothing, so no pending bubble appears, and
+        // nothing was toasted. The member watched their message vanish in silence — the exact failure the
+        // outbox was built to end. Put the words back and say so. AUDIT-2026-08-30.
+        if (!evt) {
+          setDraft(d => d || text);
+          if (ctx && ctx.toast) ctx.toast('Couldn’t lock this message, so nothing was sent — your words are still here. Try again in a moment.');
+          return;
+        }
+        if (evt._refused && ctx && ctx.toast) ctx.toast(dmFailWording(evt));
+      })
       .catch(() => {});   // a plain failure is already queued and shown as pending; no toast needed
     setDraft(''); setDmReply(null);
   };
