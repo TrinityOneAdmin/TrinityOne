@@ -75,20 +75,25 @@ test('…and a share that really went says it went', async () => {
 
 // ── moderation ───────────────────────────────────────────────────────────────────────────────────────────
 test('remove, pin and unpin report the real outcome', async () => {
-  // The helper spans several lines; take from its declaration to the end of its catch.
-  const lines = CHAT.split('\n');
-  const i = lines.findIndex(l => l.includes('const _moderated = (p, done, failed)'));
-  assert.notEqual(i, -1, '_moderated has moved — re-anchor this test, do not delete it');
-  let j = i;
-  while (j < lines.length && !lines[j].includes('.catch(')) j++;
-  const src = lines.slice(i, j + 1).join('\n').trim().replace(/^const _moderated = /, 'return ');
+  // RE-ANCHORED 2026-08-30. `_moderated` grew a busy state and a re-entry guard (see
+  // moderation-shows-its-work.test.mjs), so it now takes a THUNK and a busy sentence and no longer ends at
+  // its own `.catch(`. Take the whole statement rather than counting lines to it — the line walk this
+  // replaced would have silently stopped covering the helper the moment it grew a line.
+  const src = stmt(CHAT, 'const _moderated = ', '_moderated').replace(/^const _moderated = /, 'return ');
   const toasts = [];
-  const fn = new Function('ctx', 'Promise', src)({ toast: (m) => toasts.push(m) }, Promise);
-  await fn(Promise.resolve(null), 'Pinned', 'Couldn’t pin that');
-  await fn(Promise.resolve({ id: 'e' }), 'Pinned', 'Couldn’t pin that');
-  await fn(Promise.reject(new Error('x')), 'Pinned', 'Couldn’t pin that');
+  const busyRef = { current: false };
+  const busySeen = [];
+  const fn = new Function('ctx', 'Promise', 'modBusyRef', 'setModBusy', src)(
+    { toast: (m) => toasts.push(m) }, Promise, busyRef, (v) => busySeen.push(v));
+  await fn(() => Promise.resolve(null), 'Pinning…', 'Pinned', 'Couldn’t pin that');
+  await fn(() => Promise.resolve({ id: 'e' }), 'Pinning…', 'Pinned', 'Couldn’t pin that');
+  await fn(() => Promise.reject(new Error('x')), 'Pinning…', 'Pinned', 'Couldn’t pin that');
   assert.deepEqual(toasts, ['Couldn’t pin that', 'Pinned', 'Couldn’t pin that'],
     'a moderation action that never published was reported as done');
+  // …and every one of those three left the control usable again, which is the other half of the guard.
+  assert.equal(busyRef.current, false, 'the guard is never released, so the leader can never act again');
+  assert.deepEqual(busySeen, ['Pinning…', '', 'Pinning…', '', 'Pinning…', ''],
+    'the busy state is not raised on the way in and cleared on the way out');
 });
 
 test('every moderation control goes through it', () => {

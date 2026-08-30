@@ -215,17 +215,29 @@
   // mode 'local' = device only, no sheet. Anything else = device + offer to share.
   // `opts` lets a non-backup caller reuse this chain rather than reinventing the half of it that works.
   // Defaults keep every existing call identical.
+  //
+  // …AND THE WORDING IS PART OF THAT. `mime`/`title`/`blurb` were parameterised; the three sentences this
+  // function can THROW were not, and neither was the raw Capacitor string it lets through. So the member who
+  // tapped "Add to my calendar" could be told to "make a backup" in a browser, or to press "Save to device"
+  // — a button that only exists on the backup card — or simply "Share canceled", which is a plugin's words,
+  // not English anyone owes a member. Every default below is the sentence that was there before, so the four
+  // backup callers are unchanged; only a caller that passes its own gets different words.
+  // Callers (CLAUDE.md rule 2 — complete list): app/identity-extras.jsx doExport, app/screens-library.jsx
+  // doExport, app/stew-dashboard.jsx (the church-key backup), app/screens-serving.jsx svDownloadICS.
   async function saveFile(filename, text, mode, opts) {
     const _mime = (opts && opts.mime) || 'application/json';
     const _title = (opts && opts.title) || 'TrinityOne backup';
     const _blurb = (opts && opts.blurb) || 'Save this somewhere safe (Drive, OneDrive…)';
+    const _cantWrite = (opts && opts.cantWrite) || 'This app can’t write the file here. Update the app, or use “Save to device”.';
+    const _cantHand = (opts && opts.cantHand) || 'This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.';
+    const _shareFailed = (opts && opts.shareFailed) || 'Nothing was kept — the sharing sheet closed before the file went anywhere. Please try again.';
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
     const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
     const native = !!(P && P.Filesystem && isNative);
     // The browser download. Real in a browser or PWA; a no-op inside a WebView, so refuse there rather than
     // claim it worked. `saved: false` is not enough — every caller treats a returned object as success.
     const anchorSave = () => {
-      if (isNative) throw new Error('This app can’t write the file here. Update the app, or use “Save to device”.');
+      if (isNative) throw new Error(_cantWrite);
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: _mime }));
       a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
       return { saved: true, where: 'downloads' };
@@ -250,9 +262,14 @@
         // CACHE needs no permission. It is also cleared at Android's discretion, so this copy is a courier,
         // not a backup — which is exactly what the member has to be told, because dismissing the sheet here
         // really does leave them with nothing.
-        if (!P.Share) throw new Error('This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.');
+        if (!P.Share) throw new Error(_cantHand);
         const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-        await P.Share.share({ title: _title, text: _blurb, url: c.uri });
+        // A REJECTION HERE IS THE PLUGIN'S WORDS, NOT OURS. @capacitor/share rejects a dismissed sheet with
+        // the bare string "Share canceled", and every caller of this function puts e.message straight in
+        // front of the member. Say what it means for them instead — the CACHE copy is a courier Android may
+        // delete, so a sheet that was closed really did leave nothing behind.
+        try { await P.Share.share({ title: _title, text: _blurb, url: c.uri }); }
+        catch (e) { throw new Error(_shareFailed); }
         return { saved: true, where: 'shared', uri: c.uri,
           warn: 'This phone wouldn’t let the app save the file itself, so it was handed to whatever you chose. If you closed that without saving it, no copy was kept — please try again and save it somewhere.' };
       }
@@ -272,8 +289,12 @@
     }
     if (mode === 'local') return anchorSave();
     try {
-      const file = new File([text], filename, { type: 'application/json' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'TrinityOne backup' }); return { saved: true, where: 'cloud' }; }
+      // THE BROWSER SHARE PATH TAKES THE OPTIONS TOO. The three native paths were parameterised and this one
+      // was missed, so on a PWA a calendar file was offered to the chooser as `application/json` titled
+      // "TrinityOne backup" — and calendar apps, which filter by MIME type, removed themselves from the list.
+      // The member saw no way to add the event and nothing said why.
+      const file = new File([text], filename, { type: _mime });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: _title }); return { saved: true, where: 'cloud' }; }
     } catch {}
     return anchorSave();
   }

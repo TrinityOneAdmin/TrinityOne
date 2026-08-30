@@ -372,6 +372,16 @@ function ChatScreen({ ctx }) {
           members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : null,
           openToChurch: g.visibility !== 'invite' && g.kind !== 'team' && g.kind !== 'Team' }))
     : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, assumeMinor, ctx.church]);   // eslint-disable-line
+  // DID THE CHILD-SAFE FILTER EMPTY THIS LIST? A young person whose church HAS rooms, none of them marked
+  // child-safe, was told "<church> hasn't opened any chat rooms yet". That is simply untrue, and it reads as
+  // something broken or as being shut out. A church may perfectly well decide its children get direct
+  // messages and no group rooms — so the empty state for that case has to read as ordinary, and point at what
+  // they CAN do. Computed from the SAME pre-filter list the memo above starts from (invite-only rooms they
+  // are not on are not "theirs" either, so they are excluded here too) — if every remaining room is
+  // child-safe, the list is empty for the ordinary reason and the ordinary wording is right.
+  const childSafeHidRooms = React.useMemo(() => !!(iAmMinor && realGroups.length && realGroups
+    .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
+    .some(g => !g.childsafe && g.kind !== 'team')), [realGroups, myPub, iAmMinor]);
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
   const plainGroups = churchGroups.filter(g => !g.team);
@@ -695,7 +705,7 @@ function ChatScreen({ ctx }) {
           <div style={{ textAlign: 'center', padding: '38px 24px', color: 'var(--ink-3)', animation: 'trinityFade .4s ease both' }}>
             <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="chat" size={28} color="var(--ink-3)" /></div>
             <p style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-2)', margin: '0 0 4px' }}>No groups yet</p>
-            <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.'}</p>
+            <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{childSafeHidRooms ? 'No group chats here for you yet — you can still message people at your church directly.' : (ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.')}</p>
           </div>
         </React.Fragment>
       ) : (() => {
@@ -768,11 +778,11 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) 
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete }) {
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
-  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete };
+  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy };
   const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
@@ -1009,8 +1019,8 @@ function Row({ me, m, children, ctx, mod }) {
                       impression that a private line to a 13-year-old is on offer. Hidden, not disabled: an
                       inert control invites the question "why not?" about a particular child. */}
                 {(!me && canDM && ctx && ctx.openDM) ? <button onClick={() => { if (M.onOpenMenu) M.onOpenMenu(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="lock" size={15} color="var(--sage)" /> Reply privately</button> : null}
-                {M.canModerate ? <button onClick={M.isPinned ? M.onUnpin : M.onPin} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button> : null}
-                {M.canModerate ? <button onClick={M.onRemove} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button> : null}
+                {M.canModerate ? <button onClick={M.isPinned ? M.onUnpin : M.onPin} disabled={!!M.modBusy} style={{ opacity: M.modBusy ? .45 : 1, display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: M.modBusy ? 'default' : 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button> : null}
+                {M.canModerate ? <button onClick={M.onRemove} disabled={!!M.modBusy} style={{ opacity: M.modBusy ? .45 : 1, display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: M.modBusy ? 'default' : 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button> : null}
                 {M.onDelete ? <button onClick={M.onDelete} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Delete</button> : null}
               </div>
             ) : null}
@@ -1347,12 +1357,36 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   // ALL THREE DISCARDED THE RESULT. Each returns the event on success and null on failure, and each swallows
   // its own publish error — so a leader removing a phone number a child had posted saw "Message removed" and
   // it was still there for the whole group. Nothing retried and nothing queued. AUDIT-2026-08-29.
-  const _moderated = (p, done, failed) => Promise.resolve(p)
-    .then(evt => ctx.toast(evt ? done : failed))
-    .catch(() => ctx.toast(failed));
-  const doPin = (m) => { setMenuFor(null); _moderated(window.Fellowship.pinPost(churchNpub, group.id, m), 'Pinned', 'Couldn’t pin that — it’s still as it was.'); };
-  const doUnpin = () => _moderated(window.Fellowship.unpin(churchNpub, group.id), 'Unpinned', 'Couldn’t unpin that — it’s still pinned.');
-  const doRemove = (m) => { setMenuFor(null); _moderated(window.Fellowship.hideMessage(churchNpub, group.id, m.id), 'Message removed', 'Couldn’t remove that — it’s still visible to the group.'); };
+  //
+  // …AND THEN NOTHING SAID IT WAS WORKING. Reporting the real outcome means AWAITING the publish, and the
+  // publish these three use gives a silent relay eleven seconds (WEDGE_ACK_MS) before it gives up. The menu
+  // closed on the tap, the post stayed on screen — it only goes when the tombstone echoes back on the
+  // subscription — no spinner appeared anywhere, and nothing stopped a second tap. So a leader removing an
+  // abusive post watched it sit there for up to eleven seconds with no sign the app had heard them, at the
+  // one moment they are least able to wait. That is worse than the instant lie it replaced.
+  // Three parts: a visible busy line, a re-entry guard a double tap cannot race, and (in fellowship.src.js)
+  // a BOUNDED publish so the wait is 12s at worst rather than open-ended.
+  const [modBusy, setModBusy] = useC('');   // '' or the sentence shown while a moderation publish is in flight
+  // The guard is the REF, not the state: setModBusy lands on the next render, and two taps a few milliseconds
+  // apart both read the old `modBusy` and both publish. The ref is written synchronously, so the second tap
+  // sees it. (`modBusy` still drives what is on screen and what is disabled.)
+  const modBusyRef = useCR(false);
+  const _moderated = (start, busy, done, failed) => {
+    if (modBusyRef.current) return;
+    modBusyRef.current = true; setModBusy(busy);
+    const finish = (msg) => { modBusyRef.current = false; setModBusy(''); ctx.toast(msg); };
+    // `start()` is called HERE, synchronously, not handed to `.then` — the publish must leave on the tap,
+    // not a microtask later, and a synchronous throw from it has to land in `finish` like any other failure.
+    let p; try { p = start(); } catch (e) { finish(failed); return; }
+    return Promise.resolve(p)
+      .then(evt => finish(evt ? done : failed))
+      .catch(() => finish(failed));
+  };
+  const doPin = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.pinPost(churchNpub, group.id, m), 'Pinning…', 'Pinned', 'Couldn’t pin that — it’s still as it was.'); };
+  // setMenuFor(null) here too: unpin is reachable from the bubble menu as well as the banner ✕, and that
+  // path left the menu sitting open over a message whose action was already in flight.
+  const doUnpin = () => { setMenuFor(null); _moderated(() => window.Fellowship.unpin(churchNpub, group.id), 'Unpinning…', 'Unpinned', 'Couldn’t unpin that — it’s still pinned.'); };
+  const doRemove = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.hideMessage(churchNpub, group.id, m.id), 'Removing…', 'Message removed', 'Couldn’t remove that — it’s still visible to the group.'); };
   const hideSet = hidden || new Set();
   // perf #6: memoize the visible set on [msgs, hidden] so it's a STABLE reference. It was rebuilt every render, and
   // the `bubbles` useMemo below lists it in its deps — so that memo recomputed on EVERY render (incl. each composer
@@ -1441,9 +1475,9 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
     onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
-    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />
+    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} />
   </React.Fragment>),
-    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
@@ -1474,6 +1508,16 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       </div>
       {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
 
+      {/* THE ONLY SIGN THE APP HEARD THE TAP. It sits directly under the header, above the pinned banner and
+          the thread, because that is where the leader is looking after the menu closes over the message they
+          just acted on. role="status" so a screen reader announces it without stealing focus. */}
+      {modBusy ? (
+        <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', borderBottom: '1px solid var(--line)', fontSize: 13, fontWeight: 600, color: 'var(--ink-2)' }}>
+          <span style={{ width: 15, height: 15, flexShrink: 0, borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+          {modBusy}
+        </div>
+      ) : null}
+
       {pin && pin.msgId ? (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
           <Icon name="pin" size={15} color="var(--gold)" style={{ marginTop: 2, flexShrink: 0 }} />
@@ -1481,7 +1525,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', marginBottom: 1 }}>PINNED</div>
             <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{pin.text || '(message)'}</div>
           </div>
-          {canModerate ? <button onClick={doUnpin} title="Unpin" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
+          {canModerate ? <button onClick={doUnpin} disabled={!!modBusy} title="Unpin" style={{ border: 'none', background: 'none', cursor: modBusy ? 'default' : 'pointer', opacity: modBusy ? .45 : 1, color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
         </div>
       ) : null}
 

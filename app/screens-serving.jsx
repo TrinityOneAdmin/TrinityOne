@@ -41,7 +41,14 @@ async function svDownloadICS(it, churchName) {
   // A filename a member can recognise in their Downloads or a share sheet.
   const fname = 'serving-' + (it.date || 'event') + '.ics';
   const B = window.TrinityBackup;
-  if (B && B.saveFile) return B.saveFile(fname, ics, 'share', { mime: 'text/calendar', title: 'Add to your calendar', blurb: 'Open this to add it to your calendar' });
+  // SAY IT IN CALENDAR WORDS. saveFile's own sentences are backup sentences — "open TrinityOne in a browser
+  // to make a backup", 'use "Save to device"' (a button that exists only on the backup card) — and every one
+  // of them is reachable from this button. They are parameters now; pass ours. (CLAUDE.md rule 2: the shared
+  // helper's four callers are listed above saveFile in app/backup.jsx.)
+  if (B && B.saveFile) return B.saveFile(fname, ics, 'share', { mime: 'text/calendar', title: 'Add to your calendar', blurb: 'Open this to add it to your calendar',
+    cantWrite: 'This app can’t save the calendar file here. Update the app and try again.',
+    cantHand: 'This phone won’t let the app save the file, and it has no way to hand it to your calendar. Update the app and try again.',
+    shareFailed: 'Nothing was saved — you closed the sheet before choosing where to send it. Tap "Add to my calendar" again to have another go.' });
   const Cap = window.Capacitor;
   if (Cap && Cap.isNativePlatform && Cap.isNativePlatform()) throw new Error('This app can’t save the file here. Update the app and try again.');
   const u = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
@@ -56,7 +63,17 @@ async function svDownloadICS(it, churchName) {
 async function svAddToCalendar(ctx, it) {
   try {
     const r = await svDownloadICS(it, ctx.church && ctx.church.name);
-    ctx.toast(r && r.where === 'shared' ? 'Saved — choose where to keep it' : 'Downloaded — open the file to add it to your phone’s calendar');
+    // `warn` WINS OVER THE CHEERFUL LINE. saveFile sets it when the phone refused to let the app write the
+    // file itself and it had to be handed straight to another app: "if you closed that without saving it, no
+    // copy was kept". Three of saveFile's four other callers show that sentence; this one dropped it and
+    // said "Downloaded" — the exact claim it exists to contradict.
+    if (r && r.warn) { ctx.toast(r.warn); return; }
+    // AND "Downloaded" IS ONLY TRUE OF A DOWNLOAD. The native success path returns where:'cloud' (the file is
+    // in the phone's Documents folder, not its Downloads), and that was read as a download too.
+    const where = r && r.where;
+    ctx.toast(where === 'shared' ? 'Saved — choose where to keep it'
+      : where === 'downloads' ? 'Downloaded — open the file to add it to your phone’s calendar'
+      : 'Saved to your phone — open the file to add the event to your calendar');
   } catch (e) {
     ctx.toast((e && e.message) || 'Couldn’t save the calendar file.');
   }
@@ -240,7 +257,11 @@ function SwapSheet({ open, item, onClose, ctx }) {
 function ManageSheet({ open, item, onClose, onSwap, ctx }) {
   if (!item) return null;
   const rows = [
-    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => svAddToCalendar(ctx, item) },
+    // CLOSE THE SHEET. The row this replaced ended `onClose()`; reusing the save chain dropped it, so the
+    // sheet stayed open over a save that can take up to twelve seconds and the member tapped again — a
+    // second file, and on a phone a second share sheet on top of the first. Close first, then save: the
+    // toast lands at app level and is visible either way.
+    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { onClose(); svAddToCalendar(ctx, item); } },
     { ic: 'swap', t: 'Ask someone to swap', s: 'Send a friendly ask to a teammate', go: () => onSwap(item) },
     { ic: 'calendar', t: 'I’m away — take me off', s: 'Let your leader know you can’t make it', go: () => svRespond(ctx, item, 'decline', '', 'Taken off — thanks for letting us know', onClose) },
   ];

@@ -9376,6 +9376,17 @@
     },
     // ── moderation actions a GROUP LEADER may take (signed by me, scoped to the group, p-tagged to the
     // church). The relay only accepts these from the group's leaders (or the church), like group events. ──
+    //
+    // _publishBounded, NOT _publishAny — every one of these four is a UI path with a leader waiting on it.
+    // _publishAny raises each relay's give-up to WEDGE_ACK_MS (11s) and then waits on all of them, so a silent
+    // relay left the room's "Removing…" line spinning for eleven seconds with the abusive post still on screen.
+    // Bounded settles at PUBLISH_TIMEOUT_MS (12s) at worst and, far more importantly, CANNOT sit longer than
+    // that if a socket never settles at all. The outcome the caller sees is unchanged: the event on success,
+    // null on any failure — including the timeout, which is a failure and must read as one.
+    // Callers (CLAUDE.md rule 2 — complete list): app/screens-chat.jsx doPin / doUnpin / doRemove. The console's
+    // pin/unpin/hide are window.Steward's own implementations in src/steward.src.js and do not come through
+    // here. unhideMessage has no caller in app/ at all; it is changed with its three siblings so the next one
+    // written does not inherit the unbounded wait.
     async pinPost(churchNpub, groupId, msg) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
@@ -9383,7 +9394,7 @@
       const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] pinPost failed", e);
         return null;
@@ -9396,7 +9407,7 @@
       if (!cp || !groupId) return null;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] unpin failed", e);
         return null;
@@ -9411,7 +9422,7 @@
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] hideMessage failed", e);
         return null;
@@ -9426,7 +9437,7 @@
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] unhideMessage failed", e);
         return null;
