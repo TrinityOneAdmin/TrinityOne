@@ -153,3 +153,17 @@ export function stmt(src, anchor, what = anchor) {
   }
   assert.fail(`could not find the end of ${what}`);
 }
+
+// THE SAFEGUARDING "IS THIS ANSWER MINE?" RULE, lifted from vendor/fellowship.js as source text so it can be
+// pasted into a harness's own scope and close over that harness's `_sgSelf`, `pub` and `window`.
+//
+// Every safeguarding decision in the member app (_assumeMinor, _careNeedRefusal, publishCareRequest) starts by
+// asking whether the remembered answer belongs to the person holding the phone: a church match is not enough,
+// because one device carries more than one account — createChildAccount mints a child's twelve words on the
+// PARENT's phone and the family flow ends by handing the phone over. Stubbing this would leave those tests
+// asserting about a mock of the rule they exist to guard, so they take the real one.
+export function liftSgMine(bundle) {
+  const m = /\n  var _mePub = [\s\S]*?\n  function _sgMine\(cp\) \{[\s\S]*?\n  \}/.exec(bundle);
+  assert.ok(m, 'could not lift _mePub/_sgMine from the bundle — re-anchor this helper, do not delete it');
+  return m[0];
+}

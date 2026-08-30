@@ -724,8 +724,43 @@ let _needAuth = true;
 // the post-auth refetch, so a boolean would still be satisfied by the pre-auth EOSE. The question that
 // actually matters is whether the relay answered us AFTER it knew who we were.
 let _relayAuthedAt = 0;
-let _sgSelf = { cp: '', isMinor: false, known: false };
-const SG_ASSUME_KEY = 'trinityone.sgassume.';
+let _sgSelf = { cp: '', me: '', isMinor: false, known: false };
+// ONE PHONE IS NOT ONE PERSON. The remembered safeguarding answer is keyed by church AND member, and the
+// in-memory copy carries the member it belongs to, for the same reason ADMITTED_OK_LS is keyed `cp|pub`
+// (see _noteAdmitted). The rule is about IDENTITY, not about how an identity arrived: keyed by church alone,
+// this answered about a DEVICE, and a device is not a person. Any second account on it inherited the first
+// one's answer — a 12-word restore or reseat, an adopted steward seed, a phone passed on, the family flow.
+//
+// The family flow is the loudest route, not the only one: createChildAccount mints and reveals a child's
+// twelve words on the PARENT's phone and ends by handing the phone over, so the child's first Community tab
+// painted the parent's cached room list — by name, including rooms the church marked adults-only — and read
+// the parent's remembered "not a child". A young person who joins on their own device from an invite link
+// never touches that flow and was always right; nothing here keys off the family sheet, only off the key.
+//
+// WHAT INVALIDATES A REMEMBERED ANSWER when the church's view of a person changes — a steward marking an
+// EXISTING member as a minor, or clearing them — is that member's own sealed clearance arriving. It sets
+// `known`, and the branch below rewrites the stored value from it, so the church's word always outranks the
+// remembered one. ChatScreen re-asks on exactly that transition (its effect lists `clearanceKnown` and
+// `isMinor` among its dependencies), so the rewrite lands in the session the steward made the change, not
+// the one after. Until that document reaches the phone the old answer stands — on a thin link that can be
+// the whole session, and on a phone that never reconnects it is for ever. That window is the price of the
+// cache existing and it is deliberate: expiring the answer instead would gate every ordinary adult in every
+// safeguarding church whose phone had been offline a while, which is the larger harm the three-answer rule
+// below exists to avoid. What the window exposes is the room NAME — the relay withholds an adults-only
+// group's MESSAGES from a minor whatever this phone believes.
+const SG_ASSUME_KEY = 'trinityone.sgassume.';   // + churchPubHex|memberPubHex -> '1' | '0'
+// WHO IS ASKING? Same expression, same order, as subscribeChurchSafeguard's own `me` — the two must agree or
+// the answer would be filed under one identity and looked up under another. Empty until deriveFromIdentity
+// runs (a keyless or PIN-locked boot), and every caller below treats empty as "cannot attribute".
+const _mePub = () => (window.Fellowship && window.Fellowship.myPubkey) || pub || '';
+// MY OWN answer for THIS church, or null. Both halves must match. Church, because a member of two
+// congregations gets a different answer in each — that gap is already recorded at publishCareRequest. Member,
+// because of the paragraph above; a `_sgSelf` left in a module variable by whoever used the phone last is not
+// evidence about whoever is holding it now.
+function _sgMine(cp) {
+  const me = _mePub();
+  return (cp && me && _sgSelf.cp === cp && _sgSelf.me === me) ? _sgSelf : null;
+}
 // MUST THIS APP TREAT ME AS POSSIBLY A CHILD? Three answers, and the third is not the second — the same
 // shape publishCareRequest uses, and for the same reason. `clearanceKnown` alone is NOT a usable gate: it is
 // set only by this member's OWN sealed clearance, and a church that has never used safeguarding publishes
@@ -739,15 +774,31 @@ const SG_ASSUME_KEY = 'trinityone.sgassume.';
 //   [..]  — safeguarding is in use here and we have not heard about this member: assume
 async function _assumeMinor(cp) {
   if (!cp) return false;
-  if (_sgSelf.cp === cp && _sgSelf.known) {
+  const me = _mePub();
+  // No member pubkey yet means we cannot say WHOSE answer a stored one is, so we neither read nor write one
+  // and fall through to asking the church. That direction is safe: an unanswerable relay returns null below,
+  // which assumes. The alternative — a key with an empty member half — is the shared answer this fixes.
+  const slot = me ? SG_ASSUME_KEY + cp + '|' + me : '';
+  const mine = _sgMine(cp);
+  if (mine && mine.known) {
     // Remember it HERE, where it is also read. The write used to live back in the subscription, which meant
     // a test could only assert that the line existed — and a line can be present and unreachable. Reading
     // and writing in one function is what makes "is the answer remembered?" an executable question.
-    const v = _sgSelf.isMinor ? '1' : '0';
-    try { if (localStorage.getItem(SG_ASSUME_KEY + cp) !== v) localStorage.setItem(SG_ASSUME_KEY + cp, v); } catch (e) {}
-    return !!_sgSelf.isMinor;                                          // the church has told us outright
+    const v = mine.isMinor ? '1' : '0';
+    // …and only when this device may hold church data at all, which every other cache writer here asks
+    // (_mayCache) and this one did not. A locked boot wipes the caches and then repopulates them; see the
+    // note at _mayCache for why a wipe that keeps writing is theatre.
+    if (slot && _mayCache()) {
+      try { if (localStorage.getItem(slot) !== v) localStorage.setItem(slot, v); } catch (e) {}
+      // The church-only key this replaced can never match again, so it cannot give a wrong answer — but it
+      // still names a congregation on the device, and nothing else would ever remove it outside a PIN lock.
+      // Dropped here rather than in a migration pass, and deliberately NOT read first: its value is exactly
+      // the unattributed answer this change exists to stop trusting.
+      try { localStorage.removeItem(SG_ASSUME_KEY + cp); } catch (e) {}
+    }
+    return !!mine.isMinor;                                             // the church has told us outright
   }
-  try { const v = localStorage.getItem(SG_ASSUME_KEY + cp); if (v === '0') return false; if (v === '1') return true; } catch (e) {}
+  if (slot) { try { const v = localStorage.getItem(slot); if (v === '0') return false; if (v === '1') return true; } catch (e) {} }
   const audience = await _fetchChildCareAudience(cp);
   if (audience === null) return true;
   return audience.length > 0;
@@ -756,8 +807,9 @@ async function _assumeMinor(cp) {
 // rather than whatever `window.Fellowship` happens to be — and so a test that lifts the publisher lifts this
 // with it instead of stubbing the one decision that matters.
 async function _careNeedRefusal(cp) {
-  if (_sgSelf.cp === cp && _sgSelf.isMinor) return 'minor-cannot-open';
-  const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+  const mine = _sgMine(cp);   // MY answer for THIS church — not the last person to hold this phone (see _sgMine)
+  if (mine && mine.isMinor) return 'minor-cannot-open';
+  const sure = !!(mine && (mine.isMinor || mine.known));
   if (!sure) {
     // Exactly the second question publishCareRequest asks, and for the same reason: a church that has never
     // used safeguarding has cleared nobody, and refusing on that alone would block every ordinary adult.
@@ -1770,9 +1822,17 @@ async function deriveFromIdentity() {
   const wasKeyless = !sk;
   const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
   if (!mnemonic) throw new Error('no identity available to sign with');
+  const prevPub = pub;
   sk = privateKeyFromSeedWords(mnemonic);
   pub = getPublicKey(sk);
   window.Fellowship.myPubkey = pub;
+  // THE PHONE CHANGED HANDS. This is the ONE choke point every identity change goes through — regenerate,
+  // importMnemonic (and so unlockWithMnemonic and confirmTransfer, which both call it), removePin, unlock,
+  // and init — because they all end in identity.src.js's apply(), which fires 'trinity-identity', and this
+  // function is what that listener runs. So the safeguarding answer held for the PREVIOUS member is dropped
+  // here. _sgMine already refuses to hand it to the new one, and this is the belt to that braces: a reader
+  // added later that reaches for _sgSelf directly still starts from "we have not heard", which assumes.
+  if (prevPub && prevPub !== pub) _sgSelf = { cp: '', me: '', isMinor: false, known: false };
   // SECURITY-AUDIT-2026-07-06 M3 (guardian fix): a member who set up a child account is a GUARDIAN and must be
   // able to read the church-signed guardians: doc — how they learn the steward CONFIRMED the parent↔child link.
   // That read is safeguarding-gated (needs NIP-42 auth), so a guardian legitimately needs to authenticate even
@@ -3407,7 +3467,10 @@ window.Fellowship = {
       // UI, an older build, a modified one, or a new caller would send a child's disclosure to the whole care
       // rota and nothing would notice. `known` distinguishes "this church says they are not a child" from
       // "their clearance has not reached this phone yet", which must never be treated the same.
-      _sgSelf = { cp: pubk, isMinor, known: !!clr };
+      // `me` rides along because this is a MEMBER's answer, not a device's: one phone can hold two accounts
+      // in a session (a 12-word restore, an adopted steward seed, or the child account minted on a parent's
+      // phone by createChildAccount before the phone is handed over). Every reader goes through _sgMine.
+      _sgSelf = { cp: pubk, me: me || '', isMinor, known: !!clr };
       onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {
@@ -3959,8 +4022,11 @@ window.Fellowship = {
     //     where the cache already named THIS church, so a member of two congregations, or anyone in the moment
     //     after switching church, walked straight past it and had their request sealed to the whole care rota.
     //     The commit said "IT NEVER GUESSES"; it guessed, in the one place a guess costs the most.
-    let childish = _sgSelf.cp === cp && _sgSelf.isMinor;
-    const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+    //     …and the same holds for the member. `_sgSelf` is one module variable on a device that can carry
+    //     more than one account, so it is matched against the CURRENT signing key too (see _sgMine).
+    const mine = _sgMine(cp);
+    let childish = !!(mine && mine.isMinor);
+    const sure = !!(mine && (mine.isMinor || mine.known));
     let audience = null;
     if (!sure) {
       // …AND REFUSING IS NOT FREE EITHER. The signal for "we know" is this member's own sealed clearance, and a

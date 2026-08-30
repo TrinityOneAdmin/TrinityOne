@@ -26,24 +26,36 @@ function lift(name) {
   return m[0];
 }
 const CP = 'c'.repeat(64);
+const ME = 'a'.repeat(64);
+// The remembered answer belongs to a MEMBER at a CHURCH, not to a device — see the note at SG_ASSUME_KEY,
+// and scripts/one-phone-two-members-safeguarding.test.mjs for why. `_sgMine` is lifted rather than stubbed,
+// because the both-halves-must-match rule IS the fix; only "who is holding the phone" is injected.
+const SLOT = (cp, me) => 'trinityone.sgassume.' + cp + '|' + me;
 
 // `audience`: null = could not ask; [] = this church clears nobody; [..] = safeguarding is in use.
-function engine({ sgSelf = { cp: '', isMinor: false, known: false }, audience = [], cached = null } = {}) {
-  const store = {};
-  if (cached !== null) store['trinityone.sgassume.' + CP] = cached;
+function engine({ sgSelf = { cp: '', me: '', isMinor: false, known: false }, audience = [], cached = null,
+                  me = ME, store = {} } = {}) {
+  if (cached !== null) store[SLOT(CP, me)] = cached;
   const scope = {
     _sgSelf: sgSelf,
     SG_ASSUME_KEY: 'trinityone.sgassume.',
+    _mePub: () => me,
+    _mayCache: () => true,
     _fetchChildCareAudience: async () => audience,
-    localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } },
+    localStorage: {
+      getItem: (k) => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = v; },
+      removeItem: (k) => { delete store[k]; },
+    },
   };
   const args = Object.keys(scope);
-  return new Function(...args, lift('_assumeMinor') + '\nreturn _assumeMinor;')(...args.map(k => scope[k]));
+  const body = lift('_sgMine') + '\n' + lift('_assumeMinor') + '\nreturn _assumeMinor;';
+  return new Function(...args, body)(...args.map(k => scope[k]));
 }
 
 test('a church that has told us outright is believed, either way', async () => {
-  assert.equal(await engine({ sgSelf: { cp: CP, isMinor: true, known: true } })(CP), true);
-  assert.equal(await engine({ sgSelf: { cp: CP, isMinor: false, known: true } })(CP), false);
+  assert.equal(await engine({ sgSelf: { cp: CP, me: ME, isMinor: true, known: true } })(CP), true);
+  assert.equal(await engine({ sgSelf: { cp: CP, me: ME, isMinor: false, known: true } })(CP), false);
 });
 
 test('a church that has never used safeguarding is NOT gated — this is the trap', async () => {
@@ -75,7 +87,7 @@ test('a remembered answer is used, so a returning member is right immediately', 
 });
 
 test('the church’s own word outranks a stale remembered answer', async () => {
-  const f = engine({ sgSelf: { cp: CP, isMinor: true, known: true }, cached: '0' });
+  const f = engine({ sgSelf: { cp: CP, me: ME, isMinor: true, known: true }, cached: '0' });
   assert.equal(await f(CP), true, 'a member newly marked as a child keeps the adult view');
 });
 
@@ -84,25 +96,50 @@ test('the answer is remembered as soon as the church tells us', async () => {
   // sabotage that made the write unreachable (`if (false)`) left the text in place and the test green — the
   // exact "a regex matches an expression inside dead code" failure this round keeps rediscovering.
   const store = {};
-  const scope = {
-    _sgSelf: { cp: CP, isMinor: true, known: true },
-    SG_ASSUME_KEY: 'trinityone.sgassume.',
-    _fetchChildCareAudience: async () => [],
-    localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } },
-  };
-  const args = Object.keys(scope);
-  const f = new Function(...args, lift('_assumeMinor') + '\nreturn _assumeMinor;')(...args.map(k => scope[k]));
-  await f(CP);
-  assert.equal(store['trinityone.sgassume.' + CP], '1',
+  await engine({ sgSelf: { cp: CP, me: ME, isMinor: true, known: true }, audience: [], store })(CP);
+  assert.equal(store[SLOT(CP, ME)], '1',
     'nothing remembers the answer, so every cold start reopens the window this fix exists to close');
 
   const store2 = {};
-  const scope2 = { ...scope, _sgSelf: { cp: CP, isMinor: false, known: true },
-    localStorage: { getItem: (k) => (k in store2 ? store2[k] : null), setItem: (k, v) => { store2[k] = v; } } };
-  const a2 = Object.keys(scope2);
-  const g = new Function(...a2, lift('_assumeMinor') + '\nreturn _assumeMinor;')(...a2.map(k => scope2[k]));
-  await g(CP);
-  assert.equal(store2['trinityone.sgassume.' + CP], '0', 'an adult’s answer is not remembered');
+  await engine({ sgSelf: { cp: CP, me: ME, isMinor: false, known: true }, audience: [], store: store2 })(CP);
+  assert.equal(store2[SLOT(CP, ME)], '0', 'an adult’s answer is not remembered');
+});
+
+test('the remembered answer names the MEMBER as well as the church', async () => {
+  // The whole of scripts/one-phone-two-members-safeguarding.test.mjs rests on this key shape, so assert it
+  // here too: a key that names only the church is an answer about a DEVICE, and a device is not a person.
+  const store = {};
+  await engine({ sgSelf: { cp: CP, me: ME, isMinor: false, known: true }, audience: [], store })(CP);
+  assert.deepEqual(Object.keys(store), [SLOT(CP, ME)],
+    'the remembered answer is not filed under this member, so the next account on this phone reads it');
+});
+
+test('the church-only key the shipped build wrote is dropped, not trusted', async () => {
+  // It can no longer match a read — but it still names a congregation on the device, and outside a PIN lock
+  // nothing else would ever remove it. Reading it instead would be the original defect.
+  const store = { ['trinityone.sgassume.' + CP]: '0' };
+  const f = engine({ sgSelf: { cp: CP, me: ME, isMinor: true, known: true }, audience: [], store });
+  assert.equal(await f(CP), true, 'the legacy device-wide answer was believed over the church’s own word');
+  assert.equal(store['trinityone.sgassume.' + CP], undefined, 'the legacy key was left on the device');
+});
+
+test('nothing is remembered while this device may not hold church data', async () => {
+  // Every sibling cache writer asks _mayCache (see the note above it: a locked boot wipes the caches and
+  // then they come straight back, which is theatre). This one did not.
+  const store = {};
+  const scope = {
+    _sgSelf: { cp: CP, me: ME, isMinor: true, known: true },
+    SG_ASSUME_KEY: 'trinityone.sgassume.',
+    _mePub: () => ME,
+    _mayCache: () => false,
+    _fetchChildCareAudience: async () => [],
+    localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; },
+      removeItem: (k) => { delete store[k]; } },
+  };
+  const args = Object.keys(scope);
+  const f = new Function(...args, lift('_sgMine') + '\n' + lift('_assumeMinor') + '\nreturn _assumeMinor;')(...args.map(k => scope[k]));
+  assert.equal(await f(CP), true, 'the answer itself changed — only the WRITE is supposed to be withheld');
+  assert.deepEqual(Object.keys(store), [], 'a wiped device wrote the church’s safeguarding answer back');
 });
 
 test('the group list actually consults it', () => {

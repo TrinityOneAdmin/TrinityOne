@@ -19,6 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { liftSgMine } from './test-slice.mjs';
 
 const SRC = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
@@ -50,17 +51,23 @@ const GUARD = (() => {
 const FE = (BODY.match(/\bfinalizeEvent\d*\b/) || [])[0];
 assert.ok(FE, 'publishCareNeed no longer signs an event — re-anchor this test');
 
+// …and so is the rule that says whose answer `_sgSelf` is. One phone can hold two accounts in a session —
+// createChildAccount mints a child's twelve words on the PARENT's phone — so the guard matches the current
+// signing key as well as the church. Lifted with the guard, for the same reason the guard is lifted.
+const SGMINE = liftSgMine(SRC);
+
 const CHURCH = 'c'.repeat(64);
 const ME = 'a'.repeat(64);
+const SOMEONE_ELSE = 'b'.repeat(64);
 
 // `cleared` is what the church's cleared-adults list answers: [] = this church does not use safeguarding,
 // a non-empty list = it does, null = we could not even ask.
-function member({ isMinor = false, known = true, cpKnown = true, cleared = [], careKey = true } = {}) {
+function member({ isMinor = false, known = true, cpKnown = true, meKnown = true, cleared = [], careKey = true } = {}) {
   const state = { published: [], sealed: null };
   const scope = {
     sk: 'my-key', pub: ME,
     profiles: { [ME]: { name: 'Verity' } },
-    _sgSelf: { cp: cpKnown ? CHURCH : 'other-church', isMinor, known },
+    _sgSelf: { cp: cpKnown ? CHURCH : 'other-church', me: meKnown ? ME : SOMEONE_ELSE, isMinor, known },
     _fetchChildCareAudience: async () => cleared,
     _carekeys: careKey ? { [CHURCH]: [new Uint8Array(32)] } : {},
     _careSeal: (cp, body) => { state.sealed = { cp, body }; return 'SEALED-BLOB'; },
@@ -74,7 +81,7 @@ function member({ isMinor = false, known = true, cpKnown = true, cleared = [], c
     window: { Fellowship: { churchPub: CHURCH, ready: Promise.resolve() } },
   };
   const args = Object.keys(scope);
-  const fn = new Function(...args, `${GUARD}\nreturn ({ ${BODY} }).publishCareNeed;`)(...args.map(k => scope[k]));
+  const fn = new Function(...args, `${SGMINE}\n${GUARD}\nreturn ({ ${BODY} }).publishCareNeed;`)(...args.map(k => scope[k]));
   return { call: (f) => fn(f), state };
 }
 
@@ -103,6 +110,17 @@ test('…and a member of another church is exactly that case', () => {
   // case where the cache already named THIS church, so anyone in two congregations walked straight past.
   const m = member({ cpKnown: false, cleared: ['someone-cleared'] });
   return m.call(ADULT).then(r => assert.equal(r.error, 'unknown-clearance'));
+});
+
+test('…and so is an answer about whoever last held this phone', () => {
+  // `_sgSelf` says "known adult, this church" — but about a DIFFERENT member. A phone carries two accounts
+  // routinely here: createChildAccount reveals a child's twelve words on the parent's device and the flow
+  // ends by handing it over. A church match alone would let the child open a public need as the parent.
+  const m = member({ meKnown: false, cleared: ['someone-cleared'] });
+  return m.call(ADULT).then(r => {
+    assert.equal(r.error, 'unknown-clearance');
+    assert.deepEqual(m.state.published, [], 'the previous account’s clearance was spent by the next one');
+  });
 });
 
 test('a church that has cleared nobody is not blocked from opening needs', () => {

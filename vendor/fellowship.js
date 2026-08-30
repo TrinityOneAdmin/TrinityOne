@@ -6505,31 +6505,48 @@
   var pub = null;
   var _needAuth = true;
   var _relayAuthedAt = 0;
-  var _sgSelf = { cp: "", isMinor: false, known: false };
+  var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
   var SG_ASSUME_KEY = "trinityone.sgassume.";
+  var _mePub = () => window.Fellowship && window.Fellowship.myPubkey || pub || "";
+  function _sgMine(cp) {
+    const me = _mePub();
+    return cp && me && _sgSelf.cp === cp && _sgSelf.me === me ? _sgSelf : null;
+  }
   async function _assumeMinor(cp) {
     if (!cp) return false;
-    if (_sgSelf.cp === cp && _sgSelf.known) {
-      const v = _sgSelf.isMinor ? "1" : "0";
+    const me = _mePub();
+    const slot = me ? SG_ASSUME_KEY + cp + "|" + me : "";
+    const mine = _sgMine(cp);
+    if (mine && mine.known) {
+      const v = mine.isMinor ? "1" : "0";
+      if (slot && _mayCache()) {
+        try {
+          if (localStorage.getItem(slot) !== v) localStorage.setItem(slot, v);
+        } catch (e) {
+        }
+        try {
+          localStorage.removeItem(SG_ASSUME_KEY + cp);
+        } catch (e) {
+        }
+      }
+      return !!mine.isMinor;
+    }
+    if (slot) {
       try {
-        if (localStorage.getItem(SG_ASSUME_KEY + cp) !== v) localStorage.setItem(SG_ASSUME_KEY + cp, v);
+        const v = localStorage.getItem(slot);
+        if (v === "0") return false;
+        if (v === "1") return true;
       } catch (e) {
       }
-      return !!_sgSelf.isMinor;
-    }
-    try {
-      const v = localStorage.getItem(SG_ASSUME_KEY + cp);
-      if (v === "0") return false;
-      if (v === "1") return true;
-    } catch (e) {
     }
     const audience = await _fetchChildCareAudience(cp);
     if (audience === null) return true;
     return audience.length > 0;
   }
   async function _careNeedRefusal(cp) {
-    if (_sgSelf.cp === cp && _sgSelf.isMinor) return "minor-cannot-open";
-    const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+    const mine = _sgMine(cp);
+    if (mine && mine.isMinor) return "minor-cannot-open";
+    const sure = !!(mine && (mine.isMinor || mine.known));
     if (!sure) {
       const audience = await _fetchChildCareAudience(cp);
       if (audience === null) return "unknown-clearance";
@@ -7636,9 +7653,11 @@
     const wasKeyless = !sk;
     const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
     if (!mnemonic) throw new Error("no identity available to sign with");
+    const prevPub = pub;
     sk = privateKeyFromSeedWords(mnemonic);
     pub = getPublicKey2(sk);
     window.Fellowship.myPubkey = pub;
+    if (prevPub && prevPub !== pub) _sgSelf = { cp: "", me: "", isMinor: false, known: false };
     if (_loadChildren().length) _needAuth = true;
     try {
       const mine = window.Fellowship.myProfile || {};
@@ -9578,7 +9597,7 @@
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
-        _sgSelf = { cp: pubk, isMinor, known: !!clr };
+        _sgSelf = { cp: pubk, me: me || "", isMinor, known: !!clr };
         onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
@@ -10251,8 +10270,9 @@
         }
       }
       if (!sk || !cp) return null;
-      let childish = _sgSelf.cp === cp && _sgSelf.isMinor;
-      const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+      const mine = _sgMine(cp);
+      let childish = !!(mine && mine.isMinor);
+      const sure = !!(mine && (mine.isMinor || mine.known));
       let audience = null;
       if (!sure) {
         audience = await _fetchChildCareAudience(cp);

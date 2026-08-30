@@ -34,6 +34,17 @@ and which of your instincts about it are wrong.
   a fault that does not exist. *Cost of getting this wrong: copy that says the church has not set something
   up, when it has decided not to.*
 
+- **Marking an EXISTING member as a child is fairly common.** `ESTABLISHED 2026-08-30.` It is not an edge
+  case. Anything that remembers "this person is an adult" must stop being believed when the church changes
+  its mind — invalidation is part of the feature, not a follow-up.
+
+- **A shared device is expected, and an ADULT IS ASSUMED TO BE IN CONTROL OF IT.** `ESTABLISHED 2026-08-30.`
+  No further safeguarding is needed for that use. A family tablet an adult supervises is NOT a threat model
+  this product defends against — do not harden against it, and do not let an auditor's severity rating
+  override this. *The case that does matter is narrower: a device that STOPS being an adult's and BECOMES a
+  young person's — the family flow ends by handing the phone over, and a reseat does the same. There the
+  previous member's remembered answers must not survive the handover.*
+
 - **Safeguarding is a mechanism, not a policy.** `ESTABLISHED 2026-08-27.` Churches differ by culture in
   how they do this. Ship the gates; never ship the policy. Describe the consequence of a setting; do not
   prescribe, and do not nag.
@@ -82,10 +93,7 @@ and which of your instincts about it are wrong.
 
 Nobody has answered these. Ask before designing around them; move them up when answered.
 
-- **How common is marking an EXISTING member as a child?** `OPEN 2026-08-30.` Decides how much a stale
-  "this person is an adult" answer matters, and how hard to work to invalidate one.
-- **Are shared devices expected in the pilot** — a family tablet, a borrowed phone — or is
-  one-person-one-device realistic? `OPEN 2026-08-30.`
+*(none open at present)*
 
 ---
 
