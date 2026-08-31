@@ -583,7 +583,7 @@ function DashRota({ onNewTeam }) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', maxWidth: 380 }}>
-          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="hand" size={28} /></div>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="hand" size={28} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 6 }}>Build your first team</div>
           <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 16 }}>Create a ministry team (Welcome, Worship, Kids…) with the roles it fills. Then add a service and put people on — gaps glow gold so coverage reads at a glance.</p>
           <button onClick={onNewTeam} className="sk-btn sk-btn--clay" style={{ padding: '11px 18px' }}><Icon name="plus" size={16} color="var(--on-clay)" /> New team</button>
@@ -601,7 +601,7 @@ function DashRota({ onNewTeam }) {
           return (
             <button key={s.id} onClick={() => setSel(s.id)} title="Show this service’s rota" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
               border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)' }}>
-              <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
+              <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay-ink)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
               <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.mon} · {s.time}</div></div>
             </button>
           );
@@ -618,7 +618,7 @@ function DashRota({ onNewTeam }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: narrow ? 'none' : 1 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>{filled}/{total} <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--ink-3)' }}>roles filled</span></div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, marginTop: 2, color: gaps ? '#8a6717' : 'var(--sage)' }}>{gaps ? <><Icon name="sparkle" size={13} color="var(--gold)" /> {gaps} gap{gaps > 1 ? 's' : ''} to fill</> : <><Icon name="check" size={13} stroke={2.6} color="var(--sage)" /> Fully covered</>}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, marginTop: 2, color: gaps ? '#8a6717' : 'var(--sage-ink)' }}>{gaps ? <><Icon name="sparkle" size={13} color="var(--gold)" /> {gaps} gap{gaps > 1 ? 's' : ''} to fill</> : <><Icon name="check" size={13} stroke={2.6} color="var(--sage)" /> Fully covered</>}</div>
               </div>
               <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'var(--surface-2)', overflow: 'hidden', minWidth: 80 }}><div style={{ width: `${total ? (filled / total) * 100 : 0}%`, height: '100%', background: gaps ? 'linear-gradient(90deg, var(--sage), var(--gold))' : 'var(--sage)', borderRadius: 999, transition: 'width .3s' }} /></div>
             </div>
@@ -698,7 +698,7 @@ function DashRota({ onNewTeam }) {
                   <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{ width: 34, height: 34, borderRadius: 11, background: `color-mix(in oklab, ${m.accent} 16%, var(--surface))`, color: m.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={m.icon} size={19} /></div>
-                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
                       <button onClick={() => setRosterTeam(t)} title="Manage roster" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="users" size={14} /> Roster</button>
                     </div>
                     {(r.pods && r.pods.length) ? (
@@ -706,7 +706,7 @@ function DashRota({ onNewTeam }) {
                         const v = e.target.value; e.target.value = '';
                         if (v === '__rotate__') { if (window.confirm('Rotate ' + r.pods.length + ' pods across all upcoming services for ' + m.name + '?\n\nEach pod serves every ' + r.pods.length + ' weeks. This publishes them and asks everyone assigned.')) rotatePods(t); }
                         else { const pod = (r.pods || []).find(p => p.id === v); if (pod) applyPod(t, pod); }
-                      }} title="Apply a serving pod" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, appearance: 'auto' }}>
+                      }} title="Apply a serving pod" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, appearance: 'auto' }}>
                         <option value="">Apply a serving pod…</option>
                         {r.pods.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                         {r.pods.length > 1 ? <option value="__rotate__">↻ Rotate across upcoming weeks</option> : null}
@@ -751,7 +751,7 @@ function DashRota({ onNewTeam }) {
               );
             })}
             {/* always-visible add-team card (the topbar button can scroll out of view) */}
-            <button onClick={onNewTeam} style={{ minHeight: 96, borderRadius: 18, border: '1.5px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14 }}><Icon name="plus" size={17} color="currentColor" /> New team</button>
+            <button onClick={onNewTeam} style={{ minHeight: 96, borderRadius: 18, border: '1.5px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14 }}><Icon name="plus" size={17} color="currentColor" /> New team</button>
           </div>
         </React.Fragment>
       )}
@@ -955,7 +955,7 @@ function DashCalendar() {
             return (
               <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day" style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
                 border: pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay)' : 'var(--ink-2)' }}>{d}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d}</div>
                 {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
                 {it.events.map(e => <div key={e.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: `color-mix(in oklab, ${e.accent} 13%, var(--surface))`, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>)}
                 {it.bookings.map(b => <div key={b.id} title={(b.title || 'Booking') + ' · ' + roomName(b.roomId) + (b.start ? ' · ' + b.start + (b.end ? '–' + b.end : '') : '')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: '#345c41', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="marker" size={9} color="#345c41" />{b.start ? b.start + ' ' : ''}{roomName(b.roomId)}</div>)}
@@ -1002,7 +1002,7 @@ function DashCalendar() {
                     return (
                       <div style={{ marginTop: 8, borderTop: '1px solid var(--line-2)', paddingTop: 8 }}>
                         <div style={{ display: 'flex', gap: 12, fontSize: 12, fontWeight: 700 }}>
-                          <span style={{ color: 'var(--sage)' }}>{rs.going.length} going</span>
+                          <span style={{ color: 'var(--sage-ink)' }}>{rs.going.length} going</span>
                           {rs.maybe.length ? <span style={{ color: '#8a6717' }}>{rs.maybe.length} maybe</span> : null}
                           {rs.no.length ? <span style={{ color: 'var(--ink-3)' }}>{rs.no.length} can’t</span> : null}
                         </div>
@@ -1029,7 +1029,7 @@ function DashCalendar() {
             {upcoming.map(s => { const c = coverageFor(s.id); return (
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 11, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
                 <SchDateBlock dateStr={s.date} />
-                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{s.name}</div><div style={{ fontSize: 12, color: c.total && c.filled === c.total ? 'var(--sage)' : '#8a6717', fontWeight: 600 }}>{c.filled}/{c.total} filled</div></div>
+                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{s.name}</div><div style={{ fontSize: 12, color: c.total && c.filled === c.total ? 'var(--sage-ink)' : '#8a6717', fontWeight: 600 }}>{c.filled}/{c.total} filled</div></div>
               </div>
             ); })}
           </div>

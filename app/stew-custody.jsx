@@ -17,7 +17,7 @@ function FlowArrows({ topLabel, botLabel, note, accent = 'var(--clay)' }) {
       <div style={{ fontSize: 10.5, fontWeight: 700, color: accent, textAlign: 'center' }}>{topLabel}</div>
       <svg width="120" height="14" viewBox="0 0 120 14"><path d="M2 7 H110" stroke={accent} strokeWidth="2" strokeDasharray="2 5" strokeLinecap="round" /><path d="M104 2 L112 7 L104 12" fill="none" stroke={accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
       <svg width="120" height="14" viewBox="0 0 120 14"><path d="M118 7 H10" stroke="var(--sage)" strokeWidth="2" strokeDasharray="2 5" strokeLinecap="round" /><path d="M16 2 L8 7 L16 12" fill="none" stroke="var(--sage)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--sage)', textAlign: 'center' }}>{botLabel}</div>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--sage-ink)', textAlign: 'center' }}>{botLabel}</div>
       {note ? <div style={{ fontSize: 10, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.3 }}>{note}</div> : null}
     </div>
   );

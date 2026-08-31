@@ -228,7 +228,7 @@ function SkKey({ value, label = 'npub', tint = 'clay', style = {} }) {
       ) : (
         <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
       )}
-      <button onClick={() => { copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1400); }} title={'Copy ' + label} style={{ border: 'none', background: 'none', cursor: 'pointer', color: copied ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', padding: 4 }}>
+      <button onClick={() => { copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1400); }} title={'Copy ' + label} style={{ border: 'none', background: 'none', cursor: 'pointer', color: copied ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', padding: 4 }}>
         <Icon name={copied ? 'check' : 'copy'} size={16} stroke={2} color="currentColor" />
       </button>
     </div>

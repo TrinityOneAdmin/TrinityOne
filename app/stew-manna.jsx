@@ -24,8 +24,8 @@ const MN_AV = ['var(--clay)','var(--sage)','var(--gold)','var(--clay-deep)','#6B
 /* ---- module-local primitives (port of the Halo kit; real tokens, real <Icon>/<Halo>) ---- */
 const MN_SZ = { sm:{padding:'8px 14px',fontSize:13,gap:7,ic:16}, md:{padding:'12px 18px',fontSize:14.5,gap:8,ic:18}, lg:{padding:'15px 24px',fontSize:15.5,gap:9,ic:19} };
 const MN_VAR = {
-  clay:{background:'var(--clay)',color:'#fff',boxShadow:'0 1px 2px rgba(34,28,22,.14)'},
-  sage:{background:'var(--sage)',color:'#fff'},
+  clay:{background:'var(--clay-ink)',color:'#fff',boxShadow:'0 1px 2px rgba(34,28,22,.14)'},
+  sage:{background:'var(--sage-ink)',color:'#fff'},
   gold:{background:'var(--gold)',color:'var(--midnight)'},
   dark:{background:'var(--midnight)',color:'var(--paper)'},
   soft:{background:'var(--clay-soft)',color:'var(--clay-ink)'},
@@ -68,7 +68,7 @@ function MnStat({ icon, label, value, sub, tint='ink' }) {
 function MnLabel({ children, action, onAction }) {
   return <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'0 0 12px' }}>
     <span style={{ fontWeight:700, fontSize:19, letterSpacing:'-.01em' }}>{children}</span>
-    {action && <span onClick={onAction} style={{ fontSize:13, fontWeight:600, color:'var(--clay)', cursor:'pointer' }}>{action}</span>}</div>;
+    {action && <span onClick={onAction} style={{ fontSize:13, fontWeight:600, color:'var(--clay-ink)', cursor:'pointer' }}>{action}</span>}</div>;
 }
 
 /* ============================== Settings: opt-in enable card ============================== */
@@ -259,7 +259,7 @@ function MannaNominate({ requests, vouches, vsOf, M }) {
       </div>
       <p className="scripture" style={{ fontSize: 16, color: 'var(--clay-ink)', margin: '0 0 14px' }}>“Carry each other’s burdens.”</p>
       <div style={{ background: 'var(--surface)', borderRadius: 16, padding: '15px 16px', marginBottom: 18 }}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}><span style={{ color: 'var(--clay)', marginTop: 1 }}><Icon name="hand" size={20} /></span>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}><span style={{ color: 'var(--clay-ink)', marginTop: 1 }}><Icon name="hand" size={20} /></span>
           <p style={{ margin: 0, fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55 }}>By vouching, you’re not approving a request — you’re saying <b style={{ color: 'var(--ink)' }}>“I’ll walk with this person.”</b> You’ll be the steady hand they can reach, and the one who quietly checks in.{sel.tier === 'covenant' && vs.missingNominator ? ' This covenant gift still needs a sponsor.' : ''}</p></div>
       </div>
       {done ? (
@@ -363,7 +363,7 @@ function MannaApprove({ requests, vouches, vsOf, M, payoutReady }) {
 
         {released ? (
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderRadius: 16, background: 'var(--sage)', color: '#fff' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderRadius: 16, background: 'var(--sage-ink)', color: '#fff' }}>
               <Icon name="check" size={22} stroke={2.4} /><span style={{ fontSize: 14.5, fontWeight: 700 }}>Approved &amp; signed.</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12.5, color: 'var(--ink-3)' }}>
