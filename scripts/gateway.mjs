@@ -2411,6 +2411,40 @@ function canRead(e, authed) {
         const ppl = ROSTER_PEOPLE.get(gid);
         return !!authed && !!(ppl && ppl.has(authed));
       }
+      // AND AN ADULTS-ONLY ROOM IS NOT ADVERTISED TO A CHILD, for exactly the reason above. Measured against
+      // a real relay, 2026-08-31: with a room named `Marriage counselling` and `childsafe` absent, the minor's
+      // MESSAGES were correctly withheld (0 served; an adult got 1) and her post refused — and this DEFINITION
+      // was served to her, content {"name":"Marriage counselling","kind":"open"}. A room-list REQ as the minor
+      // returned both the child-safe room and that one. The NAME is the disclosure: a young person's chat list
+      // reads "Marriage counselling", "Safeguarding concerns", "Elders — pastoral", and tapping one opens an
+      // empty room that swallows what she types. app/screens-chat.jsx does filter the list; this is its
+      // backstop, not its duplicate — a client filter runs on the reader's own device, after a cache has
+      // painted, from a document that may not have arrived.
+      //
+      // Same test as the message gate below (the `g` branch), including its GROUP_CHURCH.get() ||
+      // idNamesOwner() fallback, so a relay holding a room's MESSAGES but not its definition still resolves
+      // the governing church. Scoped with minorOf(): whether someone is a child is a judgement only their OWN
+      // church makes (AUDIT-2026-07-30 S3), so a co-tenant church cannot blank another congregation's rooms.
+      //
+      // PLACED AFTER THE TEAM BRANCH, deliberately. That branch RETURNS, so a team room is decided by its
+      // ROSTER and never reaches this line — which is the right answer, not an oversight: a team room is
+      // already withheld from everyone the church has not staffed onto it, so the only person this could
+      // additionally hide it from is a young person the church deliberately put on that team. Telling her the
+      // name of the team she serves on is not a disclosure; blanking it would take the team's name and icon
+      // off her own serving view (app/app.jsx `_teamMeta`, fed by this same subscription). Ordinary and
+      // invite-only rooms have no such per-person grant, so they are gated here.
+      //
+      // A MINOR WHO LEADS AN ORDINARY ROOM is refused too, decided rather than inherited: the message gate
+      // already withholds every message in an adults-only room from a minor whatever their role, so serving
+      // the definition alone would list a room she can neither read nor post in — the precise defect this
+      // closes. The control is the church marking that room child-safe, which is one click in the console.
+      // (Her own event stays hers: a minor who AUTHORED the definition returned true at the top of this
+      // branch, as did the church key, its network, its stewards and its care admins — the console still sees
+      // every room.)
+      if (!GROUP_CHILDSAFE.has(gid)) {
+        const gcp = GROUP_CHURCH.get(gid) || idNamesOwner(gid);
+        if (gcp && minorOf(authed, gcp)) return false;
+      }
     }
     const md = MEMBER_DOCS.get(cp);
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
