@@ -22,6 +22,18 @@ and which of your instincts about it are wrong.
 
 ## Children and safeguarding
 
+- **A child's own clearance document is expected to have arrived before they ever use the app.**
+  `ESTABLISHED 2026-08-31.` Owner, asked whether a request for help made in the first seconds after opening
+  the app could be sealed before the app knows the person is a child: *"This is a VERY unlikely situation.
+  Due to the onboarding process, I'd be shocked if it ever happened in reality."* So do NOT design for the
+  cold-start window as though it were a normal state, and do not add machinery to close it.
+  **Counter-evidence to weigh, not to override this with:** an instrumented run recorded at
+  `app/stew-dashboard.jsx:4051` had 50 of 150 clearance publishes silently never land. If that is a real
+  delivery rate rather than an artefact of that run, the window is reachable by a route that has nothing to
+  do with onboarding — a publish that failed months ago. Worth measuring once; not worth building for until
+  it is measured.
+
+
 - **A young person can arrive by SEVERAL routes, not one.** `ESTABLISHED 2026-08-30.` A parent minting an
   account for them is only one. Others: joining directly on their own device via an invite or join link;
   an existing adult member being marked as a child by a steward AFTER the fact; a device changing hands or
