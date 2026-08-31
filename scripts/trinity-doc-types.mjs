@@ -95,7 +95,7 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/care:':         { write: 'mixed',     read: 'members', scope: 'tag',    note: 'church/steward/care-admin, or any member when openedBy=member' },
   'trinityone/careslot:':     { write: 'member',    read: 'members', scope: 'tag' },
   'trinityone/careskip:':     { write: 'recipient', read: 'members', scope: 'tag',    note: 'RECIPIENT-only, enforced by a sealed token' },
-  'trinityone/careavail:':    { write: 'member',    read: 'members', scope: 'suffix', note: 'non-minors only' },
+  'trinityone/careavail:':    { write: 'member',    read: 'members', scope: 'suffix', note: 'non-minors only, on BOTH sides: a minor may not write one, and one written before they were marked is no longer served to ordinary members \u2014 only to the author, the church, its network, its stewards and care admins' },
   'trinityone/carekey:':      { write: 'steward',   read: 'members', scope: 'suffix' },
   'trinityone/financekey:':   { write: 'church',    read: 'members', scope: 'suffix', note: 'owner-only mint — the church books\u2019 key, wrapped to the church and to every steward holding the finance capability' },
   'trinityone/checkinkey:':   { write: 'church',    read: 'members', scope: 'suffix', note: 'owner-only mint — the children\u2019s register key, wrapped to the church and to every steward holding the SAFEGUARDING capability. Separate from financekey: deliberately: until 2026-08-20 both the register and the ledger were sealed with one key derived from the church secret, so granting a treasurer Finance handed them every child\u2019s name, room and pickup code' },

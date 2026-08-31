@@ -2373,6 +2373,31 @@ function canRead(e, authed) {
       if (vis === 'stewards') return false;                        // stewards already returned true above
       if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
     }
+    // A CHILD IS NOT ADVERTISED TO THE CONGREGATION AS AN AVAILABLE HELPER.
+    //
+    // The WRITE gate has refused a minor's `careavail:` since AUDIT-2026-07-30 (:2006), and stopped there —
+    // but a member who listed themselves BEFORE their church marked them a child already has one stored, and
+    // refusing the refresh does not retract it. Measured against a real relay, 2026-08-31: the church marks
+    // them, a refresh is refused, and the ORIGINAL keeps being served, with zero kind-5 deletions on the box.
+    // On every ordinary member's Care tab they stay under "Ready to help" with their own offer text, inviting
+    // adults to contact them. Marking an existing member as a child is common, not an edge case
+    // (reference/DOMAIN.md), so this is the ordinary path, not a race.
+    //
+    // THE CLIENT FILTER CANNOT REACH IT, and it is not the place to fix. CareAvailability really does filter
+    // minors out (app/screens-today.jsx) — from `safeguard.minors`, which this relay deliberately does not
+    // serve to ordinary members: it is the cleartext list of a congregation's children, and joining an
+    // open-join church is one self-signed publish (AUDIT-2026-07-27). Measured: `minors:` served to an
+    // ordinary member = 0. The filter is live, correct, and asked a question it can never have the answer to.
+    // Back-filling it onto member devices would undo that audit to fix this one. The knowledge is here.
+    //
+    // WHO STILL SEES IT, decided rather than inherited: the author (returned true at the top of this block —
+    // their own Care tab must not silently drop their listing out from under them), and the church, its
+    // network, its stewards and its care admins, all of whom returned true a few lines above. A steward MUST
+    // keep seeing it, or a person vanishing from the register is unexplainable from the console where the
+    // marking was made. Same shape as the CAREREQ_D branch: withhold from the congregation, not from the
+    // people accountable for the decision. Scoped with minorOf() — whether someone is a child is a judgement
+    // only their OWN church makes (AUDIT-2026-07-30 S3) — so a non-minor's listing is untouched.
+    if (d.startsWith(AVAIL_D) && minorOf(e.pubkey, cp)) return false;
     // A SERVING TEAM'S ROOM IS NOT ADVERTISED TO PEOPLE WHO ARE NOT ON IT. Gating only its MESSAGES left the
     // room listed in the member's chat list, where it accepted typing and silently discarded it — Nkechi,
     // round 10: "I typed a reply and pressed send; the box emptied but my message never appeared." Listing
