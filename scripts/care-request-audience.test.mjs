@@ -35,7 +35,7 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
-import { fnBody, stripComments, liftSgMine } from './test-slice.mjs';
+import { fnBody, stripComments, liftSgMine, liftFetchMyClearance } from './test-slice.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -48,7 +48,7 @@ const joyceSk = generateSecretKey(), joycePub = getPublicKey(joyceSk);
 // Lift the shipped method and give it the free variables it closes over. Everything here is a stub EXCEPT
 // the function under test and the real NIP-44 primitives — the seal has to be genuine or "can Anne open it?"
 // is not a real question.
-function loadPublish({ team, sgSelf, childAudience }) {
+function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed }) {
   const published = [];
   const body = fnBody(VENDOR, 'async publishCareRequest(fields) {', 'publishCareRequest');
   // ONE PHONE IS NOT ONE PERSON. The child/adult branch is chosen from `_sgSelf`, and `_sgSelf` is a single
@@ -56,6 +56,11 @@ function loadPublish({ team, sgSelf, childAudience }) {
   // CURRENT signing key as well as the church, by `_sgMine`. Lifted, not stubbed: that rule is a safeguarding
   // decision and stubbing it would leave the branch below testing a mock.
   const sgMine = liftSgMine(VENDOR);
+  // …AND THE LOOKUP THAT ANSWERS "AM I A CHILD?" WHEN THE CACHE HAS NOT HEARD. Lifted for the same reason as
+  // _sgMine and with more at stake: it IS the minor/adult decision when `known` is false, so a stub of it
+  // would be a mock of the thing every test below is named after. It is fed real relay documents through
+  // `pool.querySync` (empty by default here, which is a church that has published no clearance at all).
+  const fetchClr = liftFetchMyClearance(VENDOR);
   // THE BUNDLER RENAMES WHAT IT LIFTS. In vendor/fellowship.js this function's crypto helpers are no longer
   // called nip44e/nip44ck/finalizeEvent — esbuild rewrote them to encrypt/getConversationKey/finalizeEvent2,
   // and a hard-coded parameter list therefore fed the function three undefined names. The function catches
@@ -84,7 +89,15 @@ function loadPublish({ team, sgSelf, childAudience }) {
     // Present so that reverting to the OLD inline lookup RUNS rather than dying on a missing name: the
     // sabotage must fail on the assertion, not on the harness. querySync resolving empty is the exact
     // real-world case — an unreachable or unauthenticated relay.
-    pool: { querySync: async () => [] },
+    pool: { querySync: async () => (clearanceEvents || []) },
+    // _fetchMyClearance's own free variables. `_relayAuthedAt` is what tells an EMPTY answer from an
+    // unreachable one: querySync resolves empty on a relay that is unreachable, still connecting, or has not
+    // answered the auth challenge, so without this every case below would read as "could not ask".
+    _relayAuthedAt: relayAuthed === undefined ? Date.now() : relayAuthed,
+    _churchRoster: new Map([[churchPub, new Set()]]),
+    CLEARANCE_D: 'trinityone/clearance:',
+    decrypt: (ct, key) => nip44.decrypt(ct, key),
+    nip44d: (ct, key) => nip44.decrypt(ct, key),
     console,
   };
   const scope = new Proxy(stubs, {
@@ -99,7 +112,7 @@ function loadPublish({ team, sgSelf, childAudience }) {
       throw new ReferenceError('the lifted function needs `' + String(k) + '` — add a stub for it in loadPublish()');
     },
   });
-  const fn = new Function('scope', `with (scope) { ${sgMine} return ({ ${body} }).publishCareRequest; }`)(scope);
+  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} return ({ ${body} }).publishCareRequest; }`)(scope);
   return { fn, published };
 }
 

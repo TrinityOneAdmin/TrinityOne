@@ -378,6 +378,63 @@ async function _fetchChildCareAudience(cp) {
   if (approved === null && roster === null && !_relayAuthedAt) return null;
   return [...new Set([...(approved || []), ...(roster || [])].filter(Boolean))];
 }
+// WHAT DOES THIS CHURCH SAY ABOUT *ME*? Asked of the document that actually answers it, rather than inferred
+// from a different one.
+//
+// The subscription (subscribeChurchSafeguard) delivers this member's own sealed `clearance:<pub>` and sets
+// `_sgSelf`. Until it arrives, `_sgMine().known` is false — which is "we have not heard", not "not a child".
+// The one place that could not afford to guess was inferring instead: an EMPTY cleared-adults list was read
+// as "this church does not use safeguarding", when all it means is that nobody is cleared. Those are not the
+// same sentence, and a church can easily be the second without being the first.
+//
+// The relay serves `clearance:<subj>` to the subject themselves (gateway.mjs, the CLEARANCE_D branch of
+// canRead: `if (authed && authed === subj) return true`), so this is a question this member can always ask
+// about themselves, on any relay their church uses. Asking it costs one round trip in a case that only
+// arises before the subscription has delivered; inferring costs a young person their disclosure.
+//
+// THREE ANSWERS, and the third is not the second — the same shape used everywhere else here:
+//   null            — could not establish (unreachable, unauthenticated, or a record we cannot open)
+//   { found:false } — we asked, authenticated, and this church has published no record about this member
+//   { found:true }  — the church's own word, with `minor` as it says it
+//
+// Authorship, the future bound and the same-second tiebreak are the SAME rules subscribeChurchSafeguard and
+// the console (`_beatsDoc` in src/steward.src.js) apply. Two programs that must agree cannot run different
+// rulebooks — a member's phone applying a clearance the console cannot see is how the worst defect of the
+// 2026-08-27 round happened.
+async function _fetchMyClearance(cp) {
+  const me = _mePub();
+  if (!cp || !me || !sk) return null;
+  const dtag = CLEARANCE_D + me;
+  let evs = null;
+  try { evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [dtag] }]); }
+  catch (e) { return null; }
+  const roster = _churchRoster.get(cp);
+  let best = null;
+  for (const e of (evs || [])) {
+    if (((e.tags.find(t => t[0] === 'd') || [])[1] || '') !== dtag) continue;
+    // AUTHORISED WRITERS ONLY — the church key, or one of its CURRENT roster stewards, which is who marks a
+    // child in practice. Anyone may sign an event at any d-tag; without this a stranger could publish
+    // "not a minor" at a child's clearance tag and have it believed.
+    if (e.pubkey !== cp && !(roster && roster.has(e.pubkey))) continue;
+    const ts = e.created_at || 0;
+    if (ts > Math.floor(Date.now() / 1000) + 600) continue;   // no future-dated clearance; 600s, as both other readers use
+    if (!best) { best = e; continue; }
+    const bts = best.created_at || 0;
+    if (ts < bts) continue;
+    if (ts === bts && !(String(e.id || '') > String(best.id || ''))) continue;   // same second: higher id wins, not last-arrived
+    best = e;
+  }
+  if (best) {
+    // A RECORD WE CANNOT OPEN IS NOT AN ABSENCE. It is sealed to us by its author, so a failure here means
+    // something is wrong with the key or the content, and the honest answer is "could not establish".
+    try { const o = JSON.parse(nip44d(best.content, nip44ck(sk, best.pubkey))); return { found: true, minor: !!(o && o.minor) }; }
+    catch (x) { return null; }
+  }
+  // NOTHING FOUND is a real answer only if we were genuinely connected when we asked — querySync resolves
+  // empty on a relay that is unreachable, still connecting, or that has not answered the auth challenge.
+  if (!_relayAuthedAt) return null;
+  return { found: false };
+}
 // WHO A REPLY REACHES IS DECIDED BY THE REQUEST, NOT BY WHOEVER IS TYPING.
 //
 // sendCareChat used to seal every message to the care rota. For an adult's request that is right by accident;
@@ -1053,6 +1110,7 @@ const _fireTrust = () => { try { window.dispatchEvent(new CustomEvent('trinity-c
 // check above), so a forged name is not possible, and the relay passes unknown keys through untouched, which
 // is why this is backwards compatible with churches whose roster predates it.
 const APPROVED_D = 'trinityone/approved:';   // the church's cleared-adults list — who may be near children
+const CLEARANCE_D = 'trinityone/clearance:';  // ONE member's own safeguarding status, NIP-44 sealed to them by the church
 const VOICE_D = 'trinityone/voice:';
 const _churchVoices = new Map();
 function _absorbRoster(cp, d, e) {
@@ -4029,16 +4087,40 @@ window.Fellowship = {
     const sure = !!(mine && (mine.isMinor || mine.known));
     let audience = null;
     if (!sure) {
-      // …AND REFUSING IS NOT FREE EITHER. The signal for "we know" is this member's own sealed clearance, and a
-      // church that has never used safeguarding has published none — for anybody. Refusing on its absence
-      // alone would have blocked every ordinary adult in every such church from asking for help at all, which
-      // is a far larger harm than the one being prevented. So ask a second question with a real answer: does
-      // this church have anyone cleared? If it does, safeguarding is in use here and we must not guess. If it
-      // has cleared nobody, there is no child audience to get wrong, and the relay is the backstop either way
-      // — it refuses to serve a child's request to an uncleared reader whatever this phone sealed.
-      audience = await _fetchChildCareAudience(cp);
-      if (audience === null) return { error: 'unknown-clearance' };     // could not even ask
-      if (audience.length) return { error: 'unknown-clearance' };       // this church uses safeguarding — do not guess
+      // ASK THE DOCUMENT THAT ANSWERS THE QUESTION, rather than inferring from a different one.
+      //
+      // THE INFERENCE THAT WAS HERE, AND WHY IT WAS WRONG. This asked "does this church have anyone cleared?"
+      // and read an EMPTY answer as "safeguarding is not in use here, so there is no child audience to get
+      // wrong". An empty cleared-adults list is not evidence that safeguarding is unused. It is evidence that
+      // nobody is cleared — an ordinary state for a church that has marked its children and not yet vetted
+      // anybody, and one it can sit in indefinitely. In it, a young person whose own clearance had not
+      // reached this phone was treated as an adult and their request sealed to the whole care rota.
+      // Reproduced 2026-08-31 by running this function: the request was openable by two uncleared care-rota
+      // members, and the screen said "Sent to your care team".
+      //
+      // AND THE OLD REASON FOR CALLING IT SAFE WAS WRONG TOO, which is how it survived review. It said "the
+      // relay is the backstop either way — it refuses to serve a child's request to an uncleared reader
+      // whatever this phone sealed". That is true of ONE relay. `_publishAny(churchRelays(), evt)` below
+      // sends to every relay the church uses, and the refusal depends on that relay holding the church's
+      // `minors:` document. Measured with two real gateways carrying identical churches and rosters: the one
+      // WITH `minors:` refused an uncleared care steward; the one WITHOUT served him the event — and he holds
+      // a key to it, because this phone wrapped one for him. The seal is the only thing that travels with the
+      // message. It has to be right on its own.
+      //
+      // So: fetch this member's own `clearance:<pub>`. The relay serves it to them, it is the church's own
+      // word about this person, and it is the exact document the subscription is waiting for. Nothing here
+      // widens: the refusals are the ones that were already here, and a church that has published no record
+      // about this member at all still falls through to the second question below — refusing on the absence
+      // of a document that a church which has never used safeguarding never publishes would lock every
+      // ordinary adult in every such church out of asking for help, which is the larger harm.
+      const clr = await _fetchMyClearance(cp);
+      if (clr === null) return { error: 'unknown-clearance' };          // could not even ask
+      if (clr.found) { childish = !!clr.minor; }
+      else {
+        audience = await _fetchChildCareAudience(cp);
+        if (audience === null) return { error: 'unknown-clearance' };   // could not even ask
+        if (audience.length) return { error: 'unknown-clearance' };     // this church uses safeguarding — do not guess
+      }
     }
     const team = childish ? (audience !== null ? audience : await _fetchChildCareAudience(cp)) : await _fetchCareTeam(cp);
     if (childish && team === null) return { error: 'unknown-audience' };   // could not establish — never a wide fallback

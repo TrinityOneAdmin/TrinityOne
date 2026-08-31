@@ -167,3 +167,17 @@ export function liftSgMine(bundle) {
   assert.ok(m, 'could not lift _mePub/_sgMine from the bundle — re-anchor this helper, do not delete it');
   return m[0];
 }
+
+// "WHAT DOES THIS CHURCH SAY ABOUT *ME*?" — lifted from vendor/fellowship.js as source text, for the same
+// reason and in the same way as liftSgMine above.
+//
+// publishCareRequest's child/adult branch rests on this lookup: when the member's own sealed clearance has
+// not yet reached the phone, this is what goes and fetches it instead of inferring from the cleared-adults
+// list. Stubbing it would hand the harness the exact decision the tests are named after — the failure this
+// repo has shipped four times (see the note in stub-answers-the-question). So the tests take the real one and
+// feed it real relay documents.
+export function liftFetchMyClearance(bundle) {
+  const m = /\n  async function _fetchMyClearance\(cp\) \{[\s\S]*?\n  \}/.exec(bundle);
+  assert.ok(m, 'could not lift _fetchMyClearance from the bundle — re-anchor this helper, do not delete it');
+  return m[0];
+}

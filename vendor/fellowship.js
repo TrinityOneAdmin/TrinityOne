@@ -6260,6 +6260,43 @@
     if (approved === null && roster === null && !_relayAuthedAt) return null;
     return [...new Set([...approved || [], ...roster || []].filter(Boolean))];
   }
+  async function _fetchMyClearance(cp) {
+    const me = _mePub();
+    if (!cp || !me || !sk) return null;
+    const dtag = CLEARANCE_D + me;
+    let evs = null;
+    try {
+      evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [dtag] }]);
+    } catch (e) {
+      return null;
+    }
+    const roster = _churchRoster.get(cp);
+    let best = null;
+    for (const e of evs || []) {
+      if (((e.tags.find((t) => t[0] === "d") || [])[1] || "") !== dtag) continue;
+      if (e.pubkey !== cp && !(roster && roster.has(e.pubkey))) continue;
+      const ts = e.created_at || 0;
+      if (ts > Math.floor(Date.now() / 1e3) + 600) continue;
+      if (!best) {
+        best = e;
+        continue;
+      }
+      const bts = best.created_at || 0;
+      if (ts < bts) continue;
+      if (ts === bts && !(String(e.id || "") > String(best.id || ""))) continue;
+      best = e;
+    }
+    if (best) {
+      try {
+        const o = JSON.parse(decrypt(best.content, getConversationKey(sk, best.pubkey)));
+        return { found: true, minor: !!(o && o.minor) };
+      } catch (x) {
+        return null;
+      }
+    }
+    if (!_relayAuthedAt) return null;
+    return { found: false };
+  }
   async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
     if (!cp || !reqId || !requesterPub) return null;
     try {
@@ -6776,6 +6813,7 @@
     }
   };
   var APPROVED_D = "trinityone/approved:";
+  var CLEARANCE_D = "trinityone/clearance:";
   var VOICE_D = "trinityone/voice:";
   var _churchVoices = /* @__PURE__ */ new Map();
   function _absorbRoster(cp, d, e) {
@@ -10275,9 +10313,15 @@
       const sure = !!(mine && (mine.isMinor || mine.known));
       let audience = null;
       if (!sure) {
-        audience = await _fetchChildCareAudience(cp);
-        if (audience === null) return { error: "unknown-clearance" };
-        if (audience.length) return { error: "unknown-clearance" };
+        const clr = await _fetchMyClearance(cp);
+        if (clr === null) return { error: "unknown-clearance" };
+        if (clr.found) {
+          childish = !!clr.minor;
+        } else {
+          audience = await _fetchChildCareAudience(cp);
+          if (audience === null) return { error: "unknown-clearance" };
+          if (audience.length) return { error: "unknown-clearance" };
+        }
       }
       const team = childish ? audience !== null ? audience : await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
       if (childish && team === null) return { error: "unknown-audience" };
