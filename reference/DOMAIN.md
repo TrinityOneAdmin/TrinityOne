@@ -27,11 +27,12 @@ and which of your instincts about it are wrong.
   the app could be sealed before the app knows the person is a child: *"This is a VERY unlikely situation.
   Due to the onboarding process, I'd be shocked if it ever happened in reality."* So do NOT design for the
   cold-start window as though it were a normal state, and do not add machinery to close it.
-  **Counter-evidence to weigh, not to override this with:** an instrumented run recorded at
-  `app/stew-dashboard.jsx:4051` had 50 of 150 clearance publishes silently never land. If that is a real
-  delivery rate rather than an artefact of that run, the window is reachable by a route that has nothing to
-  do with onboarding — a publish that failed months ago. Worth measuring once; not worth building for until
-  it is measured.
+  **Counter-evidence, corrected 2026-08-31 and weaker than first written:** the "50 of 150 clearance
+  publishes never landed" measurement is at `src/steward.src.js:4050`, not `app/stew-dashboard.jsx:4051`,
+  and it describes a relay rate-limit fault that was FIXED by batching (AUDIT-2026-07-28 F9). It is NOT a
+  current delivery rate, and it was wrong of me to cite it as one. What survives: a church can still hold
+  members with no clearance document, so the window is reachable by a route unrelated to onboarding. Worth
+  measuring once on real data; not worth building for until it is.
 
 
 - **A young person can arrive by SEVERAL routes, not one.** `ESTABLISHED 2026-08-30.` A parent minting an

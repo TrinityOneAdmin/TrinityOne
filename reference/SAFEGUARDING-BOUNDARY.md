@@ -69,16 +69,22 @@ should not be told they are.
   fetches the child's own clearance record, and the church's steward list to check who signed it, instead of
   inferring. **The remaining case is a child for whom no clearance record was ever published.** There the app
   still cannot tell, and still seals to the rota. That is not a race that resolves — it is permanent for that
-  child, and `app/stew-dashboard.jsx:4051` records a run where 50 of 150 clearance publishes silently never
-  landed.
+  child. A measurement often quoted alongside this needs care: `src/steward.src.js:4050` records 150 clearance
+  publishes producing 100 OK and 50 with no answer at all — but that was a relay rate-limit fault, since FIXED
+  by batching, and it is NOT evidence of a current delivery rate. Cited here only as the reason a church can
+  hold members with no clearance document at all.
   Why it matters even though the relay refuses: the request carries a key wrapped for each uncleared rota
   seat, and the app publishes to every relay the church uses. A relay that has not ingested the church's
   `minors:` document has no basis to refuse and serves it to people who can open it. Proven with two relays
   side by side.
-  Two further residuals, both reported and neither fixed: `app/screens-today.jsx:266` is a **persistent row**
-  telling the child "Sent privately — your care team will be in touch", which in this case is untrue; and
-  `src/fellowship.src.js:3584` (`subscribeChurchSafeguard`) still has the defect shape `b6588de` fixed —
-  it judges a steward-written clearance against a roster that may not have arrived on the same stream.
+  Two further residuals, both reported and neither fixed. First, the wording. `app/screens-today.jsx:266`
+  DOES branch on whether the reader is a young person — a known minor is told "someone at your church who can
+  help will be in touch", and a request sealed to only two keys says "only your church leader can open this",
+  which is honest. But in the window described above the app does not yet know, so `isMinor` is false and the
+  child is shown the adult wording, "your care team will be in touch". The branch exists; the case where it
+  matters most is the one that does not reach it. Second, `src/fellowship.src.js:3584`
+  (`subscribeChurchSafeguard`) still has the defect shape `b6588de` fixed — it judges a steward-written
+  clearance against a roster that may not have arrived on the same stream.
 
 ## What this software does not attempt at all
 
