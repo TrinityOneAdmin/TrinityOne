@@ -1,201 +1,202 @@
 # Fix plan — the four safeguarding gaps
 
 Written 2026-08-31 against `a2e3ca3` on `fix/console-sweep-defects`. Baseline suite: **2109 tests,
-2108 pass, 0 fail, 1 pre-existing todo**. Findings and their evidence are in
+2108 pass, 0 fail, 1 pre-existing todo**. The findings and the honest boundary they produce are in
 `reference/SAFEGUARDING-BOUNDARY.md`; this file is the executable half.
 
-**Read `CLAUDE.md` before starting.** Rules 1, 2, 4 and 8 are load-bearing here and each fix below names
-how it satisfies them. Read `reference/DOMAIN.md` too — in particular, a supervised shared family device
-is NOT a threat model, and a church may legitimately have no child-safe rooms at all.
+**All four were independently re-tested by an agent briefed to REFUTE them. All four reproduced**, against a
+real `scripts/gateway.mjs` over WebSocket and against functions lifted out of `vendor/fellowship.js` and
+executed. Where that pass corrected the original account, the correction is in the section below — read it,
+because two of the four are different in shape from how they were first described.
 
-**Order and cadence.** Do them in the order below. **Stop after Fix 2 and get an independent audit**
-(rule 5) before starting Fix 3. Fixes 1–3 are relay changes and share a test harness; Fix 4 is a client
-change and is the only one that is partly a copy change.
+**Read `CLAUDE.md` before starting.** Rules 1, 2, 4 and 8 are load-bearing here. Read `reference/DOMAIN.md`
+too — a supervised shared family device is NOT a threat model, and a church may legitimately have no
+child-safe rooms at all.
+
+**Order.** Severity order, worst first. **Stop after Fix 2 and get an independent audit** (rule 5) before
+starting Fix 3. Fixes 2, 3 and 4 are relay changes and share a harness; Fix 1 is a client change.
 
 **Do not touch finance.** It is locked off.
 
 **Backwards compatibility (owner, 2026-08-25): add, never repurpose.** The relay rehydrates all history on
-every update, so an ingest change is retroactive. None of these fixes may change the meaning of an existing
-document — Fix 2 adds an ingest for a document type that already exists and is already written by consoles
-in the field, so it must tolerate old and malformed content without throwing.
+every update, so an ingest change is retroactive. Fix 4 adds an ingest for a document type already written
+by consoles in the field — it must tolerate old and malformed content without throwing.
 
 ---
 
-## Fix 1 — an adults-only room's NAME is served to a young person
+## Fix 1 — a child's request for help is sealed to people who were never cleared
 
-**What a young person experiences.** Their chat list shows "Safeguarding concerns", "Elders — pastoral",
-"Marriage counselling" by name, with subtitle and category. Tapping one shows nothing; posting fails. The
-name itself is the disclosure.
+**Severity: highest. This is a disclosure, not only a delivery failure** — the original account got that
+wrong and the boundary document has been corrected.
 
-**Evidence.** `canRead`'s `group:` branch (`gateway.mjs:2383`) special-cases only `GROUP_VIS === 'team'`,
-then falls to the ordinary effective-member test. CONFIRMED by execution: the relay served a minor
-`{"name":"Leaders"}` while refusing the room's messages and refusing their post.
+**What a young person experiences.** They work up to telling someone something difficult. The sheet says
+*"This goes privately to your care team — no one else sees it."* Nobody on that team is coming, because this
+relay refuses to serve it to them — while their words sit sealed and openable by that same team on every
+other relay the church uses.
 
-**The precedent that makes this uncontroversial.** The same file, ~15 lines above, already fixed the exact
-shape for team rooms: *"Gating only its MESSAGES left the room listed in the member's chat list, where it
-accepted typing and silently discarded it… Listing the room is what makes it look joinable, so the
-DEFINITION has to go too."* The child-safe case never got the same treatment. The message gate at
-`:2470-2475` already holds the check to mirror.
+**What was proven.** Driving the shipped `publishCareRequest` with the clearance not yet arrived and an
+empty cleared list: the request is sealed to CHURCH, the CHILD, and two **uncleared care-rota members, both
+of whom could decrypt it**. The `['aud', …]` tag is written as `team`. Rendering the real screen returns
+"Sent to your care team" and the adult wording. Then, with two real gateways holding identical churches and
+rosters: the relay **with** the `minors:` document refused to serve it to an uncleared care steward; the
+relay **without** it served it, and that steward holds the key. `_publishAny(churchRelays(), evt)`
+(`fellowship.src.js:4102`) sends to all of them.
 
-**The change.** In the `d.startsWith(GROUP_D)` branch of `canRead`, after the existing `team` case, withhold
-the definition from a minor of the governing church unless the group is child-safe — mirroring `:2474`
-exactly, including its `GROUP_CHURCH.get(gid) || idNamesOwner(gid)` fallback. Stewards, the church key and
-networks return true earlier and are unaffected.
+**Reachability — CONFIRMED, and not exotic.** Three conditions: the person is a minor at the relay; their own
+`clearance:<pub>` has not landed on this device; and the church has an empty `approved:` list *and* no
+safeguarding-capable steward (`_fetchChildCareAudience` unions both). The second is every cold start before
+the subscription delivers — `publishCareRequest` reads `_sgMine().known` raw and does **not** consult the
+`trinityone.sgassume.` cache that `_assumeMinor` uses. `app/stew-dashboard.jsx:4051` records a measured run
+where 50 of 150 clearance publishes silently never landed. The perverse part: once the clearance arrives the
+child is correctly refused with a helpful message. Protection turns on whether one document has arrived.
 
-**Consumers of the group definition you MUST check before editing (rule 2).** Read each and say in the
-commit what it does when the doc is withheld:
-- `src/fellowship.src.js:3387-3390` — the member app's group subscription/room list
-- `src/steward.src.js:3651, 3670, 3732, 5420-5421` — console group editing and listing
-- `scripts/gateway.mjs:1552` — ingest, and `:1918` — the write gate
-- `app/screens-chat.jsx:358` — the client filter this is backstopping
+**The change.** The bug is the inference, at `src/fellowship.src.js:4030-4042`: an empty cleared-adults list
+is treated as evidence that safeguarding is unused here, when it is only evidence that nobody is cleared.
+When `_sgMine(cp)` is unknown, **ask the document that actually answers the question** — fetch this member's
+own `clearance:<pub>`, which the relay serves to them — rather than inferring from `approved:`. Keep the
+existing refusals: `unknown-clearance` when the answer cannot be obtained, `no-one-cleared` when it can and
+nobody is cleared. Do not widen anything.
 
-**Watch for.** A child-safe room must still be served. A minor who is a group LEADER is an edge case —
-decide and state which way it goes. Confirm the console still sees every room (it authenticates as the
-church or a steward, so it should return true before this branch).
+Also consider making `publishCareRequest` consult the same `trinityone.sgassume.` cache `_assumeMinor` uses,
+so the cold-start window closes rather than merely narrowing. Decide deliberately and say which you did.
 
-**Test that must fail if the feature is deleted (rule 1).** Drive a real relay: a church, an adults-only
-group, a child-safe group, and a member marked minor. Assert the minor is served the child-safe
-definition and NOT the adults-only one, and that a steward is still served both. It must fail if the new
-lines are removed — prove that by removing them and watching it go red.
+**Consumers you MUST check (rule 2).** `publishCareRequest`; `sendCareChat`, which reuses the `['aud', …]`
+tag so changing the audience changes replies too; `app/screens-today.jsx:747, 758, 775-776` (the pre-flight
+and the "no form" guard, both gated on `isMinor`); `:4044-4045` (`no-one-cleared`); and `careSentWording`.
+
+**Watch for.** The comment at `:4034-4042` argues the fallback is safe because "the relay is the backstop
+either way". That is true for one relay and false for the church's relay list. Update the comment — a
+comment stating a wrong reason is how this class of bug survives review.
+
+**Test (rule 1).** Lift the real `publishCareRequest` from `vendor/fellowship.js` and execute it. Assert
+that with the clearance absent and the church clearing nobody, the request is NOT sealed to an uncleared
+rota member. A stub must not supply the minor/adult decision — that is the decision under test.
 
 ---
 
-## Fix 2 — a steward's "reset this person's photo" is never enforced
+## Fix 2 — a marked child stays advertised as an available helper
 
-**What happens now.** A steward suppresses a photo; the member re-uploads and the relay stores and serves
-it. Only compliant clients hide it. `app/identity.jsx:1399` tells the steward something stronger than the
-truth.
+**What a young person experiences.** They listed themselves as willing to help. A steward later marks them
+as a child. On every ordinary member's Care tab they remain under "Ready to help" with their offer text,
+inviting adults to contact them.
 
-**Evidence.** `nophoto:` appears in `gateway.mjs` only at `:398` (declaration), `:1896` and `:1898` (the
-write gate that says who may edit the list). It is never consulted when accepting a kind-0. CONFIRMED by
-execution: a suppressed adult AND a suppressed child both re-published a photo successfully in a church
-with `childPhotos:true`.
+**What was proven.** Before marking, the listing is served. The church marks them a child; a REFRESH of the
+listing is refused; **the original keeps being served**, with zero kind-5 deletions on the relay. On the
+client half: `minors:` served to an authenticated ordinary member = 0, to the minor themself = 0, to the
+church = 1. Rendering the shipped `CareAvailability` with `minors: []` draws the marked child; the control
+with a steward's populated list does not. So the filter is live and correct, running on input it can never
+receive.
 
-**The change.** Three parts, patterned exactly on `MEMBER_PHOTOS_OFF`, which is the same shape:
-1. A `NOPHOTO_BY = new Map()` (church → Set of suppressed pubkeys), populated where the other church-scoped
-   safeguarding docs are ingested (`gateway.mjs` around `:1508`). The doc is `nophoto:<churchpub>` with
-   content `{"pubkeys":[…]}` — see `src/fellowship.src.js:3509` for the shape the client already parses.
-2. Add it to the rehydrate clear list at `:1406` alongside `CHILD_PHOTOS_OK` and `MEMBER_PHOTOS_OFF`.
-   **This is the step most likely to be forgotten**, and `:1402` carries a note about `GROUP_CHILDSAFE`
-   having had exactly this bug.
-3. A `photoSuppressed(pub)` predicate scoped like `memberPhotoBlocked` — any church the person belongs to
-   that lists them suppresses the photo — added to the existing kind-0 condition at `:1717`.
+**The change.** Gate it at the relay, where the knowledge lives. Add an `AVAIL_D` branch to `canRead`
+mirroring the write gate at `:2006`: a minor's availability doc is not served. Decide explicitly whether the
+author, the church and stewards still see it — a steward must, or they cannot understand why someone
+vanished. The CAREREQ branch at `:2225` is the precedent for that shape.
 
-**Consumers you MUST check (rule 2).**
-- `scripts/trinity-rules.mjs` `suppressPhotoAv` — the shared client rule, used by `src/fellowship.src.js:1800`
-- `src/fellowship.src.js:3442, 3455, 3474, 3509` — where the client builds `_noPhoto` and `photoBlocked`
-- `src/steward.src.js` — wherever the console writes the list
-- `gateway.mjs:1898` — the write gate stays as it is; this fix adds a READ/accept consequence, not a new writer
+**Do NOT** fix this by populating `safeguard.minors` on member devices. That would undo AUDIT-2026-07-27 and
+hand every member the congregation's list of children. Leave the client filter for stewards; it is correct
+where it can see.
 
-**Watch for.** Keep this SEPARATE from `childPhotoBlocked`. In a church with child photos off, a suppressed
-child is already covered for a different reason; that is not evidence this fix works. Test a suppressed
-ADULT, and a suppressed child in a church with `childPhotos:true`. Malformed or absent content must not
-throw — old consoles are in the field.
+**Consumers (rule 2).** `src/fellowship.src.js:1305, 1308, 1342`; `src/steward.src.js:5541`;
+`app/screens-today.jsx:840-841, 870`; `scripts/trinity-doc-types.mjs:98, 255`.
 
-**Test (rule 1).** A suppressed member's kind-0 carrying a picture is refused by a real relay; the same
-member's kind-0 with no picture is accepted; an unsuppressed member's photo is accepted.
+**Watch for.** Do not break the ordinary non-minor helper list — the common case, heavily used.
+
+**Test (rule 1).** Real relay: member publishes `careavail:`, steward marks them minor, an ordinary member
+reads the register and does NOT get the listing, while the church/steward still does.
 
 ---
 
 ## STOP HERE. Independent audit of Fixes 1 and 2 before continuing (rule 5).
 
-Run it read-only in a worktree, briefed to REFUTE. Give it the target commit and tell it a worktree has no
-`node_modules` (~5 `esbuild ENOENT` failures are environmental) and that fixed-port tests collide with a
-concurrent suite.
+Read-only worktree, briefed to REFUTE. Give it the target commit; tell it a worktree has no `node_modules`
+(~5 `esbuild ENOENT` failures are environmental) and that fixed-port tests collide with a concurrent suite.
 
 ---
 
-## Fix 3 — a member marked as a child stays advertised as an available helper
+## Fix 3 — an adults-only room's NAME is served to a young person
 
-**What a young person experiences.** They listed themselves as willing to help. A steward later marks them
-as a child. On every ordinary member's Care tab they remain under "Ready to help" with their offer text,
-inviting adults to contact them. The DM itself is refused by the relay, so the lived harm is repeated
-contact attempts and a lock nobody explains.
+**What a young person experiences.** Their chat list shows "Marriage counselling", "Safeguarding concerns",
+"Elders — pastoral" by name. Tapping shows nothing; posting fails. The name is the disclosure.
 
-**Evidence.** `accept()` AVAIL_D (`:2006`) refuses a REFRESH (`!minorOf`), but nothing withdraws the stored
-doc and `canRead` never names AVAIL_D — the only `careavail` in that region (`:2284`) is a COMMENT, not a
-gate. The client filter (`app/screens-today.jsx:840`) reads `ctx.safeguard.minors`, which
-`src/fellowship.src.js:3446-3450` documents as arriving EMPTY on every non-steward device — deliberately,
-because serving a congregation's list of children to ordinary members was itself a fault fixed in
-AUDIT-2026-07-27. Two correct decisions combining into a filter that cannot fire where it is needed.
-Per DOMAIN, marking an existing member as a child is *fairly common*, so this is a live path.
+**What was proven.** With a room named `Marriage counselling` and `childsafe` absent: messages served to the
+minor 0 (adult 1), the minor's post refused, definition served to anonymous 0 — and **definition served to
+the minor 1**, content `{"name":"Marriage counselling","kind":"open"}`. A room-list REQ as the minor returns
+both the child-safe and the adults-only room. No earlier `canRead` branch returns false for a minor.
 
-**The change.** Gate it at the relay, where the knowledge lives. In `canRead`, add an AVAIL_D branch
-modelled on the CAREREQ precedent at `:2225` (`if (minorOf(e.pubkey, cp)) return authed === e.pubkey || …`):
-a minor's availability doc is served to its author, the church, and stewards who may act on it — not to
-ordinary members.
+**The precedent.** Fifteen lines above the gap, `canRead` already withholds *team* room definitions for the
+identical reason: *"Gating only its MESSAGES left the room listed in the member's chat list, where it
+accepted typing and silently discarded it… Listing the room is what makes it look joinable, so the
+DEFINITION has to go too."* The child-safe case never got the same treatment.
 
-**Do NOT** try to fix this by populating `safeguard.minors` on member devices. That would undo
-AUDIT-2026-07-27 and hand every member the list of the congregation's children. Leave the client filter
-in place for stewards; it is correct where it can see.
+**The change.** In the `GROUP_D` branch of `canRead` (`:2383`), after the `team` case, add the test the
+message gate already makes at `:2474`, including its `GROUP_CHURCH.get(gid) || idNamesOwner(gid)` fallback.
+Stewards, the church key and networks return true earlier and are unaffected.
 
-**Consumers you MUST check (rule 2).**
-- `src/fellowship.src.js:1305, 1308, 1342` — publish/read of `careavail:`
-- `src/steward.src.js:5541` — the console's view of the helper register
-- `app/screens-today.jsx:840-841, 870` — the list and the minor's own listing control
-- `scripts/trinity-doc-types.mjs:98, 255` — the doc-type registry
+**Consumers (rule 2).** `src/fellowship.src.js:3387-3390`; `src/steward.src.js:3651, 3670, 3732,
+5420-5421`; `gateway.mjs:1552` (ingest) and `:1918` (write gate); `app/screens-chat.jsx:358`.
 
-**Watch for.** A steward must still see it, or they cannot understand why someone vanished. Decide whether
-the church console shows a marker. Do not break the ordinary (non-minor) helper list — that is the common
-case and is heavily used.
+**Watch for.** A child-safe room must still be served. A minor who is a group LEADER is an edge case —
+decide and state which way it goes. Confirm the console still sees every room.
 
-**Test (rule 1).** Against a real relay: member publishes `careavail:`, steward marks them minor, an
-ordinary member reads the register and does NOT get the listing, while the church/steward still does.
+**Test (rule 1).** Real relay, a church, an adults-only group, a child-safe group, a member marked minor:
+the minor is served the child-safe definition and NOT the adults-only one; a steward is still served both.
+Remove the new lines and watch it go red.
 
 ---
 
-## Fix 4 — a child in a church that has cleared nobody is told the wrong thing
+## Fix 4 — a steward's "reset this person's photo" is never enforced
 
-**Status: the narrowest of the four, and the one to think about before coding.** It is NOT a disclosure.
+**Lowest of the four for a child, but it always bites an adult.** With child photos left off — the default —
+a child is covered by `childPhotoBlocked`, and the console back-fills every minor into the suppression list
+(`app/stew-dashboard.jsx:4205`). So for a child this bites only in a church that opted children's photos in.
+For an adult it bites always.
 
-**What actually happens.** At `src/fellowship.src.js:4030-4042`: when the child's own sealed clearance has
-not arrived (`!sure`) AND `_fetchChildCareAudience(cp)` returns `[]`, the code falls through with
-`childish = false` and seals the request to the FULL CARE ROTA. `_fetchChildCareAudience` is deliberately
-the mirror of the relay's `childCareReader` — cleared adults ∪ safeguarding-capable stewards — so `[]`
-means the church has cleared nobody *and* has no safeguarding steward. `childCareReader` then reduces to
-the church key and its network. The church key is always in `recips`, so **the console can both receive and
-decrypt; the care rota holds keys but is never served; a safeguarding steward, if one existed, would be
-served but hold no key.** The sheet meanwhile tells the child it went privately to their care team.
+**What was proven.** In a church with `features.childPhotos: true` and member photos absent: a suppressed
+**adult** re-published a kind-0 with a photo — accepted; a suppressed **child** likewise — accepted; both
+photos then served to another member. Separator control: with church-wide child photos off, the same child's
+photo was refused, by the church-wide rule and not by the per-account one.
 
-**Reachability, which must be established before any code changes.** This needs a church that has marked
-this person as a minor (so the relay withholds) while the phone does not yet know (so `!sure`), and that
-has cleared nobody. Plausible during setup, but it is a conjunction. **A refutation pass is running on
-exactly this question — do not start Fix 4 until its result is in.** If it reports UNREACHABLE, close this
-item as "no change, reasoning recorded" rather than inventing a fix.
+**The corrected location.** `nophoto:` is consulted in `gateway.mjs` only at `:1900` (who may write the
+list) and `:983`. It is never consulted in `accept()` for kind-0 and never in `canRead`.
 
-**If it is reachable, the change is copy first, code second.** The relay's behaviour here is protective and
-should not be loosened: sending a child's disclosure to a general care rota is exactly what the gate exists
-to prevent. So:
-- The confirmation the child sees must not promise a care team that will not receive it.
-- Consider sealing to the set the relay will actually serve (church + network) rather than to a rota that
-  can never read it, so the seal and the gate agree.
-- The comment at `:4034-4042` argues the current fallback is safe because "the relay is the backstop either
-  way". That is true for confidentiality and false for delivery. Update it either way — a comment that
-  states a wrong reason is how this class of bug survives review.
+**The change.** Three parts, patterned on `MEMBER_PHOTOS_OFF`:
+1. A `NOPHOTO_BY` map (church → Set of suppressed pubkeys), populated where the other church-scoped
+   safeguarding docs are ingested (around `:1508`). The doc is `nophoto:<churchpub>`, content
+   `{"pubkeys":[…]}` — see `src/fellowship.src.js:3509` for the shape the client already parses.
+2. **Add it to the rehydrate clear list at `:1406`.** This is the step most likely to be forgotten, and
+   `:1402` carries a note about `GROUP_CHILDSAFE` having had exactly this bug.
+3. A `photoSuppressed(pub)` predicate scoped like `memberPhotoBlocked`, added to the kind-0 condition
+   at `:1717`.
 
-**Consumers you MUST check (rule 2).** `publishCareRequest` and `sendCareChat` — the latter reuses the
-`['aud', …]` tag written at `:4097` so a reply reaches the same set; changing the audience changes replies
-too. Also `app/screens-today.jsx:747, 758, 776` (the pre-flight that decides whether a form is shown at
-all) and `:4044-4045` (`no-one-cleared`).
+**Also fix the copy.** The console tooltip (`app/stew-dashboard.jsx:4535`) promises the church sees only
+their symbol and that they cannot set a new photo until allowed again. Until the relay enforces it, both are
+false. If the code fix lands, the copy becomes true and can stay; if it does not, the copy must change.
+
+**Consumers (rule 2).** `scripts/trinity-rules.mjs` `suppressPhotoAv`, used by `src/fellowship.src.js:1800`;
+`src/fellowship.src.js:3442, 3455, 3474, 3509`; the console writer and `stew-dashboard.jsx:4205, 4535`;
+`gateway.mjs:1900` (write gate — unchanged, this adds an accept consequence, not a new writer).
+
+**Watch for.** Keep this separate from `childPhotoBlocked`. Test a suppressed ADULT, and a suppressed child
+in a church with `childPhotos:true`. Malformed or absent content must not throw — old consoles are live.
+
+**Test (rule 1).** A suppressed member's kind-0 carrying a picture is refused by a real relay; the same
+member's kind-0 without a picture is accepted; an unsuppressed member's photo is accepted.
 
 ---
 
 ## Rules that apply to every fix here
 
-- **Rule 1 — test at the point of USE.** An engine test is not enough. For the relay fixes that means
-  driving a real `gateway.mjs` over a WebSocket on a temp port with a temp data dir. For Fix 4 it means
-  lifting the real function out of `vendor/fellowship.js` and executing it, never reimplementing it, and
-  never letting a stub supply the decision the test is named after.
+- **Rule 1 — test at the point of USE.** An engine test is not enough. For relay fixes, drive a real
+  `gateway.mjs` over a WebSocket on a temp port with a temp data dir. For client fixes, lift the real
+  function out of `vendor/fellowship.js` and execute it — never reimplement it, and never let a stub supply
+  the decision the test is named after.
 - **Rule 3 — never assert behaviour by matching text in `app/*.jsx`.** They ship unbundled, so `false && `
-  in front of a condition leaves every word in place and the assertion still passes. Lift and run, or make
-  no claim.
-- **Rule 4 — nothing in a commit message unless a test proves it.** Three commit messages in one sitting
-  here have asserted things that were never true.
-- **Rule 8 — account for the test count every time it moves.** Baseline 2109. If it goes down, say which
-  tests went and why, in the commit.
-- **Sabotage must be scoped to the function under test.** Near-identical siblings are this codebase's house
-  style; a plain string-replace takes the first match, which has produced false conclusions five times here.
-  Slice the enclosing function, assert the anchor appears exactly once inside it, replace, splice back.
-- **Rule 6 — device verification.** None of this is merged until it has been driven on the attached phone.
-  The handset is currently locked; that is the owner's to clear.
+  in front of a condition leaves every word in place and the assertion still passes.
+- **Rule 4 — nothing in a commit message unless a test proves it.**
+- **Rule 8 — account for the test count every time it moves.** Baseline 2109.
+- **Sabotage must be scoped to the function under test.** Slice the enclosing function, assert the anchor
+  appears exactly once inside it, replace, splice back. A mis-aimed sabotage reports what a blind test
+  reports, and has produced false conclusions five times here.
+- **Rule 6 — device verification.** Nothing merges until it has been driven on the attached phone. The
+  handset is currently locked; that is the owner's to clear.
 - **Rule 9 — stop when the error rate climbs.** Four fixes is a long session. Stopping is a control.

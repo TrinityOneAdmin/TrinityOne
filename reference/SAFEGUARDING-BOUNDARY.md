@@ -28,9 +28,11 @@ editing the app, or using a different Nostr client does not get around these.
   The default is off, and the default applies to a church that has never opened the setting.
 - **A young person cannot post a public request for help to the whole congregation**, and cannot list
   themselves in the church's "I'm here to help" register.
-- **A young person's private request for help is served only to adults the church has cleared.** Not to
-  the wider care team, not to ordinary members — the relay decides this itself, independently of how the
-  phone chose to encrypt it.
+- **A young person's private request for help is served only to adults the church has cleared** — not to
+  the wider care team, not to ordinary members. The relay decides this itself, independently of how the
+  phone chose to encrypt it. **This holds only on a relay that has ingested the church's list of children.**
+  A relay that has not cannot make the judgement, and will serve the request to whoever the phone sealed it
+  to. See the first item in the next section.
 - **The contents of an adults-only room are refused**, both the messages already in it and anything the
   young person tries to post.
 - **The name of an adults-only room does not reach a young person's lock screen** as a notification.
@@ -45,18 +47,25 @@ should not be told they are.
   the disclosure ("Safeguarding concerns", "Marriage counselling"). The hiding also depends on the app
   already knowing the person is a young person, which on a cold start over a thin link may not be true yet.
 - **A steward's "reset this person's photo".** This hides the photo in this app only. The relay stores and
-  serves it, so an older build or another client still shows it. In a church that has left child photos off,
-  the child is covered by the church-wide rule instead — but the per-person control does not do what its own
-  wording promises.
+  serves it, so an older build or another client still shows it. For a **child** this is usually academic:
+  with child photos left off — the default — they are covered by the church-wide rule, and the console
+  back-fills every minor into the suppression list anyway. For an **adult** it always bites. The console's
+  own tooltip promises two things the relay delivers neither of: that the church sees only their symbol,
+  and that they cannot set a new photo until a steward allows it.
 - **Removing someone from "Ready to help" after marking them as a child.** If they listed themselves as
   available *before* being marked, that listing keeps being served. The relay refuses any update to it, but
   does not withdraw it, and the filter meant to hide it cannot see the list of children on an ordinary
   member's phone — deliberately, because serving that list to every member was itself a privacy fault fixed
   in July. The young person stays visible as a helper.
-- **The reassurance on a young person's request for help.** In a church that has cleared nobody yet, the
-  sheet can say the request has gone privately to the care team when the relay will not serve it to that
-  team. Nothing is disclosed to the wrong people; the request simply reaches only the church console, while
-  the child has been told it was sent.
+- **A young person's request for help, when their own clearance document has not yet reached the phone.**
+  This is the most serious item on the page and it was understated in the first draft of this file. In a
+  church that has cleared nobody *and* has no safeguarding steward, the app cannot tell it is dealing with a
+  child, tells them "This goes privately to your care team — no one else sees it", and seals the request to
+  the whole care rota — **wrapping a decryption key for every uncleared seat on it**. This relay refuses to
+  serve it to them. Another relay in the church's list that has not ingested the church's `minors:` document
+  — one added later, one that was reset, one restarted mid-rehydration — serves it to them, and they hold
+  the key. Proven with two relays side by side. Whether a child is protected or quietly misrouted turns on
+  whether one document has arrived yet.
 
 ## What this software does not attempt at all
 
@@ -88,7 +97,7 @@ Kept separate so the church-facing part above stays readable. At `586b5f1`.
 | Adults-only room contents | `accept()` :2102, `canRead()` :2474 | relay |
 | Room name off the lock screen | `gateway.mjs` push branch, commit `a693e17` | relay |
 | Room NAMES in the list | `app/screens-chat.jsx:358` only; `canRead()` group branch :2383 special-cases `team` visibility alone | **client** |
-| Per-account photo suppression | `app/identity.jsx:1374`; `nophoto:` appears in `gateway.mjs` only at :398/:1896/:1898, all write-gate | **client** |
+| Per-account photo suppression | `app/identity.jsx:1374`; in `gateway.mjs` `nophoto:` is consulted only at :1900 (who may write the list) and :983 — never in `accept()` for kind-0, never in `canRead` | **client** |
 | Stale helper listing hidden | `app/screens-today.jsx:840` reads `ctx.safeguard.minors`, empty on non-steward devices by design (`fellowship.src.js:3446-3450`) | **client, inert** |
 | Care-request audience choice | `fellowship.src.js` `childish` :4028 → audience :4043 → seal :4097; escape at :4034-4042 | client picks, relay backstops delivery |
 
@@ -97,7 +106,15 @@ relay that holds no definition for it, both `accept()` :2102 and `canRead()` :24
 entirely — a young person was served an adults-only room's messages and posted into it. Reaching it needs a
 relay added after the fact or a wiped one.
 
-**Verification status.** The relay/client split in the table was established by driving a real `gateway.mjs`
-over WebSocket, not by reading. The three client-only findings were re-verified independently against source
-before being written here. The care-request escape and the rehydration of `GROUP_CHILDSAFE` are read-only
-conclusions and are marked as such in the audit notes.
+**Verification status.** Every line above was established by driving a real `gateway.mjs` over WebSocket, or
+by lifting the real function out of `vendor/fellowship.js` and executing it — not by reading. All four gaps
+were then independently re-tested by an agent briefed to REFUTE them; all four reproduced, and the
+care-request item was found to be worse than first written (see the correction note below). The rehydration
+of `GROUP_CHILDSAFE` remains a read-only conclusion.
+
+**Correction, 2026-08-31.** The first draft of this file said of the care-request gap that "nothing is
+disclosed to the wrong people". That was wrong, and it was wrong in the direction that matters. The event
+carries a decryption key wrapped for every uncleared care-rota seat, and the app publishes to every relay in
+`churchRelays()` — so any relay in the list lacking the `minors:` document serves a child's disclosure to
+people who can open it. Recorded here rather than quietly edited, because a false claim about a safeguarding
+protection is worse than the gap it describes.
