@@ -393,29 +393,71 @@ async function _fetchChildCareAudience(cp) {
 // arises before the subscription has delivered; inferring costs a young person their disclosure.
 //
 // THREE ANSWERS, and the third is not the second — the same shape used everywhere else here:
-//   null            — could not establish (unreachable, unauthenticated, or a record we cannot open)
+//   null            — could not establish: unreachable, unauthenticated, a record we cannot open, or a record
+//                     whose AUTHOR we cannot vouch for. "There is something here and I cannot verify it" is
+//                     never an absence; reading it as one is the defect audited out of here on 2026-08-31.
 //   { found:false } — we asked, authenticated, and this church has published no record about this member
 //   { found:true }  — the church's own word, with `minor` as it says it
 //
-// Authorship, the future bound and the same-second tiebreak are the SAME rules subscribeChurchSafeguard and
-// the console (`_beatsDoc` in src/steward.src.js) apply. Two programs that must agree cannot run different
-// rulebooks — a member's phone applying a clearance the console cannot see is how the worst defect of the
-// 2026-08-27 round happened.
+// The future bound and the same-second tiebreak are the SAME rules subscribeChurchSafeguard and the console
+// (`_beatsDoc` in src/steward.src.js) apply. Two programs that must agree cannot run different rulebooks — a
+// member's phone applying a clearance the console cannot see is how the worst defect of the 2026-08-27 round
+// happened. AUTHORSHIP is deliberately NOT identical to the subscription's: that one trusts any steward on
+// `_churchRoster` regardless of capability, while this trusts the church key or a steward holding the
+// SAFEGUARDING capability, which is exactly what gateway.mjs's CLEARANCE_D write gate accepts. The
+// subscription is the wider of the two; this one matches the relay, and is fetched rather than waited for.
 async function _fetchMyClearance(cp) {
   const me = _mePub();
   if (!cp || !me || !sk) return null;
   const dtag = CLEARANCE_D + me;
+  const stag = 'trinityone/stewards:' + cp;
+  // FETCH THE AUTHORITY, DO NOT WAIT FOR IT. Who may write a clearance used to be read out of `_churchRoster`,
+  // which is filled only by _absorbRoster from the `stewards:` document arriving on _onChurchDocs — THE SAME
+  // STREAM that delivers `clearance:` and sets _sgSelf. This function is only ever reached because that stream
+  // has not delivered yet, so in exactly the window it exists for the roster is characteristically EMPTY, and
+  // a clearance written by a delegated safeguarding steward — who is who marks a child in practice — was
+  // discarded as untrusted. Audited 2026-08-31 by execution: with the roster unarrived, a marked child's
+  // request was published (`toChildAudience:false`) and both uncleared care-rota members decrypted it. The
+  // same run with the roster populated correctly refused. One document's arrival was the only difference.
+  //
+  // So ask for the roster in the SAME round trip, exactly as _fetchChildCareAudience does for the same pair of
+  // documents. One querySync, one filter, no dependence on a subscription that has not arrived.
   let evs = null;
-  try { evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [dtag] }]); }
+  try { evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [dtag, stag] }]); }
   catch (e) { return null; }
-  const roster = _churchRoster.get(cp);
-  let best = null;
+  let bestS = null;
+  const mine = [];
   for (const e of (evs || [])) {
-    if (((e.tags.find(t => t[0] === 'd') || [])[1] || '') !== dtag) continue;
-    // AUTHORISED WRITERS ONLY — the church key, or one of its CURRENT roster stewards, which is who marks a
-    // child in practice. Anyone may sign an event at any d-tag; without this a stranger could publish
-    // "not a minor" at a child's clearance tag and have it believed.
-    if (e.pubkey !== cp && !(roster && roster.has(e.pubkey))) continue;
+    const d = ((e.tags.find(t => t[0] === 'd') || [])[1] || '');
+    if (d === stag) { if (e.pubkey === cp && (!bestS || (e.created_at || 0) > (bestS.created_at || 0))) bestS = e; }   // OWNER-ONLY document
+    else if (d === dtag) mine.push(e);
+  }
+  // WHO THE RELAY WOULD HAVE ACCEPTED IT FROM, and nobody else. gateway.mjs's CLEARANCE_D write gate is
+  // `e.pubkey === ncp || stewardCan(e.pubkey, ncp, 'safeguarding')`, and stewardCan's `if (!caps) return true`
+  // makes a steward with no recorded capabilities a FULL steward — the compatibility rule for a roster that
+  // predates capabilities. Mirrored here, as _fetchChildCareAudience already mirrors it: diverging downward
+  // would under-trust a steward the relay accepts, and diverging upward would believe one it refuses.
+  // `writers` stays null when the roster could not be read at all, which is not the same as an empty roster.
+  let writers = null;
+  if (bestS) {
+    try {
+      const o = JSON.parse(bestS.content);
+      const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+      const caps = (o.caps && typeof o.caps === 'object') ? o.caps : null;
+      writers = new Set(pks.filter(pk => {
+        if (!caps) return true;
+        const c = caps[pk];
+        if (!Array.isArray(c)) return true;
+        return c.some(x => String(x || '').toLowerCase() === 'safeguarding');
+      }));
+    } catch (e) { writers = null; }
+  }
+  let best = null, unverified = false;
+  for (const e of mine) {
+    // AUTHORISED WRITERS ONLY — the church key, or one of its CURRENT stewards who holds the safeguarding job,
+    // which is who marks a child in practice. Anyone may sign an event at any d-tag; without this a stranger
+    // could publish "not a minor" at a child's clearance tag and have it believed.
+    if (e.pubkey !== cp && !(writers && writers.has(e.pubkey))) { unverified = true; continue; }
     const ts = e.created_at || 0;
     if (ts > Math.floor(Date.now() / 1000) + 600) continue;   // no future-dated clearance; 600s, as both other readers use
     if (!best) { best = e; continue; }
@@ -430,6 +472,12 @@ async function _fetchMyClearance(cp) {
     try { const o = JSON.parse(nip44d(best.content, nip44ck(sk, best.pubkey))); return { found: true, minor: !!(o && o.minor) }; }
     catch (x) { return null; }
   }
+  // A RECORD WHOSE AUTHOR WE CANNOT VOUCH FOR IS NOT AN ABSENCE EITHER, and this is the half that shipped
+  // wrong. There IS a document at this member's clearance tag; all we failed at is establishing who wrote it.
+  // Reporting {found:false} sends the caller on to "has this church cleared anyone?", and in a church that has
+  // cleared nobody that reads as "safeguarding is not in use here" and a child is treated as an adult. The
+  // three answers of this function are the point: null is "could not establish", and this is that.
+  if (unverified) return null;
   // NOTHING FOUND is a real answer only if we were genuinely connected when we asked — querySync resolves
   // empty on a relay that is unreachable, still connecting, or that has not answered the auth challenge.
   if (!_relayAuthedAt) return null;

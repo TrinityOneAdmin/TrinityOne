@@ -6264,17 +6264,43 @@
     const me = _mePub();
     if (!cp || !me || !sk) return null;
     const dtag = CLEARANCE_D + me;
+    const stag = "trinityone/stewards:" + cp;
     let evs = null;
     try {
-      evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [dtag] }]);
+      evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [dtag, stag] }]);
     } catch (e) {
       return null;
     }
-    const roster = _churchRoster.get(cp);
-    let best = null;
+    let bestS = null;
+    const mine = [];
     for (const e of evs || []) {
-      if (((e.tags.find((t) => t[0] === "d") || [])[1] || "") !== dtag) continue;
-      if (e.pubkey !== cp && !(roster && roster.has(e.pubkey))) continue;
+      const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+      if (d === stag) {
+        if (e.pubkey === cp && (!bestS || (e.created_at || 0) > (bestS.created_at || 0))) bestS = e;
+      } else if (d === dtag) mine.push(e);
+    }
+    let writers = null;
+    if (bestS) {
+      try {
+        const o = JSON.parse(bestS.content);
+        const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+        const caps = o.caps && typeof o.caps === "object" ? o.caps : null;
+        writers = new Set(pks.filter((pk) => {
+          if (!caps) return true;
+          const c = caps[pk];
+          if (!Array.isArray(c)) return true;
+          return c.some((x) => String(x || "").toLowerCase() === "safeguarding");
+        }));
+      } catch (e) {
+        writers = null;
+      }
+    }
+    let best = null, unverified = false;
+    for (const e of mine) {
+      if (e.pubkey !== cp && !(writers && writers.has(e.pubkey))) {
+        unverified = true;
+        continue;
+      }
       const ts = e.created_at || 0;
       if (ts > Math.floor(Date.now() / 1e3) + 600) continue;
       if (!best) {
@@ -6294,6 +6320,7 @@
         return null;
       }
     }
+    if (unverified) return null;
     if (!_relayAuthedAt) return null;
     return { found: false };
   }

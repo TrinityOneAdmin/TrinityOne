@@ -56,9 +56,25 @@ function clearanceDoc({ by = churchSk, minor, at = now(), subject = tomPub }) {
     content: ct }, by);
 }
 
+// The church's steward roster, as the CHURCH KEY signs it and as the relay serves it. `caps` is optional: a
+// roster with none, or a steward absent from it, is a FULL steward — gateway.mjs's own compatibility rule
+// (`stewardCan`: `if (!caps) return true`), which both readers of this document mirror.
+function stewardsDoc({ pubkeys, caps = null, by = churchSk, at = now() }) {
+  return finalizeEvent({ kind: 30078, created_at: at,
+    tags: [['d', 'trinityone/stewards:' + churchPub], ['t', 'trinityone'], ['church', churchPub]],
+    content: JSON.stringify(caps ? { pubkeys, caps } : { pubkeys }) }, by);
+}
+
 // Lift the shipped method and the two safeguarding rules it rests on, and give them the free variables they
 // close over. Everything else is a stub; the seal and the clearance documents are real.
-function loadPublish({ team, childAudience, clearance = [], relayAuthed, roster = [], sgSelf }) {
+//
+// `roster` IS THE STREAM, `relayDocs` IS THE RELAY, AND THE DIFFERENCE IS THE WHOLE POINT. `_churchRoster` is
+// filled only by _absorbRoster from the `stewards:` document arriving on _onChurchDocs — the same stream that
+// delivers `clearance:` and sets `_sgSelf`. Every test here runs in the window where that stream has NOT
+// delivered, so the honest fixture for `_churchRoster` is EMPTY and the default below is exactly that. A test
+// that hands it a populated roster is describing a state that cannot coexist with its own premise; test 4 did,
+// and that fixture is how the defect this file guards shipped with a green test claiming to cover it.
+function loadPublish({ team, childAudience, clearance = [], relayDocs = [], relayAuthed, roster = null, sgSelf }) {
   const published = [];
   const body = fnBody(VENDOR, 'async publishCareRequest(fields) {', 'publishCareRequest');
   const sgMine = liftSgMine(VENDOR);
@@ -77,9 +93,11 @@ function loadPublish({ team, childAudience, clearance = [], relayAuthed, roster 
     _fetchChildCareAudience: async () => (childAudience === undefined ? [] : childAudience),
     // The relay, answering a REQ for this member's own clearance. `#d` is not applied — the lifted function
     // re-checks the d-tag itself, which is what a real relay's looser matching requires of it.
-    pool: { querySync: async () => clearance },
+    pool: { querySync: async () => [...clearance, ...relayDocs] },
     _relayAuthedAt: relayAuthed === undefined ? Date.now() : relayAuthed,
-    _churchRoster: new Map([[churchPub, new Set(roster)]]),
+    // `null` = the stewards document has NOT arrived on the stream, which is the state this whole branch is
+    // reached in. `new Map()` makes `_churchRoster.get(cp)` undefined, exactly as it is on a real cold start.
+    _churchRoster: new Map(roster ? [[churchPub, new Set(roster)]] : []),
     CLEARANCE_D,
     crypto: webcrypto,
     encrypt: (plain, key) => nip44.encrypt(plain, key),
@@ -179,14 +197,55 @@ test('the church’s own record is believed when a STEWARD wrote it — which is
   // In practice a delegated steward with the safeguarding job does the marking, not the owner's console, and
   // the relay accepts a clearance from a current roster steward. If only the church key were honoured here,
   // the fix would work in tests and not in the churches that use delegation.
+  //
+  // AND THE ROSTER IS EMPTY, WHICH IS THE ONLY HONEST FIXTURE. This test used to pass `roster: [hannahPub]`,
+  // pre-loading `_churchRoster` — a state that CANNOT coexist with its own premise. `_churchRoster` is filled
+  // only from the `stewards:` document on _onChurchDocs, the same stream that delivers `clearance:` and sets
+  // `_sgSelf`; this branch is entered only because that stream has not delivered. So in the window under test
+  // the roster is characteristically empty, and with the real fixture the shipped code discarded Hannah's
+  // clearance as untrusted, fell through to "has this church cleared anyone?", and published Tom's disclosure
+  // to Anne and Joyce. Audit F1, 2026-08-31, confirmed by execution. Authority is FETCHED now, not waited for.
   const { fn, published } = loadPublish({
     team: [annePub, joycePub], childAudience: [],
     clearance: [clearanceDoc({ by: hannahSk, minor: true })],
-    roster: [hannahPub],
+    relayDocs: [stewardsDoc({ pubkeys: [hannahPub], caps: { [hannahPub]: ['safeguarding'] } })],
   });
   const res = await fn(FIELDS);
   assert.equal(published.length, 0, 'a clearance written by the church’s own safeguarding steward was ignored');
   assert.equal(res && res.error, 'no-one-cleared');
+});
+
+test('a steward the church did NOT give the safeguarding job cannot say a child is an adult', async () => {
+  // The relay's write gate for a clearance is `e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')`, so
+  // a treasurer's "not a minor" is a document the relay would never have accepted. Believing it here would
+  // trust wider than the relay does — and the direction of the harm is the whole file: it makes a marked child
+  // look like an adult and hands the rota a key. Anything we cannot vouch for is `null`, never an absence.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub], childAudience: [],
+    clearance: [clearanceDoc({ by: hannahSk, minor: false })],
+    relayDocs: [stewardsDoc({ pubkeys: [hannahPub], caps: { [hannahPub]: ['finance'] } })],
+  });
+  const res = await fn(FIELDS);
+  assert.equal(published.length, 0, 'a finance steward’s word decided a member is not a child');
+  assert.equal(res && res.error, 'unknown-clearance');
+});
+
+test('a record we cannot vouch for is NOT an absence — it is a refusal', async () => {
+  // The half of the fix that is about the RETURN VALUE rather than the lookup. There is a document at Tom's
+  // clearance tag and we cannot establish who wrote it. Reporting `{found:false}` sends the caller to "has this
+  // church cleared anyone?", and in a church that has cleared nobody — the ordinary state this file is about —
+  // that reads as "safeguarding is not in use here" and the child is sealed to the rota. `null` is the answer.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],
+    childAudience: [],                                            // this church has cleared nobody
+    clearance: [clearanceDoc({ by: hannahSk, minor: true })],      // Hannah IS the safeguarding steward…
+    relayDocs: [],                                                 // …but no roster reached us to prove it
+  });
+  const res = await fn(FIELDS);
+  assert.equal(published.length, 0,
+    'an unverifiable record was read as "this church has said nothing", and a child’s disclosure went to the rota');
+  assert.equal(res && res.error, 'unknown-clearance',
+    '"could not establish" was reported as "no record exists" — the two answers this function keeps apart');
 });
 
 test('AN ADULT IS NOT REFUSED just because their clearance has not reached the phone', async () => {
@@ -263,4 +322,35 @@ test('a FUTURE-DATED "not a minor" cannot outrank the church’s current record'
     'a clearance dated tomorrow said "not a minor" and beat the church’s real one, and a child’s disclosure ' +
     'went to the care rota');
   assert.equal(res && res.error, 'no-one-cleared');
+});
+
+test('TWO CLEARANCES IN THE SAME SECOND: the relay’s serving order must not decide whether Tom is a child', async () => {
+  // The tiebreak at the end of _fetchMyClearance's newest-wins comparison — `same second: higher id wins, not
+  // last-arrived`. Nothing proved it: an auditor deleted the line on 2026-08-31 and all ten tests here stayed
+  // green, so the commit that claimed it was asserting something no test drove. Rule 4.
+  //
+  // WHY IT IS WORTH KEEPING. This project's adversary is lawful compulsion and seizure, and a relay under
+  // compulsion chooses what order it serves events in — it does not have to forge anything. A steward marking
+  // Tom a child and a correction landing in the same second is also ordinary: `created_at` is whole seconds,
+  // and the console writes both at a tap. Without the tiebreak the answer is "whichever the relay sent last",
+  // and a relay can send them in either order. With it, the same two documents give the same answer to every
+  // phone, and to the console, which applies the identical rule in `_beatsDoc`.
+  const at = now();
+  const a = clearanceDoc({ minor: true, at });
+  const b = clearanceDoc({ minor: false, at });
+  const winner = String(a.id) > String(b.id) ? a : b;             // the rule: higher id, whatever order it came in
+  const expectMinor = winner === a;
+  const run = async (order) => {
+    const { fn, published } = loadPublish({ team: [annePub, joycePub], childAudience: [], clearance: order });
+    const res = await fn(FIELDS);
+    return { err: (res && res.error) || null, count: published.length };
+  };
+  const forward = await run([a, b]);
+  const reversed = await run([b, a]);
+  assert.deepEqual(forward, reversed,
+    'the two orderings of the SAME two documents disagreed — a relay choosing what to send last decides ' +
+    'whether a child is treated as a child');
+  assert.deepEqual(forward, expectMinor ? { err: 'no-one-cleared', count: 0 } : { err: null, count: 1 },
+    'the same-second winner was not the higher id, so this phone and the console can reach opposite answers ' +
+    'about the same member from the same two documents');
 });
