@@ -1,7 +1,12 @@
 # What this software does and does not protect — young people
 
-**Status: INTERNAL DRAFT, 2026-08-31. Not yet fit to hand to a church.** Four of the gaps in
-"What is presented, not enforced" are open at `586b5f1`. When they are closed or consciously accepted,
+**Status: INTERNAL DRAFT, updated 2026-08-31 at `b6588de`. Not yet fit to hand to a church.** Two of the
+four gaps are closed (the stale helper listing, and the inference behind the care-request seal); two remain
+open (adults-only room names, per-account photo suppression), and the care-request item has a named residual.
+**A separate finding blocks this page becoming church-facing regardless:** a test-quality audit confirmed by
+sabotage that twelve safeguarding behaviours — including the console's "mark as a child" control doing
+nothing at all — break with the whole suite green. Until the controls a steward presses are tested, the
+enforced list below describes what the code does, not what is guarded against regression. When they are closed or consciously accepted,
 the first two sections become the church-facing document; the appendix stays here.
 
 **Who this is for.** A steward deciding what to tell parents, and a developer deciding whether a change
@@ -57,15 +62,23 @@ should not be told they are.
   does not withdraw it, and the filter meant to hide it cannot see the list of children on an ordinary
   member's phone — deliberately, because serving that list to every member was itself a privacy fault fixed
   in July. The young person stays visible as a helper.
-- **A young person's request for help, when their own clearance document has not yet reached the phone.**
-  This is the most serious item on the page and it was understated in the first draft of this file. In a
-  church that has cleared nobody *and* has no safeguarding steward, the app cannot tell it is dealing with a
-  child, tells them "This goes privately to your care team — no one else sees it", and seals the request to
-  the whole care rota — **wrapping a decryption key for every uncleared seat on it**. This relay refuses to
-  serve it to them. Another relay in the church's list that has not ingested the church's `minors:` document
-  — one added later, one that was reset, one restarted mid-rehydration — serves it to them, and they hold
-  the key. Proven with two relays side by side. Whether a child is protected or quietly misrouted turns on
-  whether one document has arrived yet.
+- **A young person's request for help, when NO clearance record for them exists at all.** *Narrowed
+  2026-08-31 by `52c44b4` and `b6588de`; what remains is stated here, not the version those fixes closed.*
+  The app used to read "this church has cleared nobody" as "safeguarding is not used here" and seal a child's
+  request to the whole care rota — **wrapping a decryption key for every uncleared seat on it**. It now
+  fetches the child's own clearance record, and the church's steward list to check who signed it, instead of
+  inferring. **The remaining case is a child for whom no clearance record was ever published.** There the app
+  still cannot tell, and still seals to the rota. That is not a race that resolves — it is permanent for that
+  child, and `app/stew-dashboard.jsx:4051` records a run where 50 of 150 clearance publishes silently never
+  landed.
+  Why it matters even though the relay refuses: the request carries a key wrapped for each uncleared rota
+  seat, and the app publishes to every relay the church uses. A relay that has not ingested the church's
+  `minors:` document has no basis to refuse and serves it to people who can open it. Proven with two relays
+  side by side.
+  Two further residuals, both reported and neither fixed: `app/screens-today.jsx:266` is a **persistent row**
+  telling the child "Sent privately — your care team will be in touch", which in this case is untrue; and
+  `src/fellowship.src.js:3584` (`subscribeChurchSafeguard`) still has the defect shape `b6588de` fixed —
+  it judges a steward-written clearance against a roster that may not have arrived on the same stream.
 
 ## What this software does not attempt at all
 
