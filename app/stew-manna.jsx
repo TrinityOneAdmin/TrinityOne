@@ -90,6 +90,9 @@ function DashMannaPanel({ church }) {
         <Icon name="lock" size={17} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Manna is the <b>money-out</b> counterpart to Finance: how your church gives to its own in need. Like Finance, it keeps <b>named, identified</b> records (it names the people you help) — so every record is <b>encrypted</b>, minimised, and never a watch-list. Manna shares the <b>Finance</b> key, so anyone you give Finance to can read these records too — bear that in mind before granting it. Payments themselves stay <b>off</b> until you wire a wallet. Use it only under your church’s safeguarding &amp; privacy policy.</div>
       </div>
+      {/* DELIBERATELY NOT a clickable row, unlike the settings rows in stew-dashboard.jsx and the practical-care
+          row in stew-meals.jsx. This switch is `disabled` during the pilot, and a row handler would bypass that
+          and enable Manna from a press on the words. Add one only when the lock is lifted. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Disbursements (Manna)</div>

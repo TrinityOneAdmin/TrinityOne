@@ -5849,6 +5849,7 @@ function DashFeaturesPanel({ church }) {
   const approval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const rules = church.rules || {};
   const fullName = !!rules.fullName;
+  const toggleFullName = () => window.Steward.publishProfile({ rules: { ...rules, fullName: !fullName } });
   const fMembers = window.useStewardMembers ? window.useStewardMembers() : [];
   const fAdmitted = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const toggleApproval = () => {
@@ -5884,13 +5885,16 @@ function DashFeaturesPanel({ church }) {
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Extras</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Same rule as ITEMS above: the row is the target. This block was copied from ITEMS and did not get
+            the row handler, so "Kids check-in" was one of the two rows a steward could press all day without
+            anything happening. */}
         {EXTRAS.map(([k, label, sub]) => (
-          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} onClick={() => toggleOpt(k)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{onOpt(k) ? 'On' : 'Off'} — {sub}</div>
             </div>
-            <button onClick={() => toggleOpt(k)} aria-label={'Toggle ' + label} role="switch" aria-checked={onOpt(k)} title={(onOpt(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: onOpt(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); toggleOpt(k); }} aria-label={'Toggle ' + label} role="switch" aria-checked={onOpt(k)} title={(onOpt(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: onOpt(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: onOpt(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
@@ -5900,34 +5904,36 @@ function DashFeaturesPanel({ church }) {
 
     <Panel title="Rules & privacy">
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Privacy</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      {/* Every row in this panel is the target for its own switch — see the note in "Congregation features".
+          These five were the same markup with no row handler. */}
+      <div onClick={toggleEncryptAll} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Encrypt all group chat</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? ('On — every group and broadcast room sealed end-to-end; the relay can’t read them.' + (encTeams.length ? ' Serving team rooms are not included.' : '')) : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
         </div>
-        <button onClick={toggleEncryptAll} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group and broadcast room end-to-end so not even the relay can read them — serving team rooms are not included" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); toggleEncryptAll(); }} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group and broadcast room end-to-end so not even the relay can read them — serving team rooms are not included" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: encOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
       {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body={'Every group and broadcast room will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default.\n\nNew broadcast rooms are not sealed by default — a broadcast is the church’s own voice to everyone. You can seal one from the Groups list.\n\nServing team rooms are not included: they don’t have an encryption control of their own, so this leaves them as they are.'} onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+      <div onClick={togglePhotos} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow member photos</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adults may set a real photo. Children only if allowed below.' : 'Off — colour, initial or symbol only (recommended for privacy).'}</div>
         </div>
-        <button onClick={togglePhotos} aria-label="Toggle member photos" role="switch" aria-checked={photosOn} title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); togglePhotos(); }} aria-label="Toggle member photos" role="switch" aria-checked={photosOn} title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: photosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
       {photosOn ? (
         <React.Fragment>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+          <div onClick={toggleKidPhotos} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow children’s photos</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{kidPhotosOn ? 'On — members marked as a child may also set a photo. Use with care.' : 'Off — children use a colour, initial or symbol. Recommended for safeguarding.'}</div>
             </div>
-            <button onClick={toggleKidPhotos} aria-label="Toggle children’s photos" role="switch" aria-checked={kidPhotosOn} title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); toggleKidPhotos(); }} aria-label="Toggle children’s photos" role="switch" aria-checked={kidPhotosOn} title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: kidPhotosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
@@ -5937,24 +5943,24 @@ function DashFeaturesPanel({ church }) {
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Joining</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      <div onClick={toggleApproval} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require approval to join</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{approval ? 'On — new joiners wait in “Requests to join” (Members) until you approve.' : 'Off — anyone with your code or QR joins straight away.'}</div>
         </div>
-        <button onClick={toggleApproval} aria-label="Toggle approval to join" role="switch" aria-checked={approval} title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); toggleApproval(); }} aria-label="Toggle approval to join" role="switch" aria-checked={approval} title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: approval ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Member names</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+      <div onClick={toggleFullName} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require a real first &amp; last name</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{fullName ? 'On — members are asked to set a full name (e.g. “Jane Smith”); those without one are nudged to add a surname.' : 'Off — members may use a single name or stay anonymous.'}</div>
         </div>
-        <button onClick={() => window.Steward.publishProfile({ rules: { ...rules, fullName: !fullName } })} aria-label="Toggle require full name" role="switch" aria-checked={fullName} title="Ask members to set a full first and last name instead of staying anonymous" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: fullName ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); toggleFullName(); }} aria-label="Toggle require full name" role="switch" aria-checked={fullName} title="Ask members to set a full first and last name instead of staying anonymous" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: fullName ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: fullName ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
@@ -5996,6 +6002,10 @@ function DashGivingPanel({ church }) {
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>Locked during the pilot.</b> This opens up once testing is finished.</div>
       </div>
       {/* steward owns the switch: giving only appears for members when this church turns it on */}
+      {/* DELIBERATELY NOT a clickable row. Every other settings row in the console toggles when its words are
+          pressed; this switch is `disabled` for the pilot, and a row handler would sail straight past that and
+          publish `giving:true` from a press on the label. Same for Manna in stew-manna.jsx. If the pilot lock
+          is ever lifted, add the row handler THEN, with stopPropagation on the switch. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)',
         background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: showConfig ? 16 : 0 }}>
         <div style={{ flex: 1 }}>
