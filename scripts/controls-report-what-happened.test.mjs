@@ -246,7 +246,11 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
       sk: new Uint8Array(32), pub: ME,
       _k0Seen: new Set([ME]),           // our own kind-0 has arrived, so this is the DID-TRY branch
       profiles: {},
+      // Both photo doors stubbed OPEN — this test is about the failed-publish REPORT, not about photos, and
+      // neither is the decision it is named after. (setProfile calls _myPhotoReset since the per-account
+      // photo reset became relay-enforced; scripts/profile-overwrite.test.mjs runs the real one.)
       _churchPhotosOff: () => false,
+      _myPhotoReset: () => false,
       _stripPhoto: (p, av) => av,
       _profilePubFor: null, _profilePubBody: null,
       PROFILE_KEY: 'trinityone.profile',

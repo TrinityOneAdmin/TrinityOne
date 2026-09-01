@@ -7684,6 +7684,9 @@
   function _churchPhotosOff() {
     return _photosOffChurches.size > 0;
   }
+  function _myPhotoReset() {
+    return !!pub && isPhotoSuppressed(pub, _noPhoto);
+  }
   function _stripPhoto(pubkey, av) {
     if (!av || av.kind !== "photo") return av;
     return { kind: "symbol", color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
@@ -8866,7 +8869,7 @@
         picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
       };
       if (meta.av || prev.av) p.av = meta.av || prev.av;
-      if (_churchPhotosOff()) {
+      if (_churchPhotosOff() || _myPhotoReset()) {
         p.picture = "";
         if (p.av) p.av = _stripPhoto(pub, p.av);
       }

@@ -1034,6 +1034,17 @@ const CHILD_PHOTOS_OK = new Set();
 // Note the polarity — member photos are ON by default and a church opts OUT, so this records the churches
 // that said no, whereas CHILD_PHOTOS_OK records the ones that said yes.
 const MEMBER_PHOTOS_OFF = new Set();
+// A steward's per-member "reset this person's photo" — d=nophoto:<churchpub>, content {"pubkeys":[…]}.
+// The THIRD photo control, and until now the only one with no relay half at all: `nophoto:` was consulted
+// here solely to decide who may WRITE the list, never to decide what may be published. So the reset was a
+// display convention of the current app build — measured 2026-08-31 against a real gateway, a suppressed
+// ADULT and a suppressed CHILD each re-published a kind-0 carrying a photograph, both were accepted, and
+// both were then served to another member. Any older build, any modified build and every other Nostr client
+// showed the photograph the church had reset.
+// Kept DELIBERATELY separate from childPhotoBlocked: with church-wide child photos off (the default) a child
+// is already covered by that rule and the console back-fills every minor into this list, so the child case
+// looks fine while the adult case — which is what this control is mostly used for — never worked.
+const NOPHOTO_BY = new Map();   // churchpub -> Set(member pubkeys whose photo this church has reset)
 
 
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
@@ -1139,6 +1150,14 @@ function childPhotoBlocked(pub) {
 // joining a second church quietly undoes the first one's decision.
 function memberPhotoBlocked(pub) {
   for (const cp of churchesOf(pub)) if (MEMBER_PHOTOS_OFF.has(cp)) return true;
+  return false;
+}
+// A STEWARD'S RESET OF ONE PERSON'S PHOTOGRAPH. Scoped exactly like memberPhotoBlocked — over the churches
+// this person actually belongs to, so a church they have never joined cannot suppress them, and the
+// strictest church they HAVE joined decides. Independent of childPhotoBlocked on purpose: this one is the
+// only thing standing between a suppressed adult and re-publishing the photograph the church removed.
+function photoSuppressed(pub) {
+  for (const cp of churchesOf(pub)) { const s = NOPHOTO_BY.get(cp); if (s && s.has(pub)) return true; }
   return false;
 }
 function safeguardAllows(minorPub, other) {
@@ -1396,7 +1415,7 @@ let _hydrating = false;
 // read from disk rather than derived.
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
-                   GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY,
+                   GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
@@ -1592,6 +1611,16 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     APPROVED_BY.set(cp, set); rebuildApproved();
   }
+  else if (d.startsWith(NOPHOTO_D) && CHURCH_PUBS.has(cp = d.slice(NOPHOTO_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding'))) {   // moderation: photo-suppression list — church key or a safeguarding steward, mirroring the write gate below
+    // Authorship mirrors accept()'s NOPHOTO_D branch exactly. Anything looser would let a member reinstate
+    // their own photograph by publishing the list without themselves on it.
+    // BACKWARDS COMPATIBLE BY CONSTRUCTION (owner: add, never repurpose). Consoles in the field have been
+    // writing this document for months and the relay rehydrates all history on every update, so this ingest
+    // runs retroactively over every one of them: absent, empty and malformed content all land as an empty
+    // set rather than throwing, and a `deleted` tag clears the church's list.
+    const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
+    NOPHOTO_BY.set(cp, set);
+  }
   else if (d.startsWith(GUARDIANS_D) && CHURCH_PUBS.has(cp = d.slice(GUARDIANS_D.length)) && e.pubkey === cp) {   // safeguarding v2: church's parent↔child map — OWNER-ONLY
     const map = new Map();
     if (!removed) { try { const links = (JSON.parse(e.content).links) || {}; for (const [c, ps] of Object.entries(links)) { const ch = toHexPub(c); if (!ch) continue; const set = new Set(); (ps || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); map.set(ch, set); } } catch {} }
@@ -1714,7 +1743,10 @@ function accept(e) {
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     // …but a minor's photograph is refused whatever their membership, unless their church allows it. Placed
     // FIRST so it cannot be fallen through: the member rule below returns true unconditionally.
-    if ((childPhotoBlocked(e.pubkey) || memberPhotoBlocked(e.pubkey)) && _profileHasPhoto(e.content)) return false;
+    // …and so is a photograph a steward has RESET, for a member of any age. Three separate rules, all three
+    // ending at the same door: the church's children's switch, the church's members' switch, and this one
+    // person's reset. Only the third of them can stop a suppressed ADULT re-publishing.
+    if ((childPhotoBlocked(e.pubkey) || memberPhotoBlocked(e.pubkey) || photoSuppressed(e.pubkey)) && _profileHasPhoto(e.content)) return false;
     if (isMember) return true;                                   // members/leaders: always
     if (store.query({ kinds: [0], authors: [e.pubkey], limit: 1 }).length) return true;  // a stranger updating their own
     // SECURITY-AUDIT-2026-07-06 M6: reject in O(cap) once the stranger cap is reached, instead of scanning +

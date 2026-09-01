@@ -15,7 +15,7 @@ import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 // Rules the console has to agree with, written once. See scripts/trinity-rules.mjs — the two copies of photo
 // suppression had already drifted apart on case handling. ARCHITECTURE-2026-07-29.
-import { pubSet, suppressPhotoAv } from '../scripts/trinity-rules.mjs';
+import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-rules.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -1895,6 +1895,15 @@ function _notePhotoPolicy(churchPub, content) {
   if (had !== off) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: {} })); } catch (e) {} }
 }
 function _churchPhotosOff() { return _photosOffChurches.size > 0; }
+// HAS A STEWARD RESET **MY** PHOTOGRAPH? The per-account half of the same door. The relay now refuses a
+// kind-0 carrying a photograph from anyone on this church's `nophoto:` list, so — exactly as with the
+// church-wide switch above — carrying the old photo forward would make every LATER edit unpublishable: the
+// relay refuses the whole event, so the "about" line and the hide-me-from-the-directory toggle, which travel
+// in that same kind-0, are lost while the app says it saved. (The display NAME is sealed separately since
+// Stage 2 and survives a refusal — do not describe this as losing a name change; it is not.) The photo
+// control is already hidden for a reset member (app/identity.jsx), so this is not about choosing a new
+// photo; it is about not losing everything else in the event.
+function _myPhotoReset() { return !!pub && isPhotoSuppressed(pub, _noPhoto); }
 function _stripPhoto(pubkey, av) {
   if (!av || av.kind !== 'photo') return av;
   return { kind: 'symbol', color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] };
@@ -2963,7 +2972,7 @@ window.Fellowship = {
     // name change or the directory opt-out that the member actually came here to make never landed either.
     // Drop the photo instead: the church has said it does not want one, and a saved name beats a saved photo
     // that is refused. The member's symbol/initial takes its place, which is what they would have been shown.
-    if (_churchPhotosOff()) { p.picture = ''; if (p.av) p.av = _stripPhoto(pub, p.av); }
+    if (_churchPhotosOff() || _myPhotoReset()) { p.picture = ''; if (p.av) p.av = _stripPhoto(pub, p.av); }
     const hidden = (meta.hidden != null ? meta.hidden : prev.hidden);   // opt out of the member directory
     if (hidden) p.hidden = true;
     // NO AUTO-CLAIMED HANDLE FOR A MEMBER. This used to derive <name>@<relay-host> from the display name and
