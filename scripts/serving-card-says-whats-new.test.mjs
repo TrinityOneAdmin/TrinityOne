@@ -2,7 +2,7 @@
 // CANNOT THEN OPEN.
 // Run: node --test scripts/serving-card-says-whats-new.test.mjs
 //
-// Owner, 2026-09-01: the Today card that reads "Serving & events · See what's on · RSVP · your rota" gains a
+// Owner, 2026-09-01: the Today card that reads "What’s happening · See what's on · RSVP · your rota" (renamed from "Serving & events", c63f387) gains a
 // small clay dot with a count when the church has posted something, or changed something, since this member
 // last opened the card. Quiet — no sound, no push, no red. It caps at "9+". It clears when they open the card,
 // not on launch and not on a timer. It is per church. And a member who joined this morning must not be told
@@ -38,7 +38,7 @@
 // still passes its own arithmetic. That is the shape CLAUDE.md rule 1 exists for.
 //
 //   · the finished screen                                            16 pass /  0 fail
-//   · <ServingNewDot> deleted from the "Serving & events" card         5 pass / 11 fail
+//   · <ServingNewDot> deleted from the "What’s happening" card         5 pass / 11 fail
 //   · <ServingNewDot> deleted from the "You're serving" card          15 pass /  1 fail
 //   · servingNewCount also counts ctx.churchServices + ctx.churchRotas 15 pass /  1 fail  (THE LEAK: the dot
 //                                                                                         lights over a rota
@@ -154,9 +154,9 @@ const visible = (n, out = []) => {
   return out;
 };
 const badge = tree => { const d = dots(tree); return d.length ? visible(d[0]).join('').trim() : null; };
-// The card itself: the tappable thing whose title is "Serving & events".
+// The card itself: the tappable thing whose title is "What’s happening".
 const servingCard = tree => find(tree, n => typeof (n.props || {}).onClick === 'function'
-  && texts(n).some(t => t.includes('Serving & events')));
+  && texts(n).some(t => t.includes('What\u2019s happening')));
 
 const ev = (id, ts, extra) => ({ id, ts, date: '2026-10-04', time: '10:00', title: 'Event ' + id, ...extra });
 const many = (n, ts) => Array.from({ length: n }, (_, i) => ev('e' + i, ts));
@@ -165,7 +165,7 @@ const many = (n, ts) => Array.from({ length: n }, (_, i) => ev('e' + i, ts));
 test('a member with nothing new gets no dot at all — not an empty one', () => {
   const s = todayScreen({ servingSeenTs: NOW - DAY, churchEvents: [ev('a', NOW - 10 * DAY), ev('b', NOW - 2 * DAY)] });
   const tree = s.draw();
-  assert.equal(servingCard(tree).length >= 1, true, 'the Serving & events card is not on the screen at all — nothing below can be true');
+  assert.equal(servingCard(tree).length >= 1, true, 'the What’s happening card is not on the screen at all — nothing below can be true');
   assert.equal(dots(tree).length, 0,
     `the card is badged with ${JSON.stringify(badge(tree))} when everything the church posted is older than ` +
     `this member's mark. A dot that is always there is not a signal.`);
@@ -298,7 +298,7 @@ test('opening the card clears it — and a draw on its own never does', () => {
   assert.equal(card.length >= 1, true, 'the badged card has no tap handler, so it cannot be opened at all');
   card[0].props.onClick({ stopPropagation() {} });
   assert.equal(s.opened.length, 1,
-    `tapping the Serving & events card called ctx.openServing() ${s.opened.length} times, not once. ` +
+    `tapping the What’s happening card called ctx.openServing() ${s.opened.length} times, not once. ` +
     `That call is the only thing that stamps the mark, so the dot would never clear.`);
 
   // …and the value app/app.jsx stamps, computed by the SHIPPED rule, really does clear the count.
@@ -348,7 +348,7 @@ test('it is quiet — clay, not red, and it does not move', () => {
 // ── the card still fits the phone, measured in a real browser ──────────────────────────────────────────────
 // 320px is where this screen has broken before (01b9814, "the header fix broke words in half at 320px"), and
 // a badge appended to a title is exactly the shape that breaks it: the first draft was a filled pill 48px
-// wide including its margin, which at 320px pushed "Serving & events" onto a second line and grew the card by
+// wide including its margin, which at 320px pushed "What’s happening" onto a second line and grew the card by
 // 25px. The badge is now a bare dot and a number, 31px including its margin, and the numbers below are the
 // contract: the badged card is NO TALLER than the same card without a badge, at every width, and the title is
 // not truncated to make room. Measured, not reasoned about — the tree says nothing about wrapping.
@@ -402,10 +402,10 @@ html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;ove
 function page(over) {
   const { html, nodes } = serialize(todayScreen(over).draw());
   const card = nodes.findIndex(n => n.type === 'div' && typeof (n.props || {}).onClick === 'function'
-    && texts(n).some(t => t.includes('Serving & events')));
-  const title = nodes.findIndex(n => n.type === 'div' && texts(n).join('').startsWith('Serving & events'));
+    && texts(n).some(t => t.includes('What\u2019s happening')));
+  const title = nodes.findIndex(n => n.type === 'div' && texts(n).join('').startsWith('What\u2019s happening'));
   const dot = nodes.findIndex(n => /since you last looked/i.test(String((n.props || {})['aria-label'] || '')));
-  assert.ok(card >= 0 && title >= 0, 'the Serving & events card is not in the serialised tree');
+  assert.ok(card >= 0 && title >= 0, 'the What’s happening card is not in the serialised tree');
   return { html: shell(html), card, title, dot };
 }
 
@@ -465,7 +465,7 @@ async function measure(which, width) {
   assert.ok(!(r.result && r.result.exceptionDetails), 'the measuring probe threw: ' + JSON.stringify(r.result || {}).slice(0, 300));
   const m = JSON.parse(r.result.result.value);
   assert.equal(m.vw, width, 'the page did not lay out at the width under test');
-  assert.ok(m.card, 'the Serving & events card never reached the page');
+  assert.ok(m.card, 'the What’s happening card never reached the page');
   return m;
 }
 

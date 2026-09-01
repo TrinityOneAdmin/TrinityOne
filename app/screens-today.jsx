@@ -1556,7 +1556,14 @@ function TodayScreen({ ctx }) {
         <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both', background: 'var(--surface)', border: '1px solid var(--line)' }}>
           <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>What’s happening<ServingNewDot n={servNew} /></div>
+            {/* The title and its dot are ONE line. "What’s happening" plus a "9+" badge is wider than the
+                old "Serving & events" was, and at 320px it wrapped and grew the card 79px -> 95px
+                (serving-card-says-whats-new.test.mjs catches exactly this). nowrap + ellipsis keeps the
+                dot beside the title instead of under it; minWidth:0 lets the ellipsis actually engage. */}
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, display: 'flex', alignItems: 'center', minWidth: 0 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>What’s happening</span>
+              <ServingNewDot n={servNew} />
+            </div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>See what’s on · RSVP · your rota</div>
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
