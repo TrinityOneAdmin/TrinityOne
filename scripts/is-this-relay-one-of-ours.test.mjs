@@ -61,12 +61,17 @@ function liftCore(file) {
     fnBody(src, 'function parseRelayNet', 'parseRelayNet'),
     fnBody(src, 'function _originKey', '_originKey'),
     fnBody(src, 'function sameOriginRelay', 'sameOriginRelay'),
+    // proveRelay is where the three roots now live; isNetworkRelay is its one-line boolean reading. Both are
+    // lifted, and the guards below still read the same lines — they simply sit in the function that answers
+    // WHICH root, because the C4 gate has to know that to scope what it caches (a canonical pin is a fact
+    // about the product, a church signature is a fact about one congregation).
+    fnBody(src, 'async function proveRelay', 'proveRelay'),
     fnBody(src, 'async function isNetworkRelay', 'isNetworkRelay'),
   ].join('\n');
   // Guards on the lift itself. A slice that quietly stopped containing the load-bearing line would leave
   // every assertion below passing over nothing.
   assert.match(body, /verify \|\| verifyRelayIdentity/,
-    `${file}: isNetworkRelay no longer runs the C2 possession proof at all`);
+    `${file}: the predicate no longer runs the C2 possession proof at all`);
   assert.match(body, /canonicalPinsFor\(url, d\.pins\)/, `${file}: the canonical pin root is gone`);
   assert.match(body, /sameOriginRelay\(url, d\.origin\)/, `${file}: the same-origin root is gone`);
   return { body, src };

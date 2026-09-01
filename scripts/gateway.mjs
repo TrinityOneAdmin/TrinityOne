@@ -2429,6 +2429,19 @@ function canRead(e, authed) {
     // PUBLIC: joinpolicy is a bare {approval:bool} with no PII, and a not-yet-joined member must read it
     // before they can join — it is the one document that legitimately precedes membership.
     if (d.startsWith(JOINPOLICY_D)) return true;
+    // PUBLIC, and for exactly the same reason one level down (closed-network plan C4). This is the church's
+    // own statement of WHICH RELAY BOXES ARE ITS NETWORK, and under the client gate a phone will not publish
+    // to an address until it has read it — including the phone of somebody who has just scanned an invite
+    // and is not a member of anything yet. Gate it behind membership and a self-hosting church's newcomer
+    // can never publish their join to the church's own box, because the box will not tell them it is the
+    // church's box until they have joined. That is the bootstrap deadlock, arriving through the relay.
+    //
+    // WHAT IT DISCLOSES, weighed rather than waved past: a list of RELAY PUBKEYS, an optional advisory URL,
+    // and an alwaysOn flag. No member, no name, no content. The church's kind-10002 already publishes the
+    // same church's relay ADDRESSES to anyone at all (`if (e.kind === 10002) return true` below), so this
+    // reveals strictly less about where a church lives than what is already public — and a reader must
+    // already know the church's pubkey to ask for it.
+    if (d === RELAY_NET_D) return true;
     // Resolve the owning church. <prefix><churchpub> d-tags carry it directly; church-authored docs are
     // self-identifying; steward-authored content names it in ['church']; member-authored replies
     // (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:) p-tag it. If none of those resolve, we cannot prove

@@ -507,7 +507,14 @@ window.InviteSheet = InviteSheet;
 function RelaysSheet({ open, onClose, ctx }) {
   const FS = window.Fellowship;
   // REAL source of truth: the live transport's configured relays (full ws/wss URLs)
-  const fromReal = () => FS && FS.relays ? FS.relays.map(u => ({ url: u, status: 'on' })) : (window.TrinityData.RELAYS || []);
+  // "Connected" now means the thing it always claimed to: this address is carrying your church's traffic.
+  // It used to be hard-coded 'on' for every entry in the list. Under the closed network a relay stays in the
+  // list, keeps being retried and keeps being re-checked, but nothing is published to it until it has proved
+  // it holds a key this church's network contains — so an address in the list is not evidence of anything on
+  // its own, and saying "Connected" over one would be the label lying about the control again.
+  const fromReal = () => FS && FS.relays
+    ? FS.relays.map(u => ({ url: u, status: (FS.relayVerified ? (FS.relayVerified(u) ? 'on' : 'checking') : 'on') }))
+    : (window.TrinityData.RELAYS || []);
   const [list, setList] = useIx(null);
 
   // (re)seed each time the sheet opens, and follow live relay changes
@@ -516,7 +523,8 @@ function RelaysSheet({ open, onClose, ctx }) {
     setList(fromReal());
     const refresh = () => setList(fromReal());
     window.addEventListener('trinity-relays', refresh);
-    return () => window.removeEventListener('trinity-relays', refresh);
+    window.addEventListener('trinity-relays-verified', refresh);
+    return () => { window.removeEventListener('trinity-relays', refresh); window.removeEventListener('trinity-relays-verified', refresh); };
   }, [open]);
 
   const rows = list || fromReal();
@@ -533,6 +541,14 @@ function RelaysSheet({ open, onClose, ctx }) {
       </div>
       <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 16px' }}>
         Relays carry your church’s messages across Nostr. They’re set up by the churches you join — you connect to a church’s relay automatically when you scan its invite.</p>
+      {rows.some(r => r.status === 'checking') ? (
+        <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
+          <Icon name="shield" size={17} color="var(--ink-3)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <span style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+            Nothing is sent to an address until it has shown it is one of your church’s relays. The ones marked
+            “Not in use” haven’t shown that yet — they stay here and are checked again.</span>
+        </div>
+      ) : null}
 
       {!rows.length ? (
         <div style={{ display: 'flex', gap: 10, padding: '14px 15px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
@@ -547,7 +563,7 @@ function RelaysSheet({ open, onClose, ctx }) {
               <span style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bare(r.url)}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
                 <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
-                {r.status === 'on' ? 'Connected' : 'Off'}</span>
+                {r.status === 'on' ? 'Connected' : r.status === 'checking' ? 'Not in use' : 'Off'}</span>
             </div>
           ))}
         </div>

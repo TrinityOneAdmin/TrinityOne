@@ -547,6 +547,11 @@ const CARE_SEND_REFUSAL = {
   // matters most. This build cannot itself produce that refusal — it always mints a naming id — so it is
   // insurance for the NEXT time the relay has to refuse an old app, not for this change.
   'stale-app': 'Please update the app to ask for help — this version can’t send a request. If you can’t update right now, speak to a leader in person.',
+  // NOT SENT, and not the member's connection. Under the closed relay network nothing is published to an
+  // address that has not shown it is one of this church's relays, so the request can fail with a perfectly
+  // good signal — and "check your connection" would send someone asking for help to stare at their wifi.
+  // Say plainly that it did not go, and point them at a person, because that is the route that still works.
+  'no-network-relay': 'Your request was NOT sent — we couldn’t reach a relay your church runs. Please speak to a leader in person, and try again later.',
 };
 function careSentWording(res) {
   // A YOUNG PERSON DID NOT WRITE TO THE CARE TEAM. Their request goes to the adults their church has cleared,

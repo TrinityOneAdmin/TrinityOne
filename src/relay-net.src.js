@@ -33,11 +33,11 @@
 // shipped, never to nothing, because the canonical pool is a literal in this bundle and needs no network to
 // be trusted. There is no urgency argument for admitting a relay that has not answered.
 //
-// WHAT THIS DELIBERATELY DOES NOT DO — the same line src/relay-identity.src.js draws, one level up. It does
-// not decide which relays anything talks to. Nothing in either bundle filters a relay list on this answer;
-// that is the closed-network plan's C4, and it lands separately with an audit between, because the moment a
-// client requires membership, a fleet relay that cannot answer the C2 proof drops out of its own church's
-// network on the day it merges.
+// WHAT CONSUMES IT (C4, at the bottom of this file). createRelayGate() turns this answer into the PUBLISH
+// SET both surfaces write over: `relays()` in the console, `churchRelays()`/`relaysForChurch()`/
+// `_publishAny()` in the member app. A relay that cannot prove itself now stops receiving a church's data —
+// which is also why merging this deploys nothing until every relay in the fleet answers /relay-identity: a
+// box that cannot answer drops out of its own church's network on the day it lands.
 //
 // AND IT DOES NOT CLAIM MORE THAN IT PROVES. Nothing remote can show that a relay's operator is not simply
 // reading their own database. This raises the floor from "anyone with a keypair" to "a relay running the
@@ -141,8 +141,9 @@ export function sameOriginRelay(url, origin) {
   return !!a && !!b && a === b;
 }
 
-// → true when `url` is a relay this church may talk to. `cp` is the church's pubkey: membership is per
-// church, because the church's own signature is the authority.
+// → WHICH ROOT admits this relay for this church, and the pubkey it proved. `{ root: '', pub: '' }` when
+// none does. `cp` is the church's pubkey: membership is per church, because the church's own signature is
+// the authority.
 //
 // deps:
 //   verify(url)      → Promise<{relayPub}|null>  — the C2 possession proof. Defaults to the shipped one.
@@ -152,26 +153,289 @@ export function sameOriginRelay(url, origin) {
 //
 // THE PROOF IS FIRST AND IT IS NOT OPTIONAL FOR ANY ROOT — including the same-origin one. Without it every
 // root below is a string comparison against something any host can echo.
-export async function isNetworkRelay(cp, url, deps) {
+//
+// WHY THE ROOT COMES BACK AND NOT JUST A YES. The C4 gate caches this answer, and two of the three roots are
+// facts about the WHOLE PRODUCT while the third is a fact about ONE CHURCH. A canonical pin and the page's
+// own origin say nothing about which congregation is asking; a church's signature says everything. Cache
+// them under the same key and church A's signature would silently admit a relay for church B's data — the
+// cross-tenant shape this codebase has shipped twice. So the caller is told which one answered.
+export async function proveRelay(cp, url, deps) {
   const d = deps || {};
-  if (!url) return false;
+  const no = { root: '', pub: '' };
+  if (!url) return no;
   let proof = null;
   try { proof = await (d.verify || verifyRelayIdentity)(url); } catch { proof = null; }
   const provenPub = String((proof && proof.relayPub) || '').toLowerCase();
-  if (!_isHex64(provenPub)) return false;
+  if (!_isHex64(provenPub)) return no;
 
   // ROOT 1 — the canonical pool, against the pin baked in beside the URL.
-  if (canonicalPinsFor(url, d.pins).includes(provenPub)) return true;
+  //
+  // AND IT IS URL-BOUND, WHICH IS NOT AN ACCIDENT (see THE FORWARDING PROXY below). `canonicalPinsFor`
+  // answers [] for any address that is not itself a canonical URL, so a host that FORWARDS the proof to a
+  // real canonical relay and passes it back cannot inherit that relay's membership at its own address.
+  if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: 'canonical', pub: provenPub };
 
-  // ROOT 2 — the page's own serving origin.
-  if (sameOriginRelay(url, d.origin)) return true;
+  // ROOT 2 — the page's own serving origin. URL-bound for the same reason and by the same construction: the
+  // address dialled must BE the origin, so a forwarder at a different address is not the origin.
+  if (sameOriginRelay(url, d.origin)) return { root: 'origin', pub: provenPub };
 
   // ROOT 3 — this church's own signature. PUBKEY ONLY: `e.url` is a hint about where the box was last seen
   // and is never compared with the URL we dialled, because a tunnelled relay's address changes on every
   // restart and matching on it would un-admit a church's own box every time it reboots.
   let entries = null;
   try { entries = d.netEntries ? await d.netEntries(cp) : null; } catch { entries = null; }
-  if (Array.isArray(entries) && entries.some(e => e && String(e.pubkey || '').toLowerCase() === provenPub)) return true;
+  if (Array.isArray(entries) && entries.some(e => e && String(e.pubkey || '').toLowerCase() === provenPub)) return { root: 'church', pub: provenPub };
 
-  return false;
+  // NO ROOT — but the key it proved still comes back, and that is not a detail. The gate needs to tell
+  // "this address did not answer" from "this address is answering with somebody ELSE's key now", because the
+  // second means the machine it once admitted is no longer the machine that is there. Returning the bare
+  // `no` here made those two indistinguishable and a cached admission survived a takeover of the address.
+  return { root: '', pub: provenPub };
 }
+
+// → true when `url` is a relay this church may talk to. The one-line reading of proveRelay(), kept because
+// it is the question every caller outside the gate actually asks.
+export async function isNetworkRelay(cp, url, deps) {
+  return !!(await proveRelay(cp, url, deps)).root;
+}
+
+// ── C4: THE GATE — from "is this relay one of ours?" to "does this church's data go there?" ─────────────
+//
+// TWO SETS, AND CONFUSING THEM IS THE WHOLE DANGER (plan §5-bis).
+//
+//   • THE CANDIDATE LIST is what the client keeps, shows, retries and verifies in the background. Its
+//     never-empty guards stay exactly where they are and are untouched: `loadRelays()` falls back to the
+//     canonical pool rather than return `[]`, and the console appends the canonical pool unconditionally.
+//   • THE PUBLISH SET is verified-only and MAY BE EMPTY. It is this filter's output, computed AFTER those
+//     guards, on the assembled list.
+//
+// Get that order backwards in either direction and one of two things happens. Filter BEFORE the guards and
+// an emptied list is refilled by the guard with relays nobody verified — the gate re-admits what it just
+// refused. Treat the publish set as never-empty and the gate does not exist. So: guards first, filter last,
+// and when the filter returns nothing, each path takes the failure surface it ALREADY has. There is no
+// general write queue in this product and this item does not build one.
+//
+// NEVER VERIFY-OR-DROP ON THE HOT PATH. `admit()` is synchronous and consults the cache and nothing else,
+// because it sits under every publish and every subscription. A URL the cache does not know is not verified
+// here and dropped here — it is scheduled, verified in the background, and enters the live set on the next
+// call if it passed. A relay is therefore never excluded because a probe happened to be slow at the moment
+// somebody pressed send; it is excluded because it has never proved itself.
+//
+// KEYED BY URL, CERTIFYING A PUBKEY. The map is keyed by `normalizeURL` — the same key the connection pool
+// files relays under, because a raw string compare that differs only by a trailing slash misses SILENTLY and
+// has done so three times in this codebase already. What an entry CERTIFIES is the pubkey proven at that
+// address. A box that moves to a new URL simply proves itself there and is re-admitted; nothing about
+// membership is URL-shaped. And a URL that starts answering with a DIFFERENT key loses its entry on the next
+// background pass, because the thing that was admitted is no longer what is there.
+//
+// PER CHURCH, WHERE THAT IS WHAT WAS PROVED. An entry records the church whose signature admitted it, or ''
+// for the canonical and same-origin roots, which are facts about the product rather than about one
+// congregation. `admit(list, cp)` accepts an entry when it is church-independent or when it names THIS
+// church. Passing no church at all (a DM, a profile read — traffic that belongs to the member and not to a
+// congregation) accepts any church this device has proved a relay for; it never accepts an unverified one.
+export const VERIFIED_KEY = 'trinityone.relays.verified';
+// HOW LONG A PROOF IS GOOD FOR WITHOUT THE NETWORK. Not a security window — the background pass re-proves
+// every few hours whenever the device is online, so this only decides what a phone that has been OFF or out
+// of signal for a long time may do the moment it comes back. Short would mean a returning member's first
+// message fails while a probe runs; and the thing being remembered is not a secret, it is "this address was
+// a relay our church signed for". A month is long enough to cover a missionary's trip and short enough that
+// a box a church removed does not stay admitted on a dormant handset for ever.
+export const VERIFIED_TTL_SEC = 30 * 24 * 3600;
+export const VERIFIED_REFRESH_SEC = 6 * 3600;   // re-prove in the background once an entry is older than this
+export const VERIFY_RETRY_SEC = 60;             // …and do not hammer a box that just failed
+
+// The cache off whatever store the caller has (localStorage in both shipped surfaces, a plain object in
+// tests). Anything malformed reads as an empty map rather than throwing: a corrupt cache must cost a boot a
+// round of re-verification, never the boot.
+export function readVerified(store) {
+  const out = new Map();
+  let raw = null;
+  try { raw = store && store.getItem ? store.getItem(VERIFIED_KEY) : null; } catch { raw = null; }
+  let obj = null;
+  try { obj = JSON.parse(raw || '{}'); } catch { return out; }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
+  for (const [k, v] of Object.entries(obj)) {
+    if (!v || typeof v !== 'object') continue;
+    const pub = String(v.pub || '').toLowerCase();
+    if (!_isHex64(pub)) continue;
+    const until = Number(v.until) || 0, at = Number(v.at) || 0;
+    const cp = _isHex64(v.cp) ? String(v.cp).toLowerCase() : '';
+    out.set(_relayKey(k), { pub, cp, at, until });
+  }
+  return out;
+}
+export function writeVerified(store, map) {
+  try {
+    if (!store || !store.setItem) return;
+    const obj = {};
+    for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until };
+    store.setItem(VERIFIED_KEY, JSON.stringify(obj));
+  } catch {}
+}
+
+// Is this URL admitted for this church, from the cache alone? SYNCHRONOUS, and the only question the hot
+// path asks. `cp` falsy = the caller is not acting for a particular church (see the header note).
+export function admitCached(map, url, cp, nowSec) {
+  const e = map.get(_relayKey(url));
+  if (!e || !(e.until > nowSec)) return false;
+  if (!e.cp) return true;                 // canonical / same-origin: church-independent
+  return !cp || e.cp === String(cp).toLowerCase();
+}
+
+export function rememberVerified(map, url, pub, cp, nowSec) {
+  const k = _relayKey(url);
+  if (!k || !_isHex64(pub)) return;
+  map.set(k, { pub: String(pub).toLowerCase(), cp: _isHex64(cp) ? String(cp).toLowerCase() : '', at: nowSec, until: nowSec + VERIFIED_TTL_SEC });
+}
+
+// THE GATE ITSELF. One per surface (one in the member app, one in the console), created once at module load.
+//
+// deps:
+//   store        — a localStorage-like { getItem, setItem }, or null for memory-only
+//   verify(url)  — the C2 possession proof; passed through to proveRelay
+//   netEntries(cp), origin, pins — proveRelay's other roots. `origin` may be a string or a function.
+//   now()        — seconds, injectable for tests
+//   onChange()   — called when the live set gained or lost a relay, so a panel can repaint
+export function createRelayGate(deps) {
+  const d = deps || {};
+  const nowSec = () => (d.now ? d.now() : Math.floor(Date.now() / 1000));
+  const map = readVerified(d.store);
+  // KEY → THE PROOF IN FLIGHT FOR IT, not merely "one is happening". A set could only tell refresh() to SKIP
+  // an address the hot path had already scheduled a moment earlier, so `await refresh(...)` would return
+  // before the very answer it was called to wait for — a barrier that is not one, and the surface's first
+  // publish would go to an empty set for no reason. Holding the promise makes refresh JOIN that work.
+  const inflight = new Map();
+  const attempted = new Map();      // key → when we last tried, so a dead box is not hammered
+  const changed = () => { try { if (d.onChange) d.onChange(); } catch {} };
+
+  function origin() { try { return (typeof d.origin === 'function') ? d.origin() : (d.origin || ''); } catch { return ''; } }
+
+  // Prove one address and record what root admitted it. Also FORGETS an entry whose address has started
+  // answering with a different key, or which no root vouches for any more (a church removed the box from its
+  // document): the cache is a memory of a proof, not a permanent grant.
+  async function prove(url, cp) {
+    const k = _relayKey(url);
+    let res = { root: '', pub: '' };
+    try { res = await proveRelay(cp, url, { verify: d.verify, netEntries: d.netEntries, origin: origin(), pins: d.pins }); } catch {}
+    const had = map.get(k);
+    if (res.root) {
+      const scope = res.root === 'church' ? String(cp || '').toLowerCase() : '';
+      // A CHURCH-ROOT ADMISSION WITH NO CHURCH TO ATTACH IT TO would be written down as church-INDEPENDENT —
+      // one congregation's signature admitting a relay for everybody on the device. It cannot arise today
+      // (netEntries answers [] when there is no church to ask about) and it is refused here anyway, because
+      // this is the exact shape of cross-tenant defect this codebase has shipped twice.
+      if (res.root === 'church' && !_isHex64(scope)) { attempted.set(k, nowSec()); return false; }
+      rememberVerified(map, url, res.pub, scope, nowSec());
+      writeVerified(d.store, map);
+      if (!had || had.pub !== res.pub || had.cp !== scope) changed();
+      return true;
+    }
+    attempted.set(k, nowSec());
+    // ONLY FORGET WHEN WE LEARNED SOMETHING, not merely when the box did not answer. A relay that is off for
+    // an afternoon must not be un-admitted by its own downtime — that is the fail-closed-in-the-wrong-place
+    // mistake, and the entry expires on its own soon enough if it never comes back. So: drop it when the
+    // address PROVED a different key (somebody else is answering here now), and leave it otherwise.
+    if (had && res.pub && res.pub !== had.pub) { map.delete(k); writeVerified(d.store, map); changed(); }
+    return false;
+  }
+
+  // Start a proof, or hand back the one already running for this address. Never two at once for one address.
+  function start(url, cp) {
+    const k = _relayKey(url);
+    const running = inflight.get(k);
+    if (running) return running;
+    const p = Promise.resolve().then(() => prove(url, cp)).catch(() => false).then((v) => { inflight.delete(k); return v; });
+    inflight.set(k, p);
+    return p;
+  }
+  // The hot path's form: start one if none is running and we have not just failed at this address, and do
+  // not wait for it under any circumstances.
+  function schedule(url, cp) {
+    const k = _relayKey(url);
+    if (!k || inflight.has(k)) return;
+    const last = attempted.get(k) || 0;
+    if (last && (nowSec() - last) < VERIFY_RETRY_SEC) return;
+    attempted.set(k, nowSec());
+    start(url, cp);
+  }
+
+  return {
+    // THE SYNCHRONOUS FILTER. Cache only. Anything it cannot admit is scheduled, never awaited.
+    admit(list, cp) {
+      const t = nowSec(), out = [];
+      for (const u of (Array.isArray(list) ? list : [])) {
+        if (!u) continue;
+        const e = map.get(_relayKey(u));
+        if (admitCached(map, u, cp, t)) {
+          out.push(u);
+          if (!e.at || (t - e.at) > VERIFIED_REFRESH_SEC) schedule(u, cp);   // still good; re-prove in the background
+        } else schedule(u, cp);
+      }
+      return out;
+    },
+    // Ask about ONE address without opening anything — what a relay panel needs to say "connected" or
+    // "not yet proved" honestly.
+    admits(url, cp) { return admitCached(map, url, cp, nowSec()); },
+    // Prove a whole list NOW, awaited. For the moments where waiting is right: the list just changed, or the
+    // app has just booted and would rather spend a second than start with an empty publish set.
+    async refresh(list, cp) {
+      const seen = new Set(), waiting = [];
+      for (const u of (Array.isArray(list) ? list : [])) {
+        const k = _relayKey(u);
+        if (!u || seen.has(k)) continue;
+        seen.add(k);
+        attempted.set(k, nowSec());     // an explicit "prove this now" is not subject to the failure backoff
+        waiting.push(start(u, cp));
+      }
+      try { await Promise.all(waiting); } catch {}
+      return this.admit(list, cp);
+    },
+    // What the gate would drop, so a screen can name the address and say why rather than losing it silently.
+    dropped(list, cp) { const t = nowSec(); return (Array.isArray(list) ? list : []).filter(u => u && !admitCached(map, u, cp, t)); },
+    forget(url) { const k = _relayKey(url); if (map.delete(k)) { writeVerified(d.store, map); changed(); } },
+    _map: map,
+  };
+}
+
+// ── THE FORWARDING PROXY, and exactly how far this closes it ────────────────────────────────────────────
+//
+// THE ATTACK. A host at an address of its own answers `/relay-identity?nonce=N` by asking a GENUINE relay
+// the same question and passing the answer back. It has learned no key and forged nothing, and the proof it
+// returns is real. If that host is also the websocket a client publishes to, the client's traffic is the
+// proxy operator's to read while the proof says everything is well.
+//
+// WHAT IS CLOSED HERE, and it is the half where the valuable identities live. Roots 1 and 2 are bound to the
+// address dialled by construction, not by a comparison that could be got wrong: `canonicalPinsFor()` answers
+// [] for any address that is not itself one of the canonical URLs, and `sameOriginRelay()` requires the
+// address to BE the page's origin. So a forwarder cannot inherit the canonical pool's identity, and cannot
+// inherit the console's own box's, however faithfully it relays the proof. There is a test that stages
+// exactly this — a real forwarding host in front of a real relay — and requires the refusal.
+//
+// WHAT IS NOT CLOSED HERE: ROOT 3, and the reason is the relay's, not the client's. Under the church
+// signature the client checks a PUBKEY, deliberately, because a church's own box behind a free tunnel gets a
+// new address on every restart and matching on address would un-admit it on every reboot. The obvious extra
+// check — "does the URL the relay SIGNED match the URL we dialled?" — cannot be made to work against the
+// proof gateway.mjs mints today, and it fails in both directions at once (measured at this commit,
+// scripts/gateway.mjs `relayIdentityUrl`):
+//
+//   • With no `origin` file, the relay signs the HOST HEADER it was sent. A proxy chooses that header, so
+//     the relay signs the PROXY's address and the comparison passes. The check buys nothing.
+//   • With an `origin` file, the relay signs THAT — and `origin` is the UPDATE origin, the box this relay
+//     pulls new code FROM (`scripts/relay-update.sh`, and gateway.mjs's own "this relay has no update origin
+//     (it may be the release host itself)"). So a satellite relay signs its MASTER's URL, and the comparison
+//     would refuse a perfectly genuine church box. The check costs a real deployment.
+//
+//   And even with those repaired it would still refuse the two canonical URLs, which are one machine reached
+//   two ways and cannot both equal what that machine signs.
+//
+// SO THE FIX IS THE RELAY'S: a box declares the address(es) it answers at, signs the dialled host only when
+// it is one of them, and refuses otherwise — at which point the client can bind, and a proxy can no longer
+// have its own address signed by somebody else's key. That is URL-to-key binding, which the plan already
+// places in C6; what this note adds is that C6 must ALSO repair `relayIdentityUrl` (it currently signs the
+// wrong URL entirely for any satellite) and must reach the CLIENT gate, not only the sync loop, because a
+// member publishing straight at a proxy never goes near the sync loop.
+//
+// AND THE RESIDUAL IS BOUNDED, which is worth saying plainly rather than leaving as a shrug: the gate only
+// ever filters addresses that are ALREADY in the church's candidate list, so this attack needs a hostile URL
+// adopted first. Every automatic route by which one can arrive — an invite's `?relay=`, a directory name
+// swap, auto-find — is C5's, and C5 is the item immediately after this one.

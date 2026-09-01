@@ -145,7 +145,12 @@ test('an outage does not count toward the give-up limit (shipped code)', () => {
   // Before: MAX_TRIES=50 at one 45s tick each = ~37 min, and EVERY offline attempt burned a try — so a
   // message queued during an outage longer than ~37 min was dropped though no relay ever saw it.
   assert.match(FELLOWSHIP, /isConnectionFailure/, 'no connection-vs-refusal distinction — offline attempts still burn tries');
-  assert.match(FELLOWSHIP, /every\(isConnectionFailure\)/, 'the flush must detect an all-connection-failure outage');
+  // …and the closed-network gate's refusal counts as one too (plan C4): a publish set that is empty because
+  // nothing could be proved means nothing reached a relay, so counting it would drop a member's words after
+  // ~37 minutes of retrying against a set that was empty the whole time. The executable version of this is
+  // in scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs, which drives the real _outboxFlush.
+  assert.match(FELLOWSHIP, /every\(\(e2\) => isConnectionFailure\(e2\) \|\| isNoNetworkRelay\(e2\)\)/,
+    'the flush must detect an all-connection-failure outage — including a gate refusal, which is one');
   assert.match(FELLOWSHIP, /if\s*\(\s*!outage\s*\)\s*item\.tries/, 'tries must increment ONLY when it is not an outage');
 });
 

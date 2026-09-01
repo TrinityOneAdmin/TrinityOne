@@ -13,8 +13,8 @@ import { _absorbById, _forgetById, _seedFromCache, _reduceAll, _tombstoneTargets
 import { verifyRelayIdentity } from './relay-identity.src.js';
 // …and then decide whether the key it proved is one this church's network contains. Shared with the console
 // for the same reason: two surfaces that disagree about who is in the network is worse than either answer.
-// NOTHING GATES ON THIS YET — see src/relay-net.src.js and the note on window.Fellowship.isNetworkRelay.
-import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay } from './relay-net.src.js';
+// …and C4's gate, which is what actually keeps this church's data off a relay that cannot prove itself.
+import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
@@ -607,9 +607,18 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // even when the member also runs a private/home relay — otherwise a relay split (groups on one relay,
 // member-joins on another) makes a screen load partial/empty. So we read church docs from the union of
 // the member's own relays + the canonical pool, fanning the query across all of them.
-function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
+// THE CANDIDATE LIST — every address this church might use, guards intact and never empty. It is what the
+// background verifier works from, what the Relays sheet shows, and what the membership document is READ over
+// (see churchRelayNet): a reader built on the FILTERED list could never learn about the box that would admit
+// itself, which is the §6-bis deadlock one level down from enrolment. Nothing publishes over this.
+function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
+// THE PUBLISH SET — the same list with the C4 gate applied, AFTER the never-empty guards above. May be
+// empty, and when it is, every caller takes the failure it already had: a chat message, DM or join queues in
+// the outbox; a care request comes back not-sent. See src/relay-net.src.js for why the order is this way
+// round and why nothing here builds a queue.
+function churchRelays() { return _netRelays(churchRelaysRaw()); }
 
-// ── IS THIS RELAY ONE OF OURS? (closed-network plan C3 — the predicate, and nothing that consumes it) ────
+// ── IS THIS RELAY ONE OF OURS? (closed-network plan C3 — the predicate; C4's gate consumes it below) ───
 //
 // The serving origin, for the same-origin root. '' when the page was NOT served by anything that could be a
 // relay, and both cases are already decided a few lines above for the relay list itself: a Capacitor APK,
@@ -635,7 +644,10 @@ async function churchRelayNet(cp, opts) {
   if (c && !(opts && opts.fresh) && (Date.now() - c.at) < RELAY_NET_TTL_MS) return c.entries;
   let entries = [];
   try {
-    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], '#d': [RELAY_NET_D] }]);
+    // RAW, NOT THE PUBLISH SET. This read is what ADMITS a relay, so it must not be routed through the gate
+    // it feeds — a church's own box would be excluded, therefore never asked for the document that names it,
+    // therefore excluded for ever. Same rule and same reason as the console's enrolment census (plan §6-bis).
+    const evs = await pool.querySync(churchRelaysRaw(), [{ kinds: [30078], authors: [cp], '#d': [RELAY_NET_D] }]);
     // NEWEST WINS, AND ONLY THE CHURCH'S OWN SIGNATURE COUNTS. The author filter is in the REQ, but a relay
     // is not obliged to honour a filter and this document decides who the church's data may reach — so the
     // author is re-checked here rather than assumed from what came back.
@@ -662,6 +674,47 @@ function isNetworkRelay(cp, url) {
     pins: CANONICAL_RELAY_PUBS,
   });
 }
+
+// ── C4: THE GATE, one per surface ───────────────────────────────────────────────────────────────────────
+//
+// The persisted verified set and the synchronous filter over it. Created once, here, because a second gate
+// would hold a second cache and the two would disagree about the same relay. Everything about how it decides
+// — the cache, the ordering against the never-empty guards, why an unknown URL is scheduled rather than
+// awaited — is in src/relay-net.src.js; this is only the wiring.
+const _gate = createRelayGate({
+  store: (typeof localStorage !== 'undefined') ? localStorage : null,
+  verify: verifyRelayIdentity,
+  netEntries: churchRelayNet,
+  origin: _adoptionOrigin(),
+  pins: CANONICAL_RELAY_PUBS,
+  // TWO EVENTS, AND EACH HAS A JOB.
+  //
+  // `trinity-relays-verified` repaints the Relays sheet: it reads the gate to say which addresses are
+  // carrying this church's traffic and which are not, and a relay that quietly stops being used is exactly
+  // the invisible divergence this work exists to end.
+  //
+  // `trinity-relay-returned` is the app's existing ADVISORY re-subscribe signal — coalesced through the
+  // scheduler, deliberately not the mandatory `trinity-reconnect` teardown. Without it a cold boot would
+  // subscribe over an empty publish set, paint nothing, and stay that way until the 90-second beat came
+  // round, even though the gate had admitted the church's relays a second later. A relay becoming usable is
+  // precisely what that event means.
+  onChange: () => {
+    try { window.dispatchEvent(new CustomEvent('trinity-relays-verified')); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url: '' } })); } catch (e) {}
+  },
+});
+// THE ONE PLACE A LIST BECOMES A PUBLISH SET. `cp` omitted means "this is the member's own traffic, not a
+// particular church's" — a DM, a profile lookup — and then any church this device has proved a relay for
+// counts. It never widens to an unverified relay; it only declines to insist WHICH signature vouched.
+function _netRelays(list, cp) {
+  try { return _gate.admit(list, cp === undefined ? window.Fellowship.churchPub : cp); } catch (e) { return []; }
+}
+// A publish that had candidates and no verified relay among them is NOT the same failure as having no relay
+// configured at all, and the member has to be told the true one. The prefix is stable and is what
+// publishCareRequest and the outbox key off; it is also classed as an OUTAGE below, because the message
+// never reached a relay and must not burn a retry.
+const NO_NETWORK_RELAY = 'no-network-relay';
+const isNoNetworkRelay = (e) => String((e && e.message) || e || '').startsWith(NO_NETWORK_RELAY);
 
 // RESTORE FOLD — turns the raw event stream of "everything this key ever wrote" into { churches, name }.
 // Split out of recoverIdentity() so it can be tested against the SHIPPED bundle without a relay: the whole
@@ -766,10 +819,24 @@ function relaysForChurch(cp) {
   // the a8 pattern) share a relayPub and count ONCE, so a church that only LOOKS redundant keeps its safety net.
   // Relays too old to advertise an identity (null) aren't counted, so this stays conservative (fallback retained).
   const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-  if (boxes >= 2) return [...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
-  return [...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])];
+  // C4: the gate runs LAST, on the assembled list, so the self-sufficiency rule above still decides which
+  // candidates there are and the gate only decides which of them proved themselves. `cp` is passed through,
+  // because a relay admitted by ANOTHER church's signature is not admitted for this one.
+  if (boxes >= 2) return _netRelays([...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])], cp);
+  return _netRelays([...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
 }
 const RELAYS_KEY = 'trinityone.relays';
+// THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.
+//
+// The plan's first draft asked for the filter at this line. Its own §5-bis amendment overrides that, and the
+// order matters in both directions: the guard below refuses to return an empty list and falls back to the
+// canonical pool, so a filter placed BEFORE it would hand the guard an empty list and the guard would refill
+// it with relays nobody had proved — the gate re-admitting exactly what it had just refused. Filtering the
+// candidate list would also throw away a relay a device is holding and could still prove in a moment, which
+// is the churn a phone on a thin link lives in.
+//
+// So this stays the candidate list: never empty, shown in the Relays sheet, re-proved in the background. The
+// publish set is churchRelays()/relaysForChurch()/_publishAny, and it is allowed to be empty.
 function loadRelays() {
   try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r) && r.length) return r; } catch {}
   // NEVER leave the relay list empty: a native install has no origin/persisted relay, and an empty list
@@ -802,6 +869,33 @@ function profile(pub) {
 }
 
 const pool = new SimplePool();
+
+// AN EMPTY RELAY LIST MUST ANSWER, NOT HANG (closed-network plan C4).
+//
+// Until the gate landed, no list handed to the pool could be empty: loadRelays() refuses to return `[]` and
+// the console appends the canonical pool unconditionally. The PUBLISH SET is allowed to be empty — that is
+// what fail-closed means — so `pool.querySync([])` and `pool.subscribeMany([], …)` are now reachable, and
+// measured against nostr-tools 2.x they never settle: querySync's promise stays pending for ever and no
+// `oneose` is ever delivered. Every screen that waits for one would spin with no error anywhere, which is
+// this codebase's worst failure class (memory: silent-blank-app-bugs).
+//
+// So an empty list answers the way an UNREACHABLE one already does. That is not an invention: a relay whose
+// socket closes counts towards SimplePool's EOSE, so "we asked and got nothing" is the answer every reader
+// here is already written to survive — and the careful ones (_oneComplete, _newestByD, _fetchMyClearance)
+// separate it from "the church has nothing" by other means, which this does not disturb. Not answering at
+// all would be a NEW state that nothing in the app has ever had to handle.
+const _poolSubMany = pool.subscribeMany.bind(pool);
+pool.subscribeMany = (urls, filters, handlers) => {
+  const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+  if (u.length) return _poolSubMany(u, filters, handlers);
+  try { setTimeout(() => { try { if (handlers && handlers.oneose) handlers.oneose(); } catch (e) {} }, 0); } catch (e) {}
+  return { close() {} };
+};
+const _poolQuerySync = pool.querySync.bind(pool);
+pool.querySync = (urls, filter, opts) => {
+  const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+  return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+};
 // EVERY RELAY THE POOL OPENS STARTS PATIENT. The loop in _publishAny can only raise the give-up on a relay
 // object that already exists, and the pool creates that object INSIDE the publish it is about to make — so
 // the first send to each relay, and the first after every reconnectAll() (which deletes them), ran at the
@@ -1071,7 +1165,9 @@ function _flushProfiles() {
   _profTimer = null;
   const authors = [..._profQueue]; _profQueue.clear();
   if (!authors.length) return;
-  const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors }], {
+  // Gated like every other socket: asking a stranger's relay for a list of members' names tells it who is
+  // in this church, which is the read half of the same leak (plan §5 — reads and writes get one rule).
+  const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
     onevent(e) {
       try {
         const m = JSON.parse(e.content);
@@ -2249,7 +2345,21 @@ function _dedupeRelays(list) {
   return out;
 }
 function _publishAny(relays, evt) {
-  const targets = _dedupeRelays(relays);
+  const candidates = _dedupeRelays(relays);
+  // THE LAST LINE OF THE GATE (plan C4). Every write in this file goes through here whatever list it was
+  // handed, so a future caller that assembles its own list cannot walk round the filter. It runs on the
+  // ASSEMBLED list, after whatever guards produced it, and it may legitimately come back empty — at which
+  // point this rejects with a message the caller can tell apart from "no relay is configured", rather than
+  // opening a socket to a machine nobody could prove.
+  const targets = _netRelays(candidates);
+  // AN EMPTY PUBLISH SET IS NOT AN EMPTY CHURCH, and the difference is the whole of the honesty half of this
+  // item. `candidates` may ALREADY be empty when churchRelays() gated it a layer up, so asking "did I just
+  // empty it?" is not the question — the question is whether this device has anywhere it could publish in
+  // principle, which is the candidate list, which keeps its never-empty guard. If it does, then something
+  // could have been sent and was not, and the caller must be able to say so in its own words.
+  if (!targets.length && (candidates.length || churchRelaysRaw().length)) {
+    return Promise.reject(new Error(NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours'));
+  }
   // …AND LOOK THE RELAY UP THE WAY THE POOL FILES IT. pool.relays is keyed by the normalised address, exactly
   // like the connection map. The first version of this line used the raw one — the same trap fixed twenty
   // lines above, missed here — so for a church that typed `wss://church.example` (which normalises to a
@@ -2317,7 +2427,10 @@ async function _outboxFlush() {
       } catch (e) {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
         const permanent = errs.length && errs.every(isPermanentRefusal);
-        const outage = errs.length && errs.every(isConnectionFailure);   // never reached a relay → don't burn a try
+        // A GATE REFUSAL IS AN OUTAGE TOO. Nothing reached a relay, so it must not count toward MAX_TRIES —
+        // otherwise a member whose church relay has not proved itself yet loses their words after ~37 minutes
+        // of retries against a set that was empty the whole time.
+        const outage = errs.length && errs.every(e => isConnectionFailure(e) || isNoNetworkRelay(e));   // never reached a relay → don't burn a try
         const rateLimited = errs.some(isRateLimited);
         if (!outage) item.tries = (item.tries || 0) + 1;
         item.lastTry = Math.floor(Date.now() / 1000);
@@ -2365,17 +2478,14 @@ if (typeof window !== 'undefined') {
 window.Fellowship = {
   relays: loadRelays(),
   // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
-  // EXPOSED, NOT YET CONSULTED. Nothing in the app gates on it: which relays this client talks to is
-  // unchanged by its presence, and the adoption/publish paths do not call it. It is here so the gates that
-  // will (closed-network plan C3/C4) have one implementation to call, and so a device session can ask a real
-  // relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is the
-  // provable form.
+  // CONSUMED BY THE C4 GATE, which is what makes it more than a diagnostic: the gate proves every candidate
+  // address through this before that address can receive anything. Still exposed so a device session can ask
+  // a real relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is
+  // the provable form.
   verifyRelayIdentity,
   // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-  // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document.
-  // EXPOSED, NOT YET CONSULTED, exactly like verifyRelayIdentity above: no relay list is filtered on this
-  // answer, loadRelays/setRelays/_publishAny/churchRelays are unchanged, and which relays this client talks
-  // to is identical with and without it. The gate is plan C4.
+  // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document. C4
+  // consumes it: the answer, cached, IS the publish set — see _netRelays and the gate above.
   isNetworkRelay,
   // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
   // session can read what the church actually signed, rather than inferring it from behaviour.
@@ -2401,7 +2511,12 @@ window.Fellowship = {
     try {
       const st = pool.listConnectionStatus();
       const want = churchRelays();
-      if (!want.length) return true;                                  // nothing wanted → nothing to be unhealthy about
+      // C4: AN EMPTY PUBLISH SET IS NOT HEALTH. `want` is now the gated set, and answering `true` for an
+      // empty one would be the exact shape recorded in memory:chat-subs-die-on-reconnect — a healthy answer
+      // is what DISABLES the 90-second safety net, so a church whose relays have not proved themselves would
+      // sit quietly forever with nothing recovering it. No candidates at all is still nothing to be
+      // unhealthy about (a member who has not joined a church yet); candidates with none proved is not.
+      if (!want.length) return !churchRelaysRaw().length;
       // COMPARE NORMALISED URLS. The pool keys this map by normalizeURL(), which strips a trailing slash,
       // collapses a doubled slash and lowercases the scheme; the relay list is stored exactly as it was
       // typed, scanned or published. So `wss://church.example/relay/` — a perfectly ordinary thing for
@@ -2595,7 +2710,18 @@ window.Fellowship = {
 
   // scope outgoing messages to a church (so its steward can see who's participating). The member
   // app calls this with the active church's npub whenever it changes; null clears the scope.
-  setChurch(npubOrHex) { window.Fellowship.churchPub = toPub(npubOrHex); return window.Fellowship.churchPub; },
+  // Switching church re-asks the gate, because membership is per church: a relay admitted by the signature of
+  // the congregation we just left is not admitted for this one, and the answer for the new church is not in
+  // the cache yet.
+  setChurch(npubOrHex) {
+    window.Fellowship.churchPub = toPub(npubOrHex);
+    try { _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub); } catch (e) {}
+    return window.Fellowship.churchPub;
+  },
+  // C4, for the Relays sheet: is this address carrying this church's traffic? A relay the gate has not
+  // proved is still IN the list and still retried — it is simply not published to, and the sheet says so
+  // rather than the address quietly ceasing to matter.
+  relayVerified(url) { try { return _gate.admits(url, window.Fellowship.churchPub); } catch (e) { return false; } },
 
   // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
   // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
@@ -2852,6 +2978,11 @@ window.Fellowship = {
     window.Fellowship.relays = list.length ? list : (DEFAULT_RELAYS.length ? DEFAULT_RELAYS : CANONICAL_RELAYS).slice();
     try { localStorage.setItem(RELAYS_KEY, JSON.stringify(window.Fellowship.relays)); } catch {}
     window.dispatchEvent(new CustomEvent('trinity-relays', { detail: window.Fellowship.relays }));
+    // THE CANDIDATE LIST IS NOT FILTERED HERE, on purpose (plan §5-bis): the never-empty guard above is what
+    // keeps a device with something to retry, and filtering before it would let the guard re-insert relays
+    // nobody proved. What changing the list DOES do is start proving the new entries, so the publish set
+    // catches up in the background instead of on the next person's send.
+    try { _gate.refresh(window.Fellowship.relays, window.Fellowship.churchPub); } catch (e) {}
     return window.Fellowship.relays;
   },
   addRelay(url) { return window.Fellowship.setRelays([...window.Fellowship.relays, url]); },
@@ -3342,7 +3473,8 @@ window.Fellowship = {
       if (e.content === '-' || e.content === '') m.delete(e.pubkey); else m.set(e.pubkey, e.content);
       const msg = msgs.get(tid); if (msg) push(msg);
     };
-    const sub = pool.subscribeMany(window.Fellowship.relays, [
+    // Gated: a DM subscription names both people to whatever answers it.
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
       { kinds: [4], authors: [pub], '#p': [peerPub] },   // sent by me to peer
       { kinds: [4], authors: [peerPub], '#p': [pub] },   // sent by peer to me
       { kinds: [7], authors: [pub], '#p': [peerPub] },   // my reactions to their DMs
@@ -4327,6 +4459,13 @@ window.Fellowship = {
     catch (e) {
       console.warn('[fellowship] care request publish failed', e);
       if (/update the app/i.test(String((e && e.message) || ''))) return { error: 'stale-app' };
+      // THE ONE MESSAGE IN THIS PRODUCT WHERE "SENT" MUST NEVER BE SAID OVER A SEND THAT DID NOT HAPPEN. The
+      // caller already treats null as not-sent, but "check your connection" is the wrong sentence when the
+      // connection is fine and the church simply has no relay we could prove: it sends somebody asking for
+      // help to look at their wifi. Its own reason, so the screen can say the true thing and point them at a
+      // person instead. (memory: fix-the-control-not-the-label — six controls have toasted success over a
+      // send that never happened; this is the reason a seventh is not being added here.)
+      if (isNoNetworkRelay(e)) return { error: 'no-network-relay' };
       return null;
     }
     // The caller must be able to tell the member the truth about who has this. `narrowed` = we could not
@@ -5022,3 +5161,8 @@ window.Fellowship = {
   },
 };
 window.Fellowship.ready = init().catch(e => console.error('[fellowship] init failed', e));
+// PROVE THE LIST WE BOOTED WITH, once, without blocking the boot. admit() would schedule these anyway on
+// first use, but that first use is somebody pressing send — and a publish set that is empty only because the
+// proof had not been asked for yet is the avoidable half of fail-closed. Fire-and-forget: nothing waits on
+// it, and a device with no network simply keeps whatever it knew yesterday.
+try { setTimeout(() => { try { _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub); } catch (e) {} }, 0); } catch (e) {}

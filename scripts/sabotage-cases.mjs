@@ -1101,7 +1101,7 @@ export const CASES = [
     // Same-origin is a reason not to ask a SECOND question, never a reason to skip the first: without the
     // proof, any host answering on the page's origin is admitted.
     find: `  let proof = null;`,
-    replace: `  if (sameOriginRelay(url, d.origin)) return true;
+    replace: `  if (sameOriginRelay(url, d.origin)) return { root: 'origin', pub: 'f'.repeat(64) };
   let proof = null;`,
     test: 'scripts/is-this-relay-one-of-ours.test.mjs',
   },
@@ -1130,8 +1130,154 @@ export const CASES = [
     file: 'src/relay-net.src.js',
     // A single pin makes a planned key rotation a fleet-wide outage; this project has rotated a relay key
     // under incident before.
-    find: `if (canonicalPinsFor(url, d.pins).includes(provenPub)) return true;`,
-    replace: `if (canonicalPinsFor(url, d.pins)[0] === provenPub) return true;`,
+    find: `if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: 'canonical', pub: provenPub };`,
+    replace: `if (canonicalPinsFor(url, d.pins)[0] === provenPub) return { root: 'canonical', pub: provenPub };`,
     test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+
+  // ── C4: the gate. Each of these is a careless edit somebody could plausibly make while "tidying" the
+  // filter, and each one takes exactly one test red. An all-red run means the harness died.
+  {
+    name: 'relay-gate: the console publishes over the RAW list',
+    file: 'src/steward.src.js',
+    // The whole leak, back in one character of difference: the assembled list is the candidate list, and
+    // publishing over it sends the church's documents to every address anyone ever typed.
+    find: `  const _targets = relays();`,
+    replace: `  const _targets = relaysRaw();`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: relays() stops filtering and just returns the candidates',
+    file: 'src/steward.src.js',
+    find: `function relays() { try { return _gate.admit(relaysRaw(), pub); } catch (e) { return []; } }`,
+    replace: `function relays() { return relaysRaw(); }`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the member app publishes over the list it was handed',
+    file: 'src/fellowship.src.js',
+    // _publishAny is the last line of the gate: thirty callers hand it lists they assembled themselves, and
+    // without this every one of them is a way round the filter.
+    find: `  const targets = _netRelays(candidates);`,
+    replace: `  const targets = candidates;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the filter runs BEFORE the never-empty guard instead of after it',
+    file: 'src/steward.src.js',
+    // §5-bis's collision, staged: gate the candidate sources and let the guard re-insert the canonical pool
+    // afterwards, unverified. It reads like a tightening and is the exact opposite.
+    find: `function relays() { try { return _gate.admit(relaysRaw(), pub); } catch (e) { return []; } }`,
+    replace: `function relays() {
+  try { const out = _gate.admit([ownRelay(), ...extraRelays()], pub); for (const r of CANONICAL_RELAYS) if (r && !out.includes(r)) out.push(r); return out; } catch (e) { return []; }
+}`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the membership read goes through the gate it feeds (the read-side deadlock)',
+    file: 'src/steward.src.js',
+    // A church's own box holds the only copy of the signature that admits it. Read that over the filtered
+    // list and the box is excluded, therefore never asked, therefore never admitted — for ever.
+    find: `    const sub = pool.subscribeMany(relaysRaw(), filters, {`,
+    replace: `    const sub = pool.subscribeMany(relays(), filters, {`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the member\'s membership read goes through the gate it feeds',
+    file: 'src/fellowship.src.js',
+    find: `    const evs = await pool.querySync(churchRelaysRaw(), [{ kinds: [30078], authors: [cp], '#d': [RELAY_NET_D] }]);`,
+    replace: `    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], '#d': [RELAY_NET_D] }]);`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: a care request that went nowhere is reported as a plain failure',
+    file: 'src/fellowship.src.js',
+    // The label half. `null` already reads as not-sent — as "check your connection", on a connection that is
+    // fine — which sends somebody asking for help to look in the wrong place entirely.
+    find: `      if (isNoNetworkRelay(e)) return { error: 'no-network-relay' };
+`,
+    replace: ``,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: a gate refusal burns one of the outbox\'s retries',
+    file: 'src/fellowship.src.js',
+    // Nothing reached a relay, so nothing should be counted. Counting it drops a member's words after ~37
+    // minutes of retrying against a set that was empty the whole time.
+    find: `const outage = errs.length && errs.every(e => isConnectionFailure(e) || isNoNetworkRelay(e));`,
+    replace: `const outage = errs.length && errs.every(isConnectionFailure);`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the cache keeps an address that now answers with a different key',
+    file: 'src/relay-net.src.js',
+    find: `  return { root: '', pub: provenPub };`,
+    replace: `  return no;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: one church\'s signature admits a relay for every church on the device',
+    file: 'src/relay-net.src.js',
+    find: `  if (!e.cp) return true;                 // canonical / same-origin: church-independent
+  return !cp || e.cp === String(cp).toLowerCase();`,
+    replace: `  return true;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the verified set is never persisted',
+    file: 'src/relay-net.src.js',
+    find: `  const map = readVerified(d.store);`,
+    replace: `  const map = new Map();`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the cache is keyed by the raw URL, not the normalised one',
+    file: 'src/relay-net.src.js',
+    // memory: relay-url-normalisation-trap. The pool keys its connections by normalizeURL(); a raw compare
+    // that differs only by a trailing slash misses SILENTLY, and the gate then misses the relay it is about.
+    find: `function _relayKey(url) { try { return normalizeURL(String(url || '')); } catch { return String(url || ''); } }`,
+    replace: `function _relayKey(url) { return String(url || ''); }`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: an empty publish set is reported as health',
+    file: 'src/fellowship.src.js',
+    // A `true` here DISABLES the app's 90-second safety net, so a church whose relays have not proved
+    // themselves would sit quietly for ever with nothing recovering it.
+    find: `      if (!want.length) return !churchRelaysRaw().length;`,
+    replace: `      if (!want.length) return true;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the relay panel is fed the publish set, so a dropped address vanishes',
+    file: 'src/steward.src.js',
+    // Silently changing where a church's data goes is how the ROADMAP-NOTES §6 divergence became invisible.
+    find: `    return Promise.all(relaysRaw().map(url => new Promise(res => {`,
+    replace: `    return Promise.all(relays().map(url => new Promise(res => {`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the member Relays sheet is told every address is in use',
+    file: 'src/fellowship.src.js',
+    find: `  relayVerified(url) { try { return _gate.admits(url, window.Fellowship.churchPub); } catch (e) { return false; } },`,
+    replace: `  relayVerified(url) { return true; },`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: an empty publish set hangs every read instead of answering',
+    file: 'src/fellowship.src.js',
+    // The gate's own side effect. Until C4 no list reaching the pool could be empty; now one can, and
+    // nostr-tools never settles a querySync([]) or delivers an oneose for a subscribeMany([], …).
+    find: `  if (u.length) return _poolSubMany(u, filters, handlers);`,
+    replace: `  if (true) return _poolSubMany(u, filters, handlers);`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: relay-net is served only to members, so a newcomer can never bootstrap',
+    file: 'scripts/gateway.mjs',
+    find: `    if (d === RELAY_NET_D) return true;
+`,
+    replace: ``,
+    test: 'scripts/doc-registry.test.mjs',
   },
 ];

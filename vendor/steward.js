@@ -6551,9 +6551,10 @@
     const b = _originKey(origin);
     return !!a && !!b && a === b;
   }
-  async function isNetworkRelay(cp, url, deps) {
+  async function proveRelay(cp, url, deps) {
     const d = deps || {};
-    if (!url) return false;
+    const no = { root: "", pub: "" };
+    if (!url) return no;
     let proof = null;
     try {
       proof = await (d.verify || verifyRelayIdentity)(url);
@@ -6561,17 +6562,185 @@
       proof = null;
     }
     const provenPub = String(proof && proof.relayPub || "").toLowerCase();
-    if (!_isHex64(provenPub)) return false;
-    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return true;
-    if (sameOriginRelay(url, d.origin)) return true;
+    if (!_isHex64(provenPub)) return no;
+    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: "canonical", pub: provenPub };
+    if (sameOriginRelay(url, d.origin)) return { root: "origin", pub: provenPub };
     let entries = null;
     try {
       entries = d.netEntries ? await d.netEntries(cp) : null;
     } catch {
       entries = null;
     }
-    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return true;
-    return false;
+    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return { root: "church", pub: provenPub };
+    return { root: "", pub: provenPub };
+  }
+  async function isNetworkRelay(cp, url, deps) {
+    return !!(await proveRelay(cp, url, deps)).root;
+  }
+  var VERIFIED_KEY = "trinityone.relays.verified";
+  var VERIFIED_TTL_SEC = 30 * 24 * 3600;
+  var VERIFIED_REFRESH_SEC = 6 * 3600;
+  var VERIFY_RETRY_SEC = 60;
+  function readVerified(store) {
+    const out = /* @__PURE__ */ new Map();
+    let raw = null;
+    try {
+      raw = store && store.getItem ? store.getItem(VERIFIED_KEY) : null;
+    } catch {
+      raw = null;
+    }
+    let obj = null;
+    try {
+      obj = JSON.parse(raw || "{}");
+    } catch {
+      return out;
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+    for (const [k, v] of Object.entries(obj)) {
+      if (!v || typeof v !== "object") continue;
+      const pub2 = String(v.pub || "").toLowerCase();
+      if (!_isHex64(pub2)) continue;
+      const until = Number(v.until) || 0, at = Number(v.at) || 0;
+      const cp = _isHex64(v.cp) ? String(v.cp).toLowerCase() : "";
+      out.set(_relayKey(k), { pub: pub2, cp, at, until });
+    }
+    return out;
+  }
+  function writeVerified(store, map) {
+    try {
+      if (!store || !store.setItem) return;
+      const obj = {};
+      for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until };
+      store.setItem(VERIFIED_KEY, JSON.stringify(obj));
+    } catch {
+    }
+  }
+  function admitCached(map, url, cp, nowSec) {
+    const e = map.get(_relayKey(url));
+    if (!e || !(e.until > nowSec)) return false;
+    if (!e.cp) return true;
+    return !cp || e.cp === String(cp).toLowerCase();
+  }
+  function rememberVerified(map, url, pub2, cp, nowSec) {
+    const k = _relayKey(url);
+    if (!k || !_isHex64(pub2)) return;
+    map.set(k, { pub: String(pub2).toLowerCase(), cp: _isHex64(cp) ? String(cp).toLowerCase() : "", at: nowSec, until: nowSec + VERIFIED_TTL_SEC });
+  }
+  function createRelayGate(deps) {
+    const d = deps || {};
+    const nowSec = () => d.now ? d.now() : Math.floor(Date.now() / 1e3);
+    const map = readVerified(d.store);
+    const inflight = /* @__PURE__ */ new Map();
+    const attempted = /* @__PURE__ */ new Map();
+    const changed = () => {
+      try {
+        if (d.onChange) d.onChange();
+      } catch {
+      }
+    };
+    function origin() {
+      try {
+        return typeof d.origin === "function" ? d.origin() : d.origin || "";
+      } catch {
+        return "";
+      }
+    }
+    async function prove(url, cp) {
+      const k = _relayKey(url);
+      let res = { root: "", pub: "" };
+      try {
+        res = await proveRelay(cp, url, { verify: d.verify, netEntries: d.netEntries, origin: origin(), pins: d.pins });
+      } catch {
+      }
+      const had = map.get(k);
+      if (res.root) {
+        const scope = res.root === "church" ? String(cp || "").toLowerCase() : "";
+        if (res.root === "church" && !_isHex64(scope)) {
+          attempted.set(k, nowSec());
+          return false;
+        }
+        rememberVerified(map, url, res.pub, scope, nowSec());
+        writeVerified(d.store, map);
+        if (!had || had.pub !== res.pub || had.cp !== scope) changed();
+        return true;
+      }
+      attempted.set(k, nowSec());
+      if (had && res.pub && res.pub !== had.pub) {
+        map.delete(k);
+        writeVerified(d.store, map);
+        changed();
+      }
+      return false;
+    }
+    function start(url, cp) {
+      const k = _relayKey(url);
+      const running = inflight.get(k);
+      if (running) return running;
+      const p = Promise.resolve().then(() => prove(url, cp)).catch(() => false).then((v) => {
+        inflight.delete(k);
+        return v;
+      });
+      inflight.set(k, p);
+      return p;
+    }
+    function schedule(url, cp) {
+      const k = _relayKey(url);
+      if (!k || inflight.has(k)) return;
+      const last = attempted.get(k) || 0;
+      if (last && nowSec() - last < VERIFY_RETRY_SEC) return;
+      attempted.set(k, nowSec());
+      start(url, cp);
+    }
+    return {
+      // THE SYNCHRONOUS FILTER. Cache only. Anything it cannot admit is scheduled, never awaited.
+      admit(list, cp) {
+        const t = nowSec(), out = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          if (!u) continue;
+          const e = map.get(_relayKey(u));
+          if (admitCached(map, u, cp, t)) {
+            out.push(u);
+            if (!e.at || t - e.at > VERIFIED_REFRESH_SEC) schedule(u, cp);
+          } else schedule(u, cp);
+        }
+        return out;
+      },
+      // Ask about ONE address without opening anything — what a relay panel needs to say "connected" or
+      // "not yet proved" honestly.
+      admits(url, cp) {
+        return admitCached(map, url, cp, nowSec());
+      },
+      // Prove a whole list NOW, awaited. For the moments where waiting is right: the list just changed, or the
+      // app has just booted and would rather spend a second than start with an empty publish set.
+      async refresh(list, cp) {
+        const seen = /* @__PURE__ */ new Set(), waiting = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          const k = _relayKey(u);
+          if (!u || seen.has(k)) continue;
+          seen.add(k);
+          attempted.set(k, nowSec());
+          waiting.push(start(u, cp));
+        }
+        try {
+          await Promise.all(waiting);
+        } catch {
+        }
+        return this.admit(list, cp);
+      },
+      // What the gate would drop, so a screen can name the address and say why rather than losing it silently.
+      dropped(list, cp) {
+        const t = nowSec();
+        return (Array.isArray(list) ? list : []).filter((u) => u && !admitCached(map, u, cp, t));
+      },
+      forget(url) {
+        const k = _relayKey(url);
+        if (map.delete(k)) {
+          writeVerified(d.store, map);
+          changed();
+        }
+      },
+      _map: map
+    };
   }
 
   // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
@@ -15195,7 +15364,7 @@ zoo`.split("\n");
     window.addEventListener("focus", refreshSelfPublicRelay);
   } catch (e) {
   }
-  function relays() {
+  function relaysRaw() {
     const own = ownRelay();
     const out = [own];
     for (const r of CANONICAL_RELAYS) {
@@ -15206,6 +15375,34 @@ zoo`.split("\n");
     }
     return out;
   }
+  var _gate = createRelayGate({
+    store: typeof localStorage !== "undefined" ? localStorage : null,
+    verify: verifyRelayIdentity,
+    netEntries: (cp) => relayNetEntries(cp),
+    origin: () => _ownOrigin(),
+    pins: CANONICAL_RELAY_PUBS,
+    // `steward-relays` repaints the Relays card; `steward-relay-returned` is the console's advisory
+    // re-subscribe/flush signal, and a relay entering the publish set is exactly that. Without the second, a
+    // console that booted before its relays were proved would sit on an empty set until something else churned.
+    onChange: () => {
+      try {
+        window.dispatchEvent(new CustomEvent("steward-relays"));
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url: "" } }));
+      } catch (e) {
+      }
+    }
+  });
+  function relays() {
+    try {
+      return _gate.admit(relaysRaw(), pub);
+    } catch (e) {
+      return [];
+    }
+  }
+  var NO_NETWORK_RELAY = "no-network-relay";
   function _blobBase() {
     const r = ownRelay();
     return r.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
@@ -15362,6 +15559,27 @@ zoo`.split("\n");
     return picked;
   }
   var pool = new SimplePool();
+  var _poolSubMany = pool.subscribeMany.bind(pool);
+  pool.subscribeMany = (urls, filters, handlers) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    if (u.length) return _poolSubMany(u, filters, handlers);
+    try {
+      setTimeout(() => {
+        try {
+          if (handlers && handlers.oneose) handlers.oneose();
+        } catch (e) {
+        }
+      }, 0);
+    } catch (e) {
+    }
+    return { close() {
+    } };
+  };
+  var _poolQuerySync = pool.querySync.bind(pool);
+  pool.querySync = (urls, filter, opts) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+  };
   var _relaysTouched = /* @__PURE__ */ new Set();
   var _subbedOn = /* @__PURE__ */ new Map();
   pool.onRelayConnectionSuccess = (url) => {
@@ -15515,6 +15733,10 @@ zoo`.split("\n");
     try {
       _loadBoxHosts();
       _refreshBoxHostsUs();
+    } catch (e) {
+    }
+    try {
+      _gate.refresh(relaysRaw(), pub);
     } catch (e) {
     }
     window.Steward.activePub = pub;
@@ -15926,8 +16148,18 @@ zoo`.split("\n");
   }
   async function publish(evt) {
     await _waitForRegistration();
+    const _targets = relays();
+    if (!_targets.length) {
+      const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
+      console.warn("[steward] publish blocked \u2014", reason);
+      try {
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+      } catch (x) {
+      }
+      return false;
+    }
     try {
-      await Promise.any(pool.publish(relays(), evt).map((p) => p.then((v) => {
+      await Promise.any(pool.publish(_targets, evt).map((p) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
         return v;
       })));
@@ -16184,7 +16416,7 @@ zoo`.split("\n");
         }
         resolve({ ev: best, complete });
       };
-      const sub = pool.subscribeMany(relays(), filters, {
+      const sub = pool.subscribeMany(relaysRaw(), filters, {
         onevent(e) {
           if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
         },
@@ -16460,15 +16692,13 @@ zoo`.split("\n");
     npub: null,
     hasKey: false,
     // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
-    // EXPOSED, NOT YET CONSULTED. relays() is unchanged, adoption is unchanged, and nothing here refuses a
-    // relay that cannot answer. It is here so the gates that will (closed-network plan C3/C4) have one
-    // implementation to call. The `relayPub` this console already reads for the redundancy count stays an
-    // unproven claim — it was never a gate and must not start looking like one.
+    // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
+    // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console
+    // reads for the redundancy count stays an unproven claim — it was never a gate and must not look like one.
     verifyRelayIdentity,
     // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
     // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
-    // EXPOSED, NOT YET CONSULTED: relays() is unchanged, publish() is unchanged, and nothing refuses a relay
-    // that fails this. The gate is plan C4.
+    // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
     isNetworkRelay: isNetworkRelay2,
     // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
     // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
@@ -16476,8 +16706,14 @@ zoo`.split("\n");
     relayNet: relayNetEntries,
     relayNetCandidates,
     // Signs the boxes this console can prove into the church's own membership document. Additive: it never
-    // drops an entry that is merely unreachable. NOT called automatically anywhere yet — wiring it into the
-    // console's start-up is merge-schedule step 4 and wants a browser/device pass of its own.
+    // drops an entry that is merely unreachable.
+    //
+    // STILL NOT CALLED AUTOMATICALLY ANYWHERE, and with C4's gate live that is now a DEPLOYMENT BLOCKER rather
+    // than a loose end: a church whose relay is admitted by neither the canonical pin nor this console's own
+    // origin has no way to author the document that would admit it, so its members would find no relay they
+    // may publish to. Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own —
+    // and the Suite's common case (§6-quater) is covered meanwhile by the same-origin root, which needs no
+    // document at all.
     enrolRelayNet,
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
@@ -21121,11 +21357,23 @@ zoo`.split("\n");
       }
       return picks;
     },
-    // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms }]
+    // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms, member }]
+    //
+    // EVERY CANDIDATE, NOT THE PUBLISH SET — and `member` says which is which. A relay this church's data no
+    // longer goes to must not simply VANISH from the panel: silently changing where a church's data goes is
+    // how the divergence in ROADMAP-NOTES §6 became invisible. Reachable and not-in-our-network are two
+    // different facts and the card shows both.
     relayStatus() {
-      return Promise.all(relays().map((url) => new Promise((res) => {
+      return Promise.all(relaysRaw().map((url) => new Promise((res) => {
         let done = false;
         const t0 = Date.now();
+        const member = (() => {
+          try {
+            return _gate.admits(url, pub);
+          } catch (e) {
+            return false;
+          }
+        })();
         const finish = (status) => {
           if (done) return;
           done = true;
@@ -21133,13 +21381,13 @@ zoo`.split("\n");
             ws.close();
           } catch {
           }
-          res({ url, status, ms: status === "on" ? Date.now() - t0 : null });
+          res({ url, status, ms: status === "on" ? Date.now() - t0 : null, member });
         };
         let ws;
         try {
           ws = new WebSocket(url);
         } catch {
-          return res({ url, status: "off", ms: null });
+          return res({ url, status: "off", ms: null, member });
         }
         const to = setTimeout(() => finish("off"), 2500);
         ws.onopen = () => {

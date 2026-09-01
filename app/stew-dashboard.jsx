@@ -3258,6 +3258,15 @@ function DashRelaysCard() {
           </div>
         ) : null}
         {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
+        {status.some(r => r.member === false) ? (
+          <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--clay-ink)', flexShrink: 0, marginTop: 5 }} />
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--ink)' }}>Nothing is published to an address until it proves it is one of your relays.</b>{' '}
+              The ones marked “Not in your network” haven’t proved it — they may be running an older build, or
+              your church may not have signed them in. They stay listed and are checked again.</div>
+          </div>
+        ) : null}
         {/* One line per relay: address, role, health. It used to stack the URL over an indented meta row —
             right for a narrow card, but this card is wide now and two relays were eating a third of it for
             two short addresses. Everything sits inline and wraps only if the card actually gets narrow. */}
@@ -3271,6 +3280,12 @@ function DashRelaysCard() {
                 <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
                   {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
+                  {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
+                      the other must not look fine. Under the closed network nothing is published to an
+                      address until it has PROVED it holds a key this church's network contains, so a live
+                      socket to an address we send nothing to is exactly the invisible divergence this work
+                      exists to end. It stays in the list and keeps being re-checked; it just says so. */}
+                  {r.member === false ? <SkPill tint="clay">Not in your network</SkPill> : null}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Live' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
                   {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}

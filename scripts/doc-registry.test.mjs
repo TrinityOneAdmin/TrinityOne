@@ -203,6 +203,15 @@ test('the safeguarding types are declared the way the relay actually gates them'
   assert.equal(DOC_TYPES['trinityone/joinpolicy:'].read, 'public');
   assert.match(GATEWAY, /if \(d\.startsWith\(JOINPOLICY_D\)\) return true;/,
     'joinpolicy: is declared public and the relay no longer serves it publicly, or vice versa');
+  // …and the second one, added with the closed-network client gate (C4). A phone will not publish to an
+  // address until it has read this document, so somebody who has just scanned an invite — a member of
+  // nothing yet — must be able to read it or they can never publish their join to the church's own box.
+  assert.equal(DOC_TYPES['trinityone/relay-net'].read, 'public');
+  assert.match(GATEWAY, /if \(d === RELAY_NET_D\) return true;/,
+    'relay-net is declared public and the relay no longer serves it publicly, or vice versa — a newcomer to ' +
+    'a self-hosting church would be unable to learn that the church\'s own box is the church\'s own box');
+  assert.equal(DOC_TYPES['trinityone/relay-net'].write, 'church',
+    'the membership document must stay owner-only — it is the sole thing that admits a self-hosted relay');
   assert.equal(DOC_TYPES['trinityone/stewards:'].write, 'church',
     'the steward roster must be owner-only — it is what grants steward authority in the first place');
   assert.match(GATEWAY, /d\.startsWith\(STEWARDS_D\)\) return CHURCH_PUBS\.has\(e\.pubkey\)/,

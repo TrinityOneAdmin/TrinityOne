@@ -81,6 +81,11 @@ function chain(pool) {
     Date: { now: () => clock },
     Promise, Array, Set, URL, Error, String, Number,
     __seen: outcomes,
+    // The closed-network gate (plan C4), passed through UNCHANGED. This file's subject is a socket that
+    // ACCEPTS and then says nothing — which requires the socket to be opened at all. Running the real gate
+    // here would empty the publish set before anything was dialled, and every test below would pass without
+    // reaching the detector it is named after. Membership has its own file.
+    _netRelays: (list) => list, churchRelaysRaw: () => [], NO_NETWORK_RELAY: 'no-network-relay',
   };
   const proxy = new Proxy(scope, {
     has: (t, k) => (k in t) || !(k in globalThis),

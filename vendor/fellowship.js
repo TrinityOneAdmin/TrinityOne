@@ -3784,9 +3784,10 @@
     const b = _originKey(origin);
     return !!a && !!b && a === b;
   }
-  async function isNetworkRelay(cp, url, deps) {
+  async function proveRelay(cp, url, deps) {
     const d = deps || {};
-    if (!url) return false;
+    const no = { root: "", pub: "" };
+    if (!url) return no;
     let proof = null;
     try {
       proof = await (d.verify || verifyRelayIdentity)(url);
@@ -3794,17 +3795,185 @@
       proof = null;
     }
     const provenPub = String(proof && proof.relayPub || "").toLowerCase();
-    if (!_isHex64(provenPub)) return false;
-    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return true;
-    if (sameOriginRelay(url, d.origin)) return true;
+    if (!_isHex64(provenPub)) return no;
+    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: "canonical", pub: provenPub };
+    if (sameOriginRelay(url, d.origin)) return { root: "origin", pub: provenPub };
     let entries = null;
     try {
       entries = d.netEntries ? await d.netEntries(cp) : null;
     } catch {
       entries = null;
     }
-    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return true;
-    return false;
+    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return { root: "church", pub: provenPub };
+    return { root: "", pub: provenPub };
+  }
+  async function isNetworkRelay(cp, url, deps) {
+    return !!(await proveRelay(cp, url, deps)).root;
+  }
+  var VERIFIED_KEY = "trinityone.relays.verified";
+  var VERIFIED_TTL_SEC = 30 * 24 * 3600;
+  var VERIFIED_REFRESH_SEC = 6 * 3600;
+  var VERIFY_RETRY_SEC = 60;
+  function readVerified(store) {
+    const out = /* @__PURE__ */ new Map();
+    let raw = null;
+    try {
+      raw = store && store.getItem ? store.getItem(VERIFIED_KEY) : null;
+    } catch {
+      raw = null;
+    }
+    let obj = null;
+    try {
+      obj = JSON.parse(raw || "{}");
+    } catch {
+      return out;
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+    for (const [k, v] of Object.entries(obj)) {
+      if (!v || typeof v !== "object") continue;
+      const pub2 = String(v.pub || "").toLowerCase();
+      if (!_isHex64(pub2)) continue;
+      const until = Number(v.until) || 0, at = Number(v.at) || 0;
+      const cp = _isHex64(v.cp) ? String(v.cp).toLowerCase() : "";
+      out.set(_relayKey(k), { pub: pub2, cp, at, until });
+    }
+    return out;
+  }
+  function writeVerified(store, map) {
+    try {
+      if (!store || !store.setItem) return;
+      const obj = {};
+      for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until };
+      store.setItem(VERIFIED_KEY, JSON.stringify(obj));
+    } catch {
+    }
+  }
+  function admitCached(map, url, cp, nowSec) {
+    const e = map.get(_relayKey(url));
+    if (!e || !(e.until > nowSec)) return false;
+    if (!e.cp) return true;
+    return !cp || e.cp === String(cp).toLowerCase();
+  }
+  function rememberVerified(map, url, pub2, cp, nowSec) {
+    const k = _relayKey(url);
+    if (!k || !_isHex64(pub2)) return;
+    map.set(k, { pub: String(pub2).toLowerCase(), cp: _isHex64(cp) ? String(cp).toLowerCase() : "", at: nowSec, until: nowSec + VERIFIED_TTL_SEC });
+  }
+  function createRelayGate(deps) {
+    const d = deps || {};
+    const nowSec = () => d.now ? d.now() : Math.floor(Date.now() / 1e3);
+    const map = readVerified(d.store);
+    const inflight = /* @__PURE__ */ new Map();
+    const attempted = /* @__PURE__ */ new Map();
+    const changed = () => {
+      try {
+        if (d.onChange) d.onChange();
+      } catch {
+      }
+    };
+    function origin() {
+      try {
+        return typeof d.origin === "function" ? d.origin() : d.origin || "";
+      } catch {
+        return "";
+      }
+    }
+    async function prove(url, cp) {
+      const k = _relayKey(url);
+      let res = { root: "", pub: "" };
+      try {
+        res = await proveRelay(cp, url, { verify: d.verify, netEntries: d.netEntries, origin: origin(), pins: d.pins });
+      } catch {
+      }
+      const had = map.get(k);
+      if (res.root) {
+        const scope = res.root === "church" ? String(cp || "").toLowerCase() : "";
+        if (res.root === "church" && !_isHex64(scope)) {
+          attempted.set(k, nowSec());
+          return false;
+        }
+        rememberVerified(map, url, res.pub, scope, nowSec());
+        writeVerified(d.store, map);
+        if (!had || had.pub !== res.pub || had.cp !== scope) changed();
+        return true;
+      }
+      attempted.set(k, nowSec());
+      if (had && res.pub && res.pub !== had.pub) {
+        map.delete(k);
+        writeVerified(d.store, map);
+        changed();
+      }
+      return false;
+    }
+    function start(url, cp) {
+      const k = _relayKey(url);
+      const running = inflight.get(k);
+      if (running) return running;
+      const p = Promise.resolve().then(() => prove(url, cp)).catch(() => false).then((v) => {
+        inflight.delete(k);
+        return v;
+      });
+      inflight.set(k, p);
+      return p;
+    }
+    function schedule(url, cp) {
+      const k = _relayKey(url);
+      if (!k || inflight.has(k)) return;
+      const last = attempted.get(k) || 0;
+      if (last && nowSec() - last < VERIFY_RETRY_SEC) return;
+      attempted.set(k, nowSec());
+      start(url, cp);
+    }
+    return {
+      // THE SYNCHRONOUS FILTER. Cache only. Anything it cannot admit is scheduled, never awaited.
+      admit(list, cp) {
+        const t = nowSec(), out = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          if (!u) continue;
+          const e = map.get(_relayKey(u));
+          if (admitCached(map, u, cp, t)) {
+            out.push(u);
+            if (!e.at || t - e.at > VERIFIED_REFRESH_SEC) schedule(u, cp);
+          } else schedule(u, cp);
+        }
+        return out;
+      },
+      // Ask about ONE address without opening anything — what a relay panel needs to say "connected" or
+      // "not yet proved" honestly.
+      admits(url, cp) {
+        return admitCached(map, url, cp, nowSec());
+      },
+      // Prove a whole list NOW, awaited. For the moments where waiting is right: the list just changed, or the
+      // app has just booted and would rather spend a second than start with an empty publish set.
+      async refresh(list, cp) {
+        const seen = /* @__PURE__ */ new Set(), waiting = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          const k = _relayKey(u);
+          if (!u || seen.has(k)) continue;
+          seen.add(k);
+          attempted.set(k, nowSec());
+          waiting.push(start(u, cp));
+        }
+        try {
+          await Promise.all(waiting);
+        } catch {
+        }
+        return this.admit(list, cp);
+      },
+      // What the gate would drop, so a screen can name the address and say why rather than losing it silently.
+      dropped(list, cp) {
+        const t = nowSec();
+        return (Array.isArray(list) ? list : []).filter((u) => u && !admitCached(map, u, cp, t));
+      },
+      forget(url) {
+        const k = _relayKey(url);
+        if (map.delete(k)) {
+          writeVerified(d.store, map);
+          changed();
+        }
+      },
+      _map: map
+    };
   }
 
   // node_modules/@noble/ciphers/utils.js
@@ -6526,8 +6695,11 @@
     // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
   ];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
-  function churchRelays() {
+  function churchRelaysRaw() {
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
+  }
+  function churchRelays() {
+    return _netRelays(churchRelaysRaw());
   }
   function _adoptionOrigin() {
     if (_native || _staticHost || !_loc || !_loc.host) return "";
@@ -6541,7 +6713,7 @@
     if (c && !(opts && opts.fresh) && Date.now() - c.at < RELAY_NET_TTL_MS) return c.entries;
     let entries = [];
     try {
-      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], "#d": [RELAY_NET_D] }]);
+      const evs = await pool.querySync(churchRelaysRaw(), [{ kinds: [30078], authors: [cp], "#d": [RELAY_NET_D] }]);
       let best = null;
       for (const e of evs || []) {
         if (!e || e.pubkey !== cp) continue;
@@ -6562,6 +6734,43 @@
       pins: CANONICAL_RELAY_PUBS
     });
   }
+  var _gate = createRelayGate({
+    store: typeof localStorage !== "undefined" ? localStorage : null,
+    verify: verifyRelayIdentity,
+    netEntries: churchRelayNet,
+    origin: _adoptionOrigin(),
+    pins: CANONICAL_RELAY_PUBS,
+    // TWO EVENTS, AND EACH HAS A JOB.
+    //
+    // `trinity-relays-verified` repaints the Relays sheet: it reads the gate to say which addresses are
+    // carrying this church's traffic and which are not, and a relay that quietly stops being used is exactly
+    // the invisible divergence this work exists to end.
+    //
+    // `trinity-relay-returned` is the app's existing ADVISORY re-subscribe signal — coalesced through the
+    // scheduler, deliberately not the mandatory `trinity-reconnect` teardown. Without it a cold boot would
+    // subscribe over an empty publish set, paint nothing, and stay that way until the 90-second beat came
+    // round, even though the gate had admitted the church's relays a second later. A relay becoming usable is
+    // precisely what that event means.
+    onChange: () => {
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-relays-verified"));
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url: "" } }));
+      } catch (e) {
+      }
+    }
+  });
+  function _netRelays(list, cp) {
+    try {
+      return _gate.admit(list, cp === void 0 ? window.Fellowship.churchPub : cp);
+    } catch (e) {
+      return [];
+    }
+  }
+  var NO_NETWORK_RELAY = "no-network-relay";
+  var isNoNetworkRelay = (e) => String(e && e.message || e || "").startsWith(NO_NETWORK_RELAY);
   function _restoreFold() {
     const seen = /* @__PURE__ */ new Map();
     let name = "", nameAt = 0;
@@ -6685,8 +6894,8 @@
     const global = window.Fellowship.relays || [];
     const ownUrls = own ? [...own.keys()] : [];
     const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-    if (boxes >= 2) return [.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
-    return [.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])];
+    if (boxes >= 2) return _netRelays([.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])], cp);
+    return _netRelays([.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
   }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
@@ -6709,6 +6918,27 @@
     return { pubkey: pub2, handle: "", color: COLORS[(h >>> 8) % COLORS.length] };
   }
   var pool = new SimplePool();
+  var _poolSubMany = pool.subscribeMany.bind(pool);
+  pool.subscribeMany = (urls, filters, handlers) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    if (u.length) return _poolSubMany(u, filters, handlers);
+    try {
+      setTimeout(() => {
+        try {
+          if (handlers && handlers.oneose) handlers.oneose();
+        } catch (e) {
+        }
+      }, 0);
+    } catch (e) {
+    }
+    return { close() {
+    } };
+  };
+  var _poolQuerySync = pool.querySync.bind(pool);
+  pool.querySync = (urls, filter, opts) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+  };
   try {
     const _ensure = pool.ensureRelay.bind(pool);
     pool.ensureRelay = function(url, params) {
@@ -6864,7 +7094,7 @@
     const authors = [..._profQueue];
     _profQueue.clear();
     if (!authors.length) return;
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors }], {
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
@@ -8117,7 +8347,11 @@
     return out;
   }
   function _publishAny(relays, evt) {
-    const targets = _dedupeRelays(relays);
+    const candidates = _dedupeRelays(relays);
+    const targets = _netRelays(candidates);
+    if (!targets.length && (candidates.length || churchRelaysRaw().length)) {
+      return Promise.reject(new Error(NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours"));
+    }
     try {
       for (const u of targets) {
         const r = pool.relays && pool.relays.get(_wedgeKey(u));
@@ -8169,7 +8403,7 @@
         } catch (e) {
           const errs = e && e.errors ? e.errors : [e];
           const permanent = errs.length && errs.every(isPermanentRefusal);
-          const outage = errs.length && errs.every(isConnectionFailure);
+          const outage = errs.length && errs.every((e2) => isConnectionFailure(e2) || isNoNetworkRelay(e2));
           const rateLimited = errs.some(isRateLimited);
           if (!outage) item.tries = (item.tries || 0) + 1;
           item.lastTry = Math.floor(Date.now() / 1e3);
@@ -8220,17 +8454,14 @@
   window.Fellowship = {
     relays: loadRelays(),
     // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
-    // EXPOSED, NOT YET CONSULTED. Nothing in the app gates on it: which relays this client talks to is
-    // unchanged by its presence, and the adoption/publish paths do not call it. It is here so the gates that
-    // will (closed-network plan C3/C4) have one implementation to call, and so a device session can ask a real
-    // relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is the
-    // provable form.
+    // CONSUMED BY THE C4 GATE, which is what makes it more than a diagnostic: the gate proves every candidate
+    // address through this before that address can receive anything. Still exposed so a device session can ask
+    // a real relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is
+    // the provable form.
     verifyRelayIdentity,
     // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-    // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document.
-    // EXPOSED, NOT YET CONSULTED, exactly like verifyRelayIdentity above: no relay list is filtered on this
-    // answer, loadRelays/setRelays/_publishAny/churchRelays are unchanged, and which relays this client talks
-    // to is identical with and without it. The gate is plan C4.
+    // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document. C4
+    // consumes it: the answer, cached, IS the publish set — see _netRelays and the gate above.
     isNetworkRelay: isNetworkRelay2,
     // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
     // session can read what the church actually signed, rather than inferring it from behaviour.
@@ -8258,7 +8489,7 @@
       try {
         const st = pool.listConnectionStatus();
         const want = churchRelays();
-        if (!want.length) return true;
+        if (!want.length) return !churchRelaysRaw().length;
         for (const url of want) {
           if (st.get(url) === true) return true;
           try {
@@ -8570,9 +8801,26 @@
     },
     // scope outgoing messages to a church (so its steward can see who's participating). The member
     // app calls this with the active church's npub whenever it changes; null clears the scope.
+    // Switching church re-asks the gate, because membership is per church: a relay admitted by the signature of
+    // the congregation we just left is not admitted for this one, and the answer for the new church is not in
+    // the cache yet.
     setChurch(npubOrHex) {
       window.Fellowship.churchPub = toPub(npubOrHex);
+      try {
+        _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub);
+      } catch (e) {
+      }
       return window.Fellowship.churchPub;
+    },
+    // C4, for the Relays sheet: is this address carrying this church's traffic? A relay the gate has not
+    // proved is still IN the list and still retried — it is simply not published to, and the sheet says so
+    // rather than the address quietly ceasing to matter.
+    relayVerified(url) {
+      try {
+        return _gate.admits(url, window.Fellowship.churchPub);
+      } catch (e) {
+        return false;
+      }
     },
     // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
     // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
@@ -8837,6 +9085,10 @@
       } catch {
       }
       window.dispatchEvent(new CustomEvent("trinity-relays", { detail: window.Fellowship.relays }));
+      try {
+        _gate.refresh(window.Fellowship.relays, window.Fellowship.churchPub);
+      } catch (e) {
+      }
       return window.Fellowship.relays;
     },
     addRelay(url) {
@@ -9340,7 +9592,7 @@
         const msg = msgs.get(tid);
         if (msg) push(msg);
       };
-      const sub = pool.subscribeMany(window.Fellowship.relays, [
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
         { kinds: [4], authors: [pub], "#p": [peerPub] },
         // sent by me to peer
         { kinds: [4], authors: [peerPub], "#p": [pub] },
@@ -10579,6 +10831,7 @@
       } catch (e) {
         console.warn("[fellowship] care request publish failed", e);
         if (/update the app/i.test(String(e && e.message || ""))) return { error: "stale-app" };
+        if (isNoNetworkRelay(e)) return { error: "no-network-relay" };
         return null;
       }
       return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };
@@ -11639,4 +11892,13 @@
     }
   };
   window.Fellowship.ready = init().catch((e) => console.error("[fellowship] init failed", e));
+  try {
+    setTimeout(() => {
+      try {
+        _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub);
+      } catch (e) {
+      }
+    }, 0);
+  } catch (e) {
+  }
 })();
