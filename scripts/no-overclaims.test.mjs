@@ -38,6 +38,20 @@ test('the site does not promise you are in the moment you tap', () => {
   }
 });
 
+// 3. "Free to use, with help on hand whenever you need it." — and, in the same block, "we'll be alongside
+//    you the whole way." Owner, 2026-09-01: "we don't have capacity to offer support for churches, we do
+//    have tutorials and a help section, but no support." Both sentences promise a PERSON. What exists is
+//    written: help.html, the in-app help screens, and the move-over guide. A church under pressure choosing
+//    whether to trust this with its congregation's data must not be choosing on a promise nobody can keep.
+test('the site does not promise support that does not exist', () => {
+  assert.equal(/help on hand/i.test(site), false,
+    '"help on hand" promises a person to call. There is no support capacity — only written guides');
+  assert.equal(/alongside you the whole way/i.test(site), false,
+    '"alongside you the whole way" is the same promise in warmer words');
+  assert.equal(/(we|our team) (will |'ll )?(be )?(here|there) (to help|for you|whenever)/i.test(site), false,
+    'any phrasing that offers a person rather than a written guide');
+});
+
 test('the app does not claim to hold anyone’s money', () => {
   assert.equal(/money is always held as Bitcoin/.test(extras), false,
     'the currency screen announces custody of the member\'s money. Giving is non-custodial by design and ' +
