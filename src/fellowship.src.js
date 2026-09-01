@@ -11,6 +11,10 @@ import { _absorbById, _forgetById, _seedFromCache, _reduceAll, _tombstoneTargets
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the console so both surfaces answer that question the same way. See src/relay-identity.src.js.
 import { verifyRelayIdentity } from './relay-identity.src.js';
+// …and then decide whether the key it proved is one this church's network contains. Shared with the console
+// for the same reason: two surfaces that disagree about who is in the network is worse than either answer.
+// NOTHING GATES ON THIS YET — see src/relay-net.src.js and the note on window.Fellowship.isNetworkRelay.
+import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
@@ -605,6 +609,60 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // the member's own relays + the canonical pool, fanning the query across all of them.
 function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 
+// ── IS THIS RELAY ONE OF OURS? (closed-network plan C3 — the predicate, and nothing that consumes it) ────
+//
+// The serving origin, for the same-origin root. '' when the page was NOT served by anything that could be a
+// relay, and both cases are already decided a few lines above for the relay list itself: a Capacitor APK,
+// where location.host is the literal string "localhost" and the page came out of the app bundle rather than
+// off a network; and a static CDN host, which serves no relay on its origin. Passing '' can only refuse, so
+// an unknown origin is fail-closed. Reusing _native/_staticHost rather than re-deriving them keeps the two
+// answers to "could this origin be our relay?" from drifting apart.
+function _adoptionOrigin() {
+  if (_native || _staticHost || !_loc || !_loc.host) return '';
+  return _loc.protocol + '//' + _loc.host;
+}
+// This church's own signed membership entries, cached briefly.
+//
+// IN MEMORY AND SHORT-LIVED ON PURPOSE. §5's persisted verified-set — the thing that lets a boot with no
+// network still know what it knew yesterday — belongs to the gate that would otherwise re-decide under time
+// pressure (plan C4). Nothing here decides anything yet, so persisting a membership answer now would ship a
+// cache with no reader and a stale-data question nobody has to answer.
+const _relayNetCache = new Map();   // cp -> { at, entries }
+const RELAY_NET_TTL_MS = 60000;
+async function churchRelayNet(cp, opts) {
+  if (!cp) return [];
+  const c = _relayNetCache.get(cp);
+  if (c && !(opts && opts.fresh) && (Date.now() - c.at) < RELAY_NET_TTL_MS) return c.entries;
+  let entries = [];
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], '#d': [RELAY_NET_D] }]);
+    // NEWEST WINS, AND ONLY THE CHURCH'S OWN SIGNATURE COUNTS. The author filter is in the REQ, but a relay
+    // is not obliged to honour a filter and this document decides who the church's data may reach — so the
+    // author is re-checked here rather than assumed from what came back.
+    let best = null;
+    for (const e of (evs || [])) {
+      if (!e || e.pubkey !== cp) continue;
+      if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+    }
+    entries = best ? parseRelayNet(best.content) : [];
+    _relayNetCache.set(cp, { at: Date.now(), entries });
+  } catch {
+    // Unreachable is NOT "the church has no relays". Return the last answer if we have one and leave the
+    // cache alone so the next call retries, rather than caching an empty list over a real membership.
+    return c ? c.entries : [];
+  }
+  return entries;
+}
+// The predicate itself. See src/relay-net.src.js for the three roots and why none of them is us.
+function isNetworkRelay(cp, url) {
+  return _isNetworkRelay(cp, url, {
+    verify: verifyRelayIdentity,
+    netEntries: churchRelayNet,
+    origin: _adoptionOrigin(),
+    pins: CANONICAL_RELAY_PUBS,
+  });
+}
+
 // RESTORE FOLD — turns the raw event stream of "everything this key ever wrote" into { churches, name }.
 // Split out of recoverIdentity() so it can be tested against the SHIPPED bundle without a relay: the whole
 // 12-word restore hangs on this handful of lines, and the bug that broke it for good (an undeclared MEMBER_D
@@ -964,6 +1022,14 @@ function _armAuthRefetch() {
 // trust anchor is that the relay came from the church's own SIGNED kind:10002 (a bad relay can't inject
 // itself; a lying relay only gets in if the church itself put it there). Fail-closed: unreachable or
 // unverified → not adopted, so a gated read never lands on a relay that would serve it to anyone.
+//
+// AND IT IS NOT THE NETWORK-MEMBERSHIP GATE — said here because it is the closest thing in this file to one
+// and it has been mistaken for one before (see _probeRelayEnforces in the console, and AUDIT-2026-07-27).
+// `trinityone.enforces` is a relay REPORTING ON ITSELF over an unauthenticated GET; the field is simply
+// "does this box hold at least one church". A host can print it. What it does honestly is FILTER CANDIDATES:
+// it keeps the client from adopting a relay that would not apply the rules even though the church named it.
+// Whether a relay is one of ours is isNetworkRelay() above — the C2 possession proof plus the church's own
+// signature — and that predicate is not consulted anywhere yet (plan C4). This probe is unchanged by it.
 const _relayInfoCache = new Map();   // wssUrl -> Promise<trinityone-block|null>, cached so we probe each relay once
 function _relayInfo(wssUrl) {
   if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
@@ -2305,6 +2371,15 @@ window.Fellowship = {
   // relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is the
   // provable form.
   verifyRelayIdentity,
+  // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
+  // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document.
+  // EXPOSED, NOT YET CONSULTED, exactly like verifyRelayIdentity above: no relay list is filtered on this
+  // answer, loadRelays/setRelays/_publishAny/churchRelays are unchanged, and which relays this client talks
+  // to is identical with and without it. The gate is plan C4.
+  isNetworkRelay,
+  // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
+  // session can read what the church actually signed, rather than inferring it from behaviour.
+  churchRelayNet,
   // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
   // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
   // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".

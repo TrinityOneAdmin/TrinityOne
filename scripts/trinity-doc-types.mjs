@@ -65,6 +65,7 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/pinsermon:':    { write: 'steward',   read: 'members', scope: 'suffix' },
   'trinityone/fund:':         { write: 'leader',    read: 'members', scope: 'tag' },
   'trinityone/relays':        { write: 'church',    read: 'members', scope: 'author', note: 'the church\'s trusted-relay list' },
+  'trinityone/relay-net':     { write: 'church',    read: 'members', scope: 'author', note: 'closed-network plan C3 — the church\'s own statement of WHICH RELAY BOXES ARE ITS NETWORK, as [{pubkey, alwaysOn, url?}]. NOT trinityone/relays, which means "cross-relay sync is on": syncEnable refuses to write that below two boxes (so a single-relay church could never author its own membership) and syncDisable writes [] to it (which would un-admit a church\'s own relay as a side effect of turning mirroring off). Add, never repurpose. The client matches on PUBKEY ONLY — `url` is an advisory hint about where the box was last seen, because a tunnelled relay changes address on every restart' },
   'trinityone/network:':      { write: 'church',    read: 'members', scope: 'author', note: 'the church declares it joined a network' },
 
   // ── membership and joining ───────────────────────────────────────────────────────────────────────────
@@ -216,6 +217,7 @@ export const D = Object.freeze({
   BOOKING:        k('trinityone/booking:'),
   RUNSHEET:       k('trinityone/runsheet:'),
   RELAYS:         k('trinityone/relays'),
+  RELAY_NET:      k('trinityone/relay-net'),
   NETWORK:        k('trinityone/network:'),
   BLOCKED:        k('trinityone/blocked:'),
   PIN:            k('trinityone/pin:'),

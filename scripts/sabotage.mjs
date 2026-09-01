@@ -64,22 +64,36 @@ if (!MODULES) {
   process.exit(2);
 }
 symlinkSync(MODULES, join(SANDBOX, 'node_modules'));
+// AND TELL THE TESTS WHERE THE HISTORY IS. The sandbox is a copy of four directories, not a git repository,
+// so any test that reads the PREVIOUS build with `git show` — the two-relay convergence test and the
+// closed-network one both do — dies before the sabotage is applied and reports BROKEN-BASELINE, which looks
+// exactly like a broken test rather than a missing .git. Read-only: `show` and `rev-parse` only.
+process.env.TRINITY_GIT_ROOT = ROOT;
 
 // REBUILD THE BUNDLE THE TEST ACTUALLY READS. Mutating src/ proves nothing about a test that lifts from
 // vendor/ — and several do, because vendor/ is what the APK and the console load. Without this the runner
 // reports a confident "ok" for a guard that never saw the mutation at all; it scored two that way the first
 // time this was tried. esbuild is reached through the symlinked node_modules, so the sandbox rebuilds the
 // same way the repo does.
+// A SOURCE FILE MAY FEED MORE THAN ONE BUNDLE, so this maps to a LIST. src/relay-net.src.js is imported by
+// both engines (the member app and the console must answer "is this relay one of ours?" identically), and
+// rebuilding only one of them would leave the other bundle un-sabotaged — a case that then reports ok on the
+// strength of a test that never saw the mutation in half the code it lifts.
 const BUILD_FOR = {
-  'src/steward.src.js': 'scripts/build-steward.sh',
-  'src/identity.src.js': 'scripts/build-identity.sh',
-  'src/fellowship.src.js': 'scripts/build-fellowship.sh',
+  'src/steward.src.js': ['scripts/build-steward.sh'],
+  'src/identity.src.js': ['scripts/build-identity.sh'],
+  'src/fellowship.src.js': ['scripts/build-fellowship.sh'],
+  'src/relay-identity.src.js': ['scripts/build-fellowship.sh', 'scripts/build-steward.sh'],
+  'src/relay-net.src.js': ['scripts/build-fellowship.sh', 'scripts/build-steward.sh'],
 };
 const rebuild = (file) => {
-  const script = BUILD_FOR[file];
-  if (!script) return true;
-  try { execSync('bash ' + script, { cwd: SANDBOX, stdio: 'pipe', timeout: 120000 }); return true; }
-  catch (e) { return false; }
+  const scripts = BUILD_FOR[file];
+  if (!scripts) return true;
+  for (const script of scripts) {
+    try { execSync('bash ' + script, { cwd: SANDBOX, stdio: 'pipe', timeout: 120000 }); }
+    catch (e) { return false; }
+  }
+  return true;
 };
 
 const runTest = (testFile) => {

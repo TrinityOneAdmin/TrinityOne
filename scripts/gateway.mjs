@@ -366,6 +366,13 @@ const FIN_JOURNAL_D = D.FIN_JOURNAL;   // church-book double-entry journal entry
 const ROOM_D = D.ROOM, BOOKING_D = D.BOOKING;   // shared room calendar (church-only writes)
 const RUNSHEET_D = D.RUNSHEET;   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
 const RELAYS_D = D.RELAYS;   // the church's trusted-relays list (resync): d=trinityone/relays, church-signed, content=[{pubkey,url}]
+// The church's own statement of which relay BOXES are its network — d=trinityone/relay-net, church-signed,
+// content=[{pubkey, alwaysOn, url?}]. A DIFFERENT DOCUMENT from RELAYS_D above and deliberately so: that one
+// means "cross-relay sync is on", refuses to be written below two boxes and is emptied to turn mirroring
+// off, none of which is true of membership. This relay does not ingest relay-net (it is a CLIENT-side
+// membership statement; the server-side pairing check stays on RELAYS_D — plan C6). All it does here is
+// gate the write, so a member of some church on this box cannot author one.
+const RELAY_NET_D = D.RELAY_NET;
 const NETWORK_D = D.NETWORK;   // the church declares it belongs to a network (the network's pubkey)
 const BLOCKED_D = D.BLOCKED;   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 const PIN_D = D.PIN;           // a group's pinned message — d=pin:<groupId> (one per group)
@@ -1894,6 +1901,15 @@ function accept(e) {
     // whose whole purpose is to catch a type nobody gave a rule to.
     if (d.startsWith(VOICE_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(VOICE_D.length) === e.pubkey;
     if (d.startsWith(STEWARDS_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey;   // OWNER-ONLY: only the church key edits its own steward roster
+    // THE CHURCH'S RELAY-NETWORK MEMBERSHIP. Owner-only, like the roster: this document is the sole thing
+    // that admits a self-hosted or third-party-hosted relay to a church's network, so the authority that
+    // gatekeeps writes is the authority that decides it. Not delegated to stewards — nothing asked for that
+    // and a delegated steward could otherwise widen where the whole corpus is published.
+    //
+    // These documents are keyed by (pubkey, kind, d), so a member writing this d-tag would only ever replace
+    // their OWN copy and never the church's — the cross-tenant overwrite that hit trinityone/voice: is not
+    // reachable here. This is a floor, not a patch: nothing but the church should be authoring it at all.
+    if (d === RELAY_NET_D) return CHURCH_PUBS.has(e.pubkey);
     if (d.startsWith(BLOCKED_D)) return leaderOf(d.slice(BLOCKED_D.length));   // OWNER-ONLY, and only your OWN blocklist                                                                // OWNER-ONLY: banning is not delegated to stewards
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide
       // SECURITY-AUDIT-2026-07-06 M5: bind authority to the church that actually OWNS the referenced group,

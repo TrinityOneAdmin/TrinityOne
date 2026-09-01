@@ -6498,6 +6498,82 @@
     }
   }
 
+  // src/relay-net.src.js
+  var RELAY_NET_D = "trinityone/relay-net";
+  var CANONICAL_RELAY_PUBS = Object.freeze({
+    "wss://app.trinityone.church/relay": Object.freeze(["6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"]),
+    "wss://trinityone-master-01.tailbeaac0.ts.net/relay": Object.freeze(["6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"])
+  });
+  function _relayKey(url) {
+    try {
+      return normalizeURL2(String(url || ""));
+    } catch {
+      return String(url || "");
+    }
+  }
+  var _isHex64 = (s) => /^[0-9a-f]{64}$/.test(String(s || "").toLowerCase());
+  function canonicalPinsFor(url, pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const want = _relayKey(url);
+    if (!want) return [];
+    for (const k of Object.keys(map)) {
+      if (_relayKey(k) === want) return (map[k] || []).map((p) => String(p).toLowerCase()).filter(_isHex64);
+    }
+    return [];
+  }
+  function parseRelayNet(content) {
+    let arr = content;
+    if (typeof arr === "string") {
+      try {
+        arr = JSON.parse(arr || "[]");
+      } catch {
+        return [];
+      }
+    }
+    if (!Array.isArray(arr)) return [];
+    const out = [], seen = /* @__PURE__ */ new Set();
+    for (const e of arr) {
+      if (!e || typeof e !== "object") continue;
+      const pubkey = String(e.pubkey || "").toLowerCase();
+      if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
+      seen.add(pubkey);
+      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+    }
+    return out;
+  }
+  function _originKey(httpUrl) {
+    let s = String(httpUrl || "").trim().toLowerCase().replace(/\/+$/, "");
+    if (!/^https?:\/\/[^/]+$/.test(s)) return "";
+    return s.replace(/^(https:\/\/[^/:]+):443$/, "$1").replace(/^(http:\/\/[^/:]+):80$/, "$1");
+  }
+  function sameOriginRelay(url, origin) {
+    const a = _originKey(relayHttpBase(url));
+    const b = _originKey(origin);
+    return !!a && !!b && a === b;
+  }
+  async function isNetworkRelay(cp, url, deps) {
+    const d = deps || {};
+    if (!url) return false;
+    let proof = null;
+    try {
+      proof = await (d.verify || verifyRelayIdentity)(url);
+    } catch {
+      proof = null;
+    }
+    const provenPub = String(proof && proof.relayPub || "").toLowerCase();
+    if (!_isHex64(provenPub)) return false;
+    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return true;
+    if (sameOriginRelay(url, d.origin)) return true;
+    let entries = null;
+    try {
+      entries = d.netEntries ? await d.netEntries(cp) : null;
+    } catch {
+      entries = null;
+    }
+    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return true;
+    return false;
+  }
+
   // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
@@ -16077,6 +16153,122 @@ zoo`.split("\n");
       setTimeout(finish, ms);
     });
   }
+  function _ownOrigin() {
+    if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return "";
+    const l = typeof location !== "undefined" ? location : null;
+    if (!l || !l.host) return "";
+    if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return "";
+    return l.protocol + "//" + l.host;
+  }
+  function relayNetCandidates(extra) {
+    const out = [];
+    const add2 = (u) => {
+      const s = String(u || "").trim();
+      if (s && !out.includes(s)) out.push(s);
+    };
+    const o = _ownOrigin();
+    if (o) add2(o.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") + "/relay");
+    for (const u of extraRelays()) add2(u);
+    for (const u of extra || []) add2(u);
+    return out;
+  }
+  function _oneComplete(filters, ms = 6e3) {
+    return new Promise((resolve) => {
+      let best = null, complete = false, done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try {
+          sub.close();
+        } catch {
+        }
+        resolve({ ev: best, complete });
+      };
+      const sub = pool.subscribeMany(relays(), filters, {
+        onevent(e) {
+          if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+        },
+        oneose() {
+          complete = true;
+          finish();
+        }
+      });
+      setTimeout(finish, ms);
+    });
+  }
+  function relayNetDoc() {
+    return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
+  }
+  async function relayNetEntries(cp) {
+    if (!pub || cp && cp !== pub) return [];
+    const { ev } = await relayNetDoc();
+    return ev && ev.pubkey === pub ? parseRelayNet(ev.content) : [];
+  }
+  async function enrolRelayNet(opts) {
+    const o = opts || {};
+    if (!sk || !pub) throw new Error("No church key on this device");
+    const { ev: existing, complete } = await relayNetDoc();
+    const mine = existing && existing.pubkey === pub ? existing : null;
+    if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    const entries = mine ? parseRelayNet(mine.content) : [];
+    const before = JSON.stringify(entries);
+    let seeded = 0;
+    if (!mine) {
+      let old = null, oldComplete = false;
+      try {
+        const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }]);
+        old = r.ev;
+        oldComplete = r.complete;
+      } catch {
+      }
+      if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+      let arr = [];
+      if (old && old.pubkey === pub) {
+        try {
+          arr = JSON.parse(old.content || "[]");
+        } catch {
+          arr = [];
+        }
+      }
+      for (const e of Array.isArray(arr) ? arr : []) {
+        const p = String(e && e.pubkey || "").toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(p) || entries.some((x) => x.pubkey === p)) continue;
+        entries.push({ pubkey: p, alwaysOn: true, url: e && typeof e.url === "string" ? e.url : "" });
+        seeded++;
+      }
+    }
+    const proven = [], unproven = [];
+    for (const url of relayNetCandidates(o.extra)) {
+      let proof = null;
+      try {
+        proof = await verifyRelayIdentity(url);
+      } catch {
+        proof = null;
+      }
+      const p = String(proof && proof.relayPub || "").toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(p)) {
+        unproven.push(url);
+        continue;
+      }
+      proven.push({ url, pubkey: p });
+      const cur = entries.find((x) => x.pubkey === p);
+      if (cur) {
+        if (url && cur.url !== url) cur.url = url;
+      } else entries.push({ pubkey: p, alwaysOn: true, url });
+    }
+    const changed = JSON.stringify(entries) !== before;
+    if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
+    const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+    return { published: !!ev, entries, proven, unproven, seeded };
+  }
+  function isNetworkRelay2(cp, url) {
+    return isNetworkRelay(cp, url, {
+      verify: verifyRelayIdentity,
+      netEntries: relayNetEntries,
+      origin: _ownOrigin(),
+      pins: CANONICAL_RELAY_PUBS
+    });
+  }
   var _beatsDoc = (a, b) => {
     if (!b) return true;
     const aa = a.created_at || 0, bb = b.created_at || 0;
@@ -16273,6 +16465,20 @@ zoo`.split("\n");
     // implementation to call. The `relayPub` this console already reads for the redundancy count stays an
     // unproven claim — it was never a gate and must not start looking like one.
     verifyRelayIdentity,
+    // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
+    // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
+    // EXPOSED, NOT YET CONSULTED: relays() is unchanged, publish() is unchanged, and nothing refuses a relay
+    // that fails this. The gate is plan C4.
+    isNetworkRelay: isNetworkRelay2,
+    // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
+    // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
+    // deadlock rule above enrolRelayNet.
+    relayNet: relayNetEntries,
+    relayNetCandidates,
+    // Signs the boxes this console can prove into the church's own membership document. Additive: it never
+    // drops an entry that is merely unreachable. NOT called automatically anywhere yet — wiring it into the
+    // console's start-up is merge-schedule step 4 and wants a browser/device pass of its own.
+    enrolRelayNet,
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
     publishSigned: _publishSigned,

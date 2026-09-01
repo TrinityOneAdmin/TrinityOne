@@ -3731,6 +3731,82 @@
     }
   }
 
+  // src/relay-net.src.js
+  var RELAY_NET_D = "trinityone/relay-net";
+  var CANONICAL_RELAY_PUBS = Object.freeze({
+    "wss://app.trinityone.church/relay": Object.freeze(["6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"]),
+    "wss://trinityone-master-01.tailbeaac0.ts.net/relay": Object.freeze(["6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"])
+  });
+  function _relayKey(url) {
+    try {
+      return normalizeURL2(String(url || ""));
+    } catch {
+      return String(url || "");
+    }
+  }
+  var _isHex64 = (s) => /^[0-9a-f]{64}$/.test(String(s || "").toLowerCase());
+  function canonicalPinsFor(url, pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const want = _relayKey(url);
+    if (!want) return [];
+    for (const k of Object.keys(map)) {
+      if (_relayKey(k) === want) return (map[k] || []).map((p) => String(p).toLowerCase()).filter(_isHex64);
+    }
+    return [];
+  }
+  function parseRelayNet(content) {
+    let arr = content;
+    if (typeof arr === "string") {
+      try {
+        arr = JSON.parse(arr || "[]");
+      } catch {
+        return [];
+      }
+    }
+    if (!Array.isArray(arr)) return [];
+    const out = [], seen = /* @__PURE__ */ new Set();
+    for (const e of arr) {
+      if (!e || typeof e !== "object") continue;
+      const pubkey = String(e.pubkey || "").toLowerCase();
+      if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
+      seen.add(pubkey);
+      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+    }
+    return out;
+  }
+  function _originKey(httpUrl) {
+    let s = String(httpUrl || "").trim().toLowerCase().replace(/\/+$/, "");
+    if (!/^https?:\/\/[^/]+$/.test(s)) return "";
+    return s.replace(/^(https:\/\/[^/:]+):443$/, "$1").replace(/^(http:\/\/[^/:]+):80$/, "$1");
+  }
+  function sameOriginRelay(url, origin) {
+    const a = _originKey(relayHttpBase(url));
+    const b = _originKey(origin);
+    return !!a && !!b && a === b;
+  }
+  async function isNetworkRelay(cp, url, deps) {
+    const d = deps || {};
+    if (!url) return false;
+    let proof = null;
+    try {
+      proof = await (d.verify || verifyRelayIdentity)(url);
+    } catch {
+      proof = null;
+    }
+    const provenPub = String(proof && proof.relayPub || "").toLowerCase();
+    if (!_isHex64(provenPub)) return false;
+    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return true;
+    if (sameOriginRelay(url, d.origin)) return true;
+    let entries = null;
+    try {
+      entries = d.netEntries ? await d.netEntries(cp) : null;
+    } catch {
+      entries = null;
+    }
+    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return true;
+    return false;
+  }
+
   // node_modules/@noble/ciphers/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
@@ -6453,6 +6529,39 @@
   function churchRelays() {
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
   }
+  function _adoptionOrigin() {
+    if (_native || _staticHost || !_loc || !_loc.host) return "";
+    return _loc.protocol + "//" + _loc.host;
+  }
+  var _relayNetCache = /* @__PURE__ */ new Map();
+  var RELAY_NET_TTL_MS = 6e4;
+  async function churchRelayNet(cp, opts) {
+    if (!cp) return [];
+    const c = _relayNetCache.get(cp);
+    if (c && !(opts && opts.fresh) && Date.now() - c.at < RELAY_NET_TTL_MS) return c.entries;
+    let entries = [];
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], "#d": [RELAY_NET_D] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (!e || e.pubkey !== cp) continue;
+        if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+      }
+      entries = best ? parseRelayNet(best.content) : [];
+      _relayNetCache.set(cp, { at: Date.now(), entries });
+    } catch {
+      return c ? c.entries : [];
+    }
+    return entries;
+  }
+  function isNetworkRelay2(cp, url) {
+    return isNetworkRelay(cp, url, {
+      verify: verifyRelayIdentity,
+      netEntries: churchRelayNet,
+      origin: _adoptionOrigin(),
+      pins: CANONICAL_RELAY_PUBS
+    });
+  }
   function _restoreFold() {
     const seen = /* @__PURE__ */ new Map();
     let name = "", nameAt = 0;
@@ -8117,6 +8226,15 @@
     // relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is the
     // provable form.
     verifyRelayIdentity,
+    // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
+    // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document.
+    // EXPOSED, NOT YET CONSULTED, exactly like verifyRelayIdentity above: no relay list is filtered on this
+    // answer, loadRelays/setRelays/_publishAny/churchRelays are unchanged, and which relays this client talks
+    // to is identical with and without it. The gate is plan C4.
+    isNetworkRelay: isNetworkRelay2,
+    // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
+    // session can read what the church actually signed, rather than inferring it from behaviour.
+    churchRelayNet,
     // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
     // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
     // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".

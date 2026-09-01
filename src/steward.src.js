@@ -21,6 +21,10 @@ import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './c
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
 import { verifyRelayIdentity } from './relay-identity.src.js';
+// …and then decide whether the key it proved is one this church's network contains, and write the document
+// that says so. Shared with the member app so both surfaces answer that question the same way.
+// NOTHING GATES ON THIS YET — see src/relay-net.src.js and the note on window.Steward.isNetworkRelay.
+import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -560,6 +564,10 @@ function ownRelay() {
   // _refreshBoxHostsUs. Until it answers, the box stays IN the list, because the two mistakes are not equal:
   // an extra relay holding nothing costs one dead connection; dropping the one that holds the church loses
   // the church.
+  //
+  // AND NOTHING THAT ENROLS A RELAY MAY CALL THIS FUNCTION. The line below caches a "no" that then removes
+  // the box from relays(), from relayIdentities() and therefore from anything that could ever sign it in.
+  // See the deadlock rule above enrolRelayNet(): the census reads location directly.
   if (_boxHostsUs === false) return CANONICAL_RELAY;
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return CANONICAL_RELAY;
@@ -730,6 +738,8 @@ function relays() {
 function _blobBase() { const r = ownRelay(); return r.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, ''); }
 // FEDERATION Phase 3 — relay discovery for the steward console (mirrors the member engine). Probe a relay's
 // NIP-11 doc for its trinityone capability/offer block; cached so each relay is probed once. Fail-closed.
+// `enforces` here is a relay REPORTING ON ITSELF over an unauthenticated GET — a candidate filter, never the
+// membership gate. See the note above _probeRelayEnforces and isNetworkRelay().
 const _relayInfoCache = new Map();
 function _relayInfo(wssUrl) {
   if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
@@ -771,6 +781,13 @@ let _discoverySeed = [];
 //
 // What this cannot prove: that the operator is not simply reading their own database. Nothing remote can. It
 // raises the floor from "says the right thing" to "does the right thing".
+//
+// AND IT IS NOT THE NETWORK-MEMBERSHIP GATE — stated here so the next reader does not promote it into one.
+// This is a CANDIDATE FILTER: it stops discovery / Auto-find steering a church at a relay that would not
+// apply the rules. What ADMITS a relay is isNetworkRelay() — the C2 possession proof plus the church's own
+// signature — and behaving correctly for a throwaway key is not a signature. Keep it this way round: a box
+// that passes this probe and is in nobody's relay-net document is a well-behaved stranger, and a box the
+// church signed for is a member whether or not it happened to answer a probe this minute.
 function _probeRelayEnforces(wssUrl, timeoutMs) {
   return new Promise((resolve) => {
     let ws = null, done = false;
@@ -1976,6 +1993,171 @@ function _one(filters, ms = 4000) {
   });
 }
 
+// ── THE CHURCH'S RELAY NETWORK (closed-network plan C3) ─────────────────────────────────────────────────
+//
+// Two things live here and they must not be confused with each other. ENROLMENT writes the church's
+// membership document. The PREDICATE reads it. Neither one filters a relay list: relays(), ownRelay(),
+// extraRelays(), publish() and every caller of them are byte-for-byte unchanged by this block, and which
+// relays this console talks to is identical with and without it. The gate is plan C4.
+//
+// ══ THE DEADLOCK RULE, and it is the reason this block exists at all ═══════════════════════════════════
+//
+// ENROLMENT ENUMERATES RAW CANDIDATE SOURCES. Never relays(). Never ownRelay(). Never the _boxHostsUs cache.
+//
+// The failure it prevents is already latent in the shipped console and it is permanent, not transient. Once
+// `_boxHostsUs === false` is cached, ownRelay() returns the canonical URL, so relays() stops naming this
+// box, so relayIdentities() — which enumerates from relays() — never sees it, so syncEnable(), which is fed
+// by relayIdentities(), can never include it. A census built from the list is a census that cannot see the
+// thing it is meant to enrol. Once C4 filters relays() on membership, the identical loop traps ANY
+// not-yet-admitted box: excluded by the gate, therefore never enumerated, therefore never signed in,
+// therefore excluded for ever. A self-hosting church would be permanently orphaned from its own machine —
+// the finding that made an earlier version of this plan a no-go.
+//
+// So the census is location, the relay panel's own configured entries, and anything explicitly handed in.
+// The filtered list is for PUBLISHING. Using it as the enrolment census is the deadlock.
+
+// The console's own serving origin, or '' when the page was not served by anything that could be a relay.
+// Two such cases, both already decided elsewhere in this file for the relay list itself: a Capacitor APK,
+// where location.host is the literal string "localhost" and the page came out of the app bundle rather than
+// off a network — a local process answering there is not "the box that served me the console"; and a static
+// CDN host, which serves no relay on its origin. '' can only ever refuse, so an unknown origin fails closed.
+//
+// READ STRAIGHT OFF location. NOT ownRelay(), which consults _boxHostsUs — see the deadlock rule above.
+function _ownOrigin() {
+  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return '';
+  const l = (typeof location !== 'undefined') ? location : null;
+  if (!l || !l.host) return '';
+  if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return '';
+  return l.protocol + '//' + l.host;
+}
+// The RAW census. Every source here is something a person put there or something the browser tells us
+// directly; not one of them has been through a membership filter or a cached verdict.
+//
+// The origin step is written INLINE rather than as its own little helper, deliberately. A one-caller helper
+// is invisible to the tests the moment the sabotage that removes its caller runs: esbuild tree-shakes it out
+// of the bundle, the lift that reads it fails to find it, and several unrelated tests then go red with a
+// "could not anchor" error instead of the one test going red with the real message. That has already cost
+// this repo a misread sabotage run, and it is cheaper to keep the line here than to explain the artefact.
+function relayNetCandidates(extra) {
+  const out = [];
+  const add = (u) => { const s = String(u || '').trim(); if (s && !out.includes(s)) out.push(s); };
+  const o = _ownOrigin();              // the box that served this console — location, NOT ownRelay()
+  if (o) add(o.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/relay');
+  for (const u of extraRelays()) add(u);   // the relay panel's own configured entries, as typed
+  for (const u of (extra || [])) add(u);   // a pasted candidate the caller is asking about
+  return out;
+}
+
+// A one-shot read that also says whether the relay FINISHED answering.
+//
+// `_one` above cannot: it resolves `null` both when the church has no such document and when we simply
+// stopped waiting, and those are opposite facts. A writer that cannot tell them apart will publish a
+// document built from "the church has signed nothing" over a real membership on a slow link — un-admitting
+// every box that was in it. That is the same mistake as reading "this record is absent" from an
+// unauthenticated read, and it produced a false "6 of 8 children did not receive their record" the last time
+// it was made here. Same shape as _newestByD's `complete`, and the same reason.
+//
+// (It reads over relays(), the raw list today. C4 must keep the READER off a filtered list for the same
+// reason enrolment stays off one — see the deadlock rule above.)
+function _oneComplete(filters, ms = 6000) {
+  return new Promise((resolve) => {
+    let best = null, complete = false, done = false;
+    const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve({ ev: best, complete }); };
+    const sub = pool.subscribeMany(relays(), filters, {
+      onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
+      oneose() { complete = true; finish(); },
+    });
+    setTimeout(finish, ms);
+  });
+}
+// This church's own signed membership document, newest wins.
+function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAY_NET_D] }]); }
+async function relayNetEntries(cp) {
+  if (!pub || (cp && cp !== pub)) return [];   // this console speaks for one church: its own
+  const { ev } = await relayNetDoc();
+  // The author filter is in the REQ, but a relay is not obliged to honour a filter and this document decides
+  // who the church's data may reach. Re-check the signature's author rather than trusting what came back.
+  return (ev && ev.pubkey === pub) ? parseRelayNet(ev.content) : [];
+}
+
+// Sign the boxes this console can PROVE into the church's own membership document.
+//
+// ADDITIVE, NEVER SUBTRACTIVE. An entry already in the document is kept even when its box does not answer
+// right now — a parish-office machine switched off at night, a tunnel between addresses, a flat connection.
+// Dropping an entry because a probe failed would make "my relay went away for an hour" into "my church
+// un-admitted its own relay", which is the fail-closed-in-the-wrong-place mistake §5 exists to refuse.
+// Removing a relay is a deliberate act by the church, and there is no UI for it in this item.
+//
+// THE ONE-TIME SEED (§6-ter). A church that already runs cross-relay sync has a trinityone/relays document
+// naming the boxes it trusts. If there is no relay-net document at all, those pubkeys seed the new one once,
+// alongside whatever the origin box proves. It is a seed, never a live mirror: trinityone/relays keeps its
+// own meaning (sync is on, at least two boxes, `[]` means off) and nothing here writes to it.
+//
+// WHAT `alwaysOn` DOES HERE: a new entry gets `true`, an existing entry keeps whatever the church set. It is
+// the owner's "this machine is not on 24/7" flag and nothing in this item reads it (plan C11 owns its
+// consumers and the checkbox that sets it) — but the writer has to carry it or a later console would erase
+// the answer every time it enrolled.
+//
+// AND "I DON'T KNOW YET" IS NOT "THE CHURCH HAS SIGNED NOTHING". If the read of the church's own document
+// did not finish, this writes nothing at all and says so (`unknown: true`). Treating a timed-out read as an
+// empty church is precisely how the additive promise above would be broken on a slow link: the writer would
+// build a document from scratch, publish it with a newer timestamp, and un-admit every box the church had
+// already signed for. The same rule covers the one-time seed, which is one-time and so gets exactly one
+// chance to read the old document correctly.
+async function enrolRelayNet(opts) {
+  const o = opts || {};
+  if (!sk || !pub) throw new Error('No church key on this device');
+  const { ev: existing, complete } = await relayNetDoc();
+  const mine = (existing && existing.pubkey === pub) ? existing : null;
+  if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+  const entries = mine ? parseRelayNet(mine.content) : [];
+  const before = JSON.stringify(entries);
+  let seeded = 0;
+  if (!mine) {
+    let old = null, oldComplete = false;
+    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }]); old = r.ev; oldComplete = r.complete; } catch {}
+    if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    let arr = [];
+    if (old && old.pubkey === pub) { try { arr = JSON.parse(old.content || '[]'); } catch { arr = []; } }
+    for (const e of (Array.isArray(arr) ? arr : [])) {
+      const p = String((e && e.pubkey) || '').toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(p) || entries.some(x => x.pubkey === p)) continue;
+      entries.push({ pubkey: p, alwaysOn: true, url: (e && typeof e.url === 'string') ? e.url : '' });
+      seeded++;
+    }
+  }
+  const proven = [], unproven = [];
+  for (const url of relayNetCandidates(o.extra)) {
+    let proof = null;
+    try { proof = await verifyRelayIdentity(url); } catch { proof = null; }
+    const p = String((proof && proof.relayPub) || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(p)) { unproven.push(url); continue; }
+    proven.push({ url, pubkey: p });
+    const cur = entries.find(x => x.pubkey === p);
+    // THE URL IS A HINT AND IS REFRESHED; THE PUBKEY IS THE MEMBERSHIP AND IS NEVER MATCHED ON. A box behind
+    // a free tunnel arrives here on a new address every restart, and it is the SAME member — so its entry's
+    // `url` is updated in place rather than a second entry being created for the same key.
+    if (cur) { if (url && cur.url !== url) cur.url = url; }
+    else entries.push({ pubkey: p, alwaysOn: true, url });
+  }
+  const changed = JSON.stringify(entries) !== before;
+  // Nothing proved and nothing already signed in: publish NOTHING. An empty document is the church signing
+  // "my network is empty", which is a statement, not a silence.
+  if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
+  const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+  return { published: !!ev, entries, proven, unproven, seeded };
+}
+
+// The predicate. See src/relay-net.src.js for the three roots and why none of them is us.
+function isNetworkRelay(cp, url) {
+  return _isNetworkRelay(cp, url, {
+    verify: verifyRelayIdentity,
+    netEntries: relayNetEntries,
+    origin: _ownOrigin(),
+    pins: CANONICAL_RELAY_PUBS,
+  });
+}
+
 // One-shot read per d-tag, keeping TWO events per document: the newest we wrote (`ours`) and the newest from
 // anyone at all (`top`). Both are needed because a replaceable event is keyed by (pubkey, kind, d), so the
 // church's copy of a member's clearance and a steward's copy are separate documents that never collide — and
@@ -2342,6 +2524,21 @@ window.Steward = {
   // implementation to call. The `relayPub` this console already reads for the redundancy count stays an
   // unproven claim — it was never a gate and must not start looking like one.
   verifyRelayIdentity,
+
+  // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
+  // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
+  // EXPOSED, NOT YET CONSULTED: relays() is unchanged, publish() is unchanged, and nothing refuses a relay
+  // that fails this. The gate is plan C4.
+  isNetworkRelay,
+  // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
+  // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
+  // deadlock rule above enrolRelayNet.
+  relayNet: relayNetEntries,
+  relayNetCandidates,
+  // Signs the boxes this console can prove into the church's own membership document. Additive: it never
+  // drops an entry that is merely unreachable. NOT called automatically anywhere yet — wiring it into the
+  // console's start-up is merge-schedule step 4 and wants a browser/device pass of its own.
+  enrolRelayNet,
 
   // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
   // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.

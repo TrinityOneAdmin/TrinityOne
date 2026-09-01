@@ -1072,4 +1072,66 @@ export const CASES = [
     replace: `  const isSeries = false;`,
     test: 'scripts/care-rota-and-rsvp.test.mjs',
   },
+
+  // ── closed-network plan C3: is this relay one of ours? ────────────────────────────────────────────────
+  // Each of these is one of the ways the plan says answering this question goes wrong, expressed as the
+  // careless edit that would cause it. Each takes exactly ONE test red, which is the reassuring shape: an
+  // all-red run means the harness died, not that the guard is sharp.
+  {
+    name: 'relay-net: membership matched on URL instead of pubkey',
+    file: 'src/relay-net.src.js',
+    // A church's relay behind a free tunnel gets a new address on every restart, so this drops that church's
+    // own box every time it reboots — and only ever shows up on a relay that has actually moved.
+    find: `String(e.pubkey || '').toLowerCase() === provenPub`,
+    replace: `String(e.url || '') === url`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: enrolment enumerates the FILTERED relay list',
+    file: 'src/steward.src.js',
+    // The bootstrap deadlock. relays()/ownRelay() consult the _boxHostsUs cache, so a box recorded as "not
+    // hosting us" is invisible to the only code that could ever sign it in — permanently.
+    find: `  const o = _ownOrigin();`,
+    replace: `  const o = ''; for (const u of relays()) add(u);`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: the same-origin root skips the possession proof',
+    file: 'src/relay-net.src.js',
+    // Same-origin is a reason not to ask a SECOND question, never a reason to skip the first: without the
+    // proof, any host answering on the page's origin is admitted.
+    find: `  let proof = null;`,
+    replace: `  if (sameOriginRelay(url, d.origin)) return true;
+  let proof = null;`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: an unfinished MEMBERSHIP read is treated as an empty church',
+    file: 'src/steward.src.js',
+    // A timed-out read comes back empty, and empty is indistinguishable from "this church has signed
+    // nothing" — so the writer would build a document from scratch and un-admit every box already in it.
+    find: `  if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+`,
+    replace: ``,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: an unfinished SEED read is treated as no old relay list',
+    file: 'src/steward.src.js',
+    // The sibling guard, and it needs its own case: the seed runs ONCE, so a timed-out read of the old sync
+    // list means those boxes are never carried across and nothing ever tries again.
+    find: `    if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+`,
+    replace: ``,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: the canonical pin is one value, not a list',
+    file: 'src/relay-net.src.js',
+    // A single pin makes a planned key rotation a fleet-wide outage; this project has rotated a relay key
+    // under incident before.
+    find: `if (canonicalPinsFor(url, d.pins).includes(provenPub)) return true;`,
+    replace: `if (canonicalPinsFor(url, d.pins)[0] === provenPub) return true;`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
 ];

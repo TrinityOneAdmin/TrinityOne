@@ -33,7 +33,7 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
@@ -42,6 +42,24 @@ import { requireFreePort } from './test-ports.mjs';
 import { D } from './trinity-doc-types.mjs';
 
 export const ROOT = fileURLToPath(new URL('..', import.meta.url));
+// WHERE THE HISTORY IS, which is not always where the code under test is.
+//
+// startOldRelay/gatewayDiffersFrom read the previous build with `git show`, and ROOT is the tree the harness
+// file happens to sit in. scripts/sabotage.mjs runs the whole suite from a COPY of the working tree — src,
+// app, scripts, vendor and nothing else — so in the sandbox ROOT is not a git repository at all and every
+// `git -C ROOT` dies with "not a git repository". A test that uses the old build then fails in the sandbox
+// BEFORE any sabotage, and every case pointed at it reports BROKEN-BASELINE, which reads exactly like a
+// broken test. (Measured 2026-09-01: five cases, all five.)
+//
+// So: TRINITY_GIT_ROOT if something told us where the history is — scripts/sabotage.mjs sets it to the real
+// checkout, the same way it symlinks the real node_modules — else walk up for a .git (which is what a git
+// worktree needs), else ROOT so git produces its own error rather than us inventing a path. Only `show` and
+// `rev-parse` are ever run against it, so this is read-only in every case.
+export const GIT_ROOT = (() => {
+  if (process.env.TRINITY_GIT_ROOT && existsSync(join(process.env.TRINITY_GIT_ROOT, '.git'))) return process.env.TRINITY_GIT_ROOT;
+  for (let d = ROOT, i = 0; i < 6; i++, d = dirname(d)) if (existsSync(join(d, '.git'))) return d;
+  return ROOT;
+})();
 export const RELAYS_D = D.RELAYS;
 export const now = () => Math.floor(Date.now() / 1000);
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -112,9 +130,10 @@ async function waitForStatus(port, proc, label, ms = 25000) {
 //   env       — extra environment
 // Returns a relay handle. `relayPub` is the box's own identity key, which is what a church authorises as a
 // sync peer — NOT the church key, and not the URL. Two URLs can be one box; two boxes can share a URL.
-export async function startRelay({ name = 'relay', churches = [], entry = join(ROOT, 'scripts/gateway.mjs'), env = {} } = {}) {
+export async function startRelay({ name = 'relay', churches = [], entry = join(ROOT, 'scripts/gateway.mjs'), env = {}, dataDir: reuseDir = '' } = {}) {
   const port = await freePort(name);
-  const dataDir = mkdtempSync(join(tmpdir(), `trin-net-${name}-`));
+  // `reuseDir` is moveRelay()'s: the SAME box coming back at a new address, so it keeps its identity key.
+  const dataDir = reuseDir || mkdtempSync(join(tmpdir(), `trin-net-${name}-`));
   tempDirs.add(dataDir);
   const base = `http://127.0.0.1:${port}`;
   // ORIGIN is how syncAllChurches recognises ITSELF in a church's relay list and skips it. Without it a relay
@@ -135,7 +154,9 @@ export async function startRelay({ name = 'relay', churches = [], entry = join(R
   proc.stdout.on('data', cap); proc.stderr.on('data', cap);
 
   const relay = {
-    name, port, dataDir, base, entry,
+    // `churches` and `env` are kept on the handle so moveRelay() can bring the box back configured the same
+    // way. A relay that came back holding different churches would not be the same box.
+    name, port, dataDir, base, entry, churches, env,
     wsUrl: `ws://127.0.0.1:${port}/relay`,
     proc, log,
     alive: () => proc.exitCode === null && proc.signalCode === null,
@@ -154,6 +175,30 @@ export async function startRelay({ name = 'relay', churches = [], entry = join(R
   try { const k = JSON.parse(readFileSync(join(dataDir, 'relay-key.json'), 'utf8')); relay.relaySk = Uint8Array.from(Buffer.from(k.sk, 'hex')); } catch {}
   if (!relay.relayPub) throw new Error(`${name} served /status without a relayPub — this gateway cannot be a sync peer`);
   return relay;
+}
+
+// A TUNNEL RESTART, IN MINIATURE: the same box at a NEW address.
+//
+// A self-hosted church very often reaches its relay through a free tunnel, which mints a different hostname
+// every time the tunnel restarts. The box is the same machine with the same identity key; only the URL moved.
+// That is the case a membership rule keyed on ADDRESS silently breaks — the church's own relay drops out on
+// every reboot of it — and it cannot be staged without genuinely moving a real relay, because the whole
+// point is that the key stays put while the URL does not.
+//
+// The process is killed and a new one started on a fresh port over the SAME data directory, so it reads the
+// same relay-key.json and comes back with the same relayPub. The old handle is retired (its directory is NOT
+// removed — the new relay is using it) and the new one is registered for teardown as usual.
+export async function moveRelay(relay) {
+  const { name, dataDir, entry, churches = [], env = {} } = relay;
+  try { relay.proc.kill('SIGKILL'); } catch {}
+  live.delete(relay);
+  tempDirs.delete(dataDir);   // the new relay re-registers it; stopAll must not race two owners of one dir
+  const moved = await startRelay({ name: name + '@2', entry, churches, env, dataDir });
+  if (moved.relayPub !== relay.relayPub)
+    throw new Error(`moveRelay(${name}): the box came back with a DIFFERENT identity key — it did not reuse ${dataDir}`);
+  if (moved.port === relay.port)
+    throw new Error(`moveRelay(${name}): the box came back on the same port, so nothing about the URL moved`);
+  return moved;
 }
 
 // ── the old build ───────────────────────────────────────────────────────────────────────────────────────
@@ -175,7 +220,7 @@ export function extractOldBuild(rev) {
   const scripts = join(dir, 'scripts');
   mkdirSync(scripts, { recursive: true });
   for (const f of OLD_LOCALS) {
-    const bytes = execFileSync('git', ['-C', ROOT, 'show', `${rev}:scripts/${f}`], { maxBuffer: 64 * 1024 * 1024 });
+    const bytes = execFileSync('git', ['-C', GIT_ROOT, 'show', `${rev}:scripts/${f}`], { maxBuffer: 64 * 1024 * 1024 });
     writeFileSync(join(scripts, f), bytes);
   }
   return { dir, entry: join(scripts, 'gateway.mjs'), rev };
@@ -189,14 +234,16 @@ export async function startOldRelay({ name = 'old', churches = [], rev = DEFAULT
   const build = extractOldBuild(rev);
   const relay = await startRelay({ name, churches, entry: build.entry, env });
   relay.oldBuild = build;
-  relay.buildRev = execFileSync('git', ['-C', ROOT, 'rev-parse', rev], { encoding: 'utf8' }).trim();
+  relay.buildRev = execFileSync('git', ['-C', GIT_ROOT, 'rev-parse', rev], { encoding: 'utf8' }).trim();
   return relay;
 }
 
 // Is the old build genuinely a different program? A rev that happens to match the working tree makes every
 // "old relay" assertion vacuous, so tests can ask instead of assuming.
 export function gatewayDiffersFrom(rev) {
-  const old = execFileSync('git', ['-C', ROOT, 'show', `${rev}:scripts/gateway.mjs`], { encoding: 'utf8' });
+  // GIT_ROOT for the history, ROOT for the comparison: the question is whether the tree UNDER TEST differs
+  // from `rev`, and under sabotage.mjs those are two different trees on purpose.
+  const old = execFileSync('git', ['-C', GIT_ROOT, 'show', `${rev}:scripts/gateway.mjs`], { encoding: 'utf8' });
   return old !== readFileSync(join(ROOT, 'scripts/gateway.mjs'), 'utf8');
 }
 
