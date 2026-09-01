@@ -80,6 +80,24 @@ and which of your instincts about it are wrong.
 
 ## Trust, privacy and tone
 
+- **A church's relay must hold the church's data and nothing else — because it may be seized.**
+  `ESTABLISHED 2026-09-01.` Owner, clarifying why the closed-network decision matters in both directions:
+  *"the concern is both really, but we don't want bloat on a persecuted church relay."* And on what
+  "non-TrinityOne" means: *"people that run our specific relay software"* — so **self-hosting stays**, and we
+  never become the party who can revoke a church's relay. That was the sharpest risk in the closed-network
+  plan and this definition removes it.
+
+  **Read "bloat" as accountability, not disk.** A congregation under pressure explaining its own records is
+  one conversation; explaining a thousand strangers' profiles that arrived because the software allowed them
+  is a different one. Anything on that box which the church did not choose is a liability to the people
+  holding it.
+
+  **Where it stands today** (measured 2026-09-01): `accept()` ends `return isMember` — a stranger cannot post
+  a note, a message or a document. Three openings remain: stranger profiles are accepted up to
+  `NONMEMBER_KIND0_CAP = 1000`; `MEMBERS` is relay-wide, so a member of any church on the box counts as a
+  member (moot once each church has its own machine, which is the pilot goal); and
+  `if (!CHURCH_PUBS.size) return true` leaves a relay fully open until its first church is registered.
+
 - **TrinityOne relays are a closed network. A church must never reach a non-TrinityOne relay.**
   `ESTABLISHED 2026-09-01, and a MUST before the pilot.` Owner, on learning a church's relay list can contain
   generic public relays: *"this is a BIG issue. This should not be allowed to happen EVER. We have specific
