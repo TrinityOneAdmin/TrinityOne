@@ -88,6 +88,11 @@ async function featuresPanel(church = {}, groups = []) {
         setAdmitted: (v) => admitted.push(v),
       },
     },
+    // "Congregation features → Extras" now holds the practical-care and giving rows, which are components
+    // from elsewhere. Stubbed here because this file is about the ROWS THIS CARD OWNS; each of those two has
+    // its own test below, driving the real component.
+    DashMealsPanel: function DashMealsPanel() { return null; },
+    DashGivingPanel: function DashGivingPanel() { return null; },
     ...furniture(React),
   });
   return { draw: () => draw(Comp, { church }), published, joinPolicy, admitted };

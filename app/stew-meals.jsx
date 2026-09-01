@@ -1,7 +1,8 @@
 // stew-meals.jsx — Steward console surface for the Meal trains / practical-care module.
 // Two top-level components (mirrors Finance):
 //   • DashMeals       — the console tab (need list, slot grid, signups)
-//   • DashMealsPanel  — the enable card in Settings → Care
+//   • DashMealsPanel  — the enable ROW in Settings → Features → Congregation features → Extras (it was a
+//                        card of its own until it was folded in there; it renders no Panel of its own now)
 // Copy is care-framed deliberately (warm, calls into pastoral care, NOT slot-management).
 // Read-only here on the steward side for slot fills + skips — members fill from their app.
 
@@ -204,10 +205,13 @@ function DashMealsPanel({ church }) {
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
     </button>
   );
+  // A ROW IN "Congregation features → Extras", not a card of its own. It was a Panel holding one switch and a
+  // note saying what practical care is; the note said it above the row, and the row's own second line — the
+  // line a steward reads while deciding — said only "turn on to start opening needs". They are one sentence
+  // now, on the row, and the card chrome is gone.
   return (
-    <Panel title="Practical care">
+    <React.Fragment>
       {announceOn ? <AnnounceCareModal onClose={() => setAnnounceOn(false)} /> : null}
-      <DismissibleNote id="care-intro" icon="heart" tone="sage" style={{ marginBottom: 12 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</DismissibleNote>
             {/* THE ROW IS THE TARGET. This toggle is a 48x28 button at the far right and the words naming it had
           no handler, so the obvious press did nothing. Rev. Miriam, session 3: "clicking the words
           'Practical care (Meal trains)' and clicking the 'Off — turn on to…' line under them does nothing
@@ -215,10 +219,10 @@ function DashMealsPanel({ church }) {
           which was the thing she most wanted for her congregation that week.
           I had already fixed this pattern in three other files and missed this one, because I audited by
           role="switch" and this file uses a plain <button> as its toggle. */}
-<div onClick={() => setAll({ enabled: !on })} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+<div onClick={() => setAll({ enabled: !on })} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Practical care (Meal trains)</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Care” tab is in your sidebar, and members see open needs in their app.' : 'Off — turn on to start opening needs and let the church sign up to help.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Care” tab is in your sidebar, and members see open needs in their app.' : 'Off — meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. Turn on to start opening needs; members fill the dates.'}</div>
         </div>
         {toggleBtn(on, () => setAll({ enabled: !on }), 'Toggle practical care')}
       </div>
@@ -262,7 +266,7 @@ function DashMealsPanel({ church }) {
         </div>
         {editTeam ? <RosterModal team={editTeam} roster={rosters.find(r => r.team === editTeam.id)} members={members} onCreate={publishCareTeam} onClose={() => setEditTeam(null)} /> : null}
       </React.Fragment> : null}
-    </Panel>
+    </React.Fragment>
   );
 }
 window.DashMealsPanel = DashMealsPanel;

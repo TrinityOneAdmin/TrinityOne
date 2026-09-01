@@ -96,9 +96,11 @@ test('CONTROL: the real console components render, with the real Panel', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-// 1. EVERY CARD TITLE IS A REAL HEADING. Panel is the single place this is decided, and it has 32 call
-//    sites (29 in stew-dashboard.jsx, one each in stew-manna.jsx, stew-meals.jsx, stew-schedule.jsx); every
-//    one passes a plain string. Both ends are tested: Panel itself, and real callers rendered through it.
+// 1. EVERY CARD TITLE IS A REAL HEADING. Panel is the single place this is decided, and it has 29 call
+//    sites (27 in stew-dashboard.jsx, one each in stew-manna.jsx and stew-schedule.jsx); every one passes a
+//    plain string. Both ends are tested: Panel itself, and real callers rendered through it.
+//    (It was 32. Giving, Console lock and Practical care were each a Panel wrapping one switch, and all
+//    three have been folded into the card next to them — see folded-settings-cards-kept-their-controls.)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('Panel renders its title as a heading element, not a styled div', () => {
   const { mod, draw } = fresh();
@@ -113,9 +115,13 @@ test('Panel renders its title as a heading element, not a styled div', () => {
     'the heading has no margin:0, so the browser’s default heading margins now push the card layout around');
 });
 
+// Each settings card, and the titles it must put on the page AS HEADINGS. DashGivingPanel expects none: it
+// is no longer a card. It is a row inside "Congregation features → Extras", so the heading above it is that
+// card's h2 and the group's own h3 — both asserted where they are rendered. Everything else in this file
+// still sweeps it: an empty title list only skips the heading test, not the colour sweep or the field names.
 const CARDS = [
   ['DashFeaturesPanel', { church: { features: {}, rules: {} } }, ['Congregation features', 'Rules & privacy']],
-  ['DashGivingPanel', { church: {} }, ['Giving']],
+  ['DashGivingPanel', { church: {} }, []],
   ['DashMediaPanel', { church: {} }, ['Video & audio']],
   ['DashChatTagsPanel', { church: {} }, ['Chat message tags']],
   ['DashBrandingPanel', { church: {} }, ['Church branding']],
@@ -124,7 +130,7 @@ const CARDS = [
   ['DashRelaysCard', {}, ['Relays']],
 ];
 
-for (const [name, props, titles] of CARDS) {
+for (const [name, props, titles] of CARDS.filter(c => c[2].length)) {
   test(`${name}: its card title reaches the page as a heading`, () => {
     const { mod, draw } = fresh();
     draw(mod[name], props);

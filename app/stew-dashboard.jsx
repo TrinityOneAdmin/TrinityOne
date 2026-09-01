@@ -5890,7 +5890,10 @@ function DashFeaturesPanel({ church }) {
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Today (home) and Giving are controlled separately. Members see changes on their next sync.</div>
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
-      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Extras</div>
+      {/* A REAL HEADING. Giving used to be a card and so had an <h2> of its own; it is a row in this group
+          now, and someone moving through the console by heading would otherwise have lost the only landmark
+          between "Congregation features" and the next card. h3 because Panel's title is the h2 above it. */}
+      <h3 style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '0 0 6px' }}>Extras</h3>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {/* Same rule as ITEMS above: the row is the target. This block was copied from ITEMS and did not get
             the row handler, so "Kids check-in" was one of the two rows a steward could press all day without
@@ -5906,6 +5909,13 @@ function DashFeaturesPanel({ church }) {
             </button>
           </div>
         ))}
+        {/* PRACTICAL CARE AND GIVING ARE ROWS HERE, not cards of their own. Both were a Panel wrapping a
+            single switch, and the Features tab read as five boxes of equal weight when two of them were one
+            toggle each. Practical care first: it is a live control a church turns on and uses. Giving last,
+            because it is locked for the pilot and does nothing yet — it does not belong between two working
+            switches. Each renders its own configuration underneath itself when it has any. */}
+        <DashMealsPanel church={church} />
+        <DashGivingPanel church={church} />
       </div>
     </Panel>
 
@@ -6002,31 +6012,32 @@ function DashGivingPanel({ church }) {
 
   const toggleGiving = () => window.Steward.publishProfile({ giving: !church.giving });
 
+  // A ROW IN "Congregation features → Extras", not a card. It was a Panel of its own holding one switch, and
+  // the card chrome plus the pilot-lock banner cost more height than the control. The lock now reads on the
+  // row's own second line, where the switch it explains is, instead of in a banner above it.
   return (
-    <Panel title="Giving">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14 }}>
-        <Icon name="lock" size={16} color="var(--clay-ink)" style={{ flexShrink: 0 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>Locked during the pilot.</b> This opens up once testing is finished.</div>
-      </div>
+    <React.Fragment>
       {/* steward owns the switch: giving only appears for members when this church turns it on */}
       {/* DELIBERATELY NOT a clickable row. Every other settings row in the console toggles when its words are
           pressed; this switch is `disabled` for the pilot, and a row handler would sail straight past that and
           publish `giving:true` from a press on the label. Same for Manna in stew-manna.jsx. If the pilot lock
           is ever lifted, add the row handler THEN, with stopPropagation on the switch. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)',
-        background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: showConfig ? 16 : 0 }}>
-        <div style={{ flex: 1 }}>
+        background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{church.giving ? 'On — members can give to this church.' : 'Off — members won’t see giving.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}><b style={{ color: 'var(--clay-ink)' }}>Locked during the pilot</b> — {church.giving ? 'on: members can give to this church.' : 'off: members won’t see giving.'} This opens up once testing is finished.</div>
         </div>
         <button onClick={toggleGiving} disabled aria-label="Toggle giving" role="switch" aria-checked={!!church.giving} title="Giving is locked during the pilot" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'not-allowed', opacity: .4, flexShrink: 0,
           background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: church.giving ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
-      {/* when giving is OFF the setup collapses to a single link, so the panel doesn't sit there full of dead fields */}
+      {/* when giving is OFF the setup collapses to a single link, so the row doesn't sit there full of dead fields.
+          One box either way, so this whole block is one item of the Extras list and keeps its own spacing. */}
+      <div>
       {!showConfig ? (
-        <button onClick={() => setExpanded(true)} style={{ border: 'none', background: 'none', padding: '10px 0 0', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <button onClick={() => setExpanded(true)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           <Icon name="pen" size={13} color="currentColor" /> {(church.lud16 || church.lnaddr) ? 'Edit the Lightning address' : 'Set up the Lightning address'}
         </button>
       ) : (
@@ -6044,7 +6055,8 @@ function DashGivingPanel({ church }) {
           {(church.lud16 || church.lnaddr) ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.lud16 || church.lnaddr}</span></div> : null}
         </React.Fragment>
       )}
-    </Panel>
+      </div>
+    </React.Fragment>
   );
 }
 
@@ -6714,12 +6726,10 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       <div>
       <DashFeaturesPanel church={church} />
       </div>
+      {/* Giving and Practical care used to be cards of their own here. They are rows inside "Congregation
+          features → Extras" now, which is where the rest of the church's feature switches live. */}
       <div>
       <DashChatTagsPanel church={church} />
-
-      <DashGivingPanel church={church} />
-
-      <DashMealsPanel church={church} />
       </div>
       </React.Fragment> : null}
 
@@ -6758,6 +6768,29 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <Icon name="lock" size={18} color="var(--sage)" />
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Held on this device</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Pilot key custody · a Keykeeper signer comes later</div></div>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--sage-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} /> Active</span>
+        </div>
+        {/* CONSOLE LOCK — a card of its own until now, sitting directly under this one. Both said the same
+            subject out loud: whether the one key this device holds is protected. Two boxes made them read as
+            two decisions, and the strip immediately above is the sentence this answers — the key is held
+            here, and this is whether anyone who opens the browser can use it. */}
+        <div style={{ padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 11 }}>
+            <Icon name={hasPin ? 'lock' : 'key'} size={18} color={hasPin ? 'var(--sage)' : 'var(--clay-ink)'} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Console lock</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{hasPin
+                ? 'Locked with a PIN — the church key is encrypted on this device and auto-locks after 10 minutes idle.'
+                : 'Not locked. Anyone who opens this browser can post as the church. A PIN encrypts the key on this device; a longer PIN or passphrase is safer.'}</div>
+            </div>
+          </div>
+          {!hasPin ? (
+            <button onClick={() => setPinAction('set')} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="lock" size={15} color="var(--on-clay)" /> Lock with a PIN</button>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => setPinAction('change')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Change PIN</button>
+              <button onClick={() => setPinAction('remove')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay-ink)' }}><Icon name="x" size={15} color="currentColor" /> Remove lock</button>
+            </div>
+          )}
         </div>
         {!revealed ? (
           <button onClick={reveal} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Reveal recovery phrase</button>
@@ -6805,20 +6838,6 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
             </div>
           )}
         </div>
-      </Panel>
-
-      <Panel title="Console lock">
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>{hasPin
-          ? 'This console is locked with a PIN — the church key is encrypted on this device and auto-locks after 10 minutes idle.'
-          : 'Add a PIN to encrypt the church key on this device. Without it, anyone who opens this browser can post as the church. A longer PIN or passphrase is safer.'}</div>
-        {!hasPin ? (
-          <button onClick={() => setPinAction('set')} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="lock" size={15} color="var(--on-clay)" /> Lock with a PIN</button>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={() => setPinAction('change')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Change PIN</button>
-            <button onClick={() => setPinAction('remove')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay-ink)' }}><Icon name="x" size={15} color="currentColor" /> Remove lock</button>
-          </div>
-        )}
       </Panel>
 
       <Panel title="Stewards & handoff">

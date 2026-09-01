@@ -159,10 +159,10 @@ const STACKS = {
   ],
   features: [
     ['DashFeaturesPanel'],
-    ['DashChatTagsPanel', 'DashGivingPanel', 'DashMealsPanel'],
+    ['DashChatTagsPanel'],
   ],
   security: [
-    ['Panel:Church key', 'Panel:Console lock', 'Panel:Stewards & handoff'],
+    ['Panel:Church key', 'Panel:Stewards & handoff'],
     ['DashStewardsPanel', 'DashBecomeStewardPanel'],
   ],
 };
