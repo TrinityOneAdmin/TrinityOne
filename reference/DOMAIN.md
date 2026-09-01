@@ -80,6 +80,26 @@ and which of your instincts about it are wrong.
 
 ## Trust, privacy and tone
 
+- **The Suite is the path we push: relay and console on one machine.**
+  `ESTABLISHED 2026-09-01.` Owner: *"we need to prioritise the TrinityOne Suite in the marketing, so that
+  more people run the Relay+steward console together, running just the relay should be harder to get to on
+  the website."*
+
+  **This is a product decision that solves an architecture problem, which is why it is here and not only in a
+  roadmap.** A church's own relay has to be vouched for before clients will talk to it. When the console is
+  served BY that relay, the vouch can be automatic and safe: to load the console the steward already ran the
+  key-holding code from that box, so adopting it adds no trust they had not already given. When the console
+  is the HOSTED one at `app.trinityone.church`, that argument does not hold — the key lives against a8's
+  origin, the steward never loads anything from their own box, and something else has to establish the link.
+
+  **Measured 2026-09-01, and the reason this matters now:** `welcome.html` contains the word "Suite" **zero**
+  times. It has 6 "Download" and 5 "Start a church" buttons, and every "Start a church" points at
+  `https://app.trinityone.church/steward.html` — the hosted console. So the path the site advertises is
+  exactly the one where automatic adoption cannot work, and the path that makes it work is not mentioned.
+
+  Consequence for planning: make the Suite the advertised route, and the awkward case shrinks to churches who
+  deliberately run a bare relay — a smaller, more technical group who can reasonably take one extra step.
+
 - **A church's relay must hold the church's data and nothing else — because it may be seized.**
   `ESTABLISHED 2026-09-01.` Owner, clarifying why the closed-network decision matters in both directions:
   *"the concern is both really, but we don't want bloat on a persecuted church relay."* And on what
