@@ -1358,13 +1358,25 @@ function TodayScreen({ ctx }) {
       <SafetyBanner ctx={ctx} />
       <RecoveryNudge ctx={ctx} />
       {/* greeting */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
-        <div>
+      {/* The greeting column shrinks; the four controls do not.
+          Measured on an Oppo (360px) and reproduced at 320/360/390 in scripts/todays-header-fits-the-phone.test.mjs:
+          the column was 191px wide in a 324px row and the control group would not go below 200px, so the row's
+          contents needed 391px and the streak pill was drawn from x=353 to x=408 — outside the 360px viewport, its
+          digit cut in half. `overflow-x: hidden` on the scroll container clipped it instead of scrolling to it.
+          The 191px was the CHURCH-NAME BUTTON's min-content: a `white-space: nowrap` run contributes its whole
+          text width to min-content, so `text-overflow: ellipsis` never got the chance to act, and the column's
+          default `min-width: auto` meant it could not shrink below that. Hence, in order: minWidth 0 lets the
+          column shrink, `min(220px, 100%)` makes the button's ellipsis actually engage, minWidth 0 on the name
+          span lets the ellipsis apply inside the button, overflowWrap anywhere keeps a long word (WEDNESDAY) from
+          spilling when a three-digit streak takes the column below 90px, and flexShrink 0 keeps the controls
+          whole. Fixing it by trimming the pill's padding would have come back at 320px, or at a 365-day streak. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
+        <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', textTransform: 'uppercase' }}>{dateStr}</div>
           <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.05 }}>{greet}</h1>
-          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 220, boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
+          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 'min(220px, 100%)', boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ minWidth: 0, fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
           {(() => {
             const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
               background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
