@@ -816,6 +816,46 @@ function ReadScreen({ ctx }) {
   useE(() => { stopNarration(); }, [loc.book, loc.chap, version]);
 
   const prev = Bible.step(loc, -1), next = Bible.step(loc, 1);
+
+  // ── swipe left/right to change chapter, the way MySword does it ────────────────────────────────────────
+  // These turn to EXACTLY the `prev` / `next` above — the same two values the footer buttons use — so a
+  // swipe and a button press cannot drift apart. `step()` already rolls into the neighbouring book; at the
+  // very ends of the Bible it returns null and the swipe says so out loud rather than doing nothing.
+  //
+  // Reading is VERTICAL, and that governs everything here:
+  //   · nothing calls preventDefault(), so the page scrolls exactly as it did before;
+  //   · a second finger cancels the gesture outright, so pinch-zoom is never interfered with;
+  //   · the drag must travel SWIPE_MIN across AND beat its own vertical travel by SWIPE_DOMINANCE, so a
+  //     scroll — or a diagonal nudge during one — is not a chapter turn;
+  //   · a drag that leaves text selected is somebody copying a verse, not turning a page. Tapping a verse
+  //     is a click and never reaches here at all, because a click after a drag this long is suppressed.
+  // No animation is introduced, so there is no transition for prefers-reduced-motion to suppress.
+  //
+  // Nothing here collides with the reader's other horizontal gesture. CommentaryPanel closes on a swipe
+  // right, but only while it is OPEN, and while it is open its own backdrop (absolute, inset 0, z-index 24)
+  // covers the scripture so no touch reaches this element at all. The NOTES tab (CommentaryEdge) is a
+  // sibling of this container, not a child, so a drag begun on that tab is simply not a chapter turn.
+  // How far a finger must travel ACROSS the page to be a chapter turn, and by how much it must beat its own
+  // vertical travel. 60px is a deliberate gesture on a 360px screen; 1.7 keeps a diagonal scroll out. Kept
+  // inside the component on purpose: app/*.jsx are CLASSIC SCRIPTS sharing one global scope, and a duplicate
+  // top-level name across two of them blanks the whole APK.
+  const SWIPE_MIN = 60, SWIPE_DOMINANCE = 1.7;
+  const swipe = useR(null);
+  const onSwipeStart = (e) => {
+    if (!e.touches || e.touches.length !== 1) { swipe.current = null; return; }
+    swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+  const onSwipeMove = (e) => { if (e.touches && e.touches.length > 1) swipe.current = null; };
+  const onSwipeEnd = (e) => {
+    const s = swipe.current; swipe.current = null;
+    if (!s || (e.touches && e.touches.length) || !e.changedTouches || !e.changedTouches.length) return;
+    const dx = e.changedTouches[0].clientX - s.x, dy = e.changedTouches[0].clientY - s.y;
+    if (Math.abs(dx) < SWIPE_MIN || Math.abs(dx) < Math.abs(dy) * SWIPE_DOMINANCE) return;
+    try { const t = window.getSelection && window.getSelection(); if (t && String(t).trim()) return; } catch (err) {}
+    const to = dx < 0 ? next : prev;                 // left -> forwards, right -> backwards
+    if (to) ctx.setLoc(to);
+    else if (ctx.toast) ctx.toast(dx < 0 ? 'That\u2019s the last chapter of the Bible' : 'That\u2019s the very beginning of the Bible');
+  };
   const readFont = serif ? 'var(--font-read)' : 'var(--font-ui)';
   const rs = ctx.readScale || 1;
   const baseSize = (serif ? 21 : 18) * scale * rs;
@@ -827,7 +867,9 @@ function ReadScreen({ ctx }) {
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
         onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
-      <div ref={scrollRef} className="no-scrollbar" style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '164px 18px 116px' }}>
+      <div ref={scrollRef} className="no-scrollbar"
+        onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
+        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '164px 18px 116px' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
