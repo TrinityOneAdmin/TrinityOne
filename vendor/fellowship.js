@@ -3671,6 +3671,66 @@
   var finalizeEvent2 = i2.finalizeEvent;
   var verifyEvent2 = i2.verifyEvent;
 
+  // src/relay-identity.src.js
+  var RELAY_PROOF_WINDOW_SEC = 300;
+  function relayIdentityNonce() {
+    try {
+      const c = typeof globalThis !== "undefined" && globalThis.crypto || null;
+      if (!c || typeof c.getRandomValues !== "function") return "";
+      const b = new Uint8Array(16);
+      c.getRandomValues(b);
+      let out = "";
+      for (let i3 = 0; i3 < b.length; i3++) out += b[i3].toString(16).padStart(2, "0");
+      return out;
+    } catch {
+      return "";
+    }
+  }
+  function relayHttpBase(wssUrl) {
+    return String(wssUrl || "").replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+  }
+  async function verifyRelayIdentity(wssUrl) {
+    try {
+      const base = relayHttpBase(wssUrl);
+      if (!base) return null;
+      const nonce = relayIdentityNonce();
+      if (!nonce) return null;
+      const ctrl = new AbortController();
+      const to = setTimeout(() => {
+        try {
+          ctrl.abort();
+        } catch (e) {
+        }
+      }, 6e3);
+      let body = null;
+      try {
+        body = await Promise.race([
+          (async () => {
+            const res = await fetch(base + "/relay-identity?nonce=" + nonce, { signal: ctrl.signal, cache: "no-store" });
+            return res.ok ? res.json() : null;
+          })(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("relay-identity timeout")), 6500))
+        ]);
+      } finally {
+        clearTimeout(to);
+      }
+      const ev = body && body.proof;
+      if (!ev || ev.kind !== 27235) return null;
+      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return null;
+      if (!verifyEvent2(ev)) return null;
+      const tag = (n) => {
+        const t = (ev.tags || []).find((x) => Array.isArray(x) && x[0] === n);
+        return t ? String(t[1] || "") : "";
+      };
+      if (tag("nonce").toLowerCase() !== nonce) return null;
+      const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
+      if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
+      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
+    } catch {
+      return null;
+    }
+  }
+
   // node_modules/@noble/ciphers/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
@@ -8050,6 +8110,13 @@
   }
   window.Fellowship = {
     relays: loadRelays(),
+    // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
+    // EXPOSED, NOT YET CONSULTED. Nothing in the app gates on it: which relays this client talks to is
+    // unchanged by its presence, and the adoption/publish paths do not call it. It is here so the gates that
+    // will (closed-network plan C3/C4) have one implementation to call, and so a device session can ask a real
+    // relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is the
+    // provable form.
+    verifyRelayIdentity,
     // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
     // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
     // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".

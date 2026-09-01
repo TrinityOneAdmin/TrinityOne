@@ -18,6 +18,9 @@ import { SimplePool } from 'nostr-tools/pool';
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
 import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
+// Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
+// Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
+import { verifyRelayIdentity } from './relay-identity.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -2332,6 +2335,13 @@ let _evtSeq = 0;
 
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
+
+  // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
+  // EXPOSED, NOT YET CONSULTED. relays() is unchanged, adoption is unchanged, and nothing here refuses a
+  // relay that cannot answer. It is here so the gates that will (closed-network plan C3/C4) have one
+  // implementation to call. The `relayPub` this console already reads for the redundancy count stays an
+  // unproven claim — it was never a gate and must not start looking like one.
+  verifyRelayIdentity,
 
   // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
   // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.

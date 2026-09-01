@@ -6438,6 +6438,66 @@
   var finalizeEvent2 = i2.finalizeEvent;
   var verifyEvent2 = i2.verifyEvent;
 
+  // src/relay-identity.src.js
+  var RELAY_PROOF_WINDOW_SEC = 300;
+  function relayIdentityNonce() {
+    try {
+      const c = typeof globalThis !== "undefined" && globalThis.crypto || null;
+      if (!c || typeof c.getRandomValues !== "function") return "";
+      const b = new Uint8Array(16);
+      c.getRandomValues(b);
+      let out = "";
+      for (let i3 = 0; i3 < b.length; i3++) out += b[i3].toString(16).padStart(2, "0");
+      return out;
+    } catch {
+      return "";
+    }
+  }
+  function relayHttpBase(wssUrl) {
+    return String(wssUrl || "").replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+  }
+  async function verifyRelayIdentity(wssUrl) {
+    try {
+      const base = relayHttpBase(wssUrl);
+      if (!base) return null;
+      const nonce = relayIdentityNonce();
+      if (!nonce) return null;
+      const ctrl = new AbortController();
+      const to = setTimeout(() => {
+        try {
+          ctrl.abort();
+        } catch (e) {
+        }
+      }, 6e3);
+      let body = null;
+      try {
+        body = await Promise.race([
+          (async () => {
+            const res = await fetch(base + "/relay-identity?nonce=" + nonce, { signal: ctrl.signal, cache: "no-store" });
+            return res.ok ? res.json() : null;
+          })(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("relay-identity timeout")), 6500))
+        ]);
+      } finally {
+        clearTimeout(to);
+      }
+      const ev = body && body.proof;
+      if (!ev || ev.kind !== 27235) return null;
+      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return null;
+      if (!verifyEvent2(ev)) return null;
+      const tag = (n) => {
+        const t = (ev.tags || []).find((x) => Array.isArray(x) && x[0] === n);
+        return t ? String(t[1] || "") : "";
+      };
+      if (tag("nonce").toLowerCase() !== nonce) return null;
+      const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
+      if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
+      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
+    } catch {
+      return null;
+    }
+  }
+
   // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
@@ -16207,6 +16267,12 @@ zoo`.split("\n");
     pubkey: null,
     npub: null,
     hasKey: false,
+    // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
+    // EXPOSED, NOT YET CONSULTED. relays() is unchanged, adoption is unchanged, and nothing here refuses a
+    // relay that cannot answer. It is here so the gates that will (closed-network plan C3/C4) have one
+    // implementation to call. The `relayPub` this console already reads for the redundancy count stays an
+    // unproven claim — it was never a gate and must not start looking like one.
+    verifyRelayIdentity,
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
     publishSigned: _publishSigned,

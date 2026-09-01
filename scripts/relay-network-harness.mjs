@@ -30,6 +30,7 @@
 // glance at `ps` before believing a network finding.
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -69,12 +70,14 @@ export async function freePort(what = 'a harness relay') {
 // ── the participants ────────────────────────────────────────────────────────────────────────────────────
 const live = new Set();      // every relay this module started and has not stopped
 const tempDirs = new Set();  // every directory this module created and has not removed
+const impostors = new Set();  // every in-process HTTP host this module started and has not closed
 
 // What is still standing. A test asserts on this to prove teardown actually happened, rather than trusting it.
 export function leftovers() {
   return {
     processes: [...live].map(r => ({ name: r.name, pid: r.proc.pid, alive: r.alive() })).filter(p => p.alive),
     dirs: [...tempDirs].filter(d => existsSync(d)),
+    impostors: [...impostors].map(h => h.base),
   };
 }
 
@@ -84,6 +87,8 @@ function register(relay) { live.add(relay); return relay; }
 export function stopAll() {
   for (const r of live) { try { r.proc.kill('SIGKILL'); } catch {} }
   live.clear();
+  for (const h of impostors) { try { h.server.close(); } catch {} try { h.server.closeAllConnections(); } catch {} }
+  impostors.clear();
   for (const d of tempDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} }
   tempDirs.clear();
 }
@@ -320,3 +325,36 @@ export async function corpusDiff(a, b, church) {
   const A = await corpusIds(a, church), B = await corpusIds(b, church);
   return { onlyOnA: [...A].filter(id => !B.has(id)), onlyOnB: [...B].filter(id => !A.has(id)) };
 }
+
+// ── an impostor ─────────────────────────────────────────────────────────────────────────────────────────
+// A host that is NOT a TrinityOne relay, answering HTTP however the test tells it to.
+//
+// ADDED for the closed-network C2 tests, because the attack that item exists to stop cannot be staged with a
+// real gateway: it is a stranger's box copying a real relay's answers and being believed. A relay handle
+// cannot play that part — it holds a key, which is the whole thing the impostor lacks.
+//
+// It is an in-process `node:http` server rather than a spawned one, so a test that throws mid-way leaves no
+// listening socket behind: it is closed by stopAll() alongside every relay, reported by leftovers() like
+// every relay, and it dies with the test process no matter how the process ends. Ports come from the same
+// freePort() every relay uses, so an impostor can never collide with one.
+//   handler(req, res, url)  — url is the parsed URL; write whatever the case under test needs.
+export async function startImpostor({ name = 'impostor', handler } = {}) {
+  if (typeof handler !== 'function') throw new Error('startImpostor needs a handler');
+  const port = await freePort(name);
+  const server = createHttpServer((req, res) => {
+    let u; try { u = new URL(req.url, 'http://127.0.0.1:' + port); } catch { u = new URL('http://127.0.0.1/'); }
+    try { handler(req, res, u); } catch (e) { try { res.writeHead(500); res.end(String(e && e.message || e)); } catch {} }
+  });
+  await new Promise((ok, bad) => { server.once('error', bad); server.listen(port, '127.0.0.1', ok); });
+  const host = { name, port, server, base: `http://127.0.0.1:${port}`,
+    stop() { try { server.close(); } catch {} try { server.closeAllConnections(); } catch {} impostors.delete(host); } };
+  impostors.add(host);
+  return host;
+}
+
+// Reply with JSON, the shape every impostor in these tests uses.
+export const sendJson = (res, body, status = 200) => {
+  const s = typeof body === 'string' ? body : JSON.stringify(body);
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+  res.end(s);
+};

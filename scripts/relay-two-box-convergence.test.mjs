@@ -126,7 +126,10 @@ test('teardown leaves no process and no directory behind', async () => {
   for (const d of dirs) assert.ok(existsSync(d), `${d} was already gone before teardown`);
   H.stopAll();
   const left = H.leftovers();
-  assert.deepEqual(left, { processes: [], dirs: [] }, 'the harness left processes or directories behind');
+  // `impostors` joined this shape when the harness grew an in-process impostor host for the C2 identity
+  // tests. This file starts none, so the empty array is the assertion that starting one elsewhere cannot
+  // quietly leak a listening socket past a teardown check that never looked for it.
+  assert.deepEqual(left, { processes: [], dirs: [], impostors: [] }, 'the harness left processes, directories or impostor hosts behind');
   for (const d of dirs) assert.ok(!existsSync(d), `${d} survived teardown`);
   // Deliberately NOT `readdir` for stray .oldbuild-* dirs: another run of this same file (the suite runs 24
   // files at once) legitimately has one open, and a repo-wide scan fails on somebody else's healthy work.

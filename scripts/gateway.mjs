@@ -536,6 +536,34 @@ function relayNameClaimEvent(handle, url, offer) {
   return finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, RELAY_SK);
 }
 function relayNameClaim(handle, url, offer) { return 'Nostr ' + Buffer.from(JSON.stringify(relayNameClaimEvent(handle, url, offer))).toString('base64'); }
+// ── C2: PROVING the key, instead of merely stating it ──────────────────────────────────────────────────
+// /status and the NIP-11 document both publish RELAY_PUB. NEITHER IS EVIDENCE. They are bare
+// strings over an unauthenticated GET, so anyone can copy this box's /status onto their own host and be
+// believed to be this box — and every gate built on "which relay is this?" is decoration until that stops.
+//
+// This is the proof. The caller supplies a fresh 128-bit nonce; the answer is a kind-27235 event signed by
+// RELAY_SK binding that nonce, this relay's own public URL and the time. The same shape and the same key as
+// relayProof()/relayNameClaimEvent() above — nothing new is invented here, it is exposed to clients.
+// A host that only copied /status cannot answer, because answering needs the secret key. A host that once
+// CAPTURED a valid answer cannot re-use it, because the nonce inside it is not the one the next caller asked.
+//
+// The URL this signs is the relay's own public origin when the operator configured one, and otherwise the
+// host the request arrived on. The client is told the URL but does NOT admit or refuse on it: a relay behind
+// a tunnel changes URL on every restart, so URL-to-key binding is a server-side job (see the closed-network
+// plan, C6) and pubkey is what a church signs. That leaves one residual worth naming: a host that FORWARDS
+// /relay-identity to the real relay can pass the proof along. It has not learned the key, and under the
+// closed-network gates it is a plain proxy of the relay it forwards to — which is why the tunnel-friendly
+// reading is the one taken here rather than a host check that would brick real deployments.
+function relayIdentityUrl(req) {
+  if (ORIGIN) return ORIGIN.replace(/\/+$/, '');
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
+  const host = String(req.headers['host'] || '').trim();
+  return host ? proto + '://' + host : '';
+}
+function relayIdentityEvent(nonce, url) {
+  return finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
+    tags: [['u', 'relay-identity'], ['method', 'GET'], ['nonce', nonce], ['relay', url]], content: '' }, RELAY_SK);
+}
 // ── Relay name directory (Phase 2): a memorable handle a steward can TYPE to connect a church to a relay,
 // instead of a wss:// URL. Any gateway can serve a directory; in practice relays register with the shared
 // community host and consoles resolve there. A claim is SIGNED by the relay's own identity key, so a handle is
@@ -3058,6 +3086,25 @@ function serveStatic(req, res) {
     }));
     return;
   }
+  // C2 — PROOF OF POSSESSION. `GET /relay-identity?nonce=<32 hex>` → a kind-27235 event signed by this
+  // relay's identity key, binding the caller's nonce (see relayIdentityEvent above for why this exists at
+  // all). Public and unauthenticated on purpose: the question "are you the box you say you are?" has to be
+  // answerable by a client that has not yet decided to trust anything here.
+  //
+  // NOTHING IN THE PRODUCT CONSULTS THIS YET. The proof and the gates that read it land separately and
+  // deliberately: a relay older than this cannot answer, so the day something starts REQUIRING an answer is
+  // the day every un-upgraded relay drops out of its church's network. Adding the endpoint is safe alone.
+  if (route === '/relay-identity') {
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    let nonce = ''; try { nonce = new URL(req.url, 'http://x').searchParams.get('nonce') || ''; } catch {}
+    // EXACTLY 32 HEX. The entire freshness of a proof is the caller's nonce, so a missing or degenerate one
+    // is refused rather than signed over: a host that had once seen the proof for nonce "" or "0" could
+    // otherwise serve that same event for ever and every caller who asked lazily would accept it.
+    if (!/^[0-9a-f]{32}$/i.test(nonce)) { res.writeHead(400, H); res.end('{"error":"nonce must be 32 hex characters"}'); return; }
+    res.writeHead(200, H);
+    res.end(JSON.stringify({ proof: relayIdentityEvent(nonce.toLowerCase(), relayIdentityUrl(req)) }));
+    return;
+  }
   if (route === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
     // OK MEANS "THIS RELAY IS DOING ITS JOB", not "the process is running". A relay that is up, listening and
@@ -3092,7 +3139,12 @@ function serveStatic(req, res) {
         } catch { return { ref, sha: null }; }
       })() } : {}),
       sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },   // is auto-sync actually working?
-      relayPub: RELAY_PUB,   // this relay's identity pubkey — a church authorises it as a trusted sync peer
+      // AN UNPROVEN CLAIM, and it must keep reading as one. This is a bare string over an unauthenticated
+      // GET: any host can serve this box's /status verbatim and be believed. It is fine for what it is used
+      // for (a church authorises this pubkey as a trusted sync peer; the relay-to-relay path then makes the
+      // box SIGN with the key before it gets anything). It is not evidence of who is answering — that is
+      // /relay-identity, which binds a caller-chosen nonce. Never treat this field as identification.
+      relayPub: RELAY_PUB,
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
       // the list from the token-gated /config; the counts below are now ALSO token-gated (red-team 2026-08-18).
@@ -3436,7 +3488,11 @@ function serveStatic(req, res) {
         // member's capability gate (_verifyEnforcing) refuses to adopt it and never routes gated reads (roster,
         // care PII) to a box that would serve them to anyone. Was hardcoded true, which made the gate a no-op.
         enforces: CHURCH_PUBS.size > 0, multiChurch: true,
-        relayPub: RELAY_PUB,                  // R3: this relay's identity key — lets a client tell two URLs apart as the SAME box (dedup the self-sufficiency count by failure-domain, not URL)
+        // R3: lets a client tell two URLs apart as the SAME box (dedup the self-sufficiency count by
+        // failure-domain, not URL). AN UNPROVEN CLAIM, exactly like /status's copy: unauthenticated, and
+        // trivially copied onto another host. Counting with it is safe; deciding with it is not. The
+        // provable form is /relay-identity, which signs a caller-chosen nonce with this key.
+        relayPub: RELAY_PUB,
         media: !MEDIA_OFF,                    // does this relay host self-hosted media (blobs)? — the client hides the upload UI when false
         // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
         // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches

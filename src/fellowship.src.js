@@ -8,6 +8,9 @@ import { SimplePool } from 'nostr-tools/pool';
 // perfectly healthy socket could read as unreachable — see relaysHealthy().
 import { normalizeURL } from 'nostr-tools/utils';
 import { _absorbById, _forgetById, _seedFromCache, _reduceAll, _tombstoneTargets } from './church-doc-store.src.js';
+// Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
+// Shared with the console so both surfaces answer that question the same way. See src/relay-identity.src.js.
+import { verifyRelayIdentity } from './relay-identity.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
@@ -2295,6 +2298,13 @@ if (typeof window !== 'undefined') {
 
 window.Fellowship = {
   relays: loadRelays(),
+  // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
+  // EXPOSED, NOT YET CONSULTED. Nothing in the app gates on it: which relays this client talks to is
+  // unchanged by its presence, and the adoption/publish paths do not call it. It is here so the gates that
+  // will (closed-network plan C3/C4) have one implementation to call, and so a device session can ask a real
+  // relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is the
+  // provable form.
+  verifyRelayIdentity,
   // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
   // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
   // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
