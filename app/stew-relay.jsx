@@ -4,7 +4,7 @@
 
 const RLY = {
   address: 'relay.grace.org',
-  managedAddress: 'grace.relay.trinityone.app',
+  managedAddress: 'grace.relay.trinityone.church',
   church: { name: 'Grace Chapel', initials: 'GC', accent: 'var(--clay)' },
   version: 'v1.4.2',
   uptime: '14d 6h',

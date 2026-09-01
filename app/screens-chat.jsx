@@ -81,7 +81,6 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const [invite, setInvite] = useC(null);    // {mnemonic, profile}
   const [nameInput, setNameInput] = useC('');
   const [avInput, setAvInput] = useC(null);   // editable mark in the profile pane
-  const [relayInput, setRelayInput] = useC('');
   const ID = window.TrinityIdentity;
   const FS = window.Fellowship;
 
@@ -112,9 +111,11 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     window.addEventListener('trinity-relays', load);
     return () => { live = false; clearInterval(iv); window.removeEventListener('trinity-relays', load); };
   }, [open]);
-  // addRelay returns false (never throws) for a duplicate or an address we already use — don't claim success
-  // for something that didn't happen; the member would think their church had another carrier when it doesn't.
-  const addRelay = () => { const u = relayInput.trim(); if (!/^wss?:\/\//i.test(u)) { ctx.toast('Use a ws:// or wss:// URL'); return; } const added = FS.addRelay(u); if (added) { setRelayInput(''); ctx.toast('Relay added'); } else ctx.toast('Already in your list, or not a valid address'); };
+  // THERE WAS AN `addRelay` HERE and it was never rendered — no input, no button, nothing on any screen
+  // called it. It accepted `ws://` as readily as `wss://`, i.e. an unencrypted socket to any host a member
+  // typed. TrinityOne relays are a closed network (reference/DOMAIN.md) and a member gets their church's
+  // relay by joining the church, so there is nothing for this to do. Deleted 2026-09-01 with its unused
+  // `relayInput` state; the relay LIST above still renders, and FS.addRelay itself is untouched.
 
   const copyNpub = () => { if (ID && ID.copyNpub) ID.copyNpub(); else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {}); ctx.toast('Public key copied'); };
   // A NEW IDENTITY IS IRREVERSIBLE — regenerate() clears the stored key and writes a fresh mnemonic, so the

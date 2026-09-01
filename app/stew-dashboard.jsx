@@ -3147,7 +3147,7 @@ function DashRelaysCard() {
   const [addedNote, setAddedNote] = React.useState('');
   const addRelay = () => {
     const r = window.Steward.addRelay && window.Steward.addRelay(draft);
-    if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); setAddedNote(''); return; }
+    if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
     setDraft(''); setErr('');
     setAddedNote(String(r));
   };
@@ -3281,12 +3281,18 @@ function DashRelaysCard() {
         </div>
         {/* relay actions → responsive 2-column grid so the many sections sit side by side on a wide card */}
         <div className="relay-grid">
-        {/* add a public relay (redundancy) */}
+        {/* ADD ANOTHER RELAY THIS CHURCH RUNS (redundancy) — never somebody else's.
+            The placeholder below used to name two generic public Nostr relays and the error under it named
+            a third. A steward who typed one of those in was following the product's own instructions, and
+            every publish — sealed care requests included — then fanned out to a
+            machine with none of this product's gates on it. TrinityOne relays are a closed network
+            (reference/DOMAIN.md). The box still TAKES a typed address, because a church legitimately adds
+            the second box it runs itself; what is gone is the suggestion of anybody else's. */}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
               aria-label="Relay address to add"
-              placeholder="nos.lol  ·  relay.damus.io  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
+              placeholder="wss://relay.yourchurch.org" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
             <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
@@ -3357,7 +3363,7 @@ function DashRelaysCard() {
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Keep your relays in sync</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on — public relays (nos.lol etc.) stay publish-only, so gated content never leaves your own infrastructure.') : 'Checking…'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
           {backup != null && backup.boxes >= 2 ? (
             <div style={{ display: 'flex', gap: 9 }}>
               <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>

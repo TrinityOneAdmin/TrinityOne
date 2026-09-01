@@ -496,37 +496,24 @@ function InviteSheet({ open, onClose, identity, ctx }) {
 window.InviteSheet = InviteSheet;
 
 // ════════ Relays sheet (network only) ════════
-const SUGGESTED_RELAYS = [
-  'relay.trinityone.app',
-  'relay.damus.io',
-  'nos.lol',
-  'relay.snort.social',
-  'nostr.wine',
-  'relay.primal.net',
-];
-
-function normalizeRelay(raw) {
-  let v = (raw || '').trim().toLowerCase();
-  if (!v) return null;
-  v = v.replace(/^wss?:\/\//, '').replace(/\/+$/, '');
-  // must look like a domain (has a dot, no spaces)
-  if (/\s/.test(v) || !/^[a-z0-9.-]+\.[a-z]{2,}(:\d+)?(\/.*)?$/.test(v)) return null;
-  return v;
-}
+// WHAT USED TO BE HERE, and why it is not. A `SUGGESTED_RELAYS` list shipped six hostnames — five generic
+// public Nostr relays plus one on a domain we do not run — with a complete add flow (`normalizeRelay`,
+// `commitAdd`, `remaining`) sitting one line of JSX away from being live. TrinityOne relays are a closed
+// network (reference/DOMAIN.md): every protection in this product lives in the relay, so publishing a
+// church's documents to a generic relay hands a sealed care request to a machine that will serve it to
+// anyone who asks. A member never needs to choose a relay — they get their church's when they join it —
+// so there is nothing here to suggest, and no add flow left to be switched on by accident.
 
 function RelaysSheet({ open, onClose, ctx }) {
   const FS = window.Fellowship;
   // REAL source of truth: the live transport's configured relays (full ws/wss URLs)
   const fromReal = () => FS && FS.relays ? FS.relays.map(u => ({ url: u, status: 'on' })) : (window.TrinityData.RELAYS || []);
   const [list, setList] = useIx(null);
-  const [adding, setAdding] = useIx(false);
-  const [url, setUrl] = useIx('');
-  const [err, setErr] = useIx('');
 
   // (re)seed each time the sheet opens, and follow live relay changes
   useIxE(() => {
     if (!open) return;
-    setList(fromReal()); setAdding(false); setUrl(''); setErr('');
+    setList(fromReal());
     const refresh = () => setList(fromReal());
     window.addEventListener('trinity-relays', refresh);
     return () => window.removeEventListener('trinity-relays', refresh);
@@ -537,18 +524,6 @@ function RelaysSheet({ open, onClose, ctx }) {
 
   const toggle = (u) => setList(rows.map(r => r.url === u ? { ...r, status: r.status === 'on' ? 'off' : 'on' } : r));  // visual only
   const remove = (u) => { if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
-
-  const commitAdd = (raw) => {
-    const v = normalizeRelay(raw);
-    if (!v) { setErr('Enter a valid relay address, e.g. relay.example.com'); return; }
-    if (rows.some(r => bare(r.url) === v)) { setErr('That relay is already in your list.'); return; }
-    const full = 'wss://' + v;
-    if (FS && FS.addRelay) FS.addRelay(full); else setList([...rows, { url: full, status: 'on' }]);
-    setList(fromReal()); setUrl(''); setErr(''); setAdding(false);
-    ctx.toast('Connected to ' + v);
-  };
-
-  const remaining = SUGGESTED_RELAYS.filter(s => !rows.some(r => bare(r.url) === s));
 
   return (
     <BottomSheet open={open} onClose={onClose} z={60}>

@@ -2590,8 +2590,15 @@ window.Steward = {
   // counterpart of encrypt-on-export; fmt is 'jsonl' (events) or 'zip' (events + media). (Restore UI = Stage 3.)
   async decryptBackup(envelope) { return _openBackup(envelope); },
   // resync: which of the church's relays are TrinityOne relays (expose a relayPub via /status) and thus can be
-  // kept in sync. Generic public relays (nos.lol etc.) have no relayPub — they're publish-only, never trusted
-  // with the gated corpus. Returns [{ url, base, pubkey, name, online }] for the UI + syncEnable().
+  // kept in sync. Returns [{ url, base, pubkey, name, online }] for the UI + syncEnable().
+  //
+  // WHAT THIS IS NOT. This comment used to say that a relay without a relayPub is "publish-only, never
+  // trusted with the gated corpus". That was false, and the console printed the same reassurance to
+  // stewards. The relayPub check is syncEnable()'s and syncEnable()'s only: it decides which boxes are
+  // told to exchange history with each other. It has never governed PUBLISH. Every console write goes out
+  // through publish() over relays() — the raw list — so a relay in that list receives the church's
+  // documents whether or not it advertises a relayPub, and a member client does the same over
+  // Fellowship.relays. Closing that is a gate, and a gate is not this function.
   async relayIdentities() {
     const out = [];
     for (const u of relays()) {
