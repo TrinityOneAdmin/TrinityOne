@@ -494,3 +494,87 @@ measuring both hosts' `/status` `relayPub` is a one-minute check the executor sh
 P1 emits "distinct-box" hints).
 
 **Could not settle without the owner:** the four open questions above.
+
+---
+
+# ADDENDUM — church CONTENT: media, reading plans, and hands-off restore
+
+Added 2026-09-01 after the owner asked what this plan means for images, reading plans and other church
+content, with the goal that running a church and a relay is as hands-off as possible and that content can be
+**restored from other relays** rather than only from a manual backup.
+
+**Measured from the code, not assumed.** The headline is better than expected: the capability is built. What
+is missing is not replication — it is **visibility, and a silent truncation**.
+
+## What is already automatic
+
+| Content | How it travels | Verified by |
+|---|---|---|
+| Reading plans, devotionals, sermons docs, groups, rotas, records | ordinary church documents (kind-30078) — signed | `syncChurchFromPeer` in the sync loop, plus `reconcileChurchWithPeer` to backfill gaps the cursor missed |
+| Images, audio, video (blobs) | `syncMediaFromPeer` in the **same loop** (`gateway.mjs:4367`, called at `syncAllChurches`) | fetches the peer's manifest, skips what it holds, **hashes as it streams** so a substituted or corrupt file is rejected, writes to a temp file first so a crash cannot wedge a truncated blob |
+| Uploads | `uploadBlob(file, encrypt, mirrors)` (`steward.src.js:2956`) puts to a primary and then **best-effort mirrors to extra hosts** | content-addressed, so a mirror cannot serve different bytes under the same name |
+| Manual backup | `/relay-backup` tars the **whole data directory** | so it contains the events database **and** the blobs — it is a complete backup, not events-only |
+
+**So "restore from another relay" already works.** A church that loses a machine, stands up a new one and
+authorises it as a peer will have its documents *and* its media pulled down automatically, hash-verified,
+without anyone copying files. That is the property the owner asked for, and it exists.
+
+## The three gaps that stop it being hands-off
+
+### C1 — a full relay stops syncing media SILENTLY. `gateway.mjs:4379` — **pre-pilot**
+```js
+if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;   // this relay's media is full
+```
+`break`, and nothing is recorded or surfaced. A church whose second machine has a smaller disk gets a second
+copy with **some of the media missing and no indication of it** — the worst shape of failure in this
+codebase: looks fine, is not. Everything else about the media path is careful; this one line undoes the
+reassurance.
+
+**Change:** record why the pass stopped (cap hit, church cap hit, peer unreachable) and expose it. Do not
+silently return a number that means "some".
+
+**Test:** two real gateways, the second with a media cap smaller than the corpus. Assert the shortfall is
+*reported*, not merely that fewer blobs arrived.
+
+### C2 — there is no way to ask "is my second machine complete?" — **pre-pilot**
+`/replication-status` appears in a comment at `gateway.mjs:163` but **no such route exists** (grep: zero
+matches for the route). So neither a steward nor an operator can answer the one question that makes the
+whole arrangement trustworthy.
+
+**Change:** an endpoint, and a line in the console: *this machine holds 1,240 of 1,240 documents and 318 of
+318 files for your church; last checked 4 minutes ago.* Steward-authorised, per church. The data already
+exists in memory (`_blobsByChurch`, the event store) — this is surfacing, not computing.
+
+**Why pre-pilot:** without it, "your records are in two places" is a claim nobody can check, including us.
+
+### C3 — new media lives on ONE machine until the paced pass runs — **pre-pilot, small**
+Events are published by the client to *all* of a church's relays. Blobs go to a **primary**, with mirrors
+only if the caller passes them. So there is a window — until the next paced media pass — where a
+just-uploaded photo or sermon exists on exactly one machine. If that machine dies inside the window, the
+file is gone while the document referencing it survives, which is a broken link for ever.
+
+**Change:** default `mirrors` to the church's own other relays wherever `uploadBlob` is called, so the
+common case is two copies immediately. Keep it best-effort — an upload must not fail because a mirror is
+down — but stop leaving it to the caller.
+
+**Consumer list:** every `uploadBlob` call site must be enumerated before changing its signature's meaning.
+
+### C4 — deleted content keeps its bytes — **post-pilot**
+Orphan-blob collection is a known outstanding item. Bytes for removed content still count against the cap,
+which eventually turns into C1. Post-pilot because it needs real churn to tune, and because C1's reporting
+makes it visible in the meantime.
+
+## What this means for the pilot
+
+- **Do not tell a church its content is in two places until C2 exists.** The mechanism is real; the
+  assurance is currently unverifiable.
+- **A church's own machine plus the shared pool is a genuine two-copy arrangement** for documents today, and
+  for media once C3 lands.
+- **The manual backup is genuinely complete** — whole data directory, events and blobs. Keep recommending it;
+  it is the one thing that does not depend on any of the above working.
+
+## Ordering, revised
+
+Insert into the pre-pilot sequence: **P1 → P2 → audit → P3 → C3 → P4 → audit → C1 → C2 → P5 → audit.**
+C1 and C2 sit immediately before P5 because P5 (two real gateways, provable convergence) is the harness that
+proves them, and C2 is the thing a steward actually looks at.
