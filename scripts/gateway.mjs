@@ -2439,8 +2439,15 @@ function canRead(e, authed) {
     // WHAT IT DISCLOSES, weighed rather than waved past: a list of RELAY PUBKEYS, an optional advisory URL,
     // and an alwaysOn flag. No member, no name, no content. The church's kind-10002 already publishes the
     // same church's relay ADDRESSES to anyone at all (`if (e.kind === 10002) return true` below), so this
-    // reveals strictly less about where a church lives than what is already public — and a reader must
-    // already know the church's pubkey to ask for it.
+    // reveals strictly less about where a church lives than what is already public.
+    //
+    // AND IT IS ENUMERABLE, which the first version of this note denied. It said "a reader must already know
+    // the church's pubkey to ask for it" — untrue: RELAY_NET_D is a BARE d-tag with no <churchpub> suffix
+    // (the compare above is an exact one), so a REQ carrying `#d: ['trinityone/relay-net']` and no `authors`
+    // returns every church's document on a shared relay. Our own clients always pass `authors: [cp]`; a
+    // stranger's need not. That does not change the decision — the already-public kind-10002 permits exactly
+    // the same enumeration, one line down — but the sentence was doing work it had not earned, and a reason
+    // that is false is worse than no reason at all.
     if (d === RELAY_NET_D) return true;
     // Resolve the owning church. <prefix><churchpub> d-tags carry it directly; church-authored docs are
     // self-identifying; steward-authored content names it in ['church']; member-authored replies

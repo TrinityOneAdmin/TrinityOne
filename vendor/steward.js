@@ -16266,7 +16266,15 @@ zoo`.split("\n");
     await _waitForRegistration();
     const live = _connectedRelays();
     const targets = urls && urls.length ? urls : live.length ? live : relays();
-    if (!targets.length) return false;
+    if (!targets.length) {
+      const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
+      console.warn("[steward] all-relay publish blocked \u2014", reason);
+      try {
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+      } catch (x) {
+      }
+      return false;
+    }
     try {
       for (const u of targets) {
         const r = pool.relays && pool.relays.get(u);

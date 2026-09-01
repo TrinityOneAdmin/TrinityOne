@@ -1394,4 +1394,45 @@ export const CASES = [
     replace: ``,
     test: 'scripts/doc-registry.test.mjs',
   },
+  // C4 F2 — the all-relays writer's empty-target return. SCOPED, because publish() twenty lines above now
+  // holds a near-identical block and a plain string-replace would hit IT: `const reason = relaysRaw().length`
+  // occurs twice in the file. Every anchor below carries the `all-relay` warn line, which occurs once.
+  {
+    name: 'no-relay: the all-relays writer goes back to failing in silence',
+    file: 'src/steward.src.js',
+    // exactly the pre-fix line — the whole surface removed, which is the revert somebody would actually make
+    find: `  if (!targets.length) {
+    const reason = relaysRaw().length
+      ? NO_NETWORK_RELAY + ': none of this church\\'s relays could be proved to be ours, so nothing was published'
+      : 'no relay is configured for this church';
+    console.warn('[steward] all-relay publish blocked —', reason);
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    return false;
+  }`,
+    replace: `  if (!targets.length) return false;`,
+    test: 'scripts/a-console-write-with-no-relay-is-not-silent.test.mjs',
+  },
+  {
+    name: 'no-relay: the reason loses the prefix that tells a bad relay from a bad connection',
+    file: 'src/steward.src.js',
+    // the subtle version — the banner still appears, so the screen test stays green; only the REASON is gone,
+    // which is the whole of degraded-set honesty. A steward is sent to look at broadband that is working.
+    find: `    const reason = relaysRaw().length
+      ? NO_NETWORK_RELAY + ': none of this church\\'s relays could be proved to be ours, so nothing was published'
+      : 'no relay is configured for this church';
+    console.warn('[steward] all-relay publish blocked —', reason);`,
+    replace: `    const reason = 'nothing was published';
+    console.warn('[steward] all-relay publish blocked —', reason);`,
+    test: 'scripts/a-console-write-with-no-relay-is-not-silent.test.mjs',
+  },
+  {
+    name: 'no-relay: setBlocked loses the trusted-view guard that stands in front of the silence',
+    file: 'src/steward.src.js',
+    // The reason the blocklist is NOT the sharpest case here. Drop this and a ban over an empty publish set
+    // stops refusing and starts writing into the void — which is what the fix above then has to catch.
+    find: `    _requireTrustedView('blocked list');
+`,
+    replace: ``,
+    test: 'scripts/a-console-write-with-no-relay-is-not-silent.test.mjs',
+  },
 ];

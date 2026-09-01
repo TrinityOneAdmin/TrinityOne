@@ -2029,7 +2029,34 @@ async function _publishToRelays(evt, urls) {
   // console reporting honestly rather than silently doing nothing.
   const live = _connectedRelays();
   const targets = (urls && urls.length) ? urls : (live.length ? live : relays());
-  if (!targets.length) return false;
+  // AND WHEN THERE IS NOWHERE TO WRITE, SAY SO — the same surface publish() takes, at the same line.
+  //
+  // This return was UNREACHABLE until C4 made the publish set allowed to be empty, and it raised nothing at
+  // all: no event, no console line, `false` to a caller. C4's own precondition was degraded-set honesty and
+  // its message claimed "a console document write raises steward-publish-error", which was true of publish()
+  // and false here. It is not a hypothetical path either — on the day C4 merges the fleet still answers 404
+  // to /relay-identity, so every canonical proof fails and this is the GUARANTEED state; afterwards it is
+  // the cold-cache window, because setKey's gate refresh is fire-and-forget and a steward's first action can
+  // beat the proofs.
+  //
+  // SIX CALLERS ARRIVE HERE, and they do not all arrive in the same condition. `targets` can only be empty
+  // when relays() is (live is a filter over it, and a non-empty `urls` is used as given), and _isRelayAuthed
+  // iterates relays() — so setBlocked, setMinors, setApproved and setGuardians are stopped one line earlier
+  // by _requireTrustedView, which raises steward-write-blocked and throws. publishGroup and publishClearance
+  // have no such guard and had nothing at all: a child-safe toggle, a group definition, a category change,
+  // a member's sealed clearance, all failing in complete silence.
+  //
+  // Written INLINE rather than shared with publish(): both functions are lifted out of the bundle and run by
+  // the tests, and a name resolved from the enclosing IIFE is undefined there — a green suite proving
+  // nothing. Same reason the connection-failure prefix above is spelled out twice.
+  if (!targets.length) {
+    const reason = relaysRaw().length
+      ? NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours, so nothing was published'
+      : 'no relay is configured for this church';
+    console.warn('[steward] all-relay publish blocked —', reason);
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    return false;
+  }
   // GIVE A SLOW RELAY TIME TO SAY YES. The vendored library waits 4.4s for each relay's acknowledgement
   // (vendor publishTimeout) and then reports failure — but a late OK is not a refusal, and the EVENT has
   // usually been stored by then. On a congested pipe that turns "saved" into "couldn't save", and the console
