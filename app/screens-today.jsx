@@ -1358,25 +1358,53 @@ function TodayScreen({ ctx }) {
       <SafetyBanner ctx={ctx} />
       <RecoveryNudge ctx={ctx} />
       {/* greeting */}
-      {/* The greeting column shrinks; the four controls do not.
-          Measured on an Oppo (360px) and reproduced at 320/360/390 in scripts/todays-header-fits-the-phone.test.mjs:
-          the column was 191px wide in a 324px row and the control group would not go below 200px, so the row's
-          contents needed 391px and the streak pill was drawn from x=353 to x=408 — outside the 360px viewport, its
-          digit cut in half. `overflow-x: hidden` on the scroll container clipped it instead of scrolling to it.
-          The 191px was the CHURCH-NAME BUTTON's min-content: a `white-space: nowrap` run contributes its whole
-          text width to min-content, so `text-overflow: ellipsis` never got the chance to act, and the column's
-          default `min-width: auto` meant it could not shrink below that. Hence, in order: minWidth 0 lets the
-          column shrink, `min(220px, 100%)` makes the button's ellipsis actually engage, minWidth 0 on the name
-          span lets the ellipsis apply inside the button, overflowWrap anywhere keeps a long word (WEDNESDAY) from
-          spilling when a three-digit streak takes the column below 90px, and flexShrink 0 keeps the controls
-          whole. Fixing it by trimming the pill's padding would have come back at 320px, or at a 365-day streak. */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
-        <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+      {/* The greeting column shrinks to a FLOOR; the controls do not shrink at all, and the row wraps rather
+          than squeeze past that floor. All numbers below were measured by
+          scripts/todays-header-fits-the-phone.test.mjs — nothing here is estimated.
+
+          The original bug: the column was 191px in a 324px row and the control group would not go below 200px,
+          so the row's contents needed 391px and the streak pill was drawn from x=353 to x=408 — outside a 360px
+          viewport, its digit cut in half; `overflow-x: hidden` on the scroll container clipped it rather than
+          scrolling to it. The 191px was the CHURCH-NAME BUTTON's min-content: a `white-space: nowrap` run
+          contributes its whole text width to min-content, so the `text-overflow: ellipsis` already on that name
+          never got the chance to act, and the column's default `min-width: auto` forbade shrinking below it.
+
+          `minWidth: 0` alone then over-corrected: at 320px with a long church name and a three-digit streak the
+          column was squeezed to 56px, and the `overflow-wrap: anywhere` that was there to stop the spill
+          inherited into the date and the greeting and broke them MID-WORD ("Wedne/sday", "mornin/g"), while the
+          church name collapsed to a bare 14px ellipsis and the row grew from 87px to 169px tall.
+
+          So the column now carries a floor instead of a licence to shrink for ever:
+            · flex 1 1 96px  — 96 clears the date line's measured min-content of 90px (the widest unbreakable
+                               word, "WEDNESDAY"/"SEPTEMBER" in Sora 13px), so a word never has to break; the
+                               column still grows into whatever room is left over.
+            · minWidth 0     — without it the column's automatic minimum size is that same 191px. That was the
+                               original overflow; with wrapping on it shows up instead as the header dropping
+                               to two lines at 360px and 390px, which have the room to stay on one.
+            · flexWrap wrap  — when the floor plus the controls genuinely do not fit (320px, or 360px with a
+                               three-digit streak) the controls drop to their own line instead of crushing the
+                               greeting. Flexbox decides that from the flex BASIS, which is why the floor is
+                               written as a basis and not as a min-width.
+            · marginLeft auto on the controls — keeps them against the right edge on a line of their own, which
+                               `justify-content: space-between` does not do for a single item.
+            · maxWidth min(220px, 100%) on the church button — a `white-space: nowrap` name IS its own
+                               min-content and an inline-flex box never shrinks below that, so without the cap
+                               the pill lays out at the full width of the name: measured at 334px, running
+                               32px off a 320px screen, for "The Cathedral Church of Saint Peter and Saint
+                               Paul". The cap is what hands the shortening to the ellipsis instead.
+          The church name's ellipsis needs no `min-width: 0` of its own: `overflow: hidden` on that span already
+          makes its automatic minimum size zero. That was measured, so it is gone.
+          Trimming the pill's padding instead would have come back at 320px, or at a 365-day streak. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
+        <div style={{ flex: '1 1 96px', minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', textTransform: 'uppercase' }}>{dateStr}</div>
           <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.05 }}>{greet}</h1>
-          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 'min(220px, 100%)', boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ minWidth: 0, fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
+          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 'min(220px, 100%)', boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+        {/* marginLeft auto right-aligns this group on a line of its own (space-between does not);
+            flexShrink 0 is MEASURED INERT — the buttons' own automatic minimum size already floors the
+            group at 200px — and is kept only as a statement of intent. */}
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
           {(() => {
             const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
               background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
