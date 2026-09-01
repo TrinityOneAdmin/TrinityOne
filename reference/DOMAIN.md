@@ -22,6 +22,18 @@ and which of your instincts about it are wrong.
 
 ## Children and safeguarding
 
+- **You do not see what you are not part of, and you are not told what you are missing.**
+  `ESTABLISHED 2026-09-01.` Owner, confirming the principle after it came up for a second document type:
+  *"that is correct, you dont see groups ur not in."* So when a gate withholds something from a young
+  person — an adults-only room, that room's NAME, an event belonging to it — the correct behaviour is
+  **silent absence**, not a placeholder, a lock icon, or an explanation of what was hidden. A young person
+  simply has a shorter list. Telling them what they cannot see would both defeat the gate (the name is
+  often the disclosure) and single them out in front of their peers.
+  **The exception already shipped:** an EMPTY list may explain itself, because "no rooms at all" reads as a
+  broken app. `app/screens-chat.jsx` says *"No group chats here for you yet — you can still message people
+  at your church directly."* That is about the list being empty, never about what was removed from it.
+
+
 - **A child's own clearance document is expected to have arrived before they ever use the app.**
   `ESTABLISHED 2026-08-31.` Owner, asked whether a request for help made in the first seconds after opening
   the app could be sealed before the app knows the person is a child: *"This is a VERY unlikely situation.
