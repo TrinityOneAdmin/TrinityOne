@@ -1,11 +1,46 @@
 # Closing the relay network — investigation and plan
 
 **Target:** `fix/console-sweep-defects`. The investigation was read/measured at `451e7c6`; re-scoped at the
-branch tip `e73d249`, which adds the owner's answer to `reference/DOMAIN.md`. Read-only; no code was changed.
+branch tip `e73d249`, which adds the owner's answer to `reference/DOMAIN.md`. **Amended at `43ae82d`** after
+an adversarial pass returned **NO-GO as written, GO after amendments**: its four blocking findings are folded
+in below (marked **AMENDED 2026-09-01** — §0-bis maps each finding to where it landed), the deployment order
+is rewritten (§7), and a scope judgement now opens the document. Read-only; no code was changed in any pass.
 
 **The decision being planned for** is the two `reference/DOMAIN.md` entries under *Trust, privacy and tone*:
 a church must never reach a non-TrinityOne relay, a church must never have to choose, **and** — the newer
 entry — a church relay holds the church's data *and nothing else, because it may be seized*.
+
+---
+
+## First: is this still the fix, or a project that merely contains it?
+
+This started as **one defect: a child's sealed request for help can be published to a relay with no
+safeguarding gates, because the product itself suggests adding one** (the `nos.lol` placeholder — §1, §3
+shortest-path 3). Three passes later it is a network-membership architecture. Both halves are real; they are
+not the same size, and with a pilot a month away the owner should be able to buy them separately. Plainly:
+
+**The plan still solves the original problem — but only five of its items do the solving.**
+
+| Role | Item | Why |
+|---|---|---|
+| closes the leak | **C1** | removes the suggestion and the false reassurance — the "because the product suggests it" clause, gone the same day |
+| closes the leak | **C4** | the actual fix: the publish fan-out only ever reaches vouched relays, whatever route a URL arrived by — typed, restored, remembered, scripted |
+| mechanism | **C2 + C3′** | the predicate C4's filter consults; without them C4 has nothing to ask |
+| proof | **C7** | the harness without which none of it is testable at the point of use |
+| same leak, other doors | **C5** | QR / church-list / named-relay routes — the same corpus to the same stranger, without even a steward's keystroke |
+
+**The minimum subset that closes the leak is C1 + C7 + C2 + C3′ + C4 — roughly four to five days.** C5 is one
+to two more and I would spend them: a scanned QR that silently re-routes a child's care request is the same
+harm as the placeholder with a worse consent story. Everything else — C6 (server-side SSRF: real, but a
+different leak), C8 (seizure exposure, not a leak), §6-bis's adoption/migration work, the Suite site work
+(§6-quater), the part-time flag (§6-ter), the whole post-pilot list — is membership *architecture*. It is why
+the fix will still be correct in a year, and none of it has to ship before the pilot for a child's request to
+stop reaching a gateless relay.
+
+**C1 + C2 alone do NOT close it.** C1 stops the product suggesting the leak, but a steward can still type
+one and a QR can still add one; and C2 is an endpoint nothing consults until C4 exists. The gate (C4) and its
+predicate (C2 + C3′) travel together or not at all. The good news is that C3′, re-scoped and amended, is half
+a day — there is no meaningful corner left to cut below the five-item core.
 
 ---
 
@@ -50,6 +85,25 @@ Every claim an executing agent would build on without re-checking was re-derived
 | "Fail closed costs nothing" | **CONFIRMED** | `CANONICAL_RELAYS` is a build-time literal (`fellowship.src.js:592`, `steward.src.js:542`). `loadRelays` (`:713-717`) refuses to return empty — falls back to `DEFAULT_RELAYS` or `CANONICAL_RELAYS`. `relays()` (`steward.src.js:709`) always appends `CANONICAL_RELAYS`. So *unverifiable → excluded* degrades to the shipped set, never to nothing. §5's argument stands. |
 
 **Nothing was refuted.** The plan's premises are sound; the re-scope changes the *mechanism* (§6/C3), not the diagnosis.
+
+---
+
+## 0-bis. AMENDED 2026-09-01 — where the adversarial findings landed
+
+The adversarial pass returned NO-GO as written, GO after amendments. Its four blocking findings and where
+each is now resolved, so a reader of the diff can audit them one by one:
+
+| Finding | Resolution, and where |
+|---|---|
+| **1 — Bootstrap deadlock.** A self-hosting church's own box can never be vouched for: the gate excludes it, `_boxHostsUs === false` is cached and makes `ownRelay()` return the canonical URL (`steward.src.js:560`), so `relays()` stops naming the box, and the function that would sign it in enumerates from that already-filtered list (`relayIdentities()` iterates `relays()` at `:2597`; `syncEnable` builds its doc from it at `:2610-2618`) | **§6-bis.** The same-origin root makes the vouch automatic AND is the deadlock fix; plus a binding rule on C3′/C4: adoption enumerates RAW candidate sources, never the filtered `relays()` list |
+| **2 — Fail-closed and never-empty contradict.** `setRelays`/`loadRelays` re-insert the canonical set when the list empties; filter before that guard and unverified relays re-enter, filter after and the list can be empty. And canonical is pinned by a bundle-baked key on a project that has rotated a relay key under incident | **§5-bis.** The two invariants govern two different sets; the publish set may be empty and must SAY so (degraded-set honesty moves pre-pilot, into C4); the pin becomes a list, and rotation's bundle-shipping cost is stated |
+| **3 — URL pairing breaks tunnel-hosted churches.** A free tunnel gets a new URL every restart, so a `{pubkey, url}` match drops a live member on every restart | **§6-ter / C3′.** The client matches **pubkey only**; `url` is demoted to an advisory hint (where to attempt the proof). URL-to-key binding is server-side only, in C6, where it belongs |
+| **4 — C3 repurposed `d=trinityone/relays`,** which today means "cross-relay sync is on": `syncEnable` refuses to write it below two boxes (`:2617` — a single-relay church could never author its own membership) and `syncDisable` publishes `[]` (`:2647`), which would un-admit the church's own relay as a side effect of switching mirroring off | **§6-ter.** A NEW doc, `d=trinityone/relay-net`; `trinityone/relays` keeps its sync meaning untouched (*add, never repurpose* — `memory: backwards-compatibility-from-pilot`) |
+
+The pass also found the commit order internally consistent but the **deploy** order not, because merging to
+main IS deploying for the web console — resolved by the rewritten sequencing note in §7. Three additions
+requested by the owner ride along: automatic adoption and its gap (§6-bis), the Suite as the pushed route
+(§6-quater), and the "this machine is not always on" flag (§6-ter).
 
 ---
 
@@ -305,6 +359,41 @@ cached-only, a care request should say it is queued rather than land on one rela
 rule and publish escaped it. Reading from a stranger's relay leaks who is asking about which church; writing
 hands over the corpus. The owner's words cover both.
 
+### 5-bis. AMENDED 2026-09-01 — reconciling "fail closed" with "never empty"
+
+§5 as first written asserted both *unverifiable → excluded* and *the list is never empty*, and never said
+which wins when they collide. They collide exactly at the never-empty guards: `loadRelays`
+(`fellowship.src.js:713-717`) refuses to return `[]` and falls back to `DEFAULT_RELAYS`/`CANONICAL_RELAYS`,
+and `relays()` (`steward.src.js:709`) appends `CANONICAL_RELAYS` unconditionally. Filter before those guards
+and an emptied list re-admits whatever the guard re-inserts, unverified; filter after and "never empty" is
+simply false. The reconciliation:
+
+**The two invariants govern two different sets, and the plan now says so.**
+- **The candidate list is never empty.** Candidates are what the client keeps, retries, and verifies in the
+  background. The never-empty guards live here, untouched.
+- **The publish set is verified-only, and it MAY be empty.** The filter runs *after* every guard, on the
+  assembled list, consulting only the verified cache. If nothing is verified right now, nothing is published
+  to — publishes queue, exactly as they already must for an offline device.
+- **Which means the honesty item stops being post-pilot.** A shrunken-or-empty publish set must say so where
+  the person is: a care request that is queued must read as queued, never as sent
+  (`memory: fix-the-control-not-the-label`). This moves from §7's post-pilot list into C4's deliverable —
+  the empty-verified-set state is now *reachable by design*, so the label ships with the gate, not after it.
+
+**Canonical entries re-enter through the same door as everyone else.** The guard may re-insert the canonical
+URLs into the candidate list; they still reach the publish set only by C2 proof against the expected
+`relayPub` baked beside them. Nothing is ever admitted *because* the guard ran.
+
+**The baked pin must survive a key rotation, because this project has rotated a relay key under incident
+before** (`memory: incident-relay-secret-exposure`). Two consequences, both cheap and both stated now rather
+than discovered mid-incident:
+- Bake a small **array** of accepted pubkeys per canonical URL, not a single value, so a planned rotation
+  ships old+new for one release and retires the old pin in the next.
+- An **unplanned** rotation (compromise, rotate now) is a bundle-shipping event. The web console picks up the
+  new pin the moment it merges to main (`memory: deploy-topology` — merge IS deploy there); installed APKs
+  lag, and until updated they fail the canonical proof and queue. That is fail-closed working as designed —
+  but write it into the incident runbook as **"rotating the canonical key pauses un-updated phones"**, so it
+  is a known cost and not a live discovery.
+
 ---
 
 ## 6. The mechanism: the church's own signature, no network key, no registry
@@ -321,18 +410,22 @@ except the church.** That rules out a credential *we* issue.
 A relay is admitted for a church if it satisfies the church-signature root **and** proves possession of the
 key that was vouched for. Two admission paths, and neither of them is us:
 
-**The church-signature root (primary).** A relay named in the church's own signed `d=trinityone/relays` doc,
-which already carries `[{pubkey, url}]`, and which proves possession of that pubkey. The authority is the
+**The church-signature root (primary).** A relay whose pubkey the church has signed into its own
+`d=trinityone/relay-net` doc (AMENDED — a NEW doc, not the existing sync doc; §6-ter has the shape and why),
+and which proves possession of that pubkey. The authority is the
 church's own key — exactly where every other trust edge in this codebase puts it. This is what keeps
 self-hosting alive, and it covers *third-party* hosting too: a relay hosting a church that is not its
 operator's (what `quitedoverelay`/`steady-harbor-18` claim to be) is admitted because **the hosted church
 signs that relay's pubkey into its own list** — the church makes the call, not TrinityOne. It is also the same
 check that closes G1 on the server side — **one mechanism, both ends.**
 
-**The loopback root (desktop Suite first run).** A relay on the console's own origin. Not a trust decision; it
-is the same computer. Must be narrow (`127.0.0.1`, `localhost`, `::1` on the serving origin) and must have its
-own test, because **this is the most likely way to brick something real** — the Suite boots its own relay on
-loopback and the console talks to it before any church document exists.
+**The same-origin root (AMENDED — was "loopback root", now generalised, §6-bis).** A relay on the console's
+own serving origin — loopback (`127.0.0.1`, `localhost`, `::1`) on the Suite's first run being its narrowest
+case. Not a trust decision: the steward already ran the key-holding code that origin served. It must have its
+own test, because **this is the most likely way to brick something real** — the Suite boots its own relay and
+the console talks to it before any church document exists — and under §6-quater it is the common first run,
+not an edge. It also carries the automatic adoption the owner wants: same-origin is the signal that lets the
+console sign the box in with no steward ceremony (§6-bis).
 
 **"Runs our software" is proved by behaviour, not by a certificate we sign.** `_probeRelayEnforces`
 (`steward.src.js:766`) already asks a candidate relay to accept a stranger's safeguarding list and rejects it
@@ -358,27 +451,153 @@ can be *compelled*. The owner's reading removes that lever deliberately. We gain
 signature does not already give us, and we would be creating exactly the compulsion target the pilot's threat
 model is built to avoid. So it is not built.
 
+### 6-bis. AMENDED 2026-09-01 — automatic adoption: the same-origin root, and the gap in it
+
+**The owner does not want a steward manually vouching for their own relay, and a mechanism exists that makes
+the vouch automatic without weakening it.** A relay serves its own console — one process, one port
+(verified). So the loopback root generalises to a **same-origin root**: when the console's serving origin IS
+a relay (it answers the C2 proof), the console may sign that box's *proven* `relayPub` into the church's
+membership doc automatically. This adds no trust the steward had not already given — to load the console at
+all, they ran the key-holding code that origin served; a box that could tamper with the console did not need
+relay membership to win. Loopback (the Suite's first run) becomes the special case of this rule, not a
+separate root.
+
+**This is also the fix for adversarial finding 1, the bootstrap deadlock.** As shipped, the box's own
+admission path eats itself: once `_boxHostsUs === false` is cached, `ownRelay()` returns the canonical URL
+(`steward.src.js:560`), so `relays()` stops naming the box, so `relayIdentities()` — which enumerates from
+`relays()` (`:2597`) — never sees it, so the function that would sign it in (`syncEnable`, `:2610-2618`)
+can never include it. Once C4 filters `relays()`, the identical loop traps ANY not-yet-admitted box, own or
+hosted. **The rule, binding on C3′ and C4: adoption and enrolment enumerate from RAW candidate sources —
+`location.origin`, the relay panel's configured box, a pasted candidate — never from the filtered `relays()`
+list, and never through the `_boxHostsUs` cache.** The filtered list is for publishing; using it as the
+enrolment census is the deadlock.
+
+**The gap, stated here so it is not discovered later.** The marketing site's five "Start a church" CTAs all
+land on the HOSTED console (direct hrefs at `welcome.html:622,652,654,694`, plus the nav/hero anchors that
+funnel there). Browser storage is per-origin, so a church that starts hosted and self-hosts later holds its
+church key against a8's origin, never loads anything from its own box, and **the same-origin signal never
+fires for exactly the churches that most need it.** Three candidate covers, weighed:
+
+1. **Make the Suite the setup route.** Now the owner's decision (`DOMAIN.md` 2026-09-01; §6-quater). Covers
+   every church that starts on the Suite — the common case once the site steers there. Cost: real site work,
+   and it does nothing for churches that already started hosted or that deliberately run a bare relay.
+2. **A second automatic signal from the hosted console.** There isn't a sound one. Anything the hosted
+   console can observe about a remote box — reachability, a C2 proof at a typed URL — proves the box holds
+   *a* key, not that this church runs it. Automatic adopt-on-sight of a URL is precisely the
+   social-engineering vector §9 refuses ("your area dean says add this address"). Not built, on purpose.
+3. **One deliberate step, for the exception only: a pairing code minted by the box itself.** The relay's
+   control panel — token-gated, reachable only by whoever administers the box — shows a short, fresh code: a
+   `RELAY_SK`-signed claim of its own `relayPub` (the `relayNameClaimEvent` shape at `gateway.mjs:536` is
+   nearly this already). The steward pastes it into the hosted console's Relays panel; the console verifies
+   the signature and the C2 possession proof at the box's URL, then signs the pubkey into the membership
+   doc. What the code proves that a bare URL cannot: **administrative access to that box**, not mere
+   knowledge of an address.
+
+**Recommendation: 1 + 3.** The Suite makes same-origin the common case and shrinks the exception to
+"started hosted, self-hosted later" plus "deliberately bare relay" — a smaller, more technical group who can
+reasonably take one deliberate step. Cost of 3: a control-panel line, a paste box, and the verify path —
+about half a day — and it can be post-pilot **unless §11 question 3 reveals a pilot church already on the
+hosted-console-plus-remote-box path**, in which case it moves up.
+
+### 6-ter. AMENDED 2026-09-01 — the membership doc is NEW, and it carries the part-time flag
+
+**Adversarial finding 4 stands: C3 as first written repurposed `d=trinityone/relays`, and that doc already
+means something else.** Today it is the sync-authorisation list: `syncEnable` (`steward.src.js:2608`) writes
+it and *refuses* below two distinct boxes (`:2617` — so a single-relay church, the commonest self-host
+shape, could never author its own membership at all), and `syncDisable` publishes `[]` (`:2647`) — which
+under the repurposed reading would un-admit the church's own relay as a side effect of switching mirroring
+off. `memory: backwards-compatibility-from-pilot` is categorical — *add, never repurpose* — and the relay
+rehydrates all history on every update, so a repurposed meaning would reach backwards too.
+
+**So: a new addressable doc, `kind 30078, d=trinityone/relay-net`, church-signed.** Shape:
+
+    [{ pubkey, alwaysOn, url? }]
+
+- **`pubkey` — the membership statement, and (finding 3) the ONLY thing the client matches.** The C2
+  possession proof turns it from an echoable string into a checkable one. Where the box lives today is not
+  part of membership: a client admits a candidate URL iff the host there proves possession of a pubkey in
+  this list (or the same-origin/canonical roots apply). Members learn candidate *URLs* exactly as they do
+  now — the church's kind-10002 (M11), `?relay=` hints, storage — but every hint is only a place to attempt
+  the proof, never an authority.
+- **`url` — advisory only:** the last place this box was seen. A free tunnel's URL churns every restart; a
+  stale hint costs a failed attempt, never a lost membership. URL-to-key *binding* is server-side only, in
+  C6, where the sync loop is about to hand a signed identity proof to a host and must know it is the right
+  one.
+- **`alwaysOn` (default `true`) — the owner's "this machine is not always on" flag.** *"Some church machines
+  wont be on 24/7, so that should be an option still."* A parish-office box switched off at night is a real
+  second copy for durability and NOT a reliable one for reach, and the doc should say which. Set from the
+  relay panel — a checkbox beside the box's entry; mechanism, not policy: describe the consequence, never
+  nag. Consumers:
+  - **Client connect ordering** — prefer `alwaysOn` boxes for first reads and initial subscriptions, so a
+    member's cold start never waits on a machine that is off until morning.
+  - **Redundancy honesty** — `backupState` (D2) counts boxes; a part-time box counts toward "your history
+    exists in two places" and NOT toward "members can always reach you". Two numbers, not one.
+  - **Sync scheduling (server-side)** — an unreachable part-time peer is expected, not an alarm; back off
+    politely instead of logging failure.
+
+**What stays where it is.** `trinityone/relays` keeps its sync meaning, its `[]`-off convention and its
+two-box minimum, untouched; the gateway's `RELAYS_D` ingest keeps reading it for sync peers, and C6's
+pairing check applies there as written. Hardening-plan **P3 is re-pointed at the new doc**: publishing
+`trinityone/relay-net` on every relay-set change is the load-bearing publish; the kind-10002 publish remains
+the member-facing URL hint it always was. **Migration:** on first run of the new console code, if the church
+has a `trinityone/relays` doc and no `trinityone/relay-net` doc, seed the new one once from the old entries
+plus `ownRelay`'s proven box, showing the steward what was written — a one-time seed, never a live mirror.
+
+### 6-quater. AMENDED 2026-09-01 — the Suite is the pushed route (owner decision, in DOMAIN.md)
+
+*"we need to prioritise the TrinityOne Suite in the marketing, so that more people run the Relay+steward
+console together."* This inverts which case is common. The plan was first written as if the hosted console
+were the default and the self-hosted box the exception; under the decision, **same-origin adoption (§6-bis)
+is the COMMON path and must be boringly reliable, and hosted-console-plus-separate-box becomes the
+exception**, served by the §6-bis pairing step. Two concrete consequences: the Suite's first-run test
+(same-origin adoption, then the membership-doc publish) is the test most churches' safety now rests on and
+must exist before the gate ships; and the site work — CTA targets, card emphasis — is go-live work, not
+marketing polish, because today every "Start a church" click steers at the one origin where automatic
+adoption cannot fire.
+
 ---
 
 ## 7. The plan
 
 Ordered so an executing agent starts at the top. **Audit after every two items** (CLAUDE.md rule 5).
 
-### Deployment sequencing — read before item one
+### Deployment sequencing — read before item one (AMENDED 2026-09-01: merging IS deploying)
 
 C2 and C3 change what a *relay* serves. C4 and C5 change what a *client* accepts. **If a client that requires
-proof ships before every relay can produce it, the fleet disconnects.** Relay first, client second, with the
-canonical box confirmed upgraded before any client gate is built. There is no relay auto-update yet
-(`memory: relay-auto-update-wanted` — "only the WHEN is missing"), so the upgrade is manual and must be
-verified by reading `/status` `versionShort` on every box in the network, not assumed.
+proof ships before every relay can produce it, the fleet disconnects.** The adversarial pass added the sharper
+constraint: for the web console, **merging to main IS deploying** (`memory: deploy-topology` — this box is the
+origin and the bundle builds from `main`; there is no "merge now, deploy later" for `steward.html`). So this
+is a merge schedule, not just a commit order:
+
+1. **C1** — merge immediately. Copy and dead code only; deploying it early is the point.
+2. **C7** — the harness. No deploy surface.
+3. **C2** — merge, deploy a8, then MANUALLY upgrade every relay in the network (there is no auto-update —
+   `memory: relay-auto-update-wanted`, "only the WHEN is missing") and verify by reading `/status`
+   `versionShort` on every box, never assumed. The self-hosted boxes run older builds today (§2(d):
+   `200b917` vs a8's `7f05991`), so this step is real work, not a formality.
+4. **The doc-writer half of C3′** — the console publishing `trinityone/relay-net` (§6-ter) gates nothing and
+   is purely additive; merge it, have every pilot church open its console once, then VERIFY ON THE RELAY that
+   each church's doc exists — query the relay for the d-tag, do not trust the console's own display
+   (`memory: console-settings-matrix-needed`).
+5. **C3′ gate + C4 + C5 together, in one merge window, only after 3 and 4 are verified.** The moment any of
+   them merges, every web-console session enforces. A client gate merged while one fleet relay cannot answer
+   the C2 proof, or one pilot church lacks its relay-net doc, drops that church's own box on the day of merge
+   — fail-closed, so it degrades to canonical rather than to nothing, but that is exactly the silent
+   re-routing C4's compatibility note forbids.
+6. **C6** — any time; server-side and independent.
+
+The APK lags all of this by its own build/install cycle (`sync-web.sh` + `assembleDebug`). The lag is safe in
+this direction — an old APK is an old *open* client, no worse than today — but the closing date the owner
+communicates is the date step 5 merges, because that is when the web console starts enforcing for everyone.
 
 **What the resolved reading changed about ordering (see §0).** The item skeleton is unchanged —
 C1 → C7 (harness) → C2 → C3 → C4 → C5, with C6 independent and highest-value-per-hour. But two things moved:
 the **key-ceremony that used to sit inside C3 is gone**, so C3 no longer blocks on an offline
 keygen/custody/rollout project and shrinks to roughly a day; and **hardening-plan P3** (the church publishing
-its signed `trinityone/relays` doc) is pulled onto the critical path as a **hard prerequisite of C3**, because
-that signature is now the sole thing that admits a self-hosted relay. Do P3 with, or just before, C3. Nothing
-new must come *first*; the change is that the riskiest pre-pilot dependency (key custody) was deleted, not
+its signed relay list — now the NEW `trinityone/relay-net` doc, §6-ter, not the sync doc) is pulled onto the
+critical path as a **hard prerequisite of C3**, because that signature is now the sole thing that admits a
+self-hosted relay. Do P3 with, or just before, C3 — it is step 4 of the merge schedule above. Nothing new
+must come *first*; the change is that the riskiest pre-pilot dependency (key custody) was deleted, not
 resequenced.
 
 ---
@@ -466,39 +685,51 @@ smaller and it is the item the fork's resolution simplified most.)*
 neither the church nor we can tell. Under the resolved reading the judgement is the **church's** — this item
 is what lets the church's own signature actually carry it.
 
-**The change.** No offline keypair, no baked root pubkeys, no credential files, nobody to approve or revoke:
+**The change.** No offline keypair, no baked root pubkeys, no credential files, nobody to approve or revoke.
+*(AMENDED 2026-09-01 — three findings land here: pubkey-only matching, the NEW doc, the same-origin root.)*
 1. Client `isNetworkRelay(cp, url)`: the C2 proof of possession succeeds for `url` **AND** either
-   - the proven `relayPub` appears **paired with this `url`** in *this church's* own signed
-     `d=trinityone/relays` doc (the church-signature root), **or**
-   - `url` is loopback on the console's own origin (the Suite first-run root).
-2. That is the whole gate. The `[{pubkey, url}]` the church already signs *is* the membership statement; C2
-   turns it from an unverifiable string into a checkable one.
-3. Nothing is issued to anyone. A church enrols its own relay by signing it into its list (hardening-plan P3),
-   which it already does. A third-party host is enrolled by the church it hosts signing that host's pubkey —
-   same mechanism.
+   - the proven `relayPub` appears in *this church's* own signed `d=trinityone/relay-net` doc (§6-ter — the
+     church-signature root). **Pubkey only — the doc's `url` field is never consulted for admission**
+     (finding 3: a tunnel's URL churns every restart; URL-to-key binding is C6, server-side), **or**
+   - `url` is the console's own serving origin (the same-origin root, §6-bis — loopback on the Suite's first
+     run is its special case).
+2. That is the whole gate. The `[{pubkey, alwaysOn, url?}]` the church signs *is* the membership statement;
+   C2 turns the pubkey from an unverifiable string into a checkable one.
+3. Nothing is issued to anyone. A church enrols its own relay automatically via the same-origin root
+   (§6-bis), or by signing its pubkey into `trinityone/relay-net` (hardening-plan P3, re-pointed). A
+   third-party host is enrolled by the church it hosts signing that host's pubkey — same mechanism.
+4. **Enrolment enumerates raw candidate sources, never the filtered `relays()` list** — the §6-bis deadlock
+   rule. `relayIdentities()`/`syncEnable`-shaped code must not be the enrolment census.
 
 **Consumers.** `CANONICAL_RELAYS` at `src/fellowship.src.js:592` and `src/steward.src.js:542` (still the
 build-time bootstrap set — the canonical box is admitted by C2 proof against a baked-in expected `relayPub`,
 not by a credential); `relays-always-canonical.test.mjs` guards part of the pair. `TRUSTED_RELAYS` /
 `RELAYS_D` ingest at `gateway.mjs:1620` — **this is where the pubkey/url pairing must stop being discarded**
-(see C6; the same paired doc feeds both the client gate here and the server gate there). `_relayInfo`
+(see C6 — AMENDED: the server gate stays on the `trinityone/relays` sync doc, the client gate reads the new
+`relay-net` doc; the pairing check is C6's, not shared). `_relayInfo`
 (`fellowship.src.js:965`, `steward.src.js:731`) — the self-reported `enforces` flag is **demoted from an
 adoption criterion to a candidate filter** and must not be left looking like the gate; the real gate is the
 church's signature.
 
 **One consequence to state plainly.** For the *canonical pool* there is no church signature — it is the shared
-default. So `CANONICAL_RELAYS` members are admitted by C2 proof against an **expected `relayPub` baked into the
-bundle beside the URL** (one value today: `6a4267…70f2`). That is not a credential we can revoke; it is a
-build-time literal, changed only by shipping a new bundle — which keeps the "no online revoker" property.
+default. So `CANONICAL_RELAYS` members are admitted by C2 proof against an **expected `relayPub` list baked
+into the bundle beside the URL** (a LIST, not one value — §5-bis: this project has rotated a relay key under
+incident, and a single pin makes rotation a fleet-wide outage; one entry today, `6a4267…70f2`). That is not a
+credential we can revoke; it is a build-time literal, changed only by shipping a new bundle — which keeps the
+"no online revoker" property, at the rotation cost §5-bis prices.
 
 **Point-of-use test.** Two real gateways: one whose `relayPub` a test church has signed into its
-`trinityone/relays` doc, one it has not. Drive a church publish and assert the un-signed gateway's store is
-**empty** — count events on the relay, not calls in the client. Sabotage scoped to `isNetworkRelay`.
+`trinityone/relay-net` doc, one it has not. Drive a church publish and assert the un-signed gateway's store
+is **empty** — count events on the relay, not calls in the client. A second case for finding 3: move the
+signed gateway to a NEW port (a tunnel restart in miniature) and assert it is still admitted at the new URL
+once it proves its key there. Sabotage scoped to `isNetworkRelay`. The same-origin root gets its own test
+(§8 — it is the most likely way to brick something real).
 
 **Backwards compatibility.** Old client + new relay: unchanged (extra endpoint ignored). New client + old
 relay: the old relay cannot answer the C2 nonce, so it is excluded — see sequencing. A self-hosting pilot
-church must have **published its `trinityone/relays` doc** (P3) before its own box will be admitted; that is
-the one operational precondition and it is cheap.
+church must have **published its `trinityone/relay-net` doc** (P3 re-pointed, §6-ter — including the one-time
+seed from any existing `trinityone/relays` doc) before its own box will be admitted; that is the one
+operational precondition, it is cheap, and it is merge-schedule step 4.
 
 **Size.** Half a day to a day — it is a client predicate plus the C2 dependency, not a key-management project.
 
@@ -519,7 +750,18 @@ history in §1 repeating with better intentions.
 - **Async, without breaking a synchronous API.** Persist a verified-set cache
   `trinityone.relays.verified = {url: {pub, until}}`. The synchronous filter consults the cache only. A URL
   that is not yet known goes to a pending list and is verified in the background, entering the live set only
-  on success. Never verify-or-drop on the hot path (§5).
+  on success. Never verify-or-drop on the hot path (§5). *(AMENDED: the cache is keyed by URL for lookup, but
+  what it certifies is the PUBKEY proven there — admission is pubkey-in-doc, §6-ter. A box that moves URL
+  re-proves at the new URL and is re-admitted; nothing about membership is URL-shaped.)*
+- **AMENDED 2026-09-01 — the filter runs AFTER the never-empty guards, on the assembled list** (§5-bis).
+  The candidate list keeps its guards and is never empty; the publish set is verified-only and MAY be empty,
+  in which case publishes queue. **The degraded-set honesty line ships in this item, not post-pilot:** when
+  the publish set is smaller than the candidate set — above all on a care request — say "queued", never
+  "sent" (`memory: fix-the-control-not-the-label`).
+- **AMENDED 2026-09-01 — enrolment reads raw sources.** The §6-bis deadlock rule: nothing that *admits* a
+  relay (same-origin adoption, the membership-doc writer, the §6-bis pairing step) may enumerate from the
+  filtered `relays()`/`loadRelays()` output or consult the `_boxHostsUs` cache. Write a test that a
+  never-yet-admitted box on the console's own origin still gets adopted — that is the deadlock, executable.
 
 **Consumers (rule 2).** Every entry in §3: M1–M16 and S1–S12. Specifically — member readers of
 `Fellowship.relays`: `app/identity-extras.jsx:520`, `app/screens-audio.jsx:173`, `app/screens-chat.jsx:322`,
@@ -534,7 +776,7 @@ misses the relay it is about. And `_dedupeRelays`/`_wedgeKey` (`fellowship.src.j
 a different reason — reuse, do not re-invent.
 
 **Point-of-use test (rule 1).** Two real gateways; only one has its `relayPub` signed into the test church's
-`trinityone/relays` doc (the church-signature root). Drive the **console's Add-relay control** — the thing a
+`trinityone/relay-net` doc (the church-signature root, §6-ter). Drive the **console's Add-relay control** — the thing a
 steward touches — at the un-signed one, then publish a church document, then count events on that relay. Must
 be zero. **This test fails if the feature is deleted from the screen, not only if the engine changes.**
 Sabotage: delete the filter inside `relays()` (scoped: slice the function,
@@ -574,6 +816,17 @@ publishing their DMs and their child's care request to somebody else's machine. 
   recover a church, not a routing table.
 - `cloneFromRelay` (`stew-dashboard.jsx:3187`) — gate the source host. It streams the whole corpus including
   safeguarding cleartext.
+
+**AMENDED 2026-09-01 — two clarifications.** (1) "Verify" everywhere above means the C3′ predicate:
+attempt the C2 proof at the hinted URL and admit iff the proven **pubkey** is in the church's
+`trinityone/relay-net` doc — the hint is a place to ask, never an authority, and a URL that moved (a tunnel
+restart) costs nothing because membership is not URL-shaped. (2) Once C4's chokepoints exist, most of these
+paths are *already* stopped at `setRelays`/`loadRelays`/`extraRelays()` — a restored backup, a QR add and a
+swapped name all pass through them. C5's independent value is at the ENTRY: refusing the input where the
+person is (a legible "this relay isn't in the TrinityOne network yet" at scan time beats a silent later
+drop), hardening the resolver, and `cloneFromRelay`, which never touches the relay pool at all. Treat C5 as
+defence-in-depth plus legibility, not as the only wall — and do not skip it on that argument, because
+`cloneFromRelay` and the resolver have no other wall.
 
 **Consumers.** `followChurch` callers: `app/app.jsx:844` (browser query), `app/screens-church.jsx:191` (QR),
 the native `safeQuery` path (`:571-577`), and `join.js:26` (the public forwarder). `restoreLocal` callers:
@@ -617,7 +870,11 @@ check in the `RELAYS_D` branch.
 
 **Backwards compatibility.** A church whose current list has a URL/pubkey mismatch stops syncing that peer.
 Measure the live `trinityone/relays` docs on a8 before shipping — if any are mismatched, that is a real church
-losing sync, and it needs a console message, not a silent stop.
+losing sync, and it needs a console message, not a silent stop. *(AMENDED: a tunnel-hosted peer produces this
+"mismatch" legitimately every time its URL churns — the doc's `url` goes stale until republished. Server-side
+that is the correct fail-closed outcome (do not hand a proof to an unverified host), but treat "pubkey proof
+failed at stale URL" as a routine retry-and-nudge, not an incident; and a peer flagged `alwaysOn:false` in
+the church's `relay-net` doc being unreachable is expected, §6-ter.)*
 
 **Size.** Half a day.
 
@@ -665,7 +922,8 @@ machine, which is why none of it is pre-pilot.
 
 *(Re-scoped: the "self-host enrolment UX" and "revocation distribution" items are **removed** — under the
 resolved reading there is no credential to issue, approve, or revoke. A self-hoster joins by signing its own
-relay into its `trinityone/relays` doc, which the console already does; there is nothing for us to hand out.)*
+relay into its `trinityone/relay-net` doc (§6-ter) — automatically, via the same-origin root, in the common
+case; there is nothing for us to hand out.)*
 
 - **Self-host onboarding polish (not enrolment).** The relay control panel already lets a church claim a
   directory name and go public; the only post-pilot nicety is making "and it's now in your church's signed
@@ -674,8 +932,15 @@ relay into its `trinityone/relays` doc, which the console already does; there is
 - **Directory-side membership filter.** Relays refusing to *store* non-member claims. Client-side filtering
   (C5) delivers the same safety without coordination and works against relays that have not upgraded — do the
   client half first, and only consider the server half once every relay is upgraded.
-- **Degraded-set honesty.** When a client is publishing to fewer relays than it expects, say so where the
-  person is — especially on a care request (§5).
+- **Degraded-set honesty — MOVED PRE-PILOT (AMENDED 2026-09-01).** The core of it (queued-not-sent when the
+  verified publish set is empty or shrunken, above all on a care request) is now part of C4's deliverable,
+  because §5-bis makes that state reachable by design. What stays post-pilot is only the richer surface — a
+  per-relay health view, history of drops.
+- **The §6-bis pairing step** for hosted-console churches adopting a remote self-hosted box — post-pilot
+  *unless* §11 question 3 finds a pilot church already on that path.
+- **The `alwaysOn` consumers beyond copy** (§6-ter) — connect-ordering preference and the two-number
+  redundancy display. The doc *field* ships with C3′ (retrofitting a field later is a migration; shipping an
+  unread field is free — *add, never repurpose* works in our favour here).
 - **`src/mydata.src.js:103`** — the `ws://127.0.0.1:7447` cleartext fallback. Harmless today; wrong under the
   new rule.
 - **Tighten what a relay ACCEPTS, for the "nothing else" half of the DOMAIN rule.** This is where the owner's
@@ -708,9 +973,11 @@ TrinityOne key that admits or revokes. The strict reading is dead: it would have
 contradicted `ROADMAP §4` ("open relays support churches that cannot self-host").
 
 **A church that already runs its own relay: does it have to do anything?** **No, provided its console has
-published its `trinityone/relays` doc** — hardening-plan P3. That publish *is* the church's vouching, and
+published its `trinityone/relay-net` doc** — hardening-plan P3, re-pointed at the new doc (§6-ter), with the
+one-time seed covering churches that only have the old sync doc. That publish *is* the church's vouching, and
 under the resolved reading it is the **sole** membership statement, so P3 stops being hygiene and becomes
-load-bearing. Treat it as non-optional.
+load-bearing. Treat it as non-optional — and note (AMENDED, finding 1) that for a Suite church even this is
+automatic: the same-origin root does the signing, and the steward does nothing at all.
 
 **A relay that hosts churches that are not its operator's** — which is what `quitedoverelay` and
 `steady-harbor-18` advertise themselves as right now — joins the same way: **the hosted church signs that
@@ -720,8 +987,12 @@ churches and no installed base the blast radius is near zero. **That is the stro
 now rather than after the pilot.**
 
 **The edge that will actually break something:** the desktop Suite boots a relay on loopback and the console
-talks to it before any church document exists. A naive gate bricks it on first run. The loopback root (§6)
-exists for this, and it needs its own test rather than a comment.
+talks to it before any church document exists. A naive gate bricks it on first run. The same-origin root
+(§6-bis; loopback is its special case) exists for this, and it needs its own test rather than a comment — and
+under §6-quater this is no longer an edge but the COMMON first run, which raises the stakes of that test.
+**The edge the amendment adds:** a hosted-console church whose box lives behind a churning tunnel URL. Its
+membership must survive every restart (pubkey-only matching, §6-ter) even though its advisory `url` goes
+stale — the C3′ moved-port test is the executable form of this.
 
 **The edge the resolved reading REMOVES (was "the edge nobody has priced").** The earlier draft flagged that
 *issuing credentials* would make us the party who decides who may run a relay — and under `memory:
@@ -739,8 +1010,9 @@ removes. This is the single biggest reason the re-scoped plan is *safer* than th
   every session. The credential must travel with the relay and verify offline.
 - **No credential to revoke, and so no revocation machinery at all.** The earlier draft reached for short
   expiry plus a gossiped revocation list; the resolved reading removes the credential those would revoke. A
-  church stops trusting a relay by dropping it from its own signed `trinityone/relays` list (the R2 burn path
-  already exists) — that is the only revocation, and it is the church's, not ours. Do not reintroduce an
+  church stops trusting a relay by dropping its pubkey from its own signed `trinityone/relay-net` doc
+  (§6-ter; the R2 burn path already exists for the sync list and is the pattern) — that is the only
+  revocation, and it is the church's, not ours. Do not reintroduce an
   OCSP-shaped online check; it is the registry trap wearing a different hat and fails exactly when the network
   is under pressure.
 - **No "advanced mode" to add an arbitrary relay.** The owner's second requirement kills it: an escape hatch
@@ -755,6 +1027,13 @@ removes. This is the single biggest reason the re-scoped plan is *safer* than th
 - **Do not make the name directory members-only before the clients filter.** It looks like the tidy fix and it
   requires every relay to upgrade in lockstep; the client-side filter is strictly safer and needs no
   coordination.
+- **No URL-based membership matching, client-side.** (AMENDED.) A membership check that compares URL strings
+  breaks every tunnel-hosted church at every restart and invites "just pin the hostname" hacks. Membership is
+  a proven pubkey in a church-signed doc; URLs are hints. The one place URL-to-key binding is right is C6,
+  server-side, at the moment a signed proof is about to be handed to a host.
+- **No automatic adopt-on-sight from the hosted console.** (AMENDED, §6-bis option 2.) A remote box proving
+  it holds *a* key proves nothing about whose box it is; an automatic adopt from a typed or linked URL is the
+  §9 escape hatch wearing an automation costume.
 - Everything already on `PLAN-RELAY-HARDENING`'s not-to-build list still stands.
 
 ---
@@ -767,7 +1046,7 @@ That plan was written at `ba913fc` under the open model. Item by item:
 |---|---|
 | **P1** — multi-relay join artefacts | **Survives, but must be re-ordered.** Its premise ("several relay hints on paper") is sound; but every hint must now be a network member and must be *verified* before adoption, so P1 depends on C2–C5. It was filed as "do it first"; it can no longer be first. Printing hints for relays that will later be excluded is worse than printing one. |
 | **P2** — restore-path name resolution without the canonical host | **Survives, small addition.** Resolving names at more mirrors is still right; the *resolved URL* must pass C5's verification before adoption. |
-| **P3** — publish kind-10002 on every relay-set change | **Survives and becomes load-bearing.** Under the resolved reading the church's signed list is the **sole** membership root (no network credential behind it), so P3 is what admits every self-hosted and third-party-hosted relay. It stops being hygiene and becomes a hard prerequisite of C3. Raise its priority to match C3's. |
+| **P3** — publish kind-10002 on every relay-set change | **Survives and becomes load-bearing — and (AMENDED) is re-pointed.** Under the resolved reading the church's signed list is the **sole** membership root (no network credential behind it), so P3 is what admits every self-hosted and third-party-hosted relay. But the membership statement is the NEW `trinityone/relay-net` doc (§6-ter), not kind-10002 and not the `trinityone/relays` sync doc — kind-10002 stays the member-facing URL *hint*. P3 = "publish `relay-net` (and refresh the 10002 hint) on every relay-set change". Hard prerequisite of C3; merge-schedule step 4. |
 | **P4** — find/rebuild the R2/R3 tests, pin the app's point of use | **Survives, but its target moves.** Several of the R1–R6 tests it hunts for assert over `trinityone.enforces` as the adoption criterion; C3 supersedes that flag. Merge P4's point-of-use sabotage work into C4 and C7 rather than running it separately against a gate that is about to change. |
 | **P5** — two real gateways, provable convergence | **Survives and is promoted.** Becomes C7, a dependency of five items rather than a standalone. Add a deliberately-non-member third participant. |
 | **Q1** — withholding / read-back | **Unaffected.** Still post-pilot, still the right shape. |
@@ -786,42 +1065,67 @@ the offers list it serves does **not** include itself under a handle, so it has 
 
 ## 11. What the owner still has to decide
 
-*(Re-scoped. Question 1 of the earlier draft — the reading of "non-TrinityOne relay" — is **ANSWERED** and in
-`DOMAIN.md`, so C3 is unblocked and the network-root-keys question that depended on it is **gone**: there are
-no root keys. What remains:)*
+*(Re-scoped twice. The reading of "non-TrinityOne relay" is **ANSWERED** and in `DOMAIN.md` — no root keys.
+The amendment pass resolved adversarial findings 1–4 without new owner input, but it added three questions
+and sharpened one. In the order they block:)*
 
-1. **The second canonical box** (C8) — **the one that now blocks the most.** The network is measurably one box
-   (`app.trinityone.church` and `master-01` share `relayPub 6a4267…70f2`). The moment extras are banned, the
-   whole closed network is one machine in one building — the entire congregation set in one seizure. This is
-   an ownership/ops decision, not code, and it should be taken in the *same conversation* as the go-ahead to
-   close the network. *Blocks: the safety story for C3/C4 — closing to one box is still net-safer than open-to-
-   one-box, but the owner should know they are choosing a single point of seizure until a second box exists.*
-2. **Are `quitedoverelay` and `steady-harbor-18` ours?** Re-checked live at re-scope time: **both are still in
-   the production directory advertising open hosting** (two anonymous Cloudflare tunnels, 1 and 3 churches),
-   and Auto-find still ranks them above a8 (§2(d)). If they are test boxes, withdraw them from the directory
-   now, before the pilot, regardless of the rest of this plan. If they are not ours, three real churches are
-   trusting an anonymous tunnel today. *Blocks: nothing in the plan, but it is a live exposure that wants an
-   answer independent of the build work.*
-3. **Does anything in the pilot rely on `cloneFromRelay` from an arbitrary host?** It exfiltrates the whole
-   corpus, safeguarding cleartext included, to a typed host. I could not tell from the code whether it is a
-   real operational route or a development convenience. *Blocks: C5's treatment of `cloneFromRelay` — gate it
-   outright, or gate it to member hosts, depending on the answer.*
+1. **Scope for the pilot: the leak-closing core, or the whole plan?** The opening section's judgement: C1 +
+   C7 + C2 + C3′ + C4 close the original leak in four to five days, C5 adds one to two and is worth it;
+   C6/C8, the §6-bis pairing step, the Suite site work and the `alwaysOn` consumers are architecture that
+   can follow the pilot. Recommended: ship the core (through merge-schedule step 5) pre-pilot, schedule the
+   rest. *Blocks: everything — this is the go decision.*
+2. **The second canonical box** (C8) — unchanged, and still the ops decision that matters most. The network
+   is measurably one box (`app.trinityone.church` and `master-01` share `relayPub 6a4267…70f2`); the moment
+   extras are banned, the whole closed network is one machine in one building. Closing to one box is still
+   net-safer than open-to-one-box, but the owner should knowingly choose the single point of seizure until a
+   second box exists. Take it in the same conversation as question 1.
+3. **Are `quitedoverelay` and `steady-harbor-18` ours?** Both are still in the production directory
+   advertising open hosting (two anonymous Cloudflare tunnels, 1 and 3 churches), and Auto-find still ranks
+   them above a8 (§2(d)). If they are test boxes, withdraw them now, before the pilot, regardless of the
+   rest. If they are not, three real churches are trusting an anonymous tunnel today — **and (AMENDED) any
+   real church hosted on them is on the hosted-console-plus-remote-box path, which is exactly §6-bis's gap:
+   the answer decides whether the pairing step is pre-pilot after all.**
+4. **Does anything in the pilot rely on `cloneFromRelay` from an arbitrary host?** Unchanged: it exfiltrates
+   the whole corpus, safeguarding cleartext included, to a typed host, and I could not tell whether it is an
+   operational route or a development convenience. *Blocks: C5's treatment of it — gate outright, or gate to
+   member hosts.*
+5. **Approve the §6-bis shape for the exception path?** One deliberate paste of a box-minted pairing code for
+   bare-relay and hosted-then-self-hosted churches, versus accepting Suite-only and leaving that migration
+   without a route. Half a day either way; the plan's default is build-it-post-pilot unless question 3 moves
+   it up. *Blocks: nothing pre-pilot unless question 3 does.*
+6. **Accept the canonical key-rotation cost** (§5-bis): pins ship as a list; a planned rotation overlaps two
+   releases; an unplanned rotation pauses un-updated APKs (they queue, fail-closed) until they update. This
+   needs a yes to the *cost*, not a design. *Blocks: nothing, but it belongs in the incident runbook before
+   the gate ships.*
 
 ---
 
 ## 12. Rule-7 assumptions — stated so they can be corrected
 
-1. *A self-hosting pilot church will have published its `trinityone/relays` doc (P3) before its box needs to
-   be admitted.* INFERRED from pilot scope + the console already publishing that doc. Under the resolved
-   reading the church's signature is the **sole** membership root, so if a church self-hosts *without* P3
-   having run, its own relay is excluded on day one — which is why P3 is a hard prerequisite of C3, not a
-   nicety (§8, sequencing note). (The earlier draft's version of this assumption — "enrolment can be a script
+1. *A self-hosting pilot church will have published its `trinityone/relay-net` doc (P3 re-pointed, §6-ter)
+   before its box needs to be admitted.* Under the resolved reading the church's signature is the **sole**
+   membership root, so if a church self-hosts *without* P3 having run, its own relay is excluded on day one —
+   which is why P3 is a hard prerequisite of C3 and merge-schedule step 4. (AMENDED: for a Suite church the
+   same-origin root writes this doc automatically, so the assumption softens to "the church opened its
+   console once after step 4 merged".) (The earlier draft's version of this assumption — "enrolment can be a script
    we run" — is void: there is no enrolment script, because there is nothing to issue.)
 2. *A printed join artefact outlives the URLs on it.* Inherited from `PLAN-RELAY-HARDENING` P1; it is why C5's
    failure message matters more than C5's gate.
 3. *A church will never knowingly want its data on a public Nostr relay.* ESTABLISHED by `451e7c6`.
 4. *A steward will not notice a relay silently leaving their list.* INFERRED — it is why C4's
    backwards-compatibility note asks for a visible line rather than a silent drop.
+5. *A relay serves its own console — one process, one port.* VERIFIED (an earlier pass ran it) — the basis of
+   the same-origin root (§6-bis). If a deployment shape exists where a church's console is served from a
+   different origin than its relay (a reverse-proxy split, a CDN in front), the same-origin signal never
+   fires there and that shape becomes a pairing-step case; none is known.
+6. *Whoever administers a self-hosted box can reach its token-gated relay control panel.* INFERRED — the
+   basis of the §6-bis pairing code.
+7. *No pilot church currently runs the hosted console against a remote self-hosted box.* OPEN — §11
+   question 3 is how we find out; if wrong, the §6-bis pairing step moves pre-pilot.
+8. *A part-time relay box is acceptable to the owner as a durability copy that clients deprioritise for
+   reach.* ESTABLISHED in intent (*"Some church machines wont be on 24/7, so that should be an option
+   still"*) — but the two-number redundancy display (§6-ter) is my reading of what "an option" implies, and
+   the owner has not seen that copy.
 
 If the owner corrects any of these, write the correction into `reference/DOMAIN.md` in the same sitting
 (CLAUDE.md rule 7).
@@ -873,4 +1177,14 @@ this pass; the verdict rests on re-reading `verifyClaimEvent`/`applyClaimRecord`
 GETs this pass: `/relay-names/offers` (still two anonymous tunnels), a8 and master-01 `/status` (same
 `relayPub 6a4267…70f2`), a8 NIP-11 (`open:true, churches:12, enforces:true`).
 
-**Could not settle without the owner:** the five questions in §11.
+**Amendment pass (2026-09-01, tip `43ae82d`).** Read-only on code; the only file changed is this one.
+Re-verified for the amendments, at the tip, by opening the lines: the `d=trinityone/relays` semantics —
+`syncEnable` writes it and refuses below two boxes (`steward.src.js:2608-2618`, throw at `:2617`),
+`syncDisable` publishes `[]` (`:2645-2647`) — finding 4; the deadlock chain — `_boxHostsUs === false` makes
+`ownRelay()` return the canonical URL (`:560`), `relayIdentities()` enumerates `relays()` (`:2597`) and
+feeds `syncEnable` (`:2610`) — finding 1; the hosted-console CTAs on the marketing site
+(`welcome.html:622,652,654,694` direct, plus nav/hero anchors funnelling to them). The adversarial pass's
+findings 2 and 3 were taken as established per the brief, not re-derived. `npm test` was NOT re-run (this
+pass changes one documentation file); the `451e7c6` baseline stands and an executor re-measures regardless.
+
+**Could not settle without the owner:** the six questions in §11.
