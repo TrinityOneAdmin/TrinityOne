@@ -571,12 +571,44 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [teamName, setTeamName] = React.useState('');
   // Same rule as the Groups page: absent means ON, only an explicit false is a steward's decision to opt out.
   const encByDefaultWiz = !church.features || church.features.encryptComms !== false;
+  // THE WHOLE-CHURCH ROOM IS A CONVERSATION; ANNOUNCEMENTS ARE THEIR OWN ROOM.
+  //
+  // "Whole Church" used to ship as kind:'broadcast', so the one room every new church got was the one room
+  // nobody in the congregation could speak in. Owner, 2026-09-01: the whole-church room should be a chat
+  // everyone can post in, with broadcast a distinctly separate thing.
+  //
+  // WHY A BROADCAST ROOM IS ADDED RATHER THAN DROPPED. `kind` is not only a posting restriction — it is the
+  // only thing that marks a room as the church's own voice, and five separate features look for a broadcast
+  // room BY KIND and find nothing when a church has none:
+  //   · scripts/gateway.mjs   note()      c.kind === 'broadcast' -> BROADCAST.add(id); this is the ONLY writer
+  //   · scripts/gateway.mjs   push        a kind-1 post is pushed to the congregation only if BROADCAST.has(gid),
+  //                                       so a church with no broadcast room can notify its members of NOTHING
+  //   · scripts/gateway.mjs   write gate  a broadcast is the church's own voice (church/network/steward only)
+  //   · app/stew-finance.jsx, app/stew-meals.jsx, app/stew-dashboard.jsx (Today)
+  //                                       groups.find(g => g.kind === 'broadcast') — share a statement, announce
+  //                                       a meal train, post a notice: all of them silently target `undefined`
+  //   · app/app.jsx           the member app's announcement feed is the broadcast groups' messages
+  // Flipping `whole` to a group with nothing replacing it would therefore have taken a brand-new church's
+  // ability to announce anything away, with no error anywhere. So the default set still contains EXACTLY ONE
+  // broadcast room; it is simply no longer the room the congregation talks in.
+  //
+  // This is a DEFAULTS change only. BROADCAST is derived per-group from each group document, not from any
+  // fixed id, and nothing here rewrites a room that already exists — a church set up before today keeps the
+  // rooms it has, exactly as they are, including a "Whole Church" that is still a broadcast.
+  //
+  // EVERY BLURB IS DISTINCT, ON PURPOSE. scripts/wizard-no-imposed-groups.test.mjs exists because two seeders
+  // once drew the same strings and members met two rooms with identical descriptions and no way to tell them
+  // apart. Adding a fourth room is exactly the moment that happens again, so no two of these share a `sub`,
+  // and none of them says "Announcements" except the room that IS the announcements. These strings are
+  // not console-only: `sub` is published on the group document and is what a MEMBER reads under the room
+  // name in their chat list, so none of them may be written from the steward's side of the room.
   const STARTERS = [
-    { id: 'whole', name: 'Whole Church', kind: 'broadcast', sub: 'Announcements for everyone' },
+    { id: 'whole', name: 'Whole Church', kind: 'group', sub: 'One room for everyone, and everyone can post' },
+    { id: 'notices', name: 'Notices', kind: 'broadcast', sub: 'Dates, news and what’s on' },
     { id: 'prayer', name: 'Prayer', kind: 'group', sub: 'Share & lift requests' },
     { id: 'life', name: 'Life Group', kind: 'group', sub: 'A midweek small group' },
   ];
-  const [picks, setPicks] = React.useState(() => new Set(['whole', 'prayer']));
+  const [picks, setPicks] = React.useState(() => new Set(['whole', 'notices', 'prayer']));
   const toggle = (id) => setPicks(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   // step 1 — key backup + optional relay registration
   const [saved, setSaved] = React.useState(false);
