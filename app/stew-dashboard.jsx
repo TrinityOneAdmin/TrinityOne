@@ -6809,7 +6809,12 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 11 }}>
             <Icon name={hasPin ? 'lock' : 'key'} size={18} color={hasPin ? 'var(--sage)' : 'var(--clay-ink)'} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>Console lock</div>
+              {/* A HEADING, not a bold div. 2f84cf1 folded this card into Church key and gave Giving's
+                  folded row an h3 for exactly this reason — heading navigation is how most screen-reader
+                  users move around a page — but left this one a plain div. It is the control that decides
+                  whether the church key sits encrypted on this computer, so it is the last one that should
+                  be unreachable that way. Found in a browser pass over the real console, 2026-09-01. */}
+              <h3 style={{ fontWeight: 700, fontSize: 14, margin: 0, fontFamily: 'inherit' }}>Console lock</h3>
               <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{hasPin
                 ? 'Locked with a PIN — the church key is encrypted on this device and auto-locks after 10 minutes idle.'
                 : 'Not locked. Anyone who opens this browser can post as the church. A PIN encrypts the key on this device; a longer PIN or passphrase is safer.'}</div>

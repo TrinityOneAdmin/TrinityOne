@@ -115,6 +115,19 @@ test('Panel renders its title as a heading element, not a styled div', () => {
     'the heading has no margin:0, so the browser’s default heading margins now push the card layout around');
 });
 
+// THE FOLDED CONTROLS NEED HEADINGS TOO. 2f84cf1 folded two cards into others and gave Giving's folded row
+// an h3 — then left "Console lock" a bold div, so the Security tab reads H1 Settings, H2 Church key,
+// H2 Stewards & handoff and nothing for the control that decides whether the church key is encrypted on this
+// computer. Verified in a browser against the running console, 2026-09-01: consoleLockIsAHeading = false.
+test('a control folded INTO a card still reaches the page as a heading', () => {
+  const { mod, draw } = fresh();
+  const tree = draw(mod.DashSettings, { initialSection: 'security' });
+  const named = headings(tree).map(h => texts(h).join('').trim());
+  assert.ok(named.includes('Console lock'),
+    'Console lock is on the page but not as a heading, so screen-reader heading navigation skips straight ' +
+    'past it. Headings found: ' + JSON.stringify(named));
+});
+
 // Each settings card, and the titles it must put on the page AS HEADINGS. DashGivingPanel expects none: it
 // is no longer a card. It is a row inside "Congregation features → Extras", so the heading above it is that
 // card's h2 and the group's own h3 — both asserted where they are rendered. Everything else in this file
