@@ -176,6 +176,19 @@ import { fnBody } from './test-slice.mjs';
 const CHAT_SRC = readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8');
 const CHURCH = 'n'.repeat(64);
 
+// The room list draws on two module-level helpers in the same file — the room-kind label and the room icon,
+// which are what tell a broadcast room apart from a conversation. The proxy below refuses an unstubbed
+// global by design, and hand-writing imitations of them here would be the trap where a stub supplies the
+// answer: they are LIFTED out of app/screens-chat.jsx and run, not faked. Neither touches the safeguarding
+// filter this file exists to guard; they only have to be the real thing.
+const ROOM_HELPERS = (() => {
+  const at = CHAT_SRC.indexOf('const ROOM_KIND_LABEL');
+  assert.notEqual(at, -1, 'the room-list helpers moved out of app/screens-chat.jsx — re-anchor this test');
+  const end = CHAT_SRC.indexOf('function ChatScreen({ ctx })', at);
+  assert.ok(end > at, 'could not find ChatScreen below the helpers — re-anchor this test');
+  return new Function(CHAT_SRC.slice(at, end) + '\nreturn { ROOM_KIND_LABEL, roomKindLabel, roomIcon };')();
+})();
+
 function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } = {}) {
   const src = transformSync(fnBody(CHAT_SRC, 'function ChatScreen({ ctx })', 'ChatScreen'),
     { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
@@ -210,6 +223,7 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } 
   const stub = (name) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: name }); return f; };
   const asked = [];
   const scope = {
+    ...ROOM_HELPERS,
     h, Frag: 'Frag',
     React: { useState: useState_, useEffect: useEffect_, useRef: useRef_, useMemo: useMemo_, useCallback: useCallback_, Fragment: 'Fragment' },
     useC: useState_, useCE: useEffect_, useCR: useRef_,

@@ -278,6 +278,28 @@ function miniBtn() {
     color: 'var(--ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' };
 }
 
+// ── telling a broadcast room apart, in words a churchwarden would say ──
+//
+// A broadcast room's ONLY signal in the room list was a pill reading "Broadcast". That names the mechanism
+// rather than the thing, and it does not tell anybody the one fact they need before they tap: there will be
+// no message box in there. So a member opened the room every church has, found nowhere to type, and the
+// screen offered no account of itself. This says who speaks in the room instead — in the list, and again
+// inside the room where the composer would be.
+//
+// It is deliberately not a warning. A broadcast room is the church speaking to everyone, which is a normal
+// and useful thing for a church to have; it is not a restriction placed on the member, and it must not read
+// as one. NOTHING HERE CHANGES WHO MAY POST — that is the relay's decision (BROADCAST in scripts/gateway.mjs)
+// and it is correct. This is only about saying, plainly, what the room already is.
+//
+// `kind` itself is left exactly as it was, because three other things read it: the search filter matches on
+// it (so a member who types "broadcast" still finds the room), ChatRoom's isBroadcast reads it, and the
+// share sheet's `postable` filter excludes it case-insensitively. A separate label and a separate boolean
+// are added alongside rather than replacing it.
+const ROOM_KIND_LABEL = { Broadcast: 'From your church', Team: 'Team', Group: 'Group' };
+const roomKindLabel = (g) => (g && ROOM_KIND_LABEL[g.kind]) || (g && g.kind) || 'Group';
+// the icon the steward console has always used for a broadcast room, so the two surfaces agree
+const roomIcon = (g) => (g && g.broadcast) ? 'send' : (g && g.team) ? 'shield' : (g && g.prayer) ? 'pray' : 'chat';
+
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
   const D = window.TrinityData;
@@ -356,7 +378,7 @@ function ChatScreen({ ctx }) {
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
-        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
           // CARRY THE PERMISSION FIELDS. This map builds a NEW object from an explicit list, so anything
           // not named here is dropped — and `members` below is deliberately turned into a COUNT. The
           // event-permission check needs the church's chosen tier, the group's named leaders and, for an
@@ -436,7 +458,7 @@ function ChatScreen({ ctx }) {
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <div style={{ width: 50, height: 50, borderRadius: 16, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`,
           display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent) }}>
-          <Icon name={g.team ? 'shield' : g.prayer ? 'pray' : 'chat'} size={25} stroke={1.8} />
+          <Icon name={roomIcon(g)} size={25} stroke={1.8} />
         </div>
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -449,8 +471,13 @@ function ChatScreen({ ctx }) {
           {(live ? unread[g.id] : g.unread) ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{live ? unread[g.id] : g.unread}</span> : null}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
-          {g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : (g.sub ? ` · ${g.sub}` : (g.openToChurch ? ' · open to your church' : ''))}
+          {/* A BROADCAST ROOM IS TINTED AND NAMED, not labelled with the word "Broadcast". The tint is the
+              same gold the steward console gives a broadcast room, so the two surfaces agree about which
+              rooms these are, and the pill says who speaks rather than what the mechanism is called. */}
+          <span style={{ background: g.broadcast ? 'color-mix(in oklab, var(--gold) 16%, var(--surface))' : 'var(--surface-2)', border: '1px solid ' + (g.broadcast ? 'color-mix(in oklab, var(--gold) 34%, var(--line))' : 'var(--line)'), color: g.broadcast ? '#8a6717' : 'inherit', padding: '1px 7px', borderRadius: 999, fontWeight: 600, flexShrink: 0 }}>{roomKindLabel(g)}</span>
+          {/* the tail can be long and this row has no ellipsis of its own — without minWidth:0 a wordy
+              blurb pushes the pill off the card instead of truncating */}
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : (g.sub ? ` · ${g.sub}` : (g.openToChurch ? ' · open to your church' : ''))}</span>
         </div>
       </div>
     </div>
@@ -619,10 +646,10 @@ function ChatScreen({ ctx }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: groupHits.length ? 22 : 0 }}>
           {groupHits.map(g => (
             <div key={g.id} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} onClick={() => openGroup(g)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
-              <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
+              <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={roomIcon(g)} size={22} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{hi(g.name)}</div>
-                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind}{g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : ''}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{roomKindLabel(g)}{g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : ''}</div>
               </div>
               <Icon name="chevR" size={17} color="var(--ink-3)" />
             </div>
@@ -1195,7 +1222,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
   const isLeader = !!group && (ctx.myLeaderGroups || []).some(g => g.id === group.id);
   const churchNpub = ctx.church && ctx.church.npub;
-  const isBroadcast = !!group && group.kind === 'Broadcast';   // one-to-many: members read, only church/leaders post
+  // `broadcast` is carried through the room-list map; `kind` is the fallback for a room reached by any
+  // other route (a shared link, sample data, an older cached list) so this can never quietly become false
+  // for a room the relay will still refuse a post to.
+  const isBroadcast = !!group && (group.broadcast === true || group.kind === 'Broadcast');   // one-to-many: members read, only church/leaders post
   const id = useIdentity();
   const scRef = useCR();
   // { gid, ids } — the message ids already shown, kept ACROSS a reconnect so the relay's replay is deduped
@@ -1497,7 +1527,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           {!docked ? <button aria-label="Back" onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button> : null}
           <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent), flexShrink: 0 }}>
-            <Icon name={group.prayer ? 'pray' : 'chat'} size={22} /></div>
+            <Icon name={isBroadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1507,6 +1537,19 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         </div>
       </div>
       {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
+
+      {/* WHO SPEAKS IN THIS ROOM, SAID ONCE, AT THE TOP. Hiding the composer is not an explanation: a
+          member tapped in, found nowhere to type and was left to guess whether the room was broken, whether
+          they had done something wrong, or whether they were being kept out. This says what the room IS.
+          It is shown to LEADERS too — someone who posts here posts as the whole church, which is worth
+          knowing before you type — and it is stated calmly and once, not as a warning and not repeated.
+          role="note" so a screen reader reaches it in document order without it announcing itself. */}
+      {isBroadcast ? (
+        <div role="note" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', borderBottom: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
+          <Icon name="send" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
+          Only your church posts in here — everyone at your church reads it.
+        </div>
+      ) : null}
 
       {/* THE ONLY SIGN THE APP HEARD THE TAP. It sits directly under the header, above the pinned banner and
           the thread, because that is where the leader is looking after the menu closes over the message they
@@ -1608,7 +1651,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           </div>
         ) : (isBroadcast && !isLeader) ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
-            <Icon name="send" size={16} color="var(--ink-3)" /> Announcements only — your church posts here.
+            <Icon name="send" size={16} color="var(--ink-3)" /> Your church posts here — you’ll see everything it sends.
           </div>
         ) : (<React.Fragment>
         {flag ? (() => { const ac = flagCss(flag.accent); return (
