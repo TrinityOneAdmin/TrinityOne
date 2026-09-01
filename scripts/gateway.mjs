@@ -1191,6 +1191,20 @@ const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
 // care-thread gate all are. Recorded here so accept()/canRead() can enforce it like the rest.
 const GROUP_CHILDSAFE = new Set();   // groupIds a church explicitly marked child-safe
 
+// WHO WAS A CANCELLED EVENT FOR? Cancelling an event is the only shape this product has ever had for "it is
+// not happening": removeEvent() publishes a TOMBSTONE at the same d-tag — empty content, ['deleted','1'] —
+// and nothing else. That tombstone carries no group tag, no title and no date, and store.put() has already
+// destroyed the version it replaces by the time any push code runs. So the audience for a cancellation can
+// only come from what was recorded when the EVENT itself arrived. note() fills this on live ingest and on
+// hydration alike, so it holds every event still standing after a restart.
+//
+// ABSENCE MEANS "WE DO NOT KNOW", AND THAT IS READ AS DO-NOT-NOTIFY — never as "the whole church". A relay
+// that only ever saw the tombstone cannot tell a church-wide event from one in a room the church has not
+// marked child-safe, and guessing the first would push the second to children. It is also what makes the
+// notification fire once: after the tombstone this entry is gone, so a second tombstone — a retry, a
+// republish, the whole corpus replaying on the next restart — has nothing to notify about.
+const EVENT_AUDIENCE = new Map();   // eventId -> { cp, gid, by } recorded when the event doc was stored
+
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
 const SUBS_FILE = join(DATA_DIR,'subscribers.json');
 let subscribers = []; try { const d = JSON.parse(readFileSync(SUBS_FILE, 'utf8')); if (Array.isArray(d)) subscribers = d; } catch {}
@@ -1336,6 +1350,64 @@ function maybePushSermon(evt) {
     }
   } catch {}
 }
+// A CHURCH CANCELS SOMETHING — TELL THE PEOPLE IT WAS FOR, AND TELL THEM ALMOST NOTHING ELSE.
+//
+// There is one representation of "this is not happening" in this product and it is the TOMBSTONE that
+// removeEvent() publishes over trinityone/event:<id>. There is no status field; the event simply stops
+// existing, on the console and on every phone. So a cancellation is: a tombstone, over an event this relay
+// had actually recorded (EVENT_AUDIENCE), from someone who could have written that event.
+//
+// WHAT THE LOCK SCREEN IS ALLOWED TO SAY. "Sunday service cancelled — St Aidan's, Barnwell Green" tells
+// anyone who picks up that phone which church its owner attends, on a screen that needs no unlock. Under
+// this project's threat model — seizure, lawful compulsion, a congregation under pressure — that is a
+// disclosure WE made. The same reasoning closed the adults-only room-name leak in maybePushMessage above,
+// and the serving push has always got it right: "Can you serve? / Serving - Welcome team - Sunday" names
+// the role and never the church. So this names nothing at all: not the church, not the event, not the room.
+// It could not name the event even if that were safe — publishEvent SEALS the title, date and place under
+// the church name key, which this relay does not hold. Enough to make someone open the app; not enough to
+// identify them to a bystander who is holding it.
+//
+// WHO GETS IT, decided rather than inherited. Not "everyone who RSVP'd": RSVP is opt-in and sparse, and a
+// church cancelling Sunday service in the snow needs to reach the people who were simply going to turn up,
+// who are most of them and who have told the relay nothing. Not "the whole congregation" either, for a
+// group event: a youth-group workday being called off is not the whole church's business. So it is the
+// audience the relay would actually SERVE that event to — the group's people when it belongs to a group
+// (invite allowlist / team roster / the owning church's members), the church's members when it does not.
+// A cancellation is rare by nature, which is why the frequency argument for narrowing further does not bite.
+//
+// SAFEGUARDING. Same rule, same maps, same fallback as maybePushMessage and as the read gate: a young person
+// is not pushed about a room their church has not marked child-safe. Written to look identical on purpose.
+const CANCEL_PUSHED = new Set();
+function maybePushCancel(evt, was) {
+  try {
+    if (evt.kind !== 30078 || !was || !was.cp) return;             // no record of the event -> nothing we can safely address
+    const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (!d.startsWith(EVENT_D)) return;
+    if (!((evt.tags || []).some(t => t[0] === 'deleted') || !evt.content)) return;   // an EDIT, not a cancellation
+    const id = d.slice(EVENT_D.length); if (!id) return;
+    const cp = was.cp, gid = was.gid || '';
+    if (!CHURCH_PUBS.has(cp)) return;
+    // A REFUSAL RULE ON TOP OF accept(). kind-30078 is per-author, so a stranger's tombstone never replaces
+    // the church's event in the store — but it would still arrive here with the church's own EVENT_AUDIENCE
+    // entry beside it, and "anyone may make the congregation's phones buzz" is not a feature. The author of
+    // the original may retract it; otherwise it takes the church, its network, or a steward it trusts with
+    // content, which is who the console publishes as.
+    if (!(evt.pubkey === was.by || evt.pubkey === cp || networkOf(evt.pubkey, cp) || stewardCan(evt.pubkey, cp, 'content'))) return;
+    const key = cp + ':' + id;
+    if (CANCEL_PUSHED.has(key)) return; CANCEL_PUSHED.add(key);    // in-session belt; EVENT_AUDIENCE is the braces, and survives a restart
+    if (CANCEL_PUSHED.size > 5000) CANCEL_PUSHED.clear();          // bounded, like SAFETY_PUSHED — dedup only needs the recent ones
+    const recips = !gid ? [...MEMBERS].filter(m => memberIn(m, cp))
+      : (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
+      : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
+      : [...MEMBERS].filter(m => memberIn(m, cp));
+    const gcpSafe = gid ? (GROUP_CHURCH.get(gid) || idNamesOwner(gid) || cp) : '';
+    for (const r of recips) {
+      if (!r || r === evt.pubkey || r === cp) continue;
+      if (gid && gcpSafe && !GROUP_CHILDSAFE.has(gid) && (MINORS_BY.get(gcpSafe) || EMPTY_SET).has(r)) continue;
+      pushTo(r, { title: 'Event cancelled', body: 'Something on your calendar is no longer happening \u2014 open to see what.', url: '/', tag: 'evtoff-' + id.slice(0, 12) }, 'announce');
+    }
+  } catch {}
+}
 // SAFETY CHECK push: alert every member when a check OPENS ("are you safe?"), and nudge the check's creator
 // when responses arrive (collapsed to one alert — the creator opens the roll call to see who's safe/in danger).
 const SAFETY_PUSHED = new Set();
@@ -1417,7 +1489,7 @@ function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS,
-                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE]) { try { m.clear(); } catch {} }
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
@@ -1699,6 +1771,18 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     }
     if (perDay.size || legacy) CARE_SKIPHASH.set(id, { perDay, legacy }); else CARE_SKIPHASH.delete(id);
     try { const r = toHexPub((JSON.parse(e.content) || {}).recipient || ''); if (r) CARE_RECIPIENT.set(id, r); else CARE_RECIPIENT.delete(id); } catch {}
+  }
+  else if (d.startsWith(EVENT_D)) {   // a calendar event, or the tombstone that cancels one
+    // Record only WHERE it lands and WHO put it there — the church, the group (if any) and the author. Never
+    // the title, the date or the place: this map exists to address a notification, and the notification is
+    // deliberately allowed to say none of those things (see maybePushCancel). The content is sealed under the
+    // church name key anyway, so the relay could not read them if it wanted to.
+    const eid = d.slice(EVENT_D.length); if (!eid) return;
+    const gid = eventGroup(e);
+    const owner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (gid && GROUP_CHURCH.get(gid)) || '');
+    if (!owner || !CHURCH_PUBS.has(owner)) return;   // not attributable to a church we carry — record nothing
+    if (removed) { EVENT_AUDIENCE.delete(eid); return; }   // cancelled: forget it, which is also what makes the notice fire once
+    EVENT_AUDIENCE.set(eid, { cp: owner, gid, by: e.pubkey });
   }
 }
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
@@ -4595,6 +4679,10 @@ wss.on('connection', (ws, req) => {
       // docs, so this survives relay restarts — a boot re-announce won't re-alert the steward. Captured before note().
       const _mdD = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
       const wasMember = _mdD.startsWith(MEMBER_D) && (MEMBER_DOCS.get(_mdD.slice(MEMBER_D.length)) || new Set()).has(evt.pubkey);
+      // …and, for the same reason and by the same means, what we knew about the EVENT a cancellation is for.
+      // store.put() destroys the version it replaces and note() forgets the entry, both of them below this
+      // line, so after either of those there is nothing left to address a cancellation notice to.
+      const wasEvent = _mdD.startsWith(EVENT_D) ? (EVENT_AUDIENCE.get(_mdD.slice(EVENT_D.length)) || null) : null;
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
       // A STORAGE FAILURE MUST NOT BE SILENT. store.put THROWS when the database cannot accept a write — a
@@ -4651,6 +4739,7 @@ wss.on('connection', (ws, req) => {
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
       maybePushSermon(evt);    // notify members when the church features a new sermon (video/audio)
+      maybePushCancel(evt, wasEvent);   // notify an event's own audience when the church cancels it
       maybePushSafety(evt);    // safety check: alert members on open, nudge the creator on responses
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       let _evtJson = null;   // E6: serialize the event ONCE (lazily, on first match) and reuse for every matching subscriber — was N JSON.stringify(evt) for N subs

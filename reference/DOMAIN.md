@@ -106,7 +106,13 @@ and which of your instincts about it are wrong.
 
 Nobody has answered these. Ask before designing around them; move them up when answered.
 
-*(none open at present)*
+- **When a church cancels an event, who should be told?** `OPEN 2026-09-01.` The relay now notifies the
+  audience the event was actually served to — the group's people for a group event, the church's members
+  for a whole-church one. The alternative considered and rejected was "only the people who RSVP'd", on the
+  assumption (`INFERRED`, unchecked) that hardly anyone RSVPs to an ordinary church event and that the
+  people most likely to make a wasted journey are the silent ones who simply meant to turn up. Also
+  unchecked: how often a church cancels anything, which is the whole basis for saying this is too rare to
+  be noise. If either assumption is wrong the audience is wrong.
 
 ---
 
