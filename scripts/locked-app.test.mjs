@@ -31,7 +31,7 @@ test('a locked app has no church in context at all', () => {
 test('the serving card cannot render without a church', () => {
   const at = TODAY.indexOf('{!ctx.church ? null : (servNext || servPendingN)');
   assert.notEqual(at, -1,
-    'the serving card renders unconditionally again — "Serving & events · RSVP · your rota" on a locked phone says church as loudly as the name did');
+    'the serving card renders unconditionally again — "What’s happening · RSVP · your rota" on a locked phone says church as loudly as the name did');
 });
 
 test('the honest limit is written down next to the fix', () => {

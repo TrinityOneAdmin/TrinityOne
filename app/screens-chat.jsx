@@ -1121,7 +1121,7 @@ function ServingEntry({ ctx }) {
       <button onClick={() => ctx.openServing && ctx.openServing()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', background: 'var(--surface)', border: '1px solid var(--line)' }}>
         <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Serving &amp; events</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>What’s happening</div>
           <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>See what’s on · RSVP · your rota</div>
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
