@@ -1,5 +1,22 @@
 # Relay discovery and inter-relay comms — what to harden after the pilot
 
+> **CORRECTED 2026-09-01. Read `reference/PLAN-RELAY-HARDENING-2026-09-01.md` instead — it is the executable
+> plan and it fixes this file's mistakes.** An independent pass verified this survey against the code and
+> found three of the five weaknesses below wrong or stale. They are struck through in place rather than
+> deleted, because being wrong about what already exists is the failure this file was meant to prevent:
+>
+> * **Weakness 3 is MISDIAGNOSED.** The church-signed peer set it asks for already exists — `RELAYS_D`
+>   (`d=trinityone/relays`, `gateway.mjs:368`), church-signed, `content=[{pubkey,url}]`, ingested at `:1548`
+>   into `TRUSTED_RELAYS` / `PEER_URLS` and driving the sync loop. Nothing to build.
+> * **Weakness 4 is essentially DONE.** Dedup by `relayPub` is implemented on both sides —
+>   `fellowship.src.js:657` (`_churchRelays`, "distinct non-null values = distinct relay BOXES") and
+>   `steward.src.js:2592-2601`. What is missing is only a test that fails if the dedup is removed.
+> * **Weakness 5 is HALF STALE.** The tag-scan correctness problem is fixed (stream + post-match + budget,
+>   `relay-scan-budget.test.mjs`); only the performance half — no tag index — remains.
+>
+> **Weaknesses 1 and 2 stand**, with sharper locations in the plan. The signed-completeness-receipt idea in
+> weakness 2 does NOT survive contact for members and is replaced there; see the plan's critique.
+
 Written 2026-09-01, from the running code. **Read this before designing anything here: more exists than a
 fresh reader expects, and the useful work is hardening, not building.**
 
