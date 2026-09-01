@@ -2562,6 +2562,66 @@ function canRead(e, authed) {
         if (gcp && minorOf(authed, gcp)) return false;
       }
     }
+    // AND AN ADULTS-ONLY GROUP'S EVENT IS NOT PUT ON A CHILD'S CALENDAR. Exact sibling of the room-name gate
+    // directly above (3bbfc23, 2026-08-31), same shape, same reasoning, different document type — and it was
+    // missed there. Measured against a real gateway on this branch, 2026-09-01: an event tagged to a group
+    // with `childsafe` absent was served to a MINOR member with its content readable — content
+    // {"title":"Marriage counselling supper","where":"The vicarage"} — byte-identical to what the adult got.
+    // canRead spans nine minorOf/GROUP_CHILDSAFE checks and had none for EVENT_D, so an event fell straight
+    // through to the ordinary effective-member rule below.
+    //
+    // THE TITLE AND THE PLACE ARE THE DISCLOSURE, and they are worse than the room name: the name says a
+    // subject exists, the event says it is happening on Thursday at the vicarage. It lands on a young
+    // person's Today card and on their calendar, next to youth club.
+    //
+    // HOW AN EVENT NAMES ITS GROUP: its non-NET `t` tag, which is what eventGroup() reads and what both
+    // writers set — src/steward.src.js publishEvent (`if (groupId) tags.push(['t', groupId])`) and
+    // src/fellowship.src.js publishGroupEvent (a leader posting into their own room). The sealed content
+    // ALSO carries `groupId`, but that is under the church name key and this relay cannot read it, so the tag
+    // is the only thing a gate can stand on. It is also why EVENT_AUDIENCE exists: the TOMBSTONE that cancels
+    // an event carries no `t` tag at all, so the audience has to be remembered at ingest. A tombstone reaching
+    // this line therefore has no group and is not gated — correctly: it is an empty document that says only
+    // "the thing at this id is gone", which is what every reader needs in order to drop a stale card.
+    //
+    // NO GROUP TAG MEANS THE WHOLE CHURCH, AND MUST STAY THAT WAY. Sunday service, the church weekend, the
+    // carol service — all published with no group. Over-gating here would take the church's own calendar off
+    // every young person's phone, which is a silent blank screen and worse than the leak (reference/DOMAIN.md
+    // on rooms; the same holds for the calendar). `gid &&` is that guard, and it is the first thing tested.
+    //
+    // A CHILD-SAFE GROUP'S EVENT STILL REACHES ITS CHILDREN — the youth-group workday is the whole point of
+    // a group calendar for a young person. GROUP_CHILDSAFE is the church's own one-click marking.
+    //
+    // FALLBACK CHAIN, and it is maybePushCancel's, not the room gate's. GROUP_CHURCH is populated only from a
+    // stored group DEFINITION, so a relay holding an event but not its group def would resolve no church and
+    // wave it through; idNamesOwner() reads the owner prefix out of the group id, and `cp` — this event doc's
+    // own owning church, resolved above — is the last resort. maybePushCancel already uses exactly
+    // `GROUP_CHURCH.get(gid) || idNamesOwner(gid) || cp` for the same question about the same document, and
+    // two safeguarding rules that are meant to agree should be recognisable as the same rule. An unknown
+    // group stays NOT child-safe, so an unresolvable one is withheld from a minor rather than served.
+    //
+    // SCOPED WITH minorOf(), so a co-tenant church cannot blank another congregation's calendar: whether
+    // someone is a child is a judgement only their OWN church makes (AUDIT-2026-07-30 S3).
+    //
+    // WHO IS UNAFFECTED: every adult member (this is the path that draws the whole congregation's calendar),
+    // the church key, its network, its stewards and its care admins — all returned true above, so the console
+    // still sees every event and can explain what a young person sees.
+    //
+    // RETROACTIVE, deliberately. The relay replays all stored history through ingest on every update, so
+    // GROUP_CHILDSAFE and MINORS_BY are rebuilt from the corpus and this gate applies to every event a church
+    // has ever published, not only new ones. A young person's calendar therefore loses adults-only group
+    // events it was already showing them; nothing is deleted and no adult's view changes.
+    //
+    // SERVICE_D IS NOT THE SAME GAP and is deliberately not touched: publishService, publishRoom and
+    // publishBooking tag only ['d', …] and ['t', NET] — no publisher anywhere sets a group tag on them and no
+    // reader filters them by one, so they are whole-church by construction and there is nothing to scope a
+    // gate to. EVENT_D is the only calendar document that carries a groupId.
+    if (d.startsWith(EVENT_D)) {
+      const gid = eventGroup(e);
+      if (gid && !GROUP_CHILDSAFE.has(gid)) {
+        const gcp = GROUP_CHURCH.get(gid) || idNamesOwner(gid) || cp;
+        if (gcp && minorOf(authed, gcp)) return false;
+      }
+    }
     const md = MEMBER_DOCS.get(cp);
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     return !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
