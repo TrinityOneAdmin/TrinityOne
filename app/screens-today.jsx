@@ -1279,6 +1279,75 @@ function RecoveryNudge({ ctx }) {
 }
 window.RecoveryNudge = RecoveryNudge;
 
+// ── "something new" on the Serving & events card ────────────────────────────────────────────────────────────
+// NEVER BADGE SOMETHING THE MEMBER CANNOT THEN OPEN. This counts `ctx.churchEvents` and nothing else, because
+// that is the EXACT list the Serving overlay's Events tab renders (app/screens-serving.jsx, `const events =
+// ctx.churchEvents || []`) — what the relay served THIS member, not what the church published. Counting from
+// the church's corpus instead would put a dot on a rota or a run sheet this member is deliberately not shown
+// (rotaVis 'team'/'stewards', enforced by the relay): the dot would open onto nothing, and it would also leak
+// that SOMETHING EXISTS to exactly the person the church chose not to show it to.
+//
+// A `_locked` entry is dropped for the same reason. It is an event sealed under a church name key that has not
+// reached this phone: the Events tab can only say "1 event you can't open yet", so it is not something new to
+// go and read. (When the key does arrive the whole calendar opens at once, which is a bigger moment than a dot;
+// this does not promise a badge for it.)
+//
+// The member's own actions are structurally absent: an RSVP is a separate document (subscribeMyRsvps) and
+// never rewrites the church's event, so `ts` cannot move because of something this member did.
+//
+// `ts` is the event document's created_at, one document per event (`trinityone/event:<id>`), so a steward
+// EDITING an event republishes it with a newer ts and it counts again — "or a change to one". Occurrences of
+// a recurring event are expanded from one document and share its id, so they are counted once.
+const SERV_NEW_CAP = 9;
+function servingNewCount(ctx, seenTs) {
+  const seen = Number(seenTs) || 0;
+  if (!seen) return 0;   // no mark yet -> nothing is new. A member who joined a church with fifty events on
+                         // its calendar this morning is not fifty things behind.
+  const ids = new Set();
+  for (const e of ((ctx && ctx.churchEvents) || [])) {
+    if (!e || e._locked || !e.id) continue;
+    if ((Number(e.ts) || 0) > seen) ids.add(e.id);
+  }
+  return ids.size;
+}
+const servingNewLabel = (n) => (n > SERV_NEW_CAP ? SERV_NEW_CAP + '+' : String(n));
+
+// THE OTHER HALF OF THE SAME RULE, kept next to it so the two cannot drift apart: given everything this member
+// is served (unexpanded — app/app.jsx holds the three source lists) and the current time in seconds, what does
+// opening the card stamp? app/app.jsx's markServingSeen() calls this and writes the result; nothing else does.
+//
+// `now` on its own would leave a document published by a device whose clock runs fast counted for ever — a dot
+// that survives being looked straight at. The newest visible ts on its own would not move at all for a member
+// with nothing yet, so the mark would stay 0 and the first arrival would badge them. It is the maximum of the
+// two. `_locked` entries are skipped because a sealed document carries the PUBLISHING device's created_at,
+// which can sit ahead of this phone's clock: letting one set the mark would stamp past things not yet
+// published and swallow them when they are.
+function servingSeenStamp(events, nowSec) {
+  let top = Number(nowSec) || 0;
+  for (const e of (events || [])) {
+    if (!e || e._locked) continue;
+    const ts = Number(e.ts) || 0;
+    if (ts > top) top = ts;
+  }
+  return top;
+}
+
+// A mark, not a demand: clay, not red; no sound, no push, no animation. Sits after the card's title.
+function ServingNewDot({ n }) {
+  if (!n) return null;
+  const label = servingNewLabel(n);
+  return (
+    <span aria-label={(n === 1 ? 'one thing' : label + ' things') + ' the church has posted since you last looked'}
+      title="New since you last opened this"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0, marginLeft: 7,
+        color: 'var(--clay-ink)', fontSize: 11.5, fontWeight: 800, fontFamily: 'var(--font-ui)',
+        verticalAlign: 'middle', lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+      <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />
+      {label}
+    </span>
+  );
+}
+
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
@@ -1355,6 +1424,9 @@ function TodayScreen({ ctx }) {
   const servNext = ctx.servNext;
   // (top bar sits just below the status bar; care + serving cards, then the verse — see the ScreenScroll top below)
   const servPendingN = (ctx.servPending || []).length;
+  // how many things the church has posted, that THIS member is served, since they last opened this card.
+  // `ctx.servingSeenTs` is the per-church mark; app/app.jsx stamps it forward from ctx.openServing().
+  const servNew = servingNewCount(ctx, ctx.servingSeenTs);
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
 
   return (
@@ -1467,12 +1539,12 @@ function TodayScreen({ ctx }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             {servPendingN ? (
               <React.Fragment>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Can you serve?</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Can you serve?<ServingNewDot n={servNew} /></div>
                 <div style={{ fontSize: 12.5, color: '#8a6717', fontWeight: 600 }}>{servPendingN} request{servPendingN > 1 ? 's' : ''} waiting for your reply</div>
               </React.Fragment>
             ) : (
               <React.Fragment>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>You’re serving · {servNext.teamName}</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>You’re serving · {servNext.teamName}<ServingNewDot n={servNew} /></div>
                 <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 600 }}>{servNext.role} · {fmtServe(servNext.date)}</div>
               </React.Fragment>
             )}
@@ -1484,7 +1556,7 @@ function TodayScreen({ ctx }) {
         <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both', background: 'var(--surface)', border: '1px solid var(--line)' }}>
           <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Serving &amp; events</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Serving &amp; events<ServingNewDot n={servNew} /></div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>See what’s on · RSVP · your rota</div>
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />

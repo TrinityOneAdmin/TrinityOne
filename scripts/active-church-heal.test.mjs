@@ -95,8 +95,12 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // church they are away so the "When are you away?" sheet can show and untick them. Identical in shape to
   // ctx.setUnavailableDates immediately above it, and an ordinary active-church read, so it benefits from
   // the same heal.
-  assert.equal(sites.length, 33,
-    `the active-church resolution sites changed (${sites.length} vs 33) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 33 → 34 on 2026-09-01: the Serving & events card's "something new" mark, which resolves the active
+  // church to its npub so the mark is keyed per church (`trinityone.servingSeen.<npub>`). An ordinary
+  // active-church read — with a stale id it resolves to no npub, the mark is simply absent and the card
+  // shows nothing, and the heal below puts it right on the same pass as everything else.
+  assert.equal(sites.length, 34,
+    `the active-church resolution sites changed (${sites.length} vs 34) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

@@ -1298,6 +1298,48 @@ function App() {
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
   const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
   const markNetSeen = () => { const top = notifications[0] && notifications[0].ts; if (top && top > netSeenTs) { setNetSeenTs(top); try { localStorage.setItem('trinityone.net-seen', String(top)); } catch {} } };
+
+  // ── "something new" on the Serving & events card ──────────────────────────────────────────────────────────
+  // ONE MARK PER CHURCH. A member can belong to more than one, so this is keyed by the church's npub — the
+  // same key the event cache above uses (`trinityone.serv.events.<npub>`) — and switching church swaps the
+  // mark rather than sharing it.
+  //
+  //   localStorage['trinityone.servingSeen.<npub>']
+  //     absent  -> first run: stamp NOW, show nothing
+  //     '<sec>' -> the newest publish time this member has been shown
+  //
+  // Readers: this block; servingNewCount() in app/screens-today.jsx, via `ctx.servingSeenTs`.
+  // Writers: this block only — the baseline effect below and markServingSeen(), which ctx.openServing() calls.
+  //
+  // WHAT IS COUNTED IS DECIDED ON THE SCREEN, from `ctx.churchEvents` — see the long note above
+  // servingNewCount in app/screens-today.jsx for why it must be what this member is SERVED and never what the
+  // church published.
+  //
+  // FIRST RUN STAMPS, IT DOES NOT COUNT. The baseline is NOW rather than the newest event in hand, because the
+  // subscriptions land after this effect runs: stamping the newest of a list that is still empty would stamp 0
+  // and then badge the church's whole back catalogue the moment it arrived. Someone joining a church with
+  // fifty events on its calendar must see nothing, and NOW is the only value that is true before the data has
+  // turned up.
+  const servSeenNpub = (churches.find(c => c.id === activeChurch) || {}).npub || '';
+  const servSeenKey = servSeenNpub ? 'trinityone.servingSeen.' + servSeenNpub : null;
+  const [servSeenTs, setServSeenTs] = useA(null);
+  useAE(() => {
+    if (!servSeenKey) { setServSeenTs(null); return; }
+    let v = null;
+    try { const raw = localStorage.getItem(servSeenKey); v = (raw == null) ? null : (Number(raw) || 0); } catch { v = null; }
+    if (v == null) { v = Math.floor(Date.now() / 1000); try { localStorage.setItem(servSeenKey, String(v)); } catch {} }
+    setServSeenTs(v);
+  }, [servSeenKey]);
+  // Stamp PAST everything currently visible, so opening the card really does clear it. The rule for WHAT to
+  // stamp lives next to the rule for what to count, in servingSeenStamp() in app/screens-today.jsx, so the two
+  // halves cannot drift apart; this passes it the three source lists unexpanded (expandEvents copies `ts`
+  // onto every occurrence, so the maximum is the same either way) and writes the answer.
+  const markServingSeen = () => {
+    if (!servSeenKey) return;
+    const top = servingSeenStamp([...churchEvents, ...groupEvents, ...netEvents], Math.floor(Date.now() / 1000));
+    try { localStorage.setItem(servSeenKey, String(top)); } catch {}
+    setServSeenTs(top);
+  };
   // derive serving items from requests + my replies (local date, not UTC)
   const _now = new Date();
   const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
@@ -1731,6 +1773,7 @@ function App() {
     churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); const all = [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
+    servingSeenTs: servSeenTs, markServingSeen,   // the Serving & events card's "something new" mark (see the block above)
     churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups, rotaVis,
     // Care / Meal trains: settings + open needs + everyone's fills/skips, plus this member's sign-up actions.
     // Only meaningful when care.settings.enabled; the Today card and Care screen render off this.
@@ -1827,7 +1870,7 @@ function App() {
     myLeaderGroups: churchGroups.filter(g => (g.leaders || []).includes((window.Fellowship && window.Fellowship.myPubkey) || '')),
     publishGroupEvent: (groupId, ev) => { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return window.Fellowship.publishGroupEvent(np, groupId, ev); },
     churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
-    openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); if (desktop) setTab('chat'); },
+    openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); markServingSeen(); if (desktop) setTab('chat'); },   // opening the overlay is what clears the card's "something new" mark — every route in, not only the Today card, and never on launch or a timer
     servingTab, careFocus,
     openEvent: (e) => setEventOv(e),
     respondServing: (item, verdict, swapTo) => {
