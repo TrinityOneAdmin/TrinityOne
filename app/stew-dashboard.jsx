@@ -6670,8 +6670,14 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           );
         })}
       </div>
-      <div role="tabpanel" id={'sk-panel-' + section} aria-labelledby={'sk-tab-' + section} className={section === 'network' ? 'net-grid' : 'sk-masonry'}>
+      {/* EVERY CARD BELOW SITS IN A STACK THAT SOMEBODY CHOSE. .sk-cols is a two-track grid and each direct
+          child is one authored column (see steward.html); a card is never a direct child of the panel, or it
+          would claim a track of its own and the two-column shape would come apart as cards are added.
+          This replaced a CSS multi-column masonry, which packed the cards by height and so decided the
+          reading order, the Tab order and the split point for us — all three moving whenever a card grew. */}
+      <div role="tabpanel" id={'sk-panel-' + section} aria-labelledby={'sk-tab-' + section} className={section === 'network' ? 'net-grid' : 'sk-cols'}>
       {section === 'church' ? <React.Fragment>
+      <div>
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <label title="Upload a church picture" style={{ position: 'relative', cursor: picBusy ? 'default' : 'pointer', flexShrink: 0, opacity: picBusy ? .6 : 1 }}>
@@ -6696,22 +6702,25 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       </Panel>
 
       <DashBrandingPanel church={church} />
-
+      </div>
+      <div>
       <DashMediaPanel church={church} />
 
       <DashBackup />
+      </div>
       </React.Fragment> : null}
 
       {section === 'features' ? <React.Fragment>
+      <div>
       <DashFeaturesPanel church={church} />
-
+      </div>
+      <div>
       <DashChatTagsPanel church={church} />
 
-      {/* Giving is a short card — place it right after the short Chat-tags card so the masonry column flow
-          packs it there, instead of stranding it at the bottom of the tall Practical-care column. */}
       <DashGivingPanel church={church} />
 
       <DashMealsPanel church={church} />
+      </div>
       </React.Fragment> : null}
 
       {/* Network and relays are one page. Apart, the Relays card was the only child of .net-grid and so
@@ -6730,14 +6739,19 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       </React.Fragment> : null}
 
       {section === 'security' && delegated ? (
+      // One stack, capped at a column's width. .sk-cols collapses the tracks it has no stack for, so a lone
+      // stack is handed the whole 1120px — measured — and this card is one short paragraph.
+      <div style={{ maxWidth: 552 }}>
       <Panel title="Security">
         <div style={{ display: 'flex', gap: 11, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 24%, var(--line))' }}>
           <Icon name="shield" size={18} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>You’re acting as a <b style={{ color: 'var(--ink)' }}>steward</b> of this church — you can post and help manage it, but its key, recovery phrase, blocklist and steward list belong to the owner. Switch back to your own identity (top-left) to manage your own key.</div>
         </div>
       </Panel>
+      </div>
       ) : null}
       {section === 'security' && !delegated ? <React.Fragment>
+      <div>
       <Panel title="Church key">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 12 }}>
@@ -6881,10 +6895,12 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <Icon name="pray" size={14} color="var(--ink-3)" /> See who’s joined in the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
         </div>
       </Panel>
-
+      </div>
+      <div>
       <DashStewardsPanel church={church} />
 
       <DashBecomeStewardPanel />
+      </div>
       </React.Fragment> : null}
       </div>
       <StewVersion />

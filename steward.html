@@ -20,9 +20,26 @@
   #root { height: 100vh; }
   .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
-  /* masonry card layout: packs variable-height cards tightly, no dead rows */
-  .sk-masonry { column-width: 330px; column-gap: 16px; }
-  .sk-masonry > * { break-inside: avoid; -webkit-column-break-inside: avoid; margin-bottom: 16px; }
+  /* Settings cards: TWO AUTHORED STACKS, not a masonry.
+     This was `.sk-masonry { column-width: 330px }` — CSS multi-column — and the BROWSER chose where the
+     column broke. Three things followed from the card heights that nobody had decided: the reading order
+     ran down one column and then across, the Tab order jumped back up the page, and the split moved
+     whenever a card grew. One card in Settings even carried a comment saying it had been reordered in
+     source to please the packing.
+     A plain row-major grid is the obvious replacement and is the worst of the three: rows are as tall as
+     their tallest card, so a 130px card sits in a 630px row. Three layouts were built and compared on the
+     live console at a 1400px window in the round that made this change (2026-09-01); the dead column space
+     on Church / Features / Security measured 469 / 488 / 799px for the masonry, 1270 / 800 / 749px for the
+     plain grid, and 133 / 363 / 262px for two authored stacks. Those three numbers are the reason this is
+     not a `grid-auto-flow: row` one-liner; re-measure before changing it.
+     auto-fit, not auto-fill: the tracks with no stack in them COLLAPSE. Measured in Chromium against these
+     exact rules: two stacks get 552px each at the 1120px cap, one stack gets the whole 1120px (so a lone
+     card caps its own width — see DashSettings), and a 600px container drops to a single track with the
+     stacks under each other in source order.
+     Sized from the CONTAINER, never a viewport media query — see the .relay-grid note below for what a
+     viewport query cost when the element lived inside a sidebar and a grid track. */
+  .sk-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 16px; align-items: start; max-width: 1120px; }
+  .sk-cols > * { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   /* Network tab: Network card (narrow) beside the wide Relays card on desktop; stacks on a phone. */
   .net-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
   @media (min-width: 940px) { .net-grid { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); } }
