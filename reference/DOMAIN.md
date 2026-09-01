@@ -92,10 +92,15 @@ and which of your instincts about it are wrong.
   is the HOSTED one at `app.trinityone.church`, that argument does not hold — the key lives against a8's
   origin, the steward never loads anything from their own box, and something else has to establish the link.
 
-  **Measured 2026-09-01, and the reason this matters now:** `welcome.html` contains the word "Suite" **zero**
-  times. It has 6 "Download" and 5 "Start a church" buttons, and every "Start a church" points at
-  `https://app.trinityone.church/steward.html` — the hosted console. So the path the site advertises is
-  exactly the one where automatic adoption cannot work, and the path that makes it work is not mentioned.
+  **Corrected 2026-09-01.** I first recorded here that `welcome.html` never mentions the Suite. That was
+  wrong — my check was case-sensitive and missed every "Suite". The site DOES present it, as the third of
+  three cards on Get TrinityOne, with installers for Windows, macOS and two Linux formats.
+
+  The real problem is weaker but still real: it is framed as **"Optional, for churches that host their own"**,
+  it sits last, and its card is the only one without a plain-language reason to choose it. Meanwhile every
+  "Start a church" button (5 of them) points at `https://app.trinityone.church/steward.html` — the hosted
+  console. So the site offers the Suite while steering setup down the path where automatic adoption cannot
+  work. The change wanted is emphasis and default, not adding something missing.
 
   Consequence for planning: make the Suite the advertised route, and the awkward case shrinks to churches who
   deliberately run a bare relay — a smaller, more technical group who can reasonably take one extra step.
