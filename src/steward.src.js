@@ -624,15 +624,49 @@ function _dirBases() {
   }
   return out;
 }
-async function resolveRelayName(handle) {
+// C5: A DIRECTORY RECORD IS AN ANSWER FROM SOMEBODY ELSE'S MACHINE, so it is a candidate and not an
+// instruction. Two checks, in this order, and both of them were missing here:
+//
+//   • THE SCHEME. Its member-side twin has refused anything but wss:// since the 2026-07-06 audit (L5); this
+//     one took whatever string the directory returned, so a re-pointed record could put a church's entire
+//     traffic on a cleartext socket for any network in the path to read.
+//   • MEMBERSHIP. Whoever holds a name decides where it points, and it can be re-pointed between two calls
+//     of refreshNamedRelays. So the address that comes back is verified the same way every other address is
+//     — the C2 possession proof plus one of the three roots — before it is handed to anything that adopts.
+//
+// `opts.member === false` asks for the POSSESSION PROOF ONLY, and there is exactly one caller: the clone
+// SOURCE (see cloneFromRelay). A box a church is leaving is by definition one it may never have vouched for,
+// and requiring membership of it inverts time — a church vouches the box it is arriving at, not the one it
+// is escaping. Nothing else may use it.
+async function resolveRelayName(handle, opts) {
   const h = String(handle || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
   if (!h) return null;
+  const memberToo = !(opts && opts.member === false);
   for (const base of _dirBases()) {
     // 6s hard timeout so a black-holed directory host (common on a censored network) can't stall the whole
     // resolve — we just fall through to the next mirror.
-    try { const r = await fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store', signal: AbortSignal.timeout(6000) }); if (r.ok) { const j = await r.json(); if (j && j.url) return j; } } catch (e) {}
+    try {
+      const r = await fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (!j || typeof j.url !== 'string' || !/^wss:\/\//i.test(j.url)) continue;
+      if (memberToo ? !(await admitRemoteRelay(j.url)) : !(await verifyRelayIdentity(j.url))) continue;
+      return j;
+    } catch (e) {}
   }
   return null;
+}
+// C5: the one place an address that arrived from somewhere REMOTE — a directory record, a named-relay swap,
+// a discovery offer, a clone destination — is admitted or refused.
+//
+// THROUGH THE C4 GATE, not a bare isNetworkRelay(), for one reason that matters at 90-second intervals: the
+// gate CACHES what it proved. refreshNamedRelays runs on load, then every 90 seconds, then on every window
+// focus, for ever — a bare proof there would be one HTTP round trip per named relay per pass for the life of
+// the console. The gate re-proves an entry once it is a few hours old and answers from the cache in between,
+// and `refresh` waits for a first proof rather than returning "not yet" the way the synchronous filter does.
+async function admitRemoteRelay(url) {
+  if (!url) return false;
+  try { return (await _gate.refresh([url], pub)).includes(url); } catch (e) { return false; }
 }
 function getNamedRelays() { try { const a = JSON.parse(lsGet(NAMES_LS) || '[]'); return Array.isArray(a) ? a.filter(e => e && e.name) : []; } catch { return []; } }
 function setNamedRelays(a) { try { lsSet(NAMES_LS, JSON.stringify(a)); } catch (e) {} }
@@ -646,7 +680,19 @@ async function refreshNamedRelays() {
   for (const entry of named) {
     try {
       const j = await resolveRelayName(entry.name); const newUrl = normRelay(j && j.url);
-      if (newUrl && newUrl !== entry.url) { extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true; }
+      if (!newUrl || newUrl === entry.url) continue;
+      // C5 — AND THIS IS THE PATH NOBODY WATCHES. It runs 2.5 seconds after load, then every 90 seconds,
+      // then on every window focus, for ever, with NO user action after the first connect. A name is held by
+      // whoever claimed it, so a record re-pointed at another machine would otherwise swap the address a
+      // church publishes to, silently, in the background, weeks after anybody typed anything.
+      //
+      // RE-VERIFIED ON EVERY SWAP, not merely the first. The question is not "was this name trustworthy when
+      // the steward typed it" — it is "is the address it points at RIGHT NOW one this church vouched for",
+      // and that answer can change between two passes of this very loop. resolveRelayName already refuses a
+      // non-member address; this is the check at the point the list is actually written, so a future edit
+      // that loosens the resolver cannot quietly un-gate the swap.
+      if (!(await admitRemoteRelay(newUrl))) continue;
+      extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true;
     } catch (e) {}
   }
   if (changed) { _writeExtraRelays(extra); setNamedRelays(named); }
@@ -826,6 +872,11 @@ let _discoverySeed = [];
 // signature — and behaving correctly for a throwaway key is not a signature. Keep it this way round: a box
 // that passes this probe and is in nobody's relay-net document is a well-behaved stranger, and a box the
 // church signed for is a member whether or not it happened to answer a probe this minute.
+//
+// SAID ONCE MORE IN THE PLAN'S OWN WORDS (closed-network C5), because it has been promoted into a gate here
+// before: THIS IS A GOOD BEHAVIOURAL TEST AND A BAD MEMBERSHIP TEST. It runs SECOND in discoverRelayOffers,
+// after admitRemoteRelay(), and it is not permitted to stand in for it. The two questions are "does this box
+// apply the rules?" and "did this church vouch for it?", and neither answer implies the other.
 function _probeRelayEnforces(wssUrl, timeoutMs) {
   return new Promise((resolve) => {
     let ws = null, done = false;
@@ -871,8 +922,27 @@ async function discoverRelayOffers(seedExtra, region) {
   const probed = await Promise.all(seed.map(async (url) => {
     const t = await _relayInfo(url);
     if (!(t && t.enforces === true && t.open === true && !t.full)) return null;   // its own claim: necessary, not sufficient
+    // C5 — MEMBERSHIP IS THE PRIMARY FILTER, and it is a different question from either check above.
+    //
+    // An offer is a stranger's advertisement. `enforces`/`open`/`full` are that stranger REPORTING ON ITSELF
+    // over an unauthenticated GET, and _probeRelayEnforces below is the box being made to DEMONSTRATE the
+    // claim — a good behavioural test and a bad membership test, because behaving correctly for a throwaway
+    // key is not a signature. A well-behaved stranger is still a stranger, and this list feeds Auto-find,
+    // which ADOPTS what it picks. So the gate is the same one every other address passes: the C2 possession
+    // proof plus one of the three roots (canonical pin, this console's own origin, this church's signature).
+    //
+    // WHAT THIS COSTS, said plainly: a church cannot Auto-find its way onto a relay it has never vouched
+    // for, which is what a closed network means. What Auto-find still does is re-adopt a box this church HAS
+    // signed into its membership document whose address the console no longer has — a relay that moved.
+    // Offering a stranger's box as a place to PUT a congregation belongs to whatever ships the "sign this
+    // key into your network" step; it is not something discovery may do on its own.
+    if (!(await admitRemoteRelay(url))) return null;
     // …and now make it prove it. `enforces` is self-reported; a relay that will accept a stranger's
-    // safeguarding list must never be offered as a place to put a congregation's roster.
+    // safeguarding list must never be offered as a place to put a congregation's roster. The probe stays,
+    // SECONDARY: it answers "does this box apply the rules?", which membership does not — a church can sign
+    // a key into its document and the box behind it still be misconfigured. Both, in this order, or neither
+    // means much. (AUDIT-2026-07-27 is why the probe exists at all; it was promoted into a membership gate
+    // once already and must not be again.)
     const canonical = (CANONICAL_RELAYS || []).includes(url);
     if (!canonical) { const v = await _probeRelayEnforces(url); if (!v.ok) { try { console.warn('[relay-offers] rejected', url, '—', v.why); } catch (e) {} return null; } }
     return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
@@ -2991,10 +3061,65 @@ window.Steward = {
   async cloneFromRelay(sourceUrl, { targetUrl, onProgress } = {}) {
     if (!sk || !pub) throw new Error('No church key on this device');
     const httpBase = (u) => String(u || '').replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
-    const src = httpBase(sourceUrl);
+    // The GATE is asked about the RELAY address, because two of the three roots are address-bound: a
+    // canonical pin sits beside a wss:// URL and the same-origin root compares an origin. /export and
+    // /import are fetched over http(s). Same box, two spellings, and mixing them refuses a genuine relay.
+    const wsForm = (u) => {
+      const v = String(u || '').trim().replace(/\/+$/, '');
+      if (/^wss?:\/\//i.test(v)) return v;
+      if (/^https:\/\//i.test(v)) return 'wss://' + v.slice(8);
+      if (/^http:\/\//i.test(v)) return 'ws://' + v.slice(7);
+      return v ? normRelay(v) : '';
+    };
+    const srcRelay = wsForm(sourceUrl);
+    const src = httpBase(srcRelay);
     if (!src) throw new Error('Enter the relay to copy from.');
-    const dst = targetUrl ? httpBase(targetUrl) : _blobBase();
+    const dstRelay = targetUrl ? wsForm(targetUrl) : ownRelay();
+    const dst = httpBase(dstRelay);
     if (src === dst) throw new Error('The source and destination are the same relay.');
+
+    // ── C5: THE CLONE GATE, AND THE TWO ENDS ARE DELIBERATELY NOT THE SAME ─────────────────────────────
+    //
+    // THE SOURCE: THE POSSESSION PROOF ONLY. MEMBERSHIP IS NOT REQUIRED, AND MUST NOT BE.
+    //
+    // A clone source is by definition the box a church is LEAVING — very often one it never vouched for,
+    // because it was somebody else's hosting before the church had a box of its own. Requiring the full
+    // membership gate here inverts time: a church vouches for the machine it is ARRIVING at, not the one it
+    // is escaping, and demanding a signature over the old host would block exactly the migration this
+    // control exists for. That was caught as a blocking finding while this was being planned; it is written
+    // out here so it cannot be re-introduced as a tightening.
+    //
+    // What the proof still buys, and it is not nothing: only a TrinityOne relay can answer the nonce, so
+    // every other host on the internet is excluded — including the plain listener whose only interest is the
+    // church-signed Authorization header this function would otherwise hand it. And /export answers only the
+    // church's own key regardless of who asks.
+    //
+    // Three measured facts bound what a hostile SOURCE could do, and none of them needs membership to hold:
+    // the proof handed to it is host+path-bound and ±5 minutes fresh, so it cannot be replayed anywhere
+    // else; /import verifies every event's signature and attributes everything to the authed church, so the
+    // worst a hostile source can inject is the church's OWN genuinely-signed history (the same replay
+    // exposure a file restore has, no worse); and the corpus never flows TO the source.
+    //
+    // A source too old to answer C2 is not a dead end: /export is a downloadable archive and restore is the
+    // file path — one deliberate extra step.
+    if (!(await verifyRelayIdentity(srcRelay)))
+      throw new Error('That relay could not prove who it is, so your church’s history was not requested from it. Check the address, or restore from a backup file instead.');
+    //
+    // THE DESTINATION: THE FULL GATE. It RECEIVES the corpus — every document, every name, every sealed care
+    // request the church ever wrote — so it is admitted exactly as any other address this church publishes
+    // to. The default (this console's own relay) passes through the same-origin root and costs nothing; a
+    // caller-supplied targetUrl has to be a relay this church actually signed for.
+    //
+    // AND ITS SIBLING IS DELIBERATELY NOT GATED, which is worth stating because the two look identical.
+    // restoreChurchData() also POSTs a corpus to a caller-supplied address ("Restore to another relay",
+    // stew-dashboard). It stays open on purpose: that screen's whole job is SEEDING A BOX THE CHURCH IS
+    // MOVING TO, which by construction is not yet in the church's membership document, so gating it would be
+    // the same inversion of time the SOURCE rule above exists to avoid — and it is a steward typing an
+    // address, not a URL pushed at them, which is what this item is about. targetUrl here has no UI at all;
+    // it is an API parameter, and an API is where an unnoticed destination can be chosen for somebody.
+    if (!(await admitRemoteRelay(dstRelay)))
+      throw new Error('The destination relay isn’t in your church’s network, so nothing was copied to it. Add it to your relay list and enrol it first.');
+
     if (onProgress) onProgress('reading', 0, 1);
     const er = await fetch(src + '/export', { headers: { Authorization: _nip98(src + '/export') } });
     if (!er.ok) throw new Error('Couldn’t read your church’s data from that relay (' + er.status + (er.status === 401 ? ' — is it the right relay for this church?' : '') + ')');
@@ -6682,8 +6807,10 @@ window.Steward = {
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return true;
   },
-  // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not required)
-  resolveRelayName(name) { return resolveRelayName(name); },
+  // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not
+  // required). C5: the answer must be wss:// AND pass the network gate before it comes back. Pass
+  // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
+  resolveRelayName(name, opts) { return resolveRelayName(name, opts); },
   // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
   rememberRelayName(name, url) {
     const n = String(name || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');

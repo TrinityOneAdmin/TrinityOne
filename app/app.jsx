@@ -711,47 +711,20 @@ function App() {
       // gets every community node for redundancy — not just the single relay carried in their link.
       const pool = F.CANONICAL_RELAYS || (F.CANONICAL_RELAY ? [F.CANONICAL_RELAY] : []);
       pool.forEach(r => F.addRelay(r));
-      // plus any church-specific relay carried in the invite/QR (?relay=wss://…) — e.g. a self-hosted one
-      const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
-      // SECURITY-AUDIT-2026-07-06 L5: require wss:// (encrypted). A crafted invite carrying ?relay=ws://attacker
-      // would otherwise add a cleartext relay to the member's set → a network MITM reads/injects fellowship traffic.
-      if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss:\/\//i.test(relay)) F.addRelay(relay); } catch (e) {} }
-      // A self-hosted relay behind a free tunnel gets a NEW url each restart, so a printed invite's ?relay= can
-      // go dead. The invite also carries the relay's STABLE directory name — resolve it against the shared
-      // directory to the relay's CURRENT url so an old QR still works after a restart. Best-effort + additive;
-      // L5 still enforced (must resolve to wss://).
-      // AUDIT-2026-07-29 S3. This asked app.trinityone.church, hardcoded, and nothing else. For a SELF-HOSTED
-      // congregation that is the one request that undoes self-hosting: joining from a printed slip told the
-      // central host that this device exists, that it is joining now, and which relay it is looking for — at
-      // the single most sensitive moment there is. The whole point of a church running its own box is that no
-      // central party sees its people.
+      // C5: AN ADDRESS CARRIED IN AN INVITE IS A CANDIDATE FOR VERIFICATION, NEVER AN INSTRUCTION.
       //
-      // /relay-names/resolve/ is public on EVERY relay and the directory is gossiped between them, so the
-      // church's own relay can answer this perfectly well. Ask the relay the invite already names FIRST, and
-      // fall back to the shared directory only if that fails (an invite may carry a name and no URL, or the
-      // self-hosted box may be down at that moment).
+      // This used to add ?relay= on sight (wss:// checked, nothing else) and then resolve ?relayname=
+      // against a directory the invite itself could nominate. So a code taped up at a church door could
+      // start this phone publishing its owner's DMs — and their child's care request — to a machine of the
+      // code's author's choosing, with nothing on screen changing.
       //
-      // No new trust: the invite's ?relay= is added directly two lines above, so preferring it as a resolver
-      // grants it nothing it did not already have, and L5 (must resolve to wss://) still applies to whatever
-      // comes back.
-      const nmm = String(raw || '').match(/[?&]relayname=([^&\s]+)/);
-      if (nmm && F && F.addRelay) { try {
-        const name = decodeURIComponent(nmm[1]).toLowerCase().replace(/[^a-z0-9-]/g, '');
-        const hosts = [];
-        try { const v = rm && decodeURIComponent(rm[1]); if (v && /^wss:\/\//i.test(v)) hosts.push(v.replace(/^wss:\/\//i, 'https://').replace(/\/relay\/?$/i, '')); } catch (e) {}
-        hosts.push('https://app.trinityone.church');   // last resort, not first choice
-        if (name) (async () => {
-          for (const h of hosts) {
-            try {
-              const r = await fetch(h + '/relay-names/resolve/' + encodeURIComponent(name), { cache: 'no-store' });
-              if (!r.ok) continue;
-              const j = await r.json();
-              const u = j && j.url;
-              if (u && /^wss:\/\//i.test(u)) { F.addRelay(u); return; }   // resolved — ask nobody else
-            } catch (e) {}
-          }
-        })();
-      } catch (e) {} }
+      // The decision lives in the ENGINE, not here: the app's .jsx files ship unbundled, so a `false && ` in front of
+      // a condition leaves every word of it in place and any text-matching test still passes (CLAUDE.md
+      // rule 3). adoptInviteRelays() runs the C2 possession proof at the address and admits it only if the
+      // key it proves is one this church's own signature (or the canonical pin, or this origin) vouches for.
+      // It is deliberately not awaited — following a church must not wait on a network probe — and it fires
+      // `trinity-relay-refused` with anything it turned away so the refusal can be shown where the person is.
+      if (F.adoptInviteRelays) { try { F.adoptInviteRelays(npub, raw); } catch (e) {} }
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
@@ -1624,6 +1597,18 @@ function App() {
     toastTimer.current = setTimeout(() => setToastMsg(''), 1900);
   };
   window.trinityToast = toast;   // a few non-React globals (e.g. the audio engine) surface notices through this
+  // A REFUSED INVITE RELAY IS SAID OUT LOUD (closed-network plan C5). A printed slip naming a box the church
+  // has not enrolled otherwise produces an unexplained nothing — the member scans it, the church appears, and
+  // the address it carried is dropped in silence. Which is exactly how the ROADMAP-NOTES §6 divergence became
+  // invisible. adoptInviteRelays fires this with everything it turned away.
+  useAE(() => {
+    const onRefused = (e) => {
+      const n = ((e && e.detail && e.detail.urls) || []).length;
+      if (n) toast(n === 1 ? 'That church’s relay isn’t in the TrinityOne network yet' : 'Those relays aren’t in the TrinityOne network yet');
+    };
+    window.addEventListener('trinity-relay-refused', onRefused);
+    return () => window.removeEventListener('trinity-relay-refused', onRefused);
+  }, []);
 
   const ctx = {
     dark: t.dark,

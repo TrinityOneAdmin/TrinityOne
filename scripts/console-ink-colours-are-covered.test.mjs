@@ -183,7 +183,10 @@ test('the "enter a relay address" error under the Add box is legible', async () 
 test('the connect-by-name result is legible whether it worked or failed', async () => {
   for (const [ok, resolve, expect, re] of [
     [true, async () => ({ url: 'wss://grace-city.example' }), 'var(--sage-ink)', /^✓ Connected/],
-    [false, async () => null, 'var(--clay-ink)', /^✗ No relay is registered/],
+    // C5: a null resolve no longer means only "no such name" — the resolver also refuses a cleartext answer
+    // and an address this church has not signed into its network, and telling a steward their relay "is not
+    // registered" would be a plain untruth in those two cases (memory: fix-the-control-not-the-label).
+    [false, async () => null, 'var(--clay-ink)', /^✗ Couldn’t use/],
   ]) {
     const card = relaysCard({
       relays: ONE_UP_ONE_DOWN, backup: { boxes: 2, online: 2, syncOn: true },

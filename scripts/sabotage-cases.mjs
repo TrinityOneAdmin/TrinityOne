@@ -1272,6 +1272,120 @@ export const CASES = [
     replace: `  if (true) return _poolSubMany(u, filters, handlers);`,
     test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
   },
+  // ── C5: the paths by which an address is PUSHED at a client ──────────────────────────────────────────
+  {
+    name: 'invite: ?relay= is adopted on sight again',
+    file: 'src/fellowship.src.js',
+    // The pre-C5 behaviour exactly: a wss:// scheme check and nothing else, so a code taped to a wall adds a
+    // relay to a member's set before they have followed anything.
+    find: `      try { ok = await isNetworkRelay(cp, url); } catch (e) { ok = false; }`,
+    replace: `      ok = true;`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'invite: the name is resolved even when the printed address worked (AUDIT-2026-07-29 S3 reopened)',
+    file: 'src/fellowship.src.js',
+    // The self-hosted congregation's joiner tells the shared directory that this device exists, that it is
+    // joining now, and which relay it is looking for — the one request that undoes self-hosting.
+    find: `    if (got) return out;
+`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'invite: the screen adopts the relay itself instead of routing it through the gate',
+    file: 'app/app.jsx',
+    // The one-line deletion CLAUDE.md rule 1 exists for: the engine keeps all eight of its tests and the
+    // screen stops consulting it.
+    find: `      if (F.adoptInviteRelays) { try { F.adoptInviteRelays(npub, raw); } catch (e) {} }`,
+    replace: `      const rm = String(raw || '').match(/[?&]relay=([^&\\s]+)/);
+      if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss:\\/\\//i.test(relay)) F.addRelay(relay); } catch (e) {} }`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'named relays: the 90-second swap stops re-verifying',
+    file: 'src/steward.src.js',
+    // The most under-appreciated path in the codebase: it runs on load, then every 90 seconds, then on every
+    // window focus, for ever, with no user action after the first connect.
+    find: `      if (!(await admitRemoteRelay(newUrl))) continue;
+`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'console resolver: takes whatever scheme the directory answers with',
+    file: 'src/steward.src.js',
+    // L5, which the member-side twin has had since 2026-07-06 and this one never did.
+    find: `      if (!j || typeof j.url !== 'string' || !/^wss:\\/\\//i.test(j.url)) continue;`,
+    replace: `      if (!j || typeof j.url !== 'string') continue;`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'console resolver: a proof is enough, membership no longer asked',
+    file: 'src/steward.src.js',
+    // The subtle version — still verifies, but only that SOMETHING TrinityOne-shaped is there, which is the
+    // question C2 answers and not the one C3 does.
+    find: `      if (memberToo ? !(await admitRemoteRelay(j.url)) : !(await verifyRelayIdentity(j.url))) continue;`,
+    replace: `      if (!(await verifyRelayIdentity(j.url))) continue;`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'auto-find: offers are no longer filtered to relays the church vouched for',
+    file: 'src/steward.src.js',
+    // Back to a well-behaved stranger being adopted because it behaved well — the behavioural probe promoted
+    // into a membership gate, which is AUDIT-2026-07-27 happening a second time.
+    find: `    if (!(await admitRemoteRelay(url))) return null;
+`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'clone: the SOURCE is required to be a member (migration inverted in time)',
+    file: 'src/steward.src.js',
+    // THE DEFECT THAT MUST NOT SHIP. It reads as a tightening and it breaks the only thing this control is
+    // for: a church vouches for the box it is ARRIVING at, never the one it is escaping.
+    find: `    if (!(await verifyRelayIdentity(srcRelay)))`,
+    replace: `    if (!(await admitRemoteRelay(srcRelay)))`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'clone: the SOURCE is not asked to prove anything',
+    file: 'src/steward.src.js',
+    find: `    if (!(await verifyRelayIdentity(srcRelay)))
+      throw new Error('That relay could not prove who it is, so your church’s history was not requested from it. Check the address, or restore from a backup file instead.');`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'clone: the DESTINATION takes the whole corpus without being in the network',
+    file: 'src/steward.src.js',
+    find: `    if (!(await admitRemoteRelay(dstRelay)))
+      throw new Error('The destination relay isn’t in your church’s network, so nothing was copied to it. Add it to your relay list and enrol it first.');`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'backup: a restore file carries the member’s relay list again',
+    file: 'app/backup.jsx',
+    find: `'trinityone.onboarded', 'trinityone.dark'`,
+    replace: `'trinityone.onboarded', 'trinityone.relays', 'trinityone.dark'`,
+    test: 'scripts/backup-file-safety.test.mjs',
+  },
+  {
+    name: 'backup: the console’s routing keys are exported again',
+    file: 'app/backup.jsx',
+    find: `      if (k && !ROUTING_KEYS.has(k) && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
+    replace: `      if (k && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
+    test: 'scripts/backup-file-safety.test.mjs',
+  },
+  {
+    name: 'backup: a crafted file can write the console’s routing keys again',
+    file: 'app/backup.jsx',
+    find: `      && !ROUTING_KEYS.has(String(k))                // never where a church's data goes — see ROUTING_KEYS
+`,
+    replace: ``,
+    test: 'scripts/backup-file-safety.test.mjs',
+  },
   {
     name: 'relay-gate: relay-net is served only to members, so a newcomer can never bootstrap',
     file: 'scripts/gateway.mjs',

@@ -3161,7 +3161,11 @@ function DashRelaysCard() {
     setByNameMsg({ text: 'Looking up “' + n + '”…' });
     try {
       const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
-      if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ No relay is registered under “' + n + '”.' }); return; }
+      // C5: the resolver now refuses two things it used to pass on — a cleartext (ws://) answer, and an
+      // address this church has not signed into its own relay-net document. "No relay is registered under
+      // that name" would be a plain untruth for the second, and this project has shipped six controls that
+      // told a steward a comforting story about something that did not happen. Say both possibilities.
+      if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
       window.Steward.addRelay(j.url);
       window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
       setByNameMsg({ text: 'Connecting your church…' });
@@ -3180,7 +3184,11 @@ function DashRelaysCard() {
     try {
       let url = raw;
       if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the mirrored directory
-        const jj = await window.Steward.resolveRelayName(raw);
+        // C5: `member: false` — the possession proof, without the membership check. A clone SOURCE is the box
+        // this church is leaving, and it may be one the church never vouched for; requiring membership of it
+        // would block exactly the migration this control exists for. The DESTINATION still takes the full
+        // gate, inside cloneFromRelay. This is the only caller allowed to pass it.
+        const jj = await window.Steward.resolveRelayName(raw, { member: false });
         if (!jj || !jj.url) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
         url = jj.url;
       }

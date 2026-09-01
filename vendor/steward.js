@@ -15196,20 +15196,30 @@ zoo`.split("\n");
     }
     return out;
   }
-  async function resolveRelayName(handle) {
+  async function resolveRelayName(handle, opts) {
     const h = String(handle || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
     if (!h) return null;
+    const memberToo = !(opts && opts.member === false);
     for (const base of _dirBases()) {
       try {
         const r = await fetch(base + "/relay-names/resolve/" + encodeURIComponent(h), { cache: "no-store", signal: AbortSignal.timeout(6e3) });
-        if (r.ok) {
-          const j = await r.json();
-          if (j && j.url) return j;
-        }
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (!j || typeof j.url !== "string" || !/^wss:\/\//i.test(j.url)) continue;
+        if (memberToo ? !await admitRemoteRelay(j.url) : !await verifyRelayIdentity(j.url)) continue;
+        return j;
       } catch (e) {
       }
     }
     return null;
+  }
+  async function admitRemoteRelay(url) {
+    if (!url) return false;
+    try {
+      return (await _gate.refresh([url], pub)).includes(url);
+    } catch (e) {
+      return false;
+    }
   }
   function getNamedRelays() {
     try {
@@ -15243,12 +15253,12 @@ zoo`.split("\n");
       try {
         const j = await resolveRelayName(entry.name);
         const newUrl = normRelay(j && j.url);
-        if (newUrl && newUrl !== entry.url) {
-          extra = extra.filter((u) => u !== entry.url);
-          extra.push(newUrl);
-          entry.url = newUrl;
-          changed = true;
-        }
+        if (!newUrl || newUrl === entry.url) continue;
+        if (!await admitRemoteRelay(newUrl)) continue;
+        extra = extra.filter((u) => u !== entry.url);
+        extra.push(newUrl);
+        entry.url = newUrl;
+        changed = true;
       } catch (e) {
       }
     }
@@ -15520,6 +15530,7 @@ zoo`.split("\n");
     const probed = await Promise.all(seed.map(async (url) => {
       const t = await _relayInfo(url);
       if (!(t && t.enforces === true && t.open === true && !t.full)) return null;
+      if (!await admitRemoteRelay(url)) return null;
       const canonical = (CANONICAL_RELAYS || []).includes(url);
       if (!canonical) {
         const v = await _probeRelayEnforces(url);
@@ -17091,10 +17102,23 @@ zoo`.split("\n");
     async cloneFromRelay(sourceUrl, { targetUrl, onProgress } = {}) {
       if (!sk || !pub) throw new Error("No church key on this device");
       const httpBase = (u) => String(u || "").replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
-      const src = httpBase(sourceUrl);
+      const wsForm = (u) => {
+        const v = String(u || "").trim().replace(/\/+$/, "");
+        if (/^wss?:\/\//i.test(v)) return v;
+        if (/^https:\/\//i.test(v)) return "wss://" + v.slice(8);
+        if (/^http:\/\//i.test(v)) return "ws://" + v.slice(7);
+        return v ? normRelay(v) : "";
+      };
+      const srcRelay = wsForm(sourceUrl);
+      const src = httpBase(srcRelay);
       if (!src) throw new Error("Enter the relay to copy from.");
-      const dst = targetUrl ? httpBase(targetUrl) : _blobBase();
+      const dstRelay = targetUrl ? wsForm(targetUrl) : ownRelay();
+      const dst = httpBase(dstRelay);
       if (src === dst) throw new Error("The source and destination are the same relay.");
+      if (!await verifyRelayIdentity(srcRelay))
+        throw new Error("That relay could not prove who it is, so your church\u2019s history was not requested from it. Check the address, or restore from a backup file instead.");
+      if (!await admitRemoteRelay(dstRelay))
+        throw new Error("The destination relay isn\u2019t in your church\u2019s network, so nothing was copied to it. Add it to your relay list and enrol it first.");
       if (onProgress) onProgress("reading", 0, 1);
       const er = await fetch(src + "/export", { headers: { Authorization: _nip98(src + "/export") } });
       if (!er.ok) throw new Error("Couldn\u2019t read your church\u2019s data from that relay (" + er.status + (er.status === 401 ? " \u2014 is it the right relay for this church?" : "") + ")");
@@ -21316,9 +21340,11 @@ zoo`.split("\n");
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return true;
     },
-    // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not required)
-    resolveRelayName(name) {
-      return resolveRelayName(name);
+    // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not
+    // required). C5: the answer must be wss:// AND pass the network gate before it comes back. Pass
+    // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
+    resolveRelayName(name, opts) {
+      return resolveRelayName(name, opts);
     },
     // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
     rememberRelayName(name, url) {

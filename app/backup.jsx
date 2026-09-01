@@ -101,12 +101,29 @@
     return JSON.parse(TD.decode(pt));
   }
 
+  // A RESTORE SHOULD RECOVER A CHURCH, NOT A ROUTING TABLE (closed-network plan C5).
+  //
+  // These keys say WHERE a congregation's data goes, and a backup file is the worst possible carrier for
+  // that: stale on the way out (last year's list re-points a phone at an address the church has since left,
+  // and the address may now belong to somebody else entirely) and untrusted on the way in — a crafted file
+  // needs only to sit inside an allowed prefix to name a machine of its author's choosing. Nothing is lost
+  // by leaving them behind: the relay list is rebuilt from the canonical pool and the church's own signed
+  // membership document, which is the only thing entitled to decide it.
+  //
+  // `trinityone.relays` is simply ABSENT from MEMBER_PREFIXES below rather than named here — which also
+  // keeps the C4 verified-set cache (`trinityone.relays.verified`, a prefix match) out of the file. The two
+  // steward keys DO need naming, because they sit under `trinityone.steward`, which stays allowed.
+  //
+  // Applied on BOTH sides on purpose: excluded from the export so the addresses never leave the device, and
+  // from the import so an older file that already carries them cannot write them.
+  const ROUTING_KEYS = new Set(['trinityone.steward.extra-relays', 'trinityone.steward.relay-names']);
+
   function snapshot(prefixes, exact) {
     const out = {};
     const ex = new Set(exact || []);
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);
+      if (k && !ROUTING_KEYS.has(k) && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);
     }
     return out;
   }
@@ -125,6 +142,7 @@
     // crafted file write `trinityone.profiles` — overwriting the member's whole view of who is in their church
     // with names of an attacker's choosing. Import is the side that faces an untrusted file.
     const ok = (k) => (exSet.has(String(k)) || (allow || []).some(p => String(k).startsWith(p)))
+      && !ROUTING_KEYS.has(String(k))                // never where a church's data goes — see ROUTING_KEYS
       && !/^trinityone\.nostr\.mnemonic/.test(k)    // never the seed, whatever the prefix list says
       // …and never a DEVICE-BOUND key wrap. church-key.enc is bound to the machine that wrote it: on web it is
       // ciphertext only that device's PIN opens, and on native it is merely the MARKER saying the real blob is
@@ -141,7 +159,10 @@
     return skipped;
   }
 
-  const MEMBER_PREFIXES = ['trinityone.mydata', 'trinityone.followedChurches', 'trinityone.activeChurch', 'trinityone.reminders', 'trinityone.onboarded', 'trinityone.relays', 'trinityone.dark', 'trinityone.theme', 'trinityone.settings'];
+  // `trinityone.relays` was here and is deliberately gone — see ROUTING_KEYS above. It matched the relay
+  // list AND the C4 verified-set cache, so a restored file used to hand a phone both a routing table and the
+  // proofs that made it look already-checked.
+  const MEMBER_PREFIXES = ['trinityone.mydata', 'trinityone.followedChurches', 'trinityone.activeChurch', 'trinityone.reminders', 'trinityone.onboarded', 'trinityone.dark', 'trinityone.theme', 'trinityone.settings'];
   // EXACT keys, never prefixes — and the difference is a privacy one, not a tidiness one.
   //
   // `trinityone.profile` is the member's OWN display name and avatar. It was never in the backup at all, so a

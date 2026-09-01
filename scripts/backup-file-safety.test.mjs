@@ -116,6 +116,10 @@ test('a crafted file cannot write the member’s identity, or anything else it l
       'trinityone.mydata:data/notes': '[]',            // legitimate, and must still land
     },
   });
+  assert.equal(localStorage.getItem('trinityone.relays'), null,
+    'a restore file wrote the member\u2019s relay list — so a crafted backup, which needs no `identity` field and ' +
+    'raises no warning, re-points where this person\u2019s messages, DMs and their child\u2019s care request are ' +
+    'published. A restore should recover a church, not a routing table (closed-network plan C5).');
   assert.equal(localStorage.getItem('trinityone.nostr.mnemonic'), 'the members own real phrase',
     'a restore file replaced the member’s identity with one the file’s author holds the words to — and with no '
     + '`identity` field present, the UI never showed the "this replaces your account" warning');
@@ -139,4 +143,56 @@ test('absurd KDF parameters in an untrusted file are clamped, not obeyed', async
   await assert.rejects(() => api.decryptStr(hostile, GOOD), (e) => /Wrong passphrase|damaged/i.test(e.message),
     'a hostile envelope was allowed to choose its own memory cost — it should fail as a bad file, not exhaust '
     + 'the device');
+});
+
+test('a backup file carries no routing table, and cannot write one', async () => {
+  // WHERE A CONGREGATION'S DATA GOES IS NOT A SETTING TO CARRY IN A FILE (closed-network plan C5).
+  //
+  // Out: a backup is read back months later, and last year's relay list points at an address the church has
+  // since left — which may by then belong to somebody else entirely. In: a file is an untrusted input, and
+  // until this it needed only to sit inside an allowed prefix to name a machine of its author's choosing.
+  // Nothing is lost either way: the list is rebuilt from the canonical pool and the church's own signed
+  // membership document, which is the only thing entitled to decide it.
+  const { api, localStorage } = loadBackup();
+  localStorage.setItem('trinityone.mydata:data/notes', '["mine"]');
+  localStorage.setItem('trinityone.relays', '["wss://the-church-relay.example/relay"]');
+  localStorage.setItem('trinityone.relays.verified', '{"wss://the-church-relay.example/relay":{"pub":"aa"}}');
+  localStorage.setItem('trinityone.steward.church-name', 'St Brides');
+  localStorage.setItem('trinityone.steward.extra-relays', '["wss://the-church-relay.example/relay"]');
+  localStorage.setItem('trinityone.steward.relay-names', '[{"name":"stbrides","url":"wss://the-church-relay.example/relay"}]');
+
+  const member = await api.collectMember();
+  assert.equal(member.local['trinityone.mydata:data/notes'], '["mine"]', 'the member backup stopped carrying the member\u2019s own data');
+  assert.equal('trinityone.relays' in member.local, false, 'the member backup still carries the relay list');
+  assert.equal('trinityone.relays.verified' in member.local, false,
+    'the member backup carries the verified-relay cache — a restore would hand a phone both a routing table and ' +
+    'the proofs that make it look already-checked');
+
+  const steward = api.collectSteward();
+  assert.equal(steward.local['trinityone.steward.church-name'], 'St Brides', 'the church backup stopped carrying the church\u2019s own settings');
+  assert.equal('trinityone.steward.extra-relays' in steward.local, false, 'the church backup still carries the console\u2019s relay list');
+  assert.equal('trinityone.steward.relay-names' in steward.local, false, 'the church backup still carries the console\u2019s named-relay table');
+
+  // …and the import side, which is the half that faces a crafted file rather than a stale one.
+  const fresh = loadBackup();
+  await fresh.api.applyMember({ v: 1, app: 'trinityone', kind: 'member', local: {
+    'trinityone.relays': '["wss://attacker.example/relay"]',
+    'trinityone.relays.verified': '{"wss://attacker.example/relay":{"pub":"bb"}}',
+    'trinityone.mydata:data/notes': '["restored"]',
+  } });
+  assert.equal(fresh.localStorage.getItem('trinityone.mydata:data/notes'), '["restored"]', 'the legitimate data did not restore');
+  assert.equal(fresh.localStorage.getItem('trinityone.relays'), null, 'a member file wrote a relay list');
+  assert.equal(fresh.localStorage.getItem('trinityone.relays.verified'), null, 'a member file wrote the verified-relay cache');
+
+  fresh.api.applySteward({ v: 1, app: 'trinityone', kind: 'steward', local: {
+    'trinityone.steward.extra-relays': '["wss://attacker.example/relay"]',
+    'trinityone.steward.relay-names': '[{"name":"x","url":"wss://attacker.example/relay"}]',
+    'trinityone.steward.church-name': 'St Brides',
+  } });
+  assert.equal(fresh.localStorage.getItem('trinityone.steward.church-name'), 'St Brides', 'the legitimate church setting did not restore');
+  assert.equal(fresh.localStorage.getItem('trinityone.steward.extra-relays'), null,
+    'a church backup file re-pointed the console\u2019s relay list — every document this church writes would go ' +
+    'wherever the file said');
+  assert.equal(fresh.localStorage.getItem('trinityone.steward.relay-names'), null,
+    'a church backup file wrote the named-relay table, which the 90-second refresh then follows for ever');
 });

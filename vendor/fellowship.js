@@ -9094,6 +9094,78 @@
     addRelay(url) {
       return window.Fellowship.setRelays([...window.Fellowship.relays, url]);
     },
+    // ── C5: AN ADDRESS THAT ARRIVES IN AN INVITE IS A CANDIDATE, NEVER AN INSTRUCTION ──────────────────────
+    //
+    // WHAT THIS STOPS. Somebody scans a code at the church door and their phone starts publishing their DMs
+    // and their child's care request to a machine of the code's choosing — and nothing on screen changes.
+    // Until this, `?relay=` was adopted on sight: a wss:// scheme check (L5) and nothing else, so any QR could
+    // put a relay into a member's set before they had followed anything at all.
+    //
+    // WHAT "VERIFY" MEANS HERE is the C3 predicate and nothing new: the C2 possession proof at the address we
+    // dialled, and the PUBKEY it proved vouched by one of the three roots — the canonical pin, the page's own
+    // serving origin, or this church's own signed relay-net document. The invite says WHERE TO ASK. The
+    // church's signature says WHO COUNTS. A hint costs nothing; an instruction is what this removes.
+    //
+    // WHY IT LIVES HERE AND NOT IN app/app.jsx. Those files ship unbundled, so a `false && ` in front of a
+    // condition leaves every word of it in place and any text-matching test still passes (CLAUDE.md rule 3).
+    // The decision belongs where a test can lift it and run it against a real relay; the screen keeps only the
+    // call.
+    //
+    // AND THE REFUSAL IS LEGIBLE. `trinity-relay-refused` carries the addresses that were turned away, so a
+    // printed slip naming a box the church has not enrolled reads as "that relay isn't in this church's
+    // network yet" at the moment it is scanned, rather than as a member discovering weeks later that their
+    // messages went nowhere. Backwards compatibility (plan C5): enrol the pilot churches' relays BEFORE this
+    // ships, or every printed invite naming one stops working.
+    //
+    // → { added: [url], refused: [url] }
+    async adoptInviteRelays(npubOrHex, raw) {
+      const out = { added: [], refused: [] };
+      const cp = toPub(npubOrHex);
+      if (!cp) return out;
+      const s = String(raw || "");
+      let inviteUrl = "";
+      const rm = s.match(/[?&]relay=([^&\s]+)/);
+      if (rm) {
+        try {
+          const u = decodeURIComponent(rm[1]);
+          if (/^wss:\/\//i.test(u)) inviteUrl = u;
+        } catch (e) {
+        }
+      }
+      const take = async (url) => {
+        if (!url) return false;
+        let ok = false;
+        try {
+          ok = await isNetworkRelay2(cp, url);
+        } catch (e) {
+          ok = false;
+        }
+        if (ok) {
+          if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], url]);
+          out.added.push(url);
+        } else out.refused.push(url);
+        return ok;
+      };
+      const got = await take(inviteUrl);
+      if (got) return out;
+      const nm = s.match(/[?&]relayname=([^&\s]+)/);
+      if (nm) {
+        let hit = null;
+        try {
+          hit = await window.Fellowship.resolveRelayName(decodeURIComponent(nm[1]));
+        } catch (e) {
+          hit = null;
+        }
+        if (hit && hit.url) await take(hit.url);
+      }
+      if (out.refused.length) {
+        try {
+          window.dispatchEvent(new CustomEvent("trinity-relay-refused", { detail: { cp, urls: out.refused.slice() } }));
+        } catch (e) {
+        }
+      }
+      return out;
+    },
     removeRelay(url) {
       return window.Fellowship.setRelays(window.Fellowship.relays.filter((r) => r !== url));
     },
@@ -9105,6 +9177,18 @@
     //
     // L5: only ever adopt a wss:// url. A cleartext ws:// would put the whole church's fellowship traffic in the
     // open, and this input comes from a stranger's directory entry.
+    //
+    // C5 — WHO GATES THE ANSWER, AND WHY THE TWO CALLERS DIFFER. This returns a candidate; it does not admit
+    // one. Its callers:
+    //   • adoptInviteRelays() above, which verifies before adopting. That is the invite path C5 closes.
+    //   • app/identity.jsx's "my church runs its own relay" box — the ONLY route back for a member with no old
+    //     phone and nobody nearby to show them a QR. It is NOT verified, deliberately, and the reason is
+    //     structural rather than an omission: at that moment this device follows no church, so there is no
+    //     church signature to check against and the gate could only ever refuse. Gating it would delete the
+    //     recovery route rather than harden it. What bounds the risk is C4: the address lands in the CANDIDATE
+    //     list, and the publish set still admits nothing that has not proved itself, so a wrong answer here
+    //     costs a wasted socket and no church data at all. The console's equivalent (connect-by-name) IS
+    //     gated, because a console always knows which church it is.
     async resolveRelayName(name) {
       const h = String(name || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
       if (!h) return null;
@@ -11760,6 +11844,12 @@
     // return only those advertising trinityone.enforces && open && !full. Reachability + the enforces/open
     // flags are all verified here, so a caller only ever sees live, enforcing, accepting relays. Ranked:
     // region match first (nearest), then lightest load. A church with no discovery seed just gets [] (safe).
+    // C5 NOTE, so the next reader does not think this path was missed. The console's discoverRelayOffers is
+    // gated on membership because its offers feed Auto-find, which ADOPTS what it picks. This one is adopted by
+    // nothing: re-grepped at this commit, no screen in app/ and no other engine function calls it or
+    // pickRelays() below — they are API surface with no consumer, so an offer here reaches no relay list. If
+    // anything ever adopts from it, it needs the same gate the console's has, and a test that counts events on
+    // the box rather than picks in the client.
     async discoverRelayOffers(opts) {
       const region = opts && opts.region;
       const seed = [.../* @__PURE__ */ new Set([...window.Fellowship.discoverySeed || [], ...window.Fellowship.CANONICAL_RELAYS || [], ...window.Fellowship.relays || []])];
