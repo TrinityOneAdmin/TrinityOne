@@ -80,6 +80,28 @@ and which of your instincts about it are wrong.
 
 ## Trust, privacy and tone
 
+- **TrinityOne relays are a closed network. A church must never reach a non-TrinityOne relay.**
+  `ESTABLISHED 2026-09-01, and a MUST before the pilot.` Owner, on learning a church's relay list can contain
+  generic public relays: *"this is a BIG issue. This should not be allowed to happen EVER. We have specific
+  features for protections for a reason, allowing outside relays is NOT allowed in our main build. TrinityOne
+  relays should be a network in and of themselves, so a church doesn't have to 'trust' or select relays, but
+  their church console should never reach non t1 relays."*
+
+  **Why it matters more than reach:** every protection in this product lives in the relay — the read gate,
+  the safeguarding gates, default-deny. A generic Nostr relay has none of them. Publishing a church's
+  documents there does not merely fail to protect them; it hands a sealed care request to a machine that
+  will serve it to anyone who asks, where the wrong recipients already hold keys to open it.
+
+  **The second half is as important as the first: a church must not have to CHOOSE.** Asking a churchwarden
+  to decide which relays are safe is asking them to hold a judgement they cannot make and we can. Membership
+  of the network is the product's job, not theirs.
+
+  Note what already exists and is NOT enough: relays expose a `relayPub` and the console reads it — but only
+  to count distinct machines for redundancy. It has never been a gate. The console's own comment calls
+  generic relays "publish-only, never trusted with the gated corpus", which stops the church SYNCING to them
+  and does nothing to stop a client PUBLISHING to them.
+
+
 - **Trust between people, not trust in the software.** `ESTABLISHED 2026-08-27.` Defaults lean open. Never
   imply suspicion of members. But gates facing OUTWARD — at the relay, at another church, at the world —
   are never optional.
