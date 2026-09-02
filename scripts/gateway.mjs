@@ -201,7 +201,8 @@ function _blobUploader(req, action) {
 }
 // download gate: a fresh NIP-98 (kind 27235) proof, bound to THIS url, signed by a member of the owning church.
 function _blobMember(req, ownerCp, host, path) {
-  if (!CHURCH_PUBS.size) return true;   // unconfigured relay → open (nothing to gate against yet)
+  if (!CHURCH_PUBS.size) return true;   // unconfigured relay → open (nothing to gate against yet). Deferred
+                                        // alongside accept()'s twin — see the note there.
   if (!ownerCp) return false;           // configured relay but this blob has no recorded owner → fail CLOSED (don't world-serve media on a missing/legacy sidecar); backfill the sidecar to restore access
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return false;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return false; }
@@ -1959,7 +1960,24 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
 const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 function accept(e) {
-  if (!CHURCH_PUBS.size) return true;                            // unconfigured = open
+  // AN UNCONFIGURED BOX ACCEPTS EVERYTHING, AND THAT IS A KNOWN GAP — DEFERRED 2026-09-02, not overlooked.
+  //
+  // Closing it (`return false` here) is right in principle: once any box proving it runs our software is
+  // admitted, a freshly installed relay is exactly such a box, and an address pointed at one would be handed
+  // a congregation's corpus by a client with no way to know better. It is defence-in-depth rather than
+  // load-bearing — the client-side gate is what actually stops a hostile box — which is why it is deferrable.
+  //
+  // WHY IT IS NOT DONE HERE. It was implemented, measured, and backed out. scripts/relay-privacy.test.mjs
+  // spawns a relay with NO church and seeds it directly, which only works because of this line; with the gate
+  // real, its seed needs the church configured, the documents published in the order a church actually comes
+  // into being, and its roster written in the per-member shape the relay ingests rather than the member-LIST
+  // shape the test invents. That is honest work on ten privacy assertions, and doing it at the end of a long
+  // session is how a safeguarding test gets quietly weakened. See CLAUDE.md §9.
+  //
+  // To finish it: restore `return false` (and the twin in _blobMember), then repair that file's staging. The
+  // executable statement of what should happen is in git history at the commit that removed it —
+  // scripts/an-unconfigured-relay-holds-nobodys-data.test.mjs, which passed, including first registration.
+  if (!CHURCH_PUBS.size) return true;                            // unconfigured = open (see above)
   // a network a church belongs to may publish church-style content here (groups/events/plans/posts)
   // REVIEW-2026-07-20 B3: `NETWORKS.has(e.pubkey)` granted church-level WRITE authority for EVERY church on
   // the relay to any key ANY church had declared a network. Scoped: when the event names a church, that

@@ -187,3 +187,9 @@ test('and the screen that fires it asks the same question first', () => {
     'the dashboard fires self-registration for any console showing a church name, including a delegate ' +
     'viewing the church they help with — which is how the junk rows were created in the first place');
 });
+
+// THE COLD-START RACE HAS NO TEST HERE — DEFERRED 2026-09-02 with the fix, and named so it is not forgotten.
+// Two cases lived here asserting that a founding write waits for the first proof. The implementation they
+// covered stalled every write in the product behind unreachable canonical probes (30 of 41 in
+// console-publish-honesty, the control included), so both were removed with it. Restore them from git
+// history alongside the real fix; the requirement is in src/steward.src.js above _waitForRegistration.

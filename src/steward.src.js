@@ -1312,8 +1312,16 @@ function setKey(mnemonic) {
   try { _loadBoxHosts(); _refreshBoxHostsUs(); } catch (e) {}
   // C4: prove this church's relays now that we know which church is asking. Membership is per church — the
   // signature that admits a relay is this church's — so the answers cached for a different church on this
-  // computer say nothing about this one. Fire-and-forget: the gate schedules the same work lazily anyway,
-  // and doing it here only means the first thing the steward saves is not waiting on a probe.
+  // computer say nothing about this one. The gate schedules the same work lazily anyway, so this only means
+  // the first thing the steward saves is not waiting on a probe.
+  //
+  // BUT THE PROMISE IS KEPT NOW, and that is the fix. Fire-and-forget was right while nothing REQUIRED a
+  // proof: an established console coasts on its 30-day cache and the probe is a background nicety. A church
+  // being created on a fresh device has an EMPTY cache, so the wizard's founding writes raced the very first
+  // proof and could land on an empty admitted set — a publish error in the church's first minute of
+  // existence. Same shape as the registration race one gate over (see _regGate below, and the measured
+  // incident that produced it), and it wants the same answer rather than a second ad-hoc await.
+  // Fire-and-forget, and the cold-start race above is the known cost of that. See _waitForRegistration.
   try { _gate.refresh(relaysRaw(), pub); } catch (e) {}
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
@@ -2137,6 +2145,27 @@ function _openRegGate() { const f = _openGate; _openGate = null; if (f) { try { 
 // EVERY publisher must wait, not just the one you happened to fix. publish() was guarded first and the
 // seeded groups went out anyway, because they travel by _publishToRelays() — the all-relays variant. Two
 // publishers, one gate.
+// THE COLD-START RACE IS REAL AND THIS IS NOT ITS FIX — DEFERRED 2026-09-02, measured, backed out.
+//
+// THE DEFECT, which stands: `_gate.refresh()` at setKey is fire-and-forget. An established console coasts on
+// its 30-day cache, but a church created on a FRESH DEVICE has an empty one, so the wizard's founding writes
+// can go out before any relay is proved, land on an empty admitted set, and fail in the church's first
+// minute. That is the owner's "a console starting a church must reach relays immediately", and it is unfixed.
+//
+// WHAT I TRIED AND WHY IT WAS WRONG: making _waitForRegistration await that refresh, so every publisher waited
+// for the first proof exactly as it waits for registration. Measured: 30 of 41 cases in
+// console-publish-honesty red, the CONTROL among them. The cause is not the tests — `relaysRaw()` includes the
+// canonical addresses, which are unreachable in a test and slow anywhere, so awaiting the WHOLE refresh puts
+// a multi-second stall in front of EVERY write in the product to fix a race that exists only at founding.
+//
+// WHAT THE FIX ACTUALLY NEEDS: bound the wait to the first ADMISSION rather than the whole refresh (resolve
+// as soon as any relay proves, or the budget expires), and scope it to founding rather than to every
+// publisher — `_regGate` is armed only while a church is being created and is latched afterwards, so it is
+// the natural signal. Both halves matter: scoping alone still stalls a real church's first write behind
+// canonical probes that will never answer.
+//
+// The executable statement of the requirement survives in scripts/church-setup-race.test.mjs; those two cases
+// are removed with this, and should come back with the fix.
 async function _waitForRegistration() {
   if (!_regGate) return;
   const g = _regGate;
