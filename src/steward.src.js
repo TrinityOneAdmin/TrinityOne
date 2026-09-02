@@ -2145,28 +2145,48 @@ function _openRegGate() { const f = _openGate; _openGate = null; if (f) { try { 
 // EVERY publisher must wait, not just the one you happened to fix. publish() was guarded first and the
 // seeded groups went out anyway, because they travel by _publishToRelays() — the all-relays variant. Two
 // publishers, one gate.
-// THE COLD-START RACE IS REAL AND THIS IS NOT ITS FIX — DEFERRED 2026-09-02, measured, backed out.
+// AND THE FIRST PROOF, which is a second gate and needs its own shape.
 //
-// THE DEFECT, which stands: `_gate.refresh()` at setKey is fire-and-forget. An established console coasts on
-// its 30-day cache, but a church created on a FRESH DEVICE has an empty one, so the wizard's founding writes
-// can go out before any relay is proved, land on an empty admitted set, and fail in the church's first
-// minute. That is the owner's "a console starting a church must reach relays immediately", and it is unfixed.
+// THE RACE: `_gate.refresh()` at setKey is fire-and-forget. An established console coasts on its 30-day
+// cache, but a church created on a FRESH DEVICE has an empty one, so the wizard's founding writes could go
+// out before any relay was proved and land on an empty admitted set — a publish failure in the church's
+// first minute. That is the owner's "a console starting a church must reach relays immediately".
 //
-// WHAT I TRIED AND WHY IT WAS WRONG: making _waitForRegistration await that refresh, so every publisher waited
-// for the first proof exactly as it waits for registration. Measured: 30 of 41 cases in
-// console-publish-honesty red, the CONTROL among them. The cause is not the tests — `relaysRaw()` includes the
-// canonical addresses, which are unreachable in a test and slow anywhere, so awaiting the WHOLE refresh puts
-// a multi-second stall in front of EVERY write in the product to fix a race that exists only at founding.
+// TWO THINGS THIS GETS RIGHT THAT THE FIRST ATTEMPT DID NOT, both measured the hard way on 2026-09-02:
 //
-// WHAT THE FIX ACTUALLY NEEDS: bound the wait to the first ADMISSION rather than the whole refresh (resolve
-// as soon as any relay proves, or the budget expires), and scope it to founding rather than to every
-// publisher — `_regGate` is armed only while a church is being created and is latched afterwards, so it is
-// the natural signal. Both halves matter: scoping alone still stalls a real church's first write behind
-// canonical probes that will never answer.
+//   FIRST ADMISSION, NOT THE WHOLE REFRESH. Awaiting `refresh()` waits for EVERY candidate to settle, and
+//   `relaysRaw()` always includes the canonical addresses — unreachable in a test and slow anywhere. That
+//   put a multi-second stall in front of every write and turned 30 of 41 cases in console-publish-honesty
+//   red, the CONTROL among them. One admitted relay is all a publish needs, so this resolves the moment the
+//   cache holds one and never waits on a slow candidate that nothing is waiting for.
 //
-// The executable statement of the requirement survives in scripts/church-setup-race.test.mjs; those two cases
-// are removed with this, and should come back with the fix.
+//   FOUNDING ONLY. `_regGate` is armed exactly where a church is coming into existence — createKey (R5-5)
+//   and selfRegister — and is latched afterwards. Gating on it means an established console never pays this
+//   at all, which is the difference between fixing a first-minute race and taxing every write for ever.
+//
+// Bounded like its neighbour, and for the same reason: a console whose relays will never answer must still
+// be able to work and say so through the publish error, not by hanging on the wizard's first screen.
+const PROOF_GATE_MS = 8000;
+let _proofWaited = false;
+function _awaitFirstAdmission(ms) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      let n = 0;
+      try { n = _gate.admit(relaysRaw(), pub).length; } catch (e) { n = 0; }
+      if (n > 0 || (Date.now() - t0) >= ms) { resolve(n > 0); return; }
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
 async function _waitForRegistration() {
+  // The proof half, and ONLY while a church is being founded — see the note above for why both halves of
+  // that sentence are load-bearing.
+  if (_regGate && !_proofWaited) {
+    _proofWaited = true;
+    try { await _awaitFirstAdmission(PROOF_GATE_MS); } catch (e) {}
+  }
   if (!_regGate) return;
   const g = _regGate;
   try { await Promise.race([g, new Promise((r) => setTimeout(r, REG_GATE_MS))]); } catch (e) {}

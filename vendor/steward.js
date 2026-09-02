@@ -16394,7 +16394,35 @@ zoo`.split("\n");
       }
     }
   }
+  var PROOF_GATE_MS = 8e3;
+  var _proofWaited = false;
+  function _awaitFirstAdmission(ms) {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = () => {
+        let n = 0;
+        try {
+          n = _gate.admit(relaysRaw(), pub).length;
+        } catch (e) {
+          n = 0;
+        }
+        if (n > 0 || Date.now() - t0 >= ms) {
+          resolve(n > 0);
+          return;
+        }
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
+  }
   async function _waitForRegistration() {
+    if (_regGate && !_proofWaited) {
+      _proofWaited = true;
+      try {
+        await _awaitFirstAdmission(PROOF_GATE_MS);
+      } catch (e) {
+      }
+    }
     if (!_regGate) return;
     const g = _regGate;
     try {
