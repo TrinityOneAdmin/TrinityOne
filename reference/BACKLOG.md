@@ -137,3 +137,18 @@ the directory will accumulate one of these per abandoned test relay.
 Wanted: an operator removal path, and/or expiry of a claim whose address has not answered for N days.
 Note the interaction with the T1-only plan — a name that resolves to a dead address now fails at the
 identity challenge rather than silently, which is better, but the tombstone remains.
+
+## Relay UI wants the same pass the console settings page got (2026-09-02)
+
+Owner, after the console settings rework: *"We should probably apply the same/similar changes to the relay
+ui that we applied to the steward console settings page."* Not urgent.
+
+The console settings work made cards more compact, fixed awkward stacking, and improved accessibility
+(reachable names on controls, tappable rows, authored stacks rather than ad-hoc spacing) — see the
+`settings-cards-sit-in-authored-stacks` / `settings-rows-tap-the-words` / `controls-have-accessible-names`
+tests for what was actually asserted. `app/stew-relay.jsx` never had that pass.
+
+Worth doing alongside whatever relay-UI work the declaration change eventually needs: the relay now has an
+operator-facing state it did not have before — *which addresses do I declare, and am I loopback-only?* — and
+that has no UI at all today. It is only visible in the startup log and an admin-gated route. An operator who
+has not read the release notes has no way to see it.
