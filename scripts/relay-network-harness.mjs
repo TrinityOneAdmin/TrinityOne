@@ -228,7 +228,18 @@ export function extractOldBuild(rev) {
 
 // The commit this repo calls "the build before the closed-network work": the branch point with main.
 // Override with TRINITY_OLD_GATEWAY_REV to rehearse against any other release.
-export const DEFAULT_OLD_REV = process.env.TRINITY_OLD_GATEWAY_REV || 'main';
+// PINNED, NOT 'main' — because main is now the branch these tests were written against.
+//
+// This was `main`, which is right while the work under test is on a side branch: "the build before this
+// work" and "the tip of main" are the same commit. The closed-network work merged to main on 2026-09-02
+// (7a292ca), so `main` became identical to the working tree, `gatewayDiffersFrom` correctly refused, and
+// every old-relay case failed rather than passing vacuously. That is the guard working, not a regression.
+//
+// 26aa696 is main's tip immediately BEFORE that merge — a genuine pre-gate relay, which is what "old" has to
+// mean for a skew rehearsal. Re-pin it the next time a release lands, or override for one run with
+// TRINITY_OLD_GATEWAY_REV. If you ever see "identical to the working tree" again, that is this line gone
+// stale, and the answer is to move it — never to delete the assertion.
+export const DEFAULT_OLD_REV = process.env.TRINITY_OLD_GATEWAY_REV || '26aa696';
 
 export async function startOldRelay({ name = 'old', churches = [], rev = DEFAULT_OLD_REV, env = {} } = {}) {
   const build = extractOldBuild(rev);

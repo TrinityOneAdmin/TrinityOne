@@ -52,3 +52,54 @@ test('no .jsx calls a bare saveIdentity anywhere it is not declared', () => {
       f + ' calls saveIdentity() without declaring it — it will throw ReferenceError when that line runs');
   }
 });
+
+// ── THE RESTORE DESTINATION IS UNGATED, AND THAT RESTS ON A HUMAN TYPING IT ─────────────
+//
+// `restoreChurchData({relayUrl})` POSTs the entire church corpus to a caller-supplied address WITHOUT the
+// membership check every other address path now gets. That is deliberate and it is right: this screen's job
+// is seeding a box the church is MOVING TO, which by construction is not yet in its membership document, so
+// requiring membership would invert time — you could not move onto a relay until you had already moved onto
+// it. Same reasoning that keeps the clone SOURCE ungated.
+//
+// What makes it safe is not the code. It is that a steward TYPES the address on a screen that says what it
+// is about to do, rather than it arriving in a link, a directory answer, or a restored backup — the paths
+// C5 closed precisely because an address can be chosen FOR somebody there.
+//
+// SO THIS FILE ENFORCES THE ARGUMENT INSTEAD OF DESCRIBING IT. The moment something calls this in code, the
+// "a human typed it" premise is false and the function has no guard at all. If this test fails, do not just
+// update the count: either gate the new caller, or explain here why it is also a human typing.
+import { test as _rsTest } from 'node:test';
+import _rsAssert from 'node:assert/strict';
+import { readFileSync as _rsRead, readdirSync as _rsDir } from 'node:fs';
+
+_rsTest('restoreChurchData has exactly one caller, and it is the screen a steward types into', () => {
+  const roots = ['app', 'src'];
+  const hits = [];
+  for (const r of roots) {
+    for (const f of _rsDir(new URL('../' + r + '/', import.meta.url))) {
+      if (!/\.(jsx|js|mjs)$/.test(f)) continue;
+      const src = _rsRead(new URL('../' + r + '/' + f, import.meta.url), 'utf8');
+      src.split('\n').forEach((line, i) => {
+        if (!/restoreChurchData\s*\(/.test(line)) return;
+        if (/async\s+restoreChurchData/.test(line)) return;          // the definition itself
+        if (/^\s*(\/\/|\*)/.test(line)) return;                       // prose about it
+        hits.push(`${r}/${f}:${i + 1}`);
+      });
+    }
+  }
+  _rsAssert.deepEqual(hits, ['app/stew-dashboard.jsx:6515'],
+    'restoreChurchData is called from somewhere new: ' + JSON.stringify(hits) + '\n' +
+    'Its destination is UNGATED, and the only reason that is safe is that a steward types the address on a ' +
+    'screen that says what it does. A programmatic caller makes that false and the corpus goes wherever it ' +
+    'is told. Gate the new caller, or justify it in the note above this test.');
+});
+
+_rsTest('a cleartext restore destination is refused', () => {
+  const bundle = _rsRead(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  const i = bundle.indexOf('async restoreChurchData');
+  _rsAssert.ok(i > 0, 'restoreChurchData is not in the bundle — re-anchor this test');
+  const body = bundle.slice(i, i + 1200);
+  _rsAssert.match(body, /wss\|https/,
+    'restoreChurchData no longer refuses a cleartext destination. A restore copies the WHOLE church, and ' +
+    'ws:// hands it to anyone on the path.');
+});

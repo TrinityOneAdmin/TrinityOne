@@ -3115,7 +3115,23 @@ window.Steward = {
   // church key if sealed, then import into a relay — THIS one (default) or `relayUrl` (clone onto another relay).
   // Events go to POST /import (which registers the church on a fresh relay); media blobs re-upload via PUT /blob.
   // Returns the relay's import tally + how many blobs restored. onProgress(phase, done, total) is optional.
+  // THE DESTINATION IS UNGATED ON PURPOSE — see the note above cloneFromRelay's targetUrl. This screen's job
+  // is seeding a box the church is MOVING TO, which by construction is not yet in its membership document,
+  // so requiring membership would invert time: you could not move onto a relay until you had already moved
+  // onto it. What makes that safe is that a steward TYPES this address on a screen that says what it does,
+  // rather than it arriving in a link or a lookup.
+  //
+  // BUT THAT SAFETY LIVES IN THE UI, NOT IN THIS FUNCTION, so two things enforce it rather than describing it.
+  // First, cleartext is refused here: a corpus is the whole church, and ws:// would hand it to anyone on the
+  // path. Second, `scripts/restore-scope.test.mjs` fails if a SECOND caller of this appears — because the
+  // argument above is about a human typing, and it stops being true the moment something calls this in code.
   async restoreChurchData(fileBytes, { relayUrl, onProgress } = {}) {
+    if (relayUrl) {
+      const u = String(relayUrl).trim();
+      const loopback = /^(wss?|https?):\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(u);
+      if (!loopback && !/^(wss|https):\/\//i.test(u))
+        throw new Error('That address is not encrypted (it must start with wss://), so nothing was sent to it. A restore copies the whole church.');
+    }
     if (!sk || !pub) throw new Error('No church key on this device');
     const base = relayUrl ? String(relayUrl).replace(/\/+$/, '') : _blobBase();
     const u8 = fileBytes instanceof Uint8Array ? fileBytes : new Uint8Array(fileBytes);
