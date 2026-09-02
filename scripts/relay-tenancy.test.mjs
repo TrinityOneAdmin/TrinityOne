@@ -3,10 +3,16 @@
 // Run: node --test scripts/relay-tenancy.test.mjs
 //
 // WHY THIS FILE EXISTS. Every pre-existing relay suite spawns the gateway with an EMPTY data dir and no
-// CHURCH_NPUB, so CHURCH_PUBS.size === 0 — accept() returns true unconditionally and note() records nothing.
-// Those suites' privacy assertions therefore pass over empty maps rather than over the real policy, which is
-// exactly why four criticals lived undetected in code they never reached. This fixture configures TWO real
-// churches so the tenancy and read-gate rules are actually executed.
+// CHURCH_NPUB, so CHURCH_PUBS.size === 0 — none of the per-church tenancy rules below is ever reached and
+// note() records nothing. Those suites' privacy assertions therefore pass over empty maps rather than over
+// the real policy, which is exactly why four criticals lived undetected in code they never reached. This
+// fixture configures TWO real churches so the tenancy and read-gate rules are actually executed.
+//
+// CORRECTED 2026-09-02. That paragraph used to say "accept() returns true unconditionally" when CHURCH_PUBS
+// is empty. Since the closed-network work it returns FALSE — an unconfigured box holds nobody's data, so it
+// accepts nobody's. The reason this fixture exists is unchanged (an empty relay exercises none of the
+// per-church rules) but the sentence explaining it now describes the opposite of the code, and a reader who
+// trusted it would think a fresh relay is permissive.
 //
 // Pins:
 //   C1 — kind-30078 is DEFAULT-DENY. Group/roster/serving docs, and a member's own MyData docs, are never

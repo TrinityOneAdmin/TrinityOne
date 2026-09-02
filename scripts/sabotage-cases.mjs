@@ -1505,4 +1505,46 @@ export const CASES = [
     replace: `    *'"ok":'*)  ok=1; break;;`,
     test: 'scripts/relay-declared-address-probe.test.mjs',
   },
+  // ── AUDIT 2026-09-02 ride-alongs: the church name at connect-by-name, and the proof gate's real cost ──
+  {
+    name: 'connect-by-name: the church name is dropped again',
+    file: 'app/stew-dashboard.jsx',
+    // the exact pre-fix line — a nameless self-registration the relay refuses, on a box that then keeps nothing the steward writes
+    find: `reg = await window.Steward.registerAtRelay(j.url, church.name);`,
+    replace: `reg = await window.Steward.registerAtRelay(j.url, '');`,
+    test: 'scripts/connect-by-name-names-the-church.test.mjs',
+  },
+  {
+    name: 'connect-by-name: the missing-name refusal is not recognised',
+    file: 'app/stew-dashboard.jsx',
+    // the steward is sent to the relay operator about a field on their own settings screen
+    find: `      const needsName = !reg.ok && /name/i.test(String(reg.why || ''));`,
+    replace: `      const needsName = false;`,
+    test: 'scripts/connect-by-name-names-the-church.test.mjs',
+  },
+  {
+    name: 'connect-by-name: registerAtRelay stops passing the relay\'s reason back',
+    file: 'src/steward.src.js',
+    // without the reason the console cannot tell a not-yet from a verdict, so every refusal becomes the same shrug
+    find: `      return { ok: r.ok, status: r.status, why };`,
+    replace: `      return { ok: r.ok, status: r.status };`,
+    test: 'scripts/connect-by-name-names-the-church.test.mjs',
+  },
+  {
+    name: 'proof gate: the first-admission wait loses its bound',
+    file: 'src/steward.src.js',
+    // a console whose relays never answer now hangs on its first write of the session instead of proceeding and saying so
+    find: `      if (n > 0 || (Date.now() - t0) >= ms) { resolve(n > 0); return; }`,
+    replace: `      if (n > 0) { resolve(true); return; }`,
+    test: 'scripts/church-setup-race.test.mjs',
+  },
+  {
+    name: 'proof gate: the once-per-session latch is removed',
+    file: 'src/steward.src.js',
+    // the wait becomes a per-write tax the moment anything re-arms the gate, which selfRegister does on every owner console
+    find: `    _proofWaited = true;
+`,
+    replace: ``,
+    test: 'scripts/church-setup-race.test.mjs',
+  },
 ];

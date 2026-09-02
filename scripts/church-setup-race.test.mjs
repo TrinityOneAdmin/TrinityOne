@@ -260,3 +260,52 @@ test('a relay that never proves itself does NOT hang the wizard for ever', async
   await waitFor();
   assert.ok(Date.now() - t0 < 2000, 'the wizard hung on relays that never answered');
 });
+
+test('an ESTABLISHED console pays the proof wait once a session, bounded, and never again', async () => {
+  // WHAT THE CASE ABOVE STAGES IS NOT WHAT THE PRODUCT DOES. It sets `_regGate = null`, and the commit that
+  // added it claimed "an established console never pays this at all". That is false. `_openRegGate()`
+  // RESOLVES the gate and never nulls it — only `_waitForRegistration` does — and app/stew-dashboard.jsx
+  // re-runs `selfRegister(church.name)` on every owner console the moment the church name resolves. So an
+  // established console arms the gate too, and the state it actually occupies is this one: a RESOLVED
+  // promise, not null. That case is kept, because null is still the state before a church name has loaded
+  // and it guards the founding scope. This is the other half.
+  //
+  // The real `_awaitFirstAdmission` runs here, not a stub — the cost being measured lives in ITS polling
+  // loop, and a stubbed one would answer the question the case is named after.
+  let admits = 0;
+  const awaitFirst = lift('function _awaitFirstAdmission(ms) {', '_awaitFirstAdmission', {
+    _gate: { admit: () => { admits++; return []; } },   // a COLD cache: nothing is admitted yet, so it polls the whole budget
+    relaysRaw: () => ['wss://cold.example/relay'],
+    pub: 'aa'.repeat(32),
+  });
+  let regGate = Promise.resolve();          // the established state: armed by selfRegister, then resolved
+  const waitFor = lift('async function _waitForRegistration() {', '_waitForRegistration', {
+    get _regGate() { return regGate; }, set _regGate(v) { regGate = v; },
+    _proofWaited: false, PROOF_GATE_MS: 300, REG_GATE_MS: 30,
+    _awaitFirstAdmission: awaitFirst,
+  });
+
+  const t0 = Date.now();
+  await waitFor();
+  const paid = Date.now() - t0;
+  assert.ok(admits > 1,
+    'the proof wait did not poll at all on an established console, so this case is not measuring the cost it ' +
+    'is named after');
+  assert.ok(paid >= 250,
+    'the wait ended early on a cache that never admits anything — the founding race it exists to close is ' +
+    'still open');
+  assert.ok(paid < 3000,
+    'the wait is not bounded by PROOF_GATE_MS. An established console whose relays never answer would hang ' +
+    'on its first write of every session, which is most of the console\'s users on a bad connection.');
+
+  // PAID AT MOST ONCE. Re-arm the gate the way a second selfRegister would, and require the poll not to run
+  // again: `_proofWaited` is the latch that stops this becoming a per-write tax.
+  const before = admits;
+  regGate = Promise.resolve();
+  const t1 = Date.now();
+  await waitFor();
+  assert.equal(admits, before,
+    'the proof wait ran a second time. It is bounded at PROOF_GATE_MS each time, so a console that re-arms ' +
+    'the gate would pay it again and again for the rest of the session.');
+  assert.ok(Date.now() - t1 < 500, 'the second write was delayed');
+});

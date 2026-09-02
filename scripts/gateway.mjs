@@ -488,10 +488,15 @@ loadChurches();
 // archive could not contain what was never written.
 //
 // Restore that archive onto a new box without remembering to set the variable again and the relay comes up
-// not knowing which church it serves: the write policy is OFF (an open relay — anyone on the internet may
-// write), and the congregation cannot read its own membership documents, because note() returns early when
-// CHURCH_PUBS is empty. It reports itself perfectly healthy throughout. Measured: 14 documents before,
-// 10 after, all three member: docs and the care slot invisible, "write policy OFF".
+// not knowing which church it serves: it REFUSES EVERY WRITE (accept() returns false while CHURCH_PUBS is
+// empty — see the note there), and the congregation cannot read its own membership documents either, because
+// note() returns early when CHURCH_PUBS is empty. It reports itself perfectly healthy throughout. Measured:
+// 14 documents before, 10 after, all three member: docs and the care slot invisible.
+//
+// CORRECTED 2026-09-02. This used to say the write policy was OFF and the box was "an open relay — anyone on
+// the internet may write", which was true when it was written and is now the reverse of the code: an
+// unconfigured box accepts nobody's data. The symptom changed from silently wrong to loudly broken; the
+// reason to stamp the church here did not.
 //
 // Stamping it here means the very next backup carries the church. Idempotent: persistChurches() writes
 // envMigrated, and loadChurches() stops folding the env var in once it sees that stamp. AUDIT 2026-08-02.
@@ -5307,7 +5312,10 @@ wss.on('close', () => clearInterval(wsHeartbeat));
 const BIND_HOST = process.env.RELAY_HOST || '0.0.0.0';   // servers keep 0.0.0.0; the desktop app sets this explicitly (loopback unless the operator opts into LAN access — see relay-app/desktop/src-tauri/src/main.rs)
 server.listen(PORT, BIND_HOST, () =>
   console.log(`TrinityOne gateway on http://${BIND_HOST}:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
-    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
+    // NOT "open relay" ANY MORE. This line said "write policy OFF (open relay — anyone may write)" long after
+    // accept() started refusing every write from a box with no churches. An operator reading it would conclude
+    // their unconfigured relay was permissive when in fact it keeps nothing at all.
+    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  NO CHURCH CONFIGURED — this relay refuses every write until one is set up in the control dashboard`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}` +
     (!_strictWeb ? `\n  ⚠ CSP is LAX (unsafe-inline/eval) — served shells still carry in-browser Babel. Deploy a PRE-TRANSPILED build (or set STRICT_CSP=1) before go-live: the console holds the church key.` : '')));
