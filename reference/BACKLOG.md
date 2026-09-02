@@ -152,3 +152,26 @@ Worth doing alongside whatever relay-UI work the declaration change eventually n
 operator-facing state it did not have before — *which addresses do I declare, and am I loopback-only?* — and
 that has no UI at all today. It is only visible in the startup log and an admin-gated route. An operator who
 has not read the release notes has no way to see it.
+
+## Relay payload: stop shipping reference/, and version by content (after round 7)
+
+Owner 2026-09-02, after a documentation-only commit prompted every relay to offer an update.
+
+**1. `reference/` ships to relays and must not.** `build-relay-payload.sh:30` strips `android ios .github
+docs modules marketing` — not `reference`. So **9.9 MB across 46 markdown files** of internal planning sits
+on every church's relay: audit findings, threat-model reasoning, and a list of where the gaps are. Under the
+recorded threat model (lawful compulsion and seizure) a seized relay currently hands over a map of the
+system's weaknesses. This is a disclosure item, not just dead weight. One line.
+
+**2. Version by payload content, not by commit.** `build-relay-payload.sh:56` stamps `version.txt` with
+`git rev-parse HEAD`, so ANY commit — a typo in a document — makes every relay report an update available.
+The version answers "did the repo move", when the question is "did the code change". Hash the payload
+instead; a doc-only commit then produces a byte-identical payload and no prompt, and the answer becomes true
+rather than approximately true.
+
+**3. Release on tags, going forward.** Owner: *"Release on tags sounds like a good process going forward as
+well."* A deliberate release moment rather than every main commit, which also fits the
+backwards-compatibility discipline the pilot needs (`backwards-compatibility-from-pilot`: add, never
+repurpose, and the relay rehydrates ALL history on every update).
+
+Sequenced after round 7 so the round tests what is currently deployed.
