@@ -6456,6 +6456,20 @@
   function relayHttpBase(wssUrl) {
     return String(wssUrl || "").replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
   }
+  function relayAddrKey(u) {
+    let str = String(u || "").trim();
+    if (!str) return "";
+    str = str.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
+    try {
+      const p = new URL(str);
+      const proto = p.protocol.toLowerCase();
+      const port = p.port === "80" && proto === "ws:" || p.port === "443" && proto === "wss:" ? "" : p.port;
+      const path = p.pathname.replace(/\/+$/, "");
+      return p.hostname.toLowerCase() + (port ? ":" + port : "") + path;
+    } catch {
+      return str.toLowerCase().replace(/^wss?:\/\//, "").replace(/\/+$/, "");
+    }
+  }
   async function verifyRelayIdentity(wssUrl) {
     try {
       const base = relayHttpBase(wssUrl);
@@ -6473,7 +6487,10 @@
       try {
         body = await Promise.race([
           (async () => {
-            const res = await fetch(base + "/relay-identity?nonce=" + nonce, { signal: ctrl.signal, cache: "no-store" });
+            const res = await fetch(
+              base + "/relay-identity?nonce=" + nonce + "&for=" + encodeURIComponent(String(wssUrl || "")),
+              { signal: ctrl.signal, cache: "no-store" }
+            );
             return res.ok ? res.json() : null;
           })(),
           new Promise((_, rej) => setTimeout(() => rej(new Error("relay-identity timeout")), 6500))
@@ -6490,6 +6507,7 @@
         return t ? String(t[1] || "") : "";
       };
       if (tag("nonce").toLowerCase() !== nonce) return null;
+      if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
       const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
       if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
       return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };

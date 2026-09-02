@@ -89,6 +89,7 @@ function gateSource(src) {
     stmt(src, 'var RELAY_PROOF_WINDOW_SEC = ', 'RELAY_PROOF_WINDOW_SEC'),
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
+    fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
     fnBody(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
     stmt(src, 'var RELAY_NET_D = ', 'RELAY_NET_D'),
     fnBody(src, 'function _relayKey', '_relayKey'),
@@ -446,14 +447,24 @@ test('a relay that moved re-proves at its new address; an address answering with
     // AND THE OTHER DIRECTION. The address this church proved is now answering with somebody else's key —
     // the box was replaced, or the name now points elsewhere. A cache that kept the old verdict would be
     // vouching for a machine it never checked.
+    // UPDATED 2026-09-02 for the address binding. This used to FORWARD to OUT, which under the binding is
+    // refused for being a forwarder — and that would have made this case pass for the wrong reason, testing
+    // hole 1 instead of the thing it is named after. A replaced box is not a proxy: it is a real machine at
+    // the same address holding a DIFFERENT key. So the usurper now signs its OWN address with its own key,
+    // which is what "the name now points elsewhere" actually looks like on the wire.
+    const usurperKey = H.key();
+    let usurperAddr = '';
     const usurper = await H.startImpostor({
       name: 'usurper',
       handler: async (req, res, u) => {
         if (!u.pathname.startsWith('/relay-identity')) return H.sendJson(res, { error: 'no' }, 404);
-        const r = await fetch(OUT.base + '/relay-identity?nonce=' + u.searchParams.get('nonce'));
-        H.sendJson(res, await r.json(), r.status);
+        const nonce = u.searchParams.get('nonce') || '';
+        H.sendJson(res, { proof: finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
+          tags: [['u', 'relay-identity'], ['method', 'GET'], ['nonce', nonce], ['relay', usurperAddr]],
+          content: '' }, usurperKey.sk) });
       },
     });
+    usurperAddr = usurper.base.replace(/^http:/, 'ws:') + '/relay';
     const takenOver = usurper.base + '/relay';
     const s2 = memStore();
     const c2 = consoleOn({ church: flock, origin: { protocol: 'https:', host: 'app.example.church' }, extra: [takenOver], store: s2 });
@@ -463,7 +474,7 @@ test('a relay that moved re-proves at its new address; an address answering with
     }));
     const c2b = consoleOn({ church: flock, origin: { protocol: 'https:', host: 'app.example.church' }, extra: [takenOver], store: s2 });
     assert.deepEqual(c2b.relays(), [takenOver], 'precondition: the seeded cache admits this address');
-    assert.equal((await c2b.proveRelay(flock.pub, takenOver)).pub, OUT.relayPub,
+    assert.equal((await c2b.proveRelay(flock.pub, takenOver)).pub, usurperKey.pub,
       'precondition: the address really is answering now with a key nothing vouches for');
     await c2b.gate.refresh([takenOver], flock.pub);
     assert.deepEqual(c2b.relays(), [],
@@ -497,9 +508,15 @@ test('a host that forwards the proof cannot inherit the canonical pool\'s identi
     const real = await con.proveRelay(church.pub, POOLBOX.wsUrl);
     assert.equal(real.root, 'canonical', 'precondition: the genuine canonical relay is admitted by its pin');
     const via = await con.proveRelay(church.pub, fCanon.base + '/relay');
-    assert.equal(via.pub, POOLBOX.relayPub,
-      'precondition: the forwarder really did pass on a valid proof of the canonical relay\'s key — if it ' +
-      'did not, this test is about a broken proxy rather than about the binding');
+    // UPDATED 2026-09-02, when the address binding landed. This used to require that the forwarder DID pass
+    // on a valid proof (`via.pub === POOLBOX.relayPub`), so that the refusal below could be shown to be
+    // about membership rather than about a broken proxy. That precondition is now unreachable and that is
+    // the whole point: the relay refuses to sign an address it does not declare, so a forwarder gets no
+    // proof to pass on at all. The refusal has moved one step EARLIER — from "your proof buys you nothing
+    // at this address" to "there is no proof". Both are asserted, so neither can regress silently.
+    assert.equal(via.pub, '',
+      'a forwarder still obtained a proof. The relay is signing an address it does not declare, which is ' +
+      'the forwarding hole itself: see relayIdentityUrl in gateway.mjs.');
     assert.equal(via.root, '',
       'a host that merely FORWARDS the possession proof inherited the canonical pool\'s membership at its ' +
       'own address. The pin is looked up by the address dialled precisely so that it cannot.');
@@ -531,10 +548,18 @@ test('a host that forwards the proof cannot inherit the canonical pool\'s identi
   const fChurch = await forward(IN);
   const con3 = consoleOn({ church, origin: { protocol: 'https:', host: 'app.example.church' }, extra: [IN.wsUrl] });
   try {
-    assert.equal((await con3.proveRelay(church.pub, fChurch.base + '/relay')).root, 'church',
-      'the church-signature root has started refusing a forwarder. That is the RIGHT direction — but it is ' +
-      'C6\'s change and it needs the relay to sign an address it owns, so update this test and the note in ' +
-      'src/relay-net.src.js rather than deleting either.');
+    // INVERTED 2026-09-02 — this is the change the old assertion was waiting for.
+    //
+    // It used to require `root === 'church'`: a forwarder in front of a church-SIGNED box inherited that
+    // box's membership, because membership is keyed on the pubkey and a forwarder passes on a real proof of
+    // it. The note said whoever made the relay sign an address it owns should come here and say so. Done:
+    // gateway.mjs now declares its addresses and refuses to sign one it does not, and the client compares
+    // the signed address against the one it dialled — so the forwarder gets no proof, and there is nothing
+    // left for the church signature to be applied to.
+    assert.equal((await con3.proveRelay(church.pub, fChurch.base + '/relay')).root, '',
+      'a forwarder in front of a church-signed box inherited that box\'s membership at its own address. ' +
+      'The address binding has regressed: see relayIdentityUrl in gateway.mjs and relayAddrKey in ' +
+      'src/relay-identity.src.js.');
   } finally { con3.close(); fChurch.stop(); }
 });
 

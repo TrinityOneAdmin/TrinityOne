@@ -21,9 +21,18 @@
 // and lands separately with an audit between, because a relay older than this cannot answer at all and would
 // silently drop out of its own church's network the moment something started requiring one.
 //
-// It also does not refuse a relay whose signed URL differs from the URL we dialled. That is not an oversight:
-// a relay behind a tunnel changes URL on every restart, so URL-to-key binding is a server-side job (plan C6)
-// and a church signs PUBKEYS. The claimed url is returned so a later caller can use it; it is not a gate here.
+// IT DOES REFUSE A RELAY WHOSE SIGNED ADDRESS IS NOT THE ONE WE DIALLED, and that is the whole point of the
+// binding. Without it a host running NONE of our software forwards this request to a real relay, passes the
+// genuine proof back, and terminates the socket itself — the corpus and every member's IP land on a reverse
+// proxy while every check says "TrinityOne". The relay half (gateway.mjs `relayIdentityUrl`) is what makes
+// the comparison mean anything: a box declares the addresses it answers at and signs the dialled one only
+// when it is one of them, because a `Host` header is chosen by whoever stands in front of it.
+//
+// COMPARED THE WAY THE POOL COMPARES. Trailing slash, default :80/:443, case, and http↔ws form all have to
+// normalise away or a correct relay is refused for a cosmetic difference — three trailing-slash misses are
+// already recorded in this codebase. And the comparison is against the URL we DIALLED, never `response.url`:
+// fetch follows redirects, so a 302 to the real relay would otherwise compare a forwarder's proof against
+// the relay's own address and pass.
 import { verifyEvent } from 'nostr-tools/pure';
 
 // The house freshness window, ±5 minutes — the same number gateway.mjs applies to every other kind-27235
@@ -56,7 +65,37 @@ export function relayHttpBase(wssUrl) {
     .replace(/\/+$/, '');
 }
 
-// → { relayPub, url } when this box proved it holds that key, or null.
+// Normalise a relay address for comparison, the way nostr-tools' normalizeURL does for the pool: lowercase
+// host, ws/wss form, no default port, no trailing slash, path preserved. Path IS preserved deliberately —
+// clients dial `wss://host/relay`, and comparing host-only would re-admit a forwarder sitting on another
+// port or path of a legitimate host, which is the quiet version of the hole this closes.
+// SCHEME IS DELIBERATELY EXCLUDED; HOST, PORT AND PATH ARE NOT.
+//
+// Those three are what a forwarder cannot fake — it would have to be declared by the relay to be signed at
+// all — and keeping the PATH is what stops a forwarder sitting on another path of a legitimate host, which
+// is the quiet version of the hole this closes. The scheme carries no such weight and cannot be compared
+// honestly: the same box is legitimately dialled `wss://` through a tunnel that terminates TLS and `ws://`
+// on the loopback behind it, an invite is REQUIRED to carry wss://, and a proxy that does not set
+// `x-forwarded-proto` leaves the relay unable to know which one the caller used. Comparing it refuses
+// correct relays for a cosmetic difference — measured: 8 legitimate cases in
+// an-invite-cannot-choose-your-relay.test.mjs, every one a real box.
+//
+// Refusing cleartext `ws://` is a SEPARATE rule and belongs on the dialled URL before we ever get here, not
+// smuggled into an equality test that would then be silently doing two jobs.
+export function relayAddrKey(u) {
+  let str = String(u || '').trim();
+  if (!str) return '';
+  str = str.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://');
+  try {
+    const p = new URL(str);
+    const proto = p.protocol.toLowerCase();
+    const port = ((p.port === '80' && proto === 'ws:') || (p.port === '443' && proto === 'wss:')) ? '' : p.port;
+    const path = p.pathname.replace(/\/+$/, '');
+    return p.hostname.toLowerCase() + (port ? ':' + port : '') + path;
+  } catch { return str.toLowerCase().replace(/^wss?:\/\//, '').replace(/\/+$/, ''); }
+}
+
+// → { relayPub, url } when this box proved it holds that key AT THE ADDRESS WE DIALLED, or null.
 //
 // FAILS CLOSED ON EVERYTHING ELSE — unreachable, non-200, unparseable, wrong kind, bad signature, a nonce
 // that is not the one we sent, a timestamp outside the window. There is no partial answer and no "probably":
@@ -75,7 +114,12 @@ export async function verifyRelayIdentity(wssUrl) {
     try {
       body = await Promise.race([
         (async () => {
-          const res = await fetch(base + '/relay-identity?nonce=' + nonce, { signal: ctrl.signal, cache: 'no-store' });
+          // `for=` names the address we are about to trust, so the relay can bind the PATH as well as the
+          // host — this HTTP request carries no trace of the socket URL otherwise. The relay signs it only
+          // if it is one of the addresses it declares, so this chooses among declared entries and can never
+          // introduce one.
+          const res = await fetch(base + '/relay-identity?nonce=' + nonce + '&for=' + encodeURIComponent(String(wssUrl || '')),
+            { signal: ctrl.signal, cache: 'no-store' });
           return res.ok ? res.json() : null;
         })(),
         new Promise((_, rej) => setTimeout(() => rej(new Error('relay-identity timeout')), 6500)),
@@ -92,6 +136,11 @@ export async function verifyRelayIdentity(wssUrl) {
     // OUR question, not one this host was asked earlier by somebody else. This single line is what makes a
     // captured proof worthless and a static pre-signed answer detectable.
     if (tag('nonce').toLowerCase() !== nonce) return null;
+    // THE ADDRESS BINDING. The signed `relay` tag must be the address we dialled. A forwarder that sends its
+    // own Host gets no proof at all (the relay refuses to sign an address it does not declare); a forwarder
+    // that rewrites Host to the real relay's name gets a proof naming THAT relay, which is not what we
+    // dialled. Compare against `wssUrl`, the argument — never anything derived from the response.
+    if (relayAddrKey(tag('relay')) !== relayAddrKey(wssUrl)) return null;
     const age = Math.abs(Math.floor(Date.now() / 1000) - (Number(ev.created_at) || 0));
     if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
     return { relayPub: String(ev.pubkey).toLowerCase(), url: tag('relay') };

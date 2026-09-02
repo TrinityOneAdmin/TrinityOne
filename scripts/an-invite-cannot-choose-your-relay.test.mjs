@@ -95,6 +95,7 @@ function gateSource(src) {
     stmt(src, 'var RELAY_PROOF_WINDOW_SEC = ', 'RELAY_PROOF_WINDOW_SEC'),
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
+    fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
     fnBody(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
     stmt(src, 'var RELAY_NET_D = ', 'RELAY_NET_D'),
     fnBody(src, 'function _relayKey', '_relayKey'),

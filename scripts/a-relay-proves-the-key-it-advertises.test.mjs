@@ -46,6 +46,7 @@ function lift(file) {
     stmt(src, 'var RELAY_PROOF_WINDOW_SEC = ', 'RELAY_PROOF_WINDOW_SEC'),
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
+    fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
     fnBody(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
   ].join('\n');
   assert.match(body, /verifyEvent2?\(ev\)/,
@@ -97,8 +98,13 @@ test('a fresh nonce verifies, and proves the key the relay advertises', async ()
     assert.ok(got, `${file}: a real relay could not prove its own identity`);
     assert.equal(got.relayPub, statusPub,
       `${file}: the key the relay PROVED is not the key it advertises in /status`);
-    // The signed URL is carried, not gated on (a tunnel's URL churns; see the module comment).
-    assert.equal(got.url, R.base, `${file}: the proof did not bind the relay's own URL`);
+    // UPDATED 2026-09-02, when the address binding landed. This used to read "the signed URL is carried,
+    // not gated on" — it is now GATED on, because a forwarder that runs none of our software could
+    // otherwise pass a genuine proof along and take the socket itself. The relay signs the address it
+    // DECLARES, in the canonical ws:// form, so the expectation is that form and not the http:// spelling
+    // the caller happened to dial. The scheme is deliberately not compared (see relayAddrKey).
+    assert.equal(got.url, R.base.replace(/^http:/, 'ws:'),
+      `${file}: the proof did not bind the relay's own declared address`);
   }
 });
 
@@ -165,10 +171,17 @@ test('a proof signed by a different key fails', async () => {
 
   // The mirror image, so the failure above is the signature and not something incidental: the same host
   // signing HONESTLY as itself does verify — and comes back as ITS key, never as the relay's.
+  // UPDATED 2026-09-02: this stranger now signs THE ADDRESS IT IS ACTUALLY SERVING AT. It used to sign a
+  // fixed 'http://honest.invalid', which was fine while the signed address was carried but not checked;
+  // under the address binding that is indistinguishable from a forwarder and is refused. Signing its own
+  // address keeps the case doing its real job — proving the refusal above is about the SIGNATURE and not
+  // something incidental — rather than accidentally re-testing the binding.
+  let honestBase = '';
   const honest = await H.startImpostor({
     name: 'honest-stranger',
-    handler: (req, res, u) => H.sendJson(res, { proof: proofClaiming(otherPub, other, u.searchParams.get('nonce') || '', 'http://honest.invalid') }),
+    handler: (req, res, u) => H.sendJson(res, { proof: proofClaiming(otherPub, other, u.searchParams.get('nonce') || '', honestBase) }),
   });
+  honestBase = honest.base;
   for (const [file, v] of verifiers) {
     const got = await v.verifyRelayIdentity(honest.base);
     assert.ok(got, `${file}: a correctly signed proof by a stranger's own key did not verify at all`);

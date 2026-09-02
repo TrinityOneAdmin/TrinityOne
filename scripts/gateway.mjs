@@ -554,18 +554,124 @@ function relayNameClaim(handle, url, offer) { return 'Nostr ' + Buffer.from(JSON
 // A host that only copied /status cannot answer, because answering needs the secret key. A host that once
 // CAPTURED a valid answer cannot re-use it, because the nonce inside it is not the one the next caller asked.
 //
-// The URL this signs is the relay's own public origin when the operator configured one, and otherwise the
-// host the request arrived on. The client is told the URL but does NOT admit or refuse on it: a relay behind
-// a tunnel changes URL on every restart, so URL-to-key binding is a server-side job (see the closed-network
-// plan, C6) and pubkey is what a church signs. That leaves one residual worth naming: a host that FORWARDS
-// /relay-identity to the real relay can pass the proof along. It has not learned the key, and under the
-// closed-network gates it is a plain proxy of the relay it forwards to — which is why the tunnel-friendly
-// reading is the one taken here rather than a host check that would brick real deployments.
-function relayIdentityUrl(req) {
-  if (ORIGIN) return ORIGIN.replace(/\/+$/, '');
-  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
+// THE ADDRESSES THIS BOX ANSWERS AT, and the reason this is not the Host header any more.
+//
+// A host that FORWARDS /relay-identity to a real relay used to pass the proof straight back: it learned no
+// key and forged nothing, yet the corpus and every member's IP landed on a box running a reverse proxy
+// rather than our software. That is the whole "only TrinityOne software talks to TrinityOne software" rule
+// defeated by nginx. The client half of the fix compares the address it dialled against the one signed here
+// (relay-identity.src.js); this half is what makes that comparison mean anything, because a `Host` header is
+// chosen by whoever is in front of us — a forwarder can simply send our own name.
+//
+// SO: a box declares the addresses it answers at, signs the DIALLED one only when it is one of them, and
+// refuses otherwise. Refusing rather than falling back is the point — a relay that signs a host it cannot
+// vouch for is the forwarding hole verbatim.
+//
+// FULL wss:// URLs, INCLUDING THE PATH. Clients dial `wss://host/relay`; a bare `proto://host` can never
+// compare equal to that under normalizeURL, and "fixing" that by comparing host-only would re-admit a
+// forwarder sitting on another port or path of a legitimate host. Declare what a client actually dials.
+//
+// NEVER SEEDED FROM `relay/origin`. That file is this box's UPDATE origin — the master a satellite pulls
+// code from (scripts/relay-update.sh, "no update origin is configured for this relay"). Seeding from it
+// would make every satellite declare and sign its MASTER's address, fleet-wide.
+//
+// MORE THAN ONE ENTRY IS NORMAL: our own shared box is reached at a Cloudflare name and a Tailscale name and
+// is one machine. Loopback is added automatically so the Suite's first run and the test harness — which
+// learns its port at spawn and cannot declare it in advance — are not asked to configure anything.
+const RELAY_ADDRESSES_FILE = join(DATA_DIR, 'relay-addresses.json');
+function _declaredAddresses() {
+  let list = [];
+  try {
+    const raw = JSON.parse(readFileSync(RELAY_ADDRESSES_FILE, 'utf8'));
+    if (Array.isArray(raw)) list = raw;
+    else if (raw && Array.isArray(raw.addresses)) list = raw.addresses;
+  } catch {}
+  const out = [];
+  for (const u of list) { const s = String(u || '').trim(); if (s) out.push(s); }
+  // Loopback, always: the console that a Suite box serves dials its own port before anything is configured.
+  for (const h of ['127.0.0.1', 'localhost', '[::1]']) {
+    out.push('ws://' + h + ':' + PORT + '/relay');
+    out.push('ws://' + h + ':' + PORT);          // some callers dial the root, with no /relay path
+  }
+  return out;
+}
+// Compare the way the client's pool does: normalizeURL() strips a trailing slash, drops :80/:443, lowercases
+// and maps http/https onto ws/wss. A raw string compare that differs only by a trailing slash misses
+// SILENTLY, and three occurrences of exactly that trap are already recorded in this codebase.
+// MUST NORMALISE IDENTICALLY TO relayAddrKey IN src/relay-identity.src.js. The two sides compare the same
+// address and a difference between them is not a mismatch anyone can see — it is a correct relay silently
+// refused. Measured 2026-09-02: keeping the scheme here while the client dropped it failed 8 legitimate
+// cases in an-invite-cannot-choose-your-relay.test.mjs, because an invite must carry wss:// while a
+// loopback declaration is ws://.
+//
+// SCHEME IS EXCLUDED, HOST/PORT/PATH ARE NOT. The same box is legitimately reached wss:// through a tunnel
+// that terminates TLS and ws:// on the loopback behind it. Host, port and path are the boundary — keeping
+// the PATH is what stops a proxy on another path of a legitimate host inheriting its identity. Refusing
+// cleartext ws:// is a separate rule on the dialled URL, not smuggled into an equality test.
+function _addrKey(u) {
+  let s = String(u || '').trim();
+  if (!s) return '';
+  s = s.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+  try {
+    const p = new URL(s);
+    const port = (p.port === '80' && p.protocol === 'ws:') || (p.port === '443' && p.protocol === 'wss:') ? '' : p.port;
+    const path = p.pathname.replace(/\/+$/, '');
+    return p.hostname.toLowerCase() + (port ? ':' + port : '') + path;
+  } catch { return s.toLowerCase().replace(/^wss?:\/\//, '').replace(/\/+$/, ''); }
+}
+// The dialled address, as a full ws(s):// URL with the path the client used, or '' if this box does not
+// declare it. '' means REFUSE — never sign.
+function relayIdentityUrl(req, want4) {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
   const host = String(req.headers['host'] || '').trim();
-  return host ? proto + '://' + host : '';
+  if (!host) return '';
+  const declared = _declaredAddresses();
+  // MATCH ON HOST+PORT+PATH; SIGN WITH THE SCHEME THE CALLER USED.
+  //
+  // The security boundary is the host, port and path — those are what a forwarder cannot fake, because it
+  // would have to be declared here to be signed at all. The SCHEME is not a boundary and must not be one: the
+  // same box is legitimately dialled `wss://` through a tunnel that terminates TLS and `ws://` on the loopback
+  // that the tunnel forwards to, and an invite is REQUIRED to carry wss://. Signing a fixed scheme therefore
+  // refuses a correct relay for a cosmetic difference — measured: it failed 8 real cases in
+  // an-invite-cannot-choose-your-relay.test.mjs, every one of them a legitimate box.
+  //
+  // A forwarder asserting `x-forwarded-proto` gains nothing: it can choose which scheme we echo, never which
+  // host we will sign, and the client compares the whole thing against the address it dialled.
+  const want = host.toLowerCase();
+  const scheme = (proto === 'https' || proto === 'wss') ? 'wss:' : 'ws:';
+  // `for=` IS THE PATH BINDING, and it exists because this request cannot otherwise see one. The caller
+  // dials a SOCKET at `wss://host/relay`; the identity request that arrives here is a different HTTP request
+  // to `/relay-identity`, carrying no trace of the socket path. Without the caller naming it, a relay can
+  // only ever bind host+port — and a forwarder on another PATH of a legitimate host would inherit that
+  // relay's identity, which is the quiet half of the forwarding hole.
+  //
+  // So the caller states the address it is about to trust, and this box signs it ONLY if it is one of the
+  // addresses it declares. Declared is still the boundary; `for` only chooses among declared entries and can
+  // never introduce one. A caller that omits it (an older client) gets the host match, which is what this
+  // did before and is strictly no worse.
+  // `for` IS NOT CHECKED AGAINST THE ARRIVING Host, DELIBERATELY. It selects among addresses this box has
+  // already declared and can never introduce one, and the caller's own comparison is what binds the answer
+  // to what it dialled — so a forwarder asking for a declared address gets a proof naming THAT address,
+  // which is not the address the client dialled, and is refused. Requiring the two to agree would instead
+  // break every legitimate deployment whose proxy rewrites Host to an internal name, which is common.
+  if (want4) {
+    const wantKey = _addrKey(want4);
+    for (const d of declared) if (_addrKey(d) === wantKey) {
+      // The declared entry parsed cleanly when we keyed it; parse THAT rather than the caller's string, and
+      // fail closed if it somehow does not — a malformed `for` must never reach `new URL` unguarded and
+      // turn a refusal into a 500.
+      return scheme + '//' + _addrKey(d);
+    }
+    return '';   // named an address this box does not declare → refuse, never fall back to the host match
+  }
+  for (const d of declared) {
+    const k = _addrKey(d);
+    if (!k) continue;
+    const kHost = k.split('/')[0];
+    if (kHost !== want) continue;
+    return scheme + '//' + k;
+  }
+  return '';
 }
 function relayIdentityEvent(nonce, url) {
   return finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
@@ -3137,8 +3243,18 @@ function serveStatic(req, res) {
     // is refused rather than signed over: a host that had once seen the proof for nonce "" or "0" could
     // otherwise serve that same event for ever and every caller who asked lazily would accept it.
     if (!/^[0-9a-f]{32}$/i.test(nonce)) { res.writeHead(400, H); res.end('{"error":"nonce must be 32 hex characters"}'); return; }
+    // UNDECLARED HOST → REFUSE, and say so in a shape an operator panel can read. Signing a host this box
+    // cannot vouch for is the forwarding hole; falling back to the Host header is what used to open it.
+    let wantFor = ''; try { wantFor = new URL(req.url, 'http://x').searchParams.get('for') || ''; } catch {}
+    const signUrl = relayIdentityUrl(req, wantFor);
+    if (!signUrl) {
+      res.writeHead(421, H);
+      res.end(JSON.stringify({ error: 'this relay does not declare the address you dialled',
+        code: 'undeclared-address', dialled: String(req.headers['host'] || ''), file: 'relay-addresses.json' }));
+      return;
+    }
     res.writeHead(200, H);
-    res.end(JSON.stringify({ proof: relayIdentityEvent(nonce.toLowerCase(), relayIdentityUrl(req)) }));
+    res.end(JSON.stringify({ proof: relayIdentityEvent(nonce.toLowerCase(), signUrl) }));
     return;
   }
   if (route === '/status') {

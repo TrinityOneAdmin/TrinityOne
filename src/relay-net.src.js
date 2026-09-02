@@ -428,6 +428,8 @@ export function createRelayGate(deps) {
 //   And even with those repaired it would still refuse the two canonical URLs, which are one machine reached
 //   two ways and cannot both equal what that machine signs.
 //
+// CLOSED 2026-09-02 — what follows is the design that was implemented, kept because it records WHY.
+//
 // SO THE FIX IS THE RELAY'S: a box declares the address(es) it answers at, signs the dialled host only when
 // it is one of them, and refuses otherwise — at which point the client can bind, and a proxy can no longer
 // have its own address signed by somebody else's key. That is URL-to-key binding, which the plan already
