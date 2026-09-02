@@ -211,6 +211,36 @@ for _ in $(seq 1 15); do
   if curl -fsS "http://localhost:$PORT/status" >/dev/null 2>&1; then ok=1; break; fi
 done
 
+# CAN IT PROVE ITSELF WHERE MEMBERS ACTUALLY REACH IT?
+#
+# `/status` on localhost says the process is up. It does NOT say the box can answer the possession proof at
+# its PUBLIC address, and since 2026-09-02 that is what decides whether any phone will talk to it. A relay
+# that answers on loopback and refuses everywhere else looks perfectly healthy to the check above, which is
+# how a fleet-wide silent outage would have shipped: every box reporting "healthy", every member cut off,
+# rollback never firing because nothing failed.
+#
+# So ask the box the question a member asks. `/relay-identity?for=` is refused (421) when the address is not
+# one this relay declares, which is exactly the failure we are looking for. A box with no public address
+# configured at all is NOT failed here — that is a legitimate loopback-only or LAN deployment — but it is
+# reported, so an operator is told rather than left to find out from a member.
+pub_url="$(curl -fsS --max-time 5 "http://localhost:$PORT/relay-names/mine" 2>/dev/null \
+  | sed -n 's/.*"relayWss":"\([^"]*\)".*/\1/p')"
+if [ "$ok" = 1 ] && [ -n "$pub_url" ]; then
+  nonce="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  probe_base="$(printf '%s' "$pub_url" | sed -e 's|^wss://|https://|' -e 's|^ws://|http://|' -e 's|/relay/*$||')"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    "$probe_base/relay-identity?nonce=$nonce&for=$(printf '%s' "$pub_url" | sed 's|:|%3A|g; s|/|%2F|g')" 2>/dev/null)"
+  if [ "$code" != "200" ]; then
+    log "relay is up but CANNOT PROVE ITSELF at $pub_url (HTTP ${code:-no answer})"
+    log "members reach it there, so it will refuse them. declare that address and re-run."
+    ok=0
+  else
+    log "identity proof verified at $pub_url"
+  fi
+elif [ "$ok" = 1 ]; then
+  log "no public address known for this relay — proof checked on loopback only"
+fi
+
 if [ "$ok" = 1 ]; then
   log "update complete — relay healthy on :$PORT"
   status ok ""

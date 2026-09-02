@@ -579,6 +579,27 @@ function relayNameClaim(handle, url, offer) { return 'Nostr ' + Buffer.from(JSON
 // is one machine. Loopback is added automatically so the Suite's first run and the test harness — which
 // learns its port at spawn and cannot declare it in advance — are not asked to configure anything.
 const RELAY_ADDRESSES_FILE = join(DATA_DIR, 'relay-addresses.json');
+// A BOX ALREADY KNOWS ITS OWN PUBLIC ADDRESS, so do not make an operator type it.
+//
+// This is the half that was missing when §1 landed, and the audit was right that it would have been a
+// fleet-wide silent outage: nothing anywhere created relay-addresses.json, so every relay would have refused
+// every non-loopback caller while `/status` on localhost stayed green and the update reported success.
+//
+// The relay already computes its own public URL to claim its directory handle — the Cloudflare quick tunnel
+// it spawned, the Tailscale funnel, or RELAY_PUBLIC_URL. That is the same fact the address declaration
+// needs, so it is taken from there and the file becomes the escape hatch for the unusual case rather than
+// the mechanism. Nothing to configure on the Suite, on a8, or in a test.
+//
+// TAILSCALE IS ASYNC AND THIS IS NOT: `tsState()` does I/O, and this runs inside a request. So it is
+// refreshed in the background and read from a cache here. A miss costs a refusal at that address until the
+// first refresh lands, never a wrong answer.
+let _tsPublicWss = '';
+async function _refreshPublicAddress() {
+  try { const st = await tsState(); _tsPublicWss = String((st && st.relayWss) || '').trim(); } catch {}
+}
+_refreshPublicAddress();
+setInterval(_refreshPublicAddress, 5 * 60 * 1000).unref?.();
+
 function _declaredAddresses() {
   let list = [];
   try {
@@ -588,6 +609,15 @@ function _declaredAddresses() {
   } catch {}
   const out = [];
   for (const u of list) { const s = String(u || '').trim(); if (s) out.push(s); }
+  // The addresses this box reaches the world by, from the same source its directory claim uses.
+  for (const u of [cfPublicWss(), _tsPublicWss, String(process.env.RELAY_PUBLIC_URL || '').trim()]) {
+    const v = String(u || '').trim();
+    if (!v) continue;
+    out.push(v);
+    // A public address is normally published WITH the /relay path and dialled that way; accept the bare
+    // origin too, because a caller that dials the root is asking the same box the same question.
+    out.push(v.replace(/\/relay\/?$/i, ''));
+  }
   // Loopback, always: the console that a Suite box serves dials its own port before anything is configured.
   for (const h of ['127.0.0.1', 'localhost', '[::1]']) {
     out.push('ws://' + h + ':' + PORT + '/relay');
