@@ -2160,9 +2160,21 @@ function _openRegGate() { const f = _openGate; _openGate = null; if (f) { try { 
 //   red, the CONTROL among them. One admitted relay is all a publish needs, so this resolves the moment the
 //   cache holds one and never waits on a slow candidate that nothing is waiting for.
 //
-//   FOUNDING ONLY. `_regGate` is armed exactly where a church is coming into existence — createKey (R5-5)
-//   and selfRegister — and is latched afterwards. Gating on it means an established console never pays this
-//   at all, which is the difference between fixing a first-minute race and taxing every write for ever.
+//   ONCE PER SESSION, NOT ONCE PER CHURCH — and the commit that introduced this said otherwise. It claimed
+//   "an established console never pays this at all", and that is FALSE. `_armRegGate()` runs at createKey
+//   AND inside selfRegister, `_openRegGate()` RESOLVES the gate but never nulls it (only
+//   `_waitForRegistration` does), and app/stew-dashboard.jsx re-runs `selfRegister(church.name)` on every
+//   owner console the moment the church name resolves. So an established console arms the gate too, and its
+//   FIRST publish of the session goes through the proof wait.
+//
+//   That is affordable, and it was measured rather than assumed (2026-09-02): with a warm relay cache the
+//   wait ends on the first tick — 0 ms, one `admit()` call — because the cache already holds an admitted
+//   relay. With a cold cache it costs the full PROOF_GATE_MS budget ONCE, about 80 polls at 10/sec: no spin,
+//   and no probe storm, because `schedule()` is guarded by `inflight` plus a 60 s backoff. Both latches then
+//   shut it for the rest of the session — `_proofWaited`, and `_regGate` being nulled below.
+//
+//   What "founding only" DOES still buy is scope: nothing here runs for a console that has never had a
+//   church key, and nothing runs twice. The per-write tax the first attempt introduced is still gone.
 //
 // Bounded like its neighbour, and for the same reason: a console whose relays will never answer must still
 // be able to work and say so through the publish error, not by hanging on the wizard's first screen.
@@ -6863,7 +6875,14 @@ window.Steward = {
     try {
       const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || '' }, auth }) });
-      return { ok: r.ok, status: r.status };
+      // PASS THE RELAY'S OWN REASON BACK. A caller that knows only "not ok" can say nothing more useful than
+      // "it might not have worked", and the relay's refusals are well written and actionable — H4's is "set
+      // your church's name in the Steward console before connecting it to a relay", which is a NOT-YET the
+      // steward can act on in ten seconds, not a verdict. selfRegister already reads this reason (see
+      // `_regNeedsName`); this is the same fact, made available to the one other caller.
+      let why = '';
+      if (!r.ok) { try { why = ((await r.json()) || {}).error || ''; } catch (e) {} }
+      return { ok: r.ok, status: r.status, why };
     } catch (e) { return { ok: false, error: (e && e.message) || 'network' }; }
   },
   // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)

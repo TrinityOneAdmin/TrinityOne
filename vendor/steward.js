@@ -21395,7 +21395,14 @@ zoo`.split("\n");
       try {
         const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
         const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || "" }, auth }) });
-        return { ok: r.ok, status: r.status };
+        let why = "";
+        if (!r.ok) {
+          try {
+            why = (await r.json() || {}).error || "";
+          } catch (e) {
+          }
+        }
+        return { ok: r.ok, status: r.status, why };
       } catch (e) {
         return { ok: false, error: e && e.message || "network" };
       }

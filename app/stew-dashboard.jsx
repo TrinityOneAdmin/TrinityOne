@@ -3120,6 +3120,12 @@ function DashRunRelayCard() {
 }
 
 function DashRelaysCard() {
+  // THE CHURCH'S NAME, because connect-by-name registers this church at the relay it just found and a
+  // nameless registration is refused (gateway.mjs H4: a NEW self-registration with no name is a 400, written
+  // after one box accumulated 37 rows the operator could only see as a bare npub). This card used to pass ''
+  // — harmless while an unconfigured relay accepted everything, and since the closed-network work a fresh box
+  // refuses every write instead, so the steward connected to a relay that would never take a word they wrote.
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
   const host = (typeof location !== 'undefined' && location.host) || '';
   const online = status.filter(r => r.status === 'on').length;
@@ -3169,8 +3175,15 @@ function DashRelaysCard() {
       window.Steward.addRelay(j.url);
       window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
       setByNameMsg({ text: 'Connecting your church…' });
-      let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, ''); } catch (e) {}
-      setByNameMsg({ ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
+      let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, church.name); } catch (e) {}
+      // THE MISSING-NAME REFUSAL IS A NOT-YET, NOT A VERDICT, and it is the one the steward can fix. Telling
+      // them "the relay operator may need to approve your church" here would send them to somebody else about
+      // a field on their own settings screen. Mirrors _regNeedsName in src/steward.src.js, which reads the
+      // relay's reason the same way.
+      const needsName = !reg.ok && /name/i.test(String(reg.why || ''));
+      setByNameMsg(needsName
+        ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
+        : { ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };

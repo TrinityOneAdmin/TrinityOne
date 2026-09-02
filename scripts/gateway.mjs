@@ -488,10 +488,15 @@ loadChurches();
 // archive could not contain what was never written.
 //
 // Restore that archive onto a new box without remembering to set the variable again and the relay comes up
-// not knowing which church it serves: the write policy is OFF (an open relay — anyone on the internet may
-// write), and the congregation cannot read its own membership documents, because note() returns early when
-// CHURCH_PUBS is empty. It reports itself perfectly healthy throughout. Measured: 14 documents before,
-// 10 after, all three member: docs and the care slot invisible, "write policy OFF".
+// not knowing which church it serves: it REFUSES EVERY WRITE (accept() returns false while CHURCH_PUBS is
+// empty — see the note there), and the congregation cannot read its own membership documents either, because
+// note() returns early when CHURCH_PUBS is empty. It reports itself perfectly healthy throughout. Measured:
+// 14 documents before, 10 after, all three member: docs and the care slot invisible.
+//
+// CORRECTED 2026-09-02. This used to say the write policy was OFF and the box was "an open relay — anyone on
+// the internet may write", which was true when it was written and is now the reverse of the code: an
+// unconfigured box accepts nobody's data. The symptom changed from silently wrong to loudly broken; the
+// reason to stamp the church here did not.
 //
 // Stamping it here means the very next backup carries the church. Idempotent: persistChurches() writes
 // envMigrated, and loadChurches() stops folding the env var in once it sees that stamp. AUDIT 2026-08-02.
@@ -599,8 +604,14 @@ const RELAY_ADDRESSES_FILE = join(DATA_DIR, 'relay-addresses.json');
 let _tsPublicWss = '';
 async function _refreshPublicAddress() {
   try { const st = await tsState(); _tsPublicWss = String((st && st.relayWss) || '').trim(); } catch {}
+  // Say what this box declares as soon as the answer can be honest — see logDeclaredAddresses. It dedupes on
+  // the public set, so the refresh timer below is silent until something genuinely moves.
+  try { logDeclaredAddresses(); } catch (e) {}
 }
-_refreshPublicAddress();
+// THE FIRST REFRESH IS THE ONE THE STARTUP LINE WAITS FOR. A Tailscale funnel box learns its public address
+// from an external command that takes seconds; printing "no public address declared" before that answer
+// arrives would be a false alarm on exactly the deployment the warning exists to protect.
+const _firstPublicRefresh = _refreshPublicAddress();
 setInterval(_refreshPublicAddress, 5 * 60 * 1000).unref?.();
 
 function _declaredAddresses() {
@@ -622,12 +633,20 @@ function _declaredAddresses() {
     out.push(v.replace(/\/relay\/?$/i, ''));
   }
   // Loopback, always: the console that a Suite box serves dials its own port before anything is configured.
-  for (const h of ['127.0.0.1', 'localhost', '[::1]']) {
-    out.push('ws://' + h + ':' + PORT + '/relay');
-    out.push('ws://' + h + ':' + PORT);          // some callers dial the root, with no /relay path
-  }
+  for (const a of AUTO_LOOPBACK_ADDRESSES) out.push(a);
   return out;
 }
+// The loopback entries this box adds FOR ITSELF, listed once so that "did anybody actually declare a public
+// address, or is this just the automatic list?" is answerable by comparison rather than by guessing from the
+// shape of a hostname.
+//
+// DELIBERATELY NOT "is this IP in 127.0.0.0/8". That question has a different answer from the one that
+// matters. What matters is whether a HUMAN OR A TUNNEL put an address here: an operator who writes
+// `ws://127.0.0.2:8000/relay` into relay-addresses.json meant it, and it answers, so it should be probed like
+// any other declaration. An address nobody chose — the two forms of each of these three hosts — is the one
+// that cannot tell you anything about whether members can reach this box.
+const AUTO_LOOPBACK_ADDRESSES = ['127.0.0.1', 'localhost', '[::1]'].flatMap(
+  (h) => ['ws://' + h + ':' + PORT + '/relay', 'ws://' + h + ':' + PORT]);
 // Compare the way the client's pool does: normalizeURL() strips a trailing slash, drops :80/:443, lowercases
 // and maps http/https onto ws/wss. A raw string compare that differs only by a trailing slash misses
 // SILENTLY, and three occurrences of exactly that trap are already recorded in this codebase.
@@ -651,6 +670,62 @@ function _addrKey(u) {
     const path = p.pathname.replace(/\/+$/, '');
     return p.hostname.toLowerCase() + (port ? ':' + port : '') + path;
   } catch { return s.toLowerCase().replace(/^wss?:\/\//, '').replace(/\/+$/, ''); }
+}
+// ── DID ANYBODY DECLARE A PUBLIC ADDRESS, AND DID THEY MEAN NOT TO? ────────────────────────────────────
+//
+// AUDIT 2026-09-02. The refusal above is correct and the operational half around it was not. `/status` on
+// loopback stayed green, the update script reported "relay healthy", and a box behind a NAMED cloudflared
+// tunnel — which is what our own shared relay runs — declared loopback and nothing else, because
+// cfPublicWss() can only ever recognise a *quick* tunnel's trycloudflare.com URL. Every member 421ed, every
+// check green. Silent success is what let that hide, so this box now says what it declares, out loud, and
+// the update refuses to pass a box that cannot say it meant it.
+//
+// LOOPBACK-ONLY IS A LEGITIMATE DEPLOYMENT. A church running the desktop Suite on one machine, or a relay on
+// a LAN with no public road at all, is a real and supported thing. It is indistinguishable AT STARTUP from a
+// public relay nobody configured — the distinguishing evidence only arrives when somebody dials a public
+// Host, which may be days later. So this warns and serves; the hard failure lives in relay-update.sh, where
+// it is recoverable, and where an operator is present.
+const _loopbackKeys = new Set(AUTO_LOOPBACK_ADDRESSES.map(_addrKey));
+// The addresses somebody actually chose for this box — the declared set minus the automatic loopback list.
+function _publicDeclaredAddresses() {
+  const seen = new Set(), out = [];
+  for (const u of _declaredAddresses()) {
+    const k = _addrKey(u);
+    if (!k || _loopbackKeys.has(k) || seen.has(k)) continue;
+    seen.add(k); out.push(u);
+  }
+  return out;
+}
+// "I am a LAN box and I mean it." Env var for a service unit, file flag for a box configured by hand; either
+// is enough. Present → silence. Absent, with no public address → the next UPDATE fails, which is the only
+// place this can be a hard stop without bricking the console an operator would use to fix it.
+function _loopbackOnlyOptIn() {
+  if (/^(1|true|yes|on)$/i.test(String(process.env.RELAY_LOOPBACK_ONLY || '').trim())) return true;
+  try { const raw = JSON.parse(readFileSync(RELAY_ADDRESSES_FILE, 'utf8')); if (raw && raw.loopbackOnly === true) return true; } catch {}
+  return false;
+}
+// SAY IT AT STARTUP, EVERY TIME, AND SAY IT AGAIN WHEN IT CHANGES. Tailscale is async and a quick tunnel may
+// open minutes after boot, so the first line a box prints can be honestly loopback-only and stop being true
+// later; printing only once would replace a silent wrong answer with a stale one.
+let _lastDeclaredLine = null;
+function logDeclaredAddresses(why) {
+  const pub = _publicDeclaredAddresses();
+  const line = pub.join(' ');
+  if (_lastDeclaredLine === line) return;      // nothing changed — do not fill an operator's journal
+  _lastDeclaredLine = line;
+  try {
+    console.log(`[relay] declares ${pub.length + AUTO_LOOPBACK_ADDRESSES.length} address(es)` + (why ? ` (${why})` : '') +
+      `\n  public: ${pub.length ? pub.join(', ') : '(none)'}` +
+      `\n  loopback: ${AUTO_LOOPBACK_ADDRESSES.join(', ')}`);
+    if (!pub.length && !_loopbackOnlyOptIn()) {
+      // The consequence, not the configuration. An operator reading a journal at 11pm needs to know what
+      // BREAKS, and "relay-addresses.json not found" does not say that anyone is cut off.
+      console.error('[relay] ⚠ NO PUBLIC ADDRESS DECLARED — this relay will refuse every member who is not on this machine.' +
+        '\n  They will be told it does not declare the address they dialled (HTTP 421), while this box goes on reporting itself healthy.' +
+        `\n  Fix: set RELAY_PUBLIC_URL=wss://your.host/relay in the service environment, or list the addresses in ${RELAY_ADDRESSES_FILE}.` +
+        '\n  If this really is a loopback/LAN-only relay, say so with RELAY_LOOPBACK_ONLY=1 (or {"loopbackOnly":true} in that file) — otherwise its next update will fail.');
+    }
+  } catch (e) {}
 }
 // The dialled address, as a full ws(s):// URL with the path the client used, or '' if this box does not
 // declare it. '' means REFUSE — never sign.
@@ -873,7 +948,9 @@ function startCloudflared() {
       if (done) return; done = true; CF_URL = url;
       try { writeFileSync(TUNNEL_FLAG, '1'); } catch {}
       if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} }
-      reclaimRelayName(); settle({ ok: true, url: CF_URL });
+      reclaimRelayName();
+      try { logDeclaredAddresses('quick tunnel opened'); } catch (e) {}   // the declared set just gained a public road
+      settle({ ok: true, url: CF_URL });
     };
     const onData = (d) => {
       const s = String(d); cfLog(s);
@@ -3199,7 +3276,13 @@ function azRateLimited(ip) {
 // route that calls these is gated behind the admin token (adminOK) — nothing here is interpolated
 // into a shell (spawn with an arg array), and the only caller-supplied value (an optional auth key)
 // is format-checked first.
-const TS_BIN = 'tailscale';
+// Overridable so a box that keeps tailscale outside PATH still works — and so a TEST can put a relay into the
+// "no public address anywhere" state deliberately. That state is otherwise inherited from whatever machine the
+// suite runs on: this dev box has a funnel, so every spawned relay would pick up a public address and the
+// loopback-only cases would pass here and fail on a machine without tailscale, or the reverse.
+// Users: tsRun() below (every tailscale query — tsState, tsStateCached, /tailscale/*) and the funnel `serve`
+// spawn in the /tailscale/funnel route. Nothing else shells out to tailscale.
+const TS_BIN = process.env.TRINITY_TAILSCALE_BIN || 'tailscale';
 function tsRun(args, { timeoutMs = 12000 } = {}) {
   return new Promise((resolve) => {
     let out = '', err = '', done = false, child;
@@ -3374,6 +3457,34 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // deliberately NO Access-Control-Allow-Origin
     if (loopbackSock && !proxied && loopbackHost) { res.writeHead(200, H); res.end(JSON.stringify({ token: ADMIN_TOKEN })); return; }
     res.writeHead(403, H); res.end('{"error":"not a local request"}'); return;
+  }
+  // WHAT THIS BOX WILL SIGN FOR — the list, not just the first entry. ADMIN-GATED.
+  //
+  // Read by scripts/relay-update.sh, which asks the box what it declares and then goes and dials every one of
+  // those addresses from outside before it will call an update healthy. Before this existed the update read
+  // `relayWss` out of /relay-names/mine — an adminOK route it sent no credential to, so the value was always
+  // empty, the "no public address" branch always ran, and EVERY update passed. That is the defect this route
+  // exists to close; see the probe block in relay-update.sh.
+  //
+  // NOT PUBLIC, deliberately. An unauthenticated route listing every address a relay answers at would be a
+  // permanent internet-facing disclosure on every box in the fleet, to catch an operator mistake. The caller
+  // is on the machine, so it can have the admin token from /local-token, which is already loopback-fenced.
+  //
+  // TEXT, NOT JSON, and this is the one place in this file that is. The only consumer is a POSIX shell script
+  // running as ROOT on boxes nobody can log in to, and its failure mode is a ROLLBACK. A JSON array cannot be
+  // parsed reliably by sed the moment an address is a bracketed IPv6 literal (`ws://[::1]:8000/relay` is in
+  // this very list), and requiring jq or node in the update path would roll back every relay on a box where
+  // neither is on root's PATH. One key and one value per line is parseable by awk and cannot be got wrong.
+  if (route === '/relay-addresses') {
+    const H = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // no Access-Control-Allow-Origin
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('error unauthorized\n'); return; }
+    const lines = ['loopbackOnly ' + (_loopbackOnlyOptIn() ? '1' : '0')];
+    // Whitespace would silently split a line into a different address, so drop it here rather than hand the
+    // updater something it will mis-parse. An address with a space in it is malformed anyway.
+    for (const u of _publicDeclaredAddresses()) if (!/\s/.test(u)) lines.push('public ' + u);
+    for (const u of AUTO_LOOPBACK_ADDRESSES) lines.push('loopback ' + u);
+    res.writeHead(200, H); res.end(lines.join('\n') + '\n');
+    return;
   }
   // Relay name directory — resolve a handle (public) or claim one (relay-key-signed). See _verifyRelayClaim.
   if (route.startsWith('/relay-names/')) {
@@ -5201,10 +5312,17 @@ wss.on('close', () => clearInterval(wsHeartbeat));
 const BIND_HOST = process.env.RELAY_HOST || '0.0.0.0';   // servers keep 0.0.0.0; the desktop app sets this explicitly (loopback unless the operator opts into LAN access — see relay-app/desktop/src-tauri/src/main.rs)
 server.listen(PORT, BIND_HOST, () =>
   console.log(`TrinityOne gateway on http://${BIND_HOST}:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
-    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
+    // NOT "open relay" ANY MORE. This line said "write policy OFF (open relay — anyone may write)" long after
+    // accept() started refusing every write from a box with no churches. An operator reading it would conclude
+    // their unconfigured relay was permissive when in fact it keeps nothing at all.
+    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  NO CHURCH CONFIGURED — this relay refuses every write until one is set up in the control dashboard`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}` +
     (!_strictWeb ? `\n  ⚠ CSP is LAX (unsafe-inline/eval) — served shells still carry in-browser Babel. Deploy a PRE-TRANSPILED build (or set STRICT_CSP=1) before go-live: the console holds the church key.` : '')));
+// AND SAY WHERE IT WILL ANSWER. Held until the first public-address refresh lands so a Tailscale funnel box is
+// not warned about a state it was never in. logDeclaredAddresses() dedupes, so this is normally the refresh's
+// own line and this call is the belt to its braces.
+_firstPublicRefresh.then(() => logDeclaredAddresses('startup')).catch(() => {});
 // "Stay public": if the operator turned on the tunnel before, re-open it on boot (a fresh quick-tunnel URL) and
 // re-point the relay's directory name at it — so a restart doesn't silently drop members' access.
 if (existsSync(TUNNEL_FLAG)) { setTimeout(() => { startCloudflared().then(r => console.log(r.ok ? `  tunnel re-opened: ${r.url}` : `  tunnel re-open failed: ${r.error || ''}`)).catch(() => {}); }, 2500); }
