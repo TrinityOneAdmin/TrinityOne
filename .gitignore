@@ -43,6 +43,10 @@ HANDOFF.md
 
 # local/agent cruft — never publish
 .claude/
+# a temporary copy of an OLDER scripts/gateway.mjs, extracted by scripts/relay-network-harness.mjs so a
+# test can run a relay as it was at a previous commit. It must live under the repo root for node to resolve
+# its dependencies; it is removed on teardown, and ignored here so a crashed run cannot stage a stray copy.
+.oldbuild-*/
 *.tmp.*
 *.bak-*
 reference/TrinityOne.zip
@@ -93,3 +97,8 @@ scripts/sim*.mjs
 scripts/netsim-*.mjs
 scripts/.sim-*.json
 !scripts/sim-round4-fixes.test.mjs
+# …and this one, for the same reason. The rule above exists because sim DATA leaked private keys; a TEST
+# about the harness leaks nothing. Being ignored meant it never ran in CI or for any auditor, and it
+# silently added 4 tests to every count recorded in a commit message — which is how 2059 was written down
+# for a tree that gives everyone else 2055. CLAUDE.md rule 7 cannot work while a test file is invisible.
+!scripts/sim-harness-dialogs.test.mjs

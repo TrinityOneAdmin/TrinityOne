@@ -1072,4 +1072,479 @@ export const CASES = [
     replace: `  const isSeries = false;`,
     test: 'scripts/care-rota-and-rsvp.test.mjs',
   },
+
+  // ── closed-network plan C3: is this relay one of ours? ────────────────────────────────────────────────
+  // Each of these is one of the ways the plan says answering this question goes wrong, expressed as the
+  // careless edit that would cause it. Each takes exactly ONE test red, which is the reassuring shape: an
+  // all-red run means the harness died, not that the guard is sharp.
+  {
+    name: 'relay-net: membership matched on URL instead of pubkey',
+    file: 'src/relay-net.src.js',
+    // A church's relay behind a free tunnel gets a new address on every restart, so this drops that church's
+    // own box every time it reboots — and only ever shows up on a relay that has actually moved.
+    find: `String(e.pubkey || '').toLowerCase() === provenPub`,
+    replace: `String(e.url || '') === url`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: enrolment enumerates the FILTERED relay list',
+    file: 'src/steward.src.js',
+    // The bootstrap deadlock. relays()/ownRelay() consult the _boxHostsUs cache, so a box recorded as "not
+    // hosting us" is invisible to the only code that could ever sign it in — permanently.
+    find: `  const o = _ownOrigin();`,
+    replace: `  const o = ''; for (const u of relays()) add(u);`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: the same-origin root skips the possession proof',
+    file: 'src/relay-net.src.js',
+    // Same-origin is a reason not to ask a SECOND question, never a reason to skip the first: without the
+    // proof, any host answering on the page's origin is admitted.
+    find: `  let proof = null;`,
+    replace: `  if (sameOriginRelay(url, d.origin)) return { root: 'origin', pub: 'f'.repeat(64) };
+  let proof = null;`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: an unfinished MEMBERSHIP read is treated as an empty church',
+    file: 'src/steward.src.js',
+    // A timed-out read comes back empty, and empty is indistinguishable from "this church has signed
+    // nothing" — so the writer would build a document from scratch and un-admit every box already in it.
+    find: `  if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+`,
+    replace: ``,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: an unfinished SEED read is treated as no old relay list',
+    file: 'src/steward.src.js',
+    // The sibling guard, and it needs its own case: the seed runs ONCE, so a timed-out read of the old sync
+    // list means those boxes are never carried across and nothing ever tries again.
+    find: `    if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+`,
+    replace: ``,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+  {
+    name: 'relay-net: the canonical pin is one value, not a list',
+    file: 'src/relay-net.src.js',
+    // A single pin makes a planned key rotation a fleet-wide outage; this project has rotated a relay key
+    // under incident before.
+    find: `if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: 'canonical', pub: provenPub };`,
+    replace: `if (canonicalPinsFor(url, d.pins)[0] === provenPub) return { root: 'canonical', pub: provenPub };`,
+    test: 'scripts/is-this-relay-one-of-ours.test.mjs',
+  },
+
+  // ── C4: the gate. Each of these is a careless edit somebody could plausibly make while "tidying" the
+  // filter, and each one takes exactly one test red. An all-red run means the harness died.
+  {
+    name: 'relay-gate: the console publishes over the RAW list',
+    file: 'src/steward.src.js',
+    // The whole leak, back in one character of difference: the assembled list is the candidate list, and
+    // publishing over it sends the church's documents to every address anyone ever typed.
+    find: `  const _targets = relays();`,
+    replace: `  const _targets = relaysRaw();`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: relays() stops filtering and just returns the candidates',
+    file: 'src/steward.src.js',
+    find: `function relays() { try { return _gate.admit(relaysRaw(), pub); } catch (e) { return []; } }`,
+    replace: `function relays() { return relaysRaw(); }`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the member app publishes over the list it was handed',
+    file: 'src/fellowship.src.js',
+    // _publishAny is the last line of the gate: thirty callers hand it lists they assembled themselves, and
+    // without this every one of them is a way round the filter.
+    find: `  const targets = _netRelays(candidates);`,
+    replace: `  const targets = candidates;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the filter runs BEFORE the never-empty guard instead of after it',
+    file: 'src/steward.src.js',
+    // §5-bis's collision, staged: gate the candidate sources and let the guard re-insert the canonical pool
+    // afterwards, unverified. It reads like a tightening and is the exact opposite.
+    find: `function relays() { try { return _gate.admit(relaysRaw(), pub); } catch (e) { return []; } }`,
+    replace: `function relays() {
+  try { const out = _gate.admit([ownRelay(), ...extraRelays()], pub); for (const r of CANONICAL_RELAYS) if (r && !out.includes(r)) out.push(r); return out; } catch (e) { return []; }
+}`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the membership read goes through the gate it feeds (the read-side deadlock)',
+    file: 'src/steward.src.js',
+    // A church's own box holds the only copy of the signature that admits it. Read that over the filtered
+    // list and the box is excluded, therefore never asked, therefore never admitted — for ever.
+    find: `    const sub = pool.subscribeMany(relaysRaw(), filters, {`,
+    replace: `    const sub = pool.subscribeMany(relays(), filters, {`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the member\'s membership read goes through the gate it feeds',
+    file: 'src/fellowship.src.js',
+    find: `    const evs = await pool.querySync(churchRelaysRaw(), [{ kinds: [30078], authors: [cp], '#d': [RELAY_NET_D] }]);`,
+    replace: `    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], '#d': [RELAY_NET_D] }]);`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: a care request that went nowhere is reported as a plain failure',
+    file: 'src/fellowship.src.js',
+    // The label half. `null` already reads as not-sent — as "check your connection", on a connection that is
+    // fine — which sends somebody asking for help to look in the wrong place entirely.
+    find: `      if (isNoNetworkRelay(e)) return { error: 'no-network-relay' };
+`,
+    replace: ``,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: a gate refusal burns one of the outbox\'s retries',
+    file: 'src/fellowship.src.js',
+    // Nothing reached a relay, so nothing should be counted. Counting it drops a member's words after ~37
+    // minutes of retrying against a set that was empty the whole time.
+    find: `const outage = errs.length && errs.every(e => isConnectionFailure(e) || isNoNetworkRelay(e));`,
+    replace: `const outage = errs.length && errs.every(isConnectionFailure);`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the cache keeps an address that now answers with a different key',
+    file: 'src/relay-net.src.js',
+    find: `  return { root: '', pub: provenPub };`,
+    replace: `  return no;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: one church\'s signature admits a relay for every church on the device',
+    file: 'src/relay-net.src.js',
+    find: `  if (!e.cp) return true;                 // canonical / same-origin: church-independent
+  return !cp || e.cp === String(cp).toLowerCase();`,
+    replace: `  return true;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the verified set is never persisted',
+    file: 'src/relay-net.src.js',
+    find: `  const map = readVerified(d.store);`,
+    replace: `  const map = new Map();`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the cache is keyed by the raw URL, not the normalised one',
+    file: 'src/relay-net.src.js',
+    // memory: relay-url-normalisation-trap. The pool keys its connections by normalizeURL(); a raw compare
+    // that differs only by a trailing slash misses SILENTLY, and the gate then misses the relay it is about.
+    find: `function _relayKey(url) { try { return normalizeURL(String(url || '')); } catch { return String(url || ''); } }`,
+    replace: `function _relayKey(url) { return String(url || ''); }`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: an empty publish set is reported as health',
+    file: 'src/fellowship.src.js',
+    // A `true` here DISABLES the app's 90-second safety net, so a church whose relays have not proved
+    // themselves would sit quietly for ever with nothing recovering it.
+    find: `      if (!want.length) return !churchRelaysRaw().length;`,
+    replace: `      if (!want.length) return true;`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the relay panel is fed the publish set, so a dropped address vanishes',
+    file: 'src/steward.src.js',
+    // Silently changing where a church's data goes is how the ROADMAP-NOTES §6 divergence became invisible.
+    find: `    return Promise.all(relaysRaw().map(url => new Promise(res => {`,
+    replace: `    return Promise.all(relays().map(url => new Promise(res => {`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: the member Relays sheet is told every address is in use',
+    file: 'src/fellowship.src.js',
+    find: `  relayVerified(url) { try { return _gate.admits(url, window.Fellowship.churchPub); } catch (e) { return false; } },`,
+    replace: `  relayVerified(url) { return true; },`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: an empty publish set hangs every read instead of answering',
+    file: 'src/fellowship.src.js',
+    // The gate's own side effect. Until C4 no list reaching the pool could be empty; now one can, and
+    // nostr-tools never settles a querySync([]) or delivers an oneose for a subscribeMany([], …).
+    find: `  if (u.length) return _poolSubMany(u, filters, handlers);`,
+    replace: `  if (true) return _poolSubMany(u, filters, handlers);`,
+    test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  // ── C5: the paths by which an address is PUSHED at a client ──────────────────────────────────────────
+  {
+    name: 'invite: ?relay= is adopted on sight again',
+    file: 'src/fellowship.src.js',
+    // The pre-C5 behaviour exactly: a wss:// scheme check and nothing else, so a code taped to a wall adds a
+    // relay to a member's set before they have followed anything.
+    find: `      try { ok = await isNetworkRelay(cp, url); } catch (e) { ok = false; }`,
+    replace: `      ok = true;`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'invite: the name is resolved even when the printed address worked (AUDIT-2026-07-29 S3 reopened)',
+    file: 'src/fellowship.src.js',
+    // The self-hosted congregation's joiner tells the shared directory that this device exists, that it is
+    // joining now, and which relay it is looking for — the one request that undoes self-hosting.
+    find: `    if (got) return out;
+`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'invite: the screen adopts the relay itself instead of routing it through the gate',
+    file: 'app/app.jsx',
+    // The one-line deletion CLAUDE.md rule 1 exists for: the engine keeps all eight of its tests and the
+    // screen stops consulting it.
+    find: `      if (F.adoptInviteRelays) { try { F.adoptInviteRelays(npub, raw); } catch (e) {} }`,
+    replace: `      const rm = String(raw || '').match(/[?&]relay=([^&\\s]+)/);
+      if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss:\\/\\//i.test(relay)) F.addRelay(relay); } catch (e) {} }`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'named relays: the 90-second swap stops re-verifying',
+    file: 'src/steward.src.js',
+    // The most under-appreciated path in the codebase: it runs on load, then every 90 seconds, then on every
+    // window focus, for ever, with no user action after the first connect.
+    find: `      if (!(await admitRemoteRelay(newUrl))) continue;
+`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'console resolver: takes whatever scheme the directory answers with',
+    file: 'src/steward.src.js',
+    // L5, which the member-side twin has had since 2026-07-06 and this one never did.
+    find: `      if (!j || typeof j.url !== 'string' || !/^wss:\\/\\//i.test(j.url)) continue;`,
+    replace: `      if (!j || typeof j.url !== 'string') continue;`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'console resolver: a proof is enough, membership no longer asked',
+    file: 'src/steward.src.js',
+    // The subtle version — still verifies, but only that SOMETHING TrinityOne-shaped is there, which is the
+    // question C2 answers and not the one C3 does.
+    find: `      if (memberToo ? !(await admitRemoteRelay(j.url)) : !(await verifyRelayIdentity(j.url))) continue;`,
+    replace: `      if (!(await verifyRelayIdentity(j.url))) continue;`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'auto-find: offers are no longer filtered to relays the church vouched for',
+    file: 'src/steward.src.js',
+    // Back to a well-behaved stranger being adopted because it behaved well — the behavioural probe promoted
+    // into a membership gate, which is AUDIT-2026-07-27 happening a second time.
+    find: `    if (!(await admitRemoteRelay(url))) return null;
+`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'clone: the SOURCE is required to be a member (migration inverted in time)',
+    file: 'src/steward.src.js',
+    // THE DEFECT THAT MUST NOT SHIP. It reads as a tightening and it breaks the only thing this control is
+    // for: a church vouches for the box it is ARRIVING at, never the one it is escaping.
+    find: `    if (!(await verifyRelayIdentity(srcRelay)))`,
+    replace: `    if (!(await admitRemoteRelay(srcRelay)))`,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'clone: the SOURCE is not asked to prove anything',
+    file: 'src/steward.src.js',
+    find: `    if (!(await verifyRelayIdentity(srcRelay)))
+      throw new Error('That relay could not prove who it is, so your church’s history was not requested from it. Check the address, or restore from a backup file instead.');`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'clone: the DESTINATION takes the whole corpus without being in the network',
+    file: 'src/steward.src.js',
+    find: `    if (!(await admitRemoteRelay(dstRelay)))
+      throw new Error('The destination relay isn’t in your church’s network, so nothing was copied to it. Add it to your relay list and enrol it first.');`,
+    replace: ``,
+    test: 'scripts/an-invite-cannot-choose-your-relay.test.mjs',
+  },
+  {
+    name: 'backup: a restore file carries the member’s relay list again',
+    file: 'app/backup.jsx',
+    find: `'trinityone.onboarded', 'trinityone.dark'`,
+    replace: `'trinityone.onboarded', 'trinityone.relays', 'trinityone.dark'`,
+    test: 'scripts/backup-file-safety.test.mjs',
+  },
+  {
+    name: 'backup: the console’s routing keys are exported again',
+    file: 'app/backup.jsx',
+    find: `      if (k && !ROUTING_KEYS.has(k) && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
+    replace: `      if (k && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
+    test: 'scripts/backup-file-safety.test.mjs',
+  },
+  {
+    name: 'backup: a crafted file can write the console’s routing keys again',
+    file: 'app/backup.jsx',
+    find: `      && !ROUTING_KEYS.has(String(k))                // never where a church's data goes — see ROUTING_KEYS
+`,
+    replace: ``,
+    test: 'scripts/backup-file-safety.test.mjs',
+  },
+  {
+    name: 'relay-gate: relay-net is served only to members, so a newcomer can never bootstrap',
+    file: 'scripts/gateway.mjs',
+    find: `    if (d === RELAY_NET_D) return true;
+`,
+    replace: ``,
+    test: 'scripts/doc-registry.test.mjs',
+  },
+  // C4 F2 — the all-relays writer's empty-target return. SCOPED, because publish() twenty lines above now
+  // holds a near-identical block and a plain string-replace would hit IT: `const reason = relaysRaw().length`
+  // occurs twice in the file. Every anchor below carries the `all-relay` warn line, which occurs once.
+  {
+    name: 'no-relay: the all-relays writer goes back to failing in silence',
+    file: 'src/steward.src.js',
+    // exactly the pre-fix line — the whole surface removed, which is the revert somebody would actually make
+    find: `  if (!targets.length) {
+    const reason = relaysRaw().length
+      ? NO_NETWORK_RELAY + ': none of this church\\'s relays could be proved to be ours, so nothing was published'
+      : 'no relay is configured for this church';
+    console.warn('[steward] all-relay publish blocked —', reason);
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    return false;
+  }`,
+    replace: `  if (!targets.length) return false;`,
+    test: 'scripts/a-console-write-with-no-relay-is-not-silent.test.mjs',
+  },
+  {
+    name: 'no-relay: the reason loses the prefix that tells a bad relay from a bad connection',
+    file: 'src/steward.src.js',
+    // the subtle version — the banner still appears, so the screen test stays green; only the REASON is gone,
+    // which is the whole of degraded-set honesty. A steward is sent to look at broadband that is working.
+    find: `    const reason = relaysRaw().length
+      ? NO_NETWORK_RELAY + ': none of this church\\'s relays could be proved to be ours, so nothing was published'
+      : 'no relay is configured for this church';
+    console.warn('[steward] all-relay publish blocked —', reason);`,
+    replace: `    const reason = 'nothing was published';
+    console.warn('[steward] all-relay publish blocked —', reason);`,
+    test: 'scripts/a-console-write-with-no-relay-is-not-silent.test.mjs',
+  },
+  {
+    name: 'no-relay: setBlocked loses the trusted-view guard that stands in front of the silence',
+    file: 'src/steward.src.js',
+    // The reason the blocklist is NOT the sharpest case here. Drop this and a ban over an empty publish set
+    // stops refusing and starts writing into the void — which is what the fix above then has to catch.
+    find: `    _requireTrustedView('blocked list');
+`,
+    replace: ``,
+    test: 'scripts/a-console-write-with-no-relay-is-not-silent.test.mjs',
+  },
+  // ── AUDIT 2026-09-02: a relay must declare where it answers, and the update must check ──
+  {
+    name: 'declared-addresses: the loopback-only warning never fires',
+    file: 'scripts/gateway.mjs',
+    // the plausible slip — an inverted condition, so the one box that needs telling is the one box that is not told
+    find: `    if (!pub.length && !_loopbackOnlyOptIn()) {`,
+    replace: `    if (pub.length && !_loopbackOnlyOptIn()) {`,
+    test: 'scripts/a-relay-declares-where-it-answers.test.mjs',
+  },
+  {
+    name: 'declared-addresses: the loopback-only opt-in is ignored',
+    file: 'scripts/gateway.mjs',
+    // every correct LAN box now prints a fleet-outage warning on every launch, which is how a warning stops being read
+    find: `  if (/^(1|true|yes|on)$/i.test(String(process.env.RELAY_LOOPBACK_ONLY || '').trim())) return true;`,
+    replace: `  if (false) return true;`,
+    test: 'scripts/a-relay-declares-where-it-answers.test.mjs',
+  },
+  {
+    name: 'declared-addresses: loopback counts as a public address',
+    file: 'scripts/gateway.mjs',
+    // the exact shape of the original defect — a box with no road to the outside world looks configured, because it declares itself
+    find: `    if (!k || _loopbackKeys.has(k) || seen.has(k)) continue;`,
+    replace: `    if (!k || seen.has(k)) continue;`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: an address that answers nothing is accepted',
+    file: 'scripts/relay-update.sh',
+    // the guard runs, dials, and then ignores what came back
+    find: `    if [ "$code" != "200" ]; then`,
+    replace: `    if [ "$code" = "999" ]; then`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: a proof naming someone else is accepted',
+    file: 'scripts/relay-update.sh',
+    // status-code-only checking — the forwarding hole passes, and members refuse the relay after release
+    find: `    if [ "$(_norm_addr "$got")" != "$(_norm_addr "$u")" ]; then`,
+    replace: `    if false; then`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: a box that declares no public address passes anyway',
+    file: 'scripts/relay-update.sh',
+    // the behaviour that shipped: "no public address known — proof checked on loopback only", and every update passed
+    find: `    log "THIS RELAY DECLARES NO PUBLIC ADDRESS, so it will refuse every member who is not on this machine"
+    log "set RELAY_PUBLIC_URL=wss://your.host/relay in the service environment, or list the addresses in $DIR/relay/relay-addresses.json"
+    log "if it really is loopback/LAN-only, set RELAY_LOOPBACK_ONLY=1 and request the update again"
+    return 1`,
+    replace: `    log "no public address known for this relay — proof checked on loopback only"
+    return 0`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: the credential is lost, so nothing can be asked',
+    file: 'scripts/relay-update.sh',
+    // TODAY'S BUG ONE LEVEL DOWN — the probe cannot read the token, and must FAIL rather than quietly checking nothing
+    find: `"http://localhost:$PORT/local-token"`,
+    replace: `"http://localhost:$PORT/local-token-moved"`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: a degraded relay is called healthy',
+    file: 'scripts/relay-update.sh',
+    // reads the field and then treats every value as success — the shape the old body-discarding check had
+    find: `    *'"ok":true'*)  ok=1; break;;
+    *'"ok":false'*) log "relay is answering but reports itself DEGRADED — it is refusing writes, so it is not healthy";;`,
+    replace: `    *'"ok":'*)  ok=1; break;;`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  // ── AUDIT 2026-09-02 ride-alongs: the church name at connect-by-name, and the proof gate's real cost ──
+  {
+    name: 'connect-by-name: the church name is dropped again',
+    file: 'app/stew-dashboard.jsx',
+    // the exact pre-fix line — a nameless self-registration the relay refuses, on a box that then keeps nothing the steward writes
+    find: `reg = await window.Steward.registerAtRelay(j.url, church.name);`,
+    replace: `reg = await window.Steward.registerAtRelay(j.url, '');`,
+    test: 'scripts/connect-by-name-names-the-church.test.mjs',
+  },
+  {
+    name: 'connect-by-name: the missing-name refusal is not recognised',
+    file: 'app/stew-dashboard.jsx',
+    // the steward is sent to the relay operator about a field on their own settings screen
+    find: `      const needsName = !reg.ok && /name/i.test(String(reg.why || ''));`,
+    replace: `      const needsName = false;`,
+    test: 'scripts/connect-by-name-names-the-church.test.mjs',
+  },
+  {
+    name: 'connect-by-name: registerAtRelay stops passing the relay\'s reason back',
+    file: 'src/steward.src.js',
+    // without the reason the console cannot tell a not-yet from a verdict, so every refusal becomes the same shrug
+    find: `      return { ok: r.ok, status: r.status, why };`,
+    replace: `      return { ok: r.ok, status: r.status };`,
+    test: 'scripts/connect-by-name-names-the-church.test.mjs',
+  },
+  {
+    name: 'proof gate: the first-admission wait loses its bound',
+    file: 'src/steward.src.js',
+    // a console whose relays never answer now hangs on its first write of the session instead of proceeding and saying so
+    find: `      if (n > 0 || (Date.now() - t0) >= ms) { resolve(n > 0); return; }`,
+    replace: `      if (n > 0) { resolve(true); return; }`,
+    test: 'scripts/church-setup-race.test.mjs',
+  },
+  {
+    name: 'proof gate: the once-per-session latch is removed',
+    file: 'src/steward.src.js',
+    // the wait becomes a per-write tax the moment anything re-arms the gate, which selfRegister does on every owner console
+    find: `    _proofWaited = true;
+`,
+    replace: ``,
+    test: 'scripts/church-setup-race.test.mjs',
+  },
 ];

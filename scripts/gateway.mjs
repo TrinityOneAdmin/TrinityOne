@@ -201,7 +201,10 @@ function _blobUploader(req, action) {
 }
 // download gate: a fresh NIP-98 (kind 27235) proof, bound to THIS url, signed by a member of the owning church.
 function _blobMember(req, ownerCp, host, path) {
-  if (!CHURCH_PUBS.size) return true;   // unconfigured relay → open (nothing to gate against yet)
+  // Same reasoning as accept()'s twin: an unconfigured box has no church whose media this could be, so there
+  // is nobody it can legitimately serve. No media can exist before a church does, so nothing legitimate is
+  // refused by closing this.
+  if (!CHURCH_PUBS.size) return false;  // unconfigured relay → serves nobody (it holds nobody's media)
   if (!ownerCp) return false;           // configured relay but this blob has no recorded owner → fail CLOSED (don't world-serve media on a missing/legacy sidecar); backfill the sidecar to restore access
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return false;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return false; }
@@ -366,6 +369,13 @@ const FIN_JOURNAL_D = D.FIN_JOURNAL;   // church-book double-entry journal entry
 const ROOM_D = D.ROOM, BOOKING_D = D.BOOKING;   // shared room calendar (church-only writes)
 const RUNSHEET_D = D.RUNSHEET;   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
 const RELAYS_D = D.RELAYS;   // the church's trusted-relays list (resync): d=trinityone/relays, church-signed, content=[{pubkey,url}]
+// The church's own statement of which relay BOXES are its network — d=trinityone/relay-net, church-signed,
+// content=[{pubkey, alwaysOn, url?}]. A DIFFERENT DOCUMENT from RELAYS_D above and deliberately so: that one
+// means "cross-relay sync is on", refuses to be written below two boxes and is emptied to turn mirroring
+// off, none of which is true of membership. This relay does not ingest relay-net (it is a CLIENT-side
+// membership statement; the server-side pairing check stays on RELAYS_D — plan C6). All it does here is
+// gate the write, so a member of some church on this box cannot author one.
+const RELAY_NET_D = D.RELAY_NET;
 const NETWORK_D = D.NETWORK;   // the church declares it belongs to a network (the network's pubkey)
 const BLOCKED_D = D.BLOCKED;   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 const PIN_D = D.PIN;           // a group's pinned message — d=pin:<groupId> (one per group)
@@ -478,10 +488,15 @@ loadChurches();
 // archive could not contain what was never written.
 //
 // Restore that archive onto a new box without remembering to set the variable again and the relay comes up
-// not knowing which church it serves: the write policy is OFF (an open relay — anyone on the internet may
-// write), and the congregation cannot read its own membership documents, because note() returns early when
-// CHURCH_PUBS is empty. It reports itself perfectly healthy throughout. Measured: 14 documents before,
-// 10 after, all three member: docs and the care slot invisible, "write policy OFF".
+// not knowing which church it serves: it REFUSES EVERY WRITE (accept() returns false while CHURCH_PUBS is
+// empty — see the note there), and the congregation cannot read its own membership documents either, because
+// note() returns early when CHURCH_PUBS is empty. It reports itself perfectly healthy throughout. Measured:
+// 14 documents before, 10 after, all three member: docs and the care slot invisible.
+//
+// CORRECTED 2026-09-02. This used to say the write policy was OFF and the box was "an open relay — anyone on
+// the internet may write", which was true when it was written and is now the reverse of the code: an
+// unconfigured box accepts nobody's data. The symptom changed from silently wrong to loudly broken; the
+// reason to stamp the church here did not.
 //
 // Stamping it here means the very next backup carries the church. Idempotent: persistChurches() writes
 // envMigrated, and loadChurches() stops folding the env var in once it sees that stamp. AUDIT 2026-08-02.
@@ -536,6 +551,240 @@ function relayNameClaimEvent(handle, url, offer) {
   return finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, RELAY_SK);
 }
 function relayNameClaim(handle, url, offer) { return 'Nostr ' + Buffer.from(JSON.stringify(relayNameClaimEvent(handle, url, offer))).toString('base64'); }
+// ── C2: PROVING the key, instead of merely stating it ──────────────────────────────────────────────────
+// /status and the NIP-11 document both publish RELAY_PUB. NEITHER IS EVIDENCE. They are bare
+// strings over an unauthenticated GET, so anyone can copy this box's /status onto their own host and be
+// believed to be this box — and every gate built on "which relay is this?" is decoration until that stops.
+//
+// This is the proof. The caller supplies a fresh 128-bit nonce; the answer is a kind-27235 event signed by
+// RELAY_SK binding that nonce, this relay's own public URL and the time. The same shape and the same key as
+// relayProof()/relayNameClaimEvent() above — nothing new is invented here, it is exposed to clients.
+// A host that only copied /status cannot answer, because answering needs the secret key. A host that once
+// CAPTURED a valid answer cannot re-use it, because the nonce inside it is not the one the next caller asked.
+//
+// THE ADDRESSES THIS BOX ANSWERS AT, and the reason this is not the Host header any more.
+//
+// A host that FORWARDS /relay-identity to a real relay used to pass the proof straight back: it learned no
+// key and forged nothing, yet the corpus and every member's IP landed on a box running a reverse proxy
+// rather than our software. That is the whole "only TrinityOne software talks to TrinityOne software" rule
+// defeated by nginx. The client half of the fix compares the address it dialled against the one signed here
+// (relay-identity.src.js); this half is what makes that comparison mean anything, because a `Host` header is
+// chosen by whoever is in front of us — a forwarder can simply send our own name.
+//
+// SO: a box declares the addresses it answers at, signs the DIALLED one only when it is one of them, and
+// refuses otherwise. Refusing rather than falling back is the point — a relay that signs a host it cannot
+// vouch for is the forwarding hole verbatim.
+//
+// FULL wss:// URLs, INCLUDING THE PATH. Clients dial `wss://host/relay`; a bare `proto://host` can never
+// compare equal to that under normalizeURL, and "fixing" that by comparing host-only would re-admit a
+// forwarder sitting on another port or path of a legitimate host. Declare what a client actually dials.
+//
+// NEVER SEEDED FROM `relay/origin`. That file is this box's UPDATE origin — the master a satellite pulls
+// code from (scripts/relay-update.sh, "no update origin is configured for this relay"). Seeding from it
+// would make every satellite declare and sign its MASTER's address, fleet-wide.
+//
+// MORE THAN ONE ENTRY IS NORMAL: our own shared box is reached at a Cloudflare name and a Tailscale name and
+// is one machine. Loopback is added automatically so the Suite's first run and the test harness — which
+// learns its port at spawn and cannot declare it in advance — are not asked to configure anything.
+const RELAY_ADDRESSES_FILE = join(DATA_DIR, 'relay-addresses.json');
+// A BOX ALREADY KNOWS ITS OWN PUBLIC ADDRESS, so do not make an operator type it.
+//
+// This is the half that was missing when §1 landed, and the audit was right that it would have been a
+// fleet-wide silent outage: nothing anywhere created relay-addresses.json, so every relay would have refused
+// every non-loopback caller while `/status` on localhost stayed green and the update reported success.
+//
+// The relay already computes its own public URL to claim its directory handle — the Cloudflare quick tunnel
+// it spawned, the Tailscale funnel, or RELAY_PUBLIC_URL. That is the same fact the address declaration
+// needs, so it is taken from there and the file becomes the escape hatch for the unusual case rather than
+// the mechanism. Nothing to configure on the Suite, on a8, or in a test.
+//
+// TAILSCALE IS ASYNC AND THIS IS NOT: `tsState()` does I/O, and this runs inside a request. So it is
+// refreshed in the background and read from a cache here. A miss costs a refusal at that address until the
+// first refresh lands, never a wrong answer.
+let _tsPublicWss = '';
+async function _refreshPublicAddress() {
+  try { const st = await tsState(); _tsPublicWss = String((st && st.relayWss) || '').trim(); } catch {}
+  // Say what this box declares as soon as the answer can be honest — see logDeclaredAddresses. It dedupes on
+  // the public set, so the refresh timer below is silent until something genuinely moves.
+  try { logDeclaredAddresses(); } catch (e) {}
+}
+// THE FIRST REFRESH IS THE ONE THE STARTUP LINE WAITS FOR. A Tailscale funnel box learns its public address
+// from an external command that takes seconds; printing "no public address declared" before that answer
+// arrives would be a false alarm on exactly the deployment the warning exists to protect.
+const _firstPublicRefresh = _refreshPublicAddress();
+setInterval(_refreshPublicAddress, 5 * 60 * 1000).unref?.();
+
+function _declaredAddresses() {
+  let list = [];
+  try {
+    const raw = JSON.parse(readFileSync(RELAY_ADDRESSES_FILE, 'utf8'));
+    if (Array.isArray(raw)) list = raw;
+    else if (raw && Array.isArray(raw.addresses)) list = raw.addresses;
+  } catch {}
+  const out = [];
+  for (const u of list) { const s = String(u || '').trim(); if (s) out.push(s); }
+  // The addresses this box reaches the world by, from the same source its directory claim uses.
+  for (const u of [cfPublicWss(), _tsPublicWss, String(process.env.RELAY_PUBLIC_URL || '').trim()]) {
+    const v = String(u || '').trim();
+    if (!v) continue;
+    out.push(v);
+    // A public address is normally published WITH the /relay path and dialled that way; accept the bare
+    // origin too, because a caller that dials the root is asking the same box the same question.
+    out.push(v.replace(/\/relay\/?$/i, ''));
+  }
+  // Loopback, always: the console that a Suite box serves dials its own port before anything is configured.
+  for (const a of AUTO_LOOPBACK_ADDRESSES) out.push(a);
+  return out;
+}
+// The loopback entries this box adds FOR ITSELF, listed once so that "did anybody actually declare a public
+// address, or is this just the automatic list?" is answerable by comparison rather than by guessing from the
+// shape of a hostname.
+//
+// DELIBERATELY NOT "is this IP in 127.0.0.0/8". That question has a different answer from the one that
+// matters. What matters is whether a HUMAN OR A TUNNEL put an address here: an operator who writes
+// `ws://127.0.0.2:8000/relay` into relay-addresses.json meant it, and it answers, so it should be probed like
+// any other declaration. An address nobody chose — the two forms of each of these three hosts — is the one
+// that cannot tell you anything about whether members can reach this box.
+const AUTO_LOOPBACK_ADDRESSES = ['127.0.0.1', 'localhost', '[::1]'].flatMap(
+  (h) => ['ws://' + h + ':' + PORT + '/relay', 'ws://' + h + ':' + PORT]);
+// Compare the way the client's pool does: normalizeURL() strips a trailing slash, drops :80/:443, lowercases
+// and maps http/https onto ws/wss. A raw string compare that differs only by a trailing slash misses
+// SILENTLY, and three occurrences of exactly that trap are already recorded in this codebase.
+// MUST NORMALISE IDENTICALLY TO relayAddrKey IN src/relay-identity.src.js. The two sides compare the same
+// address and a difference between them is not a mismatch anyone can see — it is a correct relay silently
+// refused. Measured 2026-09-02: keeping the scheme here while the client dropped it failed 8 legitimate
+// cases in an-invite-cannot-choose-your-relay.test.mjs, because an invite must carry wss:// while a
+// loopback declaration is ws://.
+//
+// SCHEME IS EXCLUDED, HOST/PORT/PATH ARE NOT. The same box is legitimately reached wss:// through a tunnel
+// that terminates TLS and ws:// on the loopback behind it. Host, port and path are the boundary — keeping
+// the PATH is what stops a proxy on another path of a legitimate host inheriting its identity. Refusing
+// cleartext ws:// is a separate rule on the dialled URL, not smuggled into an equality test.
+function _addrKey(u) {
+  let s = String(u || '').trim();
+  if (!s) return '';
+  s = s.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+  try {
+    const p = new URL(s);
+    const port = (p.port === '80' && p.protocol === 'ws:') || (p.port === '443' && p.protocol === 'wss:') ? '' : p.port;
+    const path = p.pathname.replace(/\/+$/, '');
+    return p.hostname.toLowerCase() + (port ? ':' + port : '') + path;
+  } catch { return s.toLowerCase().replace(/^wss?:\/\//, '').replace(/\/+$/, ''); }
+}
+// ── DID ANYBODY DECLARE A PUBLIC ADDRESS, AND DID THEY MEAN NOT TO? ────────────────────────────────────
+//
+// AUDIT 2026-09-02. The refusal above is correct and the operational half around it was not. `/status` on
+// loopback stayed green, the update script reported "relay healthy", and a box behind a NAMED cloudflared
+// tunnel — which is what our own shared relay runs — declared loopback and nothing else, because
+// cfPublicWss() can only ever recognise a *quick* tunnel's trycloudflare.com URL. Every member 421ed, every
+// check green. Silent success is what let that hide, so this box now says what it declares, out loud, and
+// the update refuses to pass a box that cannot say it meant it.
+//
+// LOOPBACK-ONLY IS A LEGITIMATE DEPLOYMENT. A church running the desktop Suite on one machine, or a relay on
+// a LAN with no public road at all, is a real and supported thing. It is indistinguishable AT STARTUP from a
+// public relay nobody configured — the distinguishing evidence only arrives when somebody dials a public
+// Host, which may be days later. So this warns and serves; the hard failure lives in relay-update.sh, where
+// it is recoverable, and where an operator is present.
+const _loopbackKeys = new Set(AUTO_LOOPBACK_ADDRESSES.map(_addrKey));
+// The addresses somebody actually chose for this box — the declared set minus the automatic loopback list.
+function _publicDeclaredAddresses() {
+  const seen = new Set(), out = [];
+  for (const u of _declaredAddresses()) {
+    const k = _addrKey(u);
+    if (!k || _loopbackKeys.has(k) || seen.has(k)) continue;
+    seen.add(k); out.push(u);
+  }
+  return out;
+}
+// "I am a LAN box and I mean it." Env var for a service unit, file flag for a box configured by hand; either
+// is enough. Present → silence. Absent, with no public address → the next UPDATE fails, which is the only
+// place this can be a hard stop without bricking the console an operator would use to fix it.
+function _loopbackOnlyOptIn() {
+  if (/^(1|true|yes|on)$/i.test(String(process.env.RELAY_LOOPBACK_ONLY || '').trim())) return true;
+  try { const raw = JSON.parse(readFileSync(RELAY_ADDRESSES_FILE, 'utf8')); if (raw && raw.loopbackOnly === true) return true; } catch {}
+  return false;
+}
+// SAY IT AT STARTUP, EVERY TIME, AND SAY IT AGAIN WHEN IT CHANGES. Tailscale is async and a quick tunnel may
+// open minutes after boot, so the first line a box prints can be honestly loopback-only and stop being true
+// later; printing only once would replace a silent wrong answer with a stale one.
+let _lastDeclaredLine = null;
+function logDeclaredAddresses(why) {
+  const pub = _publicDeclaredAddresses();
+  const line = pub.join(' ');
+  if (_lastDeclaredLine === line) return;      // nothing changed — do not fill an operator's journal
+  _lastDeclaredLine = line;
+  try {
+    console.log(`[relay] declares ${pub.length + AUTO_LOOPBACK_ADDRESSES.length} address(es)` + (why ? ` (${why})` : '') +
+      `\n  public: ${pub.length ? pub.join(', ') : '(none)'}` +
+      `\n  loopback: ${AUTO_LOOPBACK_ADDRESSES.join(', ')}`);
+    if (!pub.length && !_loopbackOnlyOptIn()) {
+      // The consequence, not the configuration. An operator reading a journal at 11pm needs to know what
+      // BREAKS, and "relay-addresses.json not found" does not say that anyone is cut off.
+      console.error('[relay] ⚠ NO PUBLIC ADDRESS DECLARED — this relay will refuse every member who is not on this machine.' +
+        '\n  They will be told it does not declare the address they dialled (HTTP 421), while this box goes on reporting itself healthy.' +
+        `\n  Fix: set RELAY_PUBLIC_URL=wss://your.host/relay in the service environment, or list the addresses in ${RELAY_ADDRESSES_FILE}.` +
+        '\n  If this really is a loopback/LAN-only relay, say so with RELAY_LOOPBACK_ONLY=1 (or {"loopbackOnly":true} in that file) — otherwise its next update will fail.');
+    }
+  } catch (e) {}
+}
+// The dialled address, as a full ws(s):// URL with the path the client used, or '' if this box does not
+// declare it. '' means REFUSE — never sign.
+function relayIdentityUrl(req, want4) {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const host = String(req.headers['host'] || '').trim();
+  if (!host) return '';
+  const declared = _declaredAddresses();
+  // MATCH ON HOST+PORT+PATH; SIGN WITH THE SCHEME THE CALLER USED.
+  //
+  // The security boundary is the host, port and path — those are what a forwarder cannot fake, because it
+  // would have to be declared here to be signed at all. The SCHEME is not a boundary and must not be one: the
+  // same box is legitimately dialled `wss://` through a tunnel that terminates TLS and `ws://` on the loopback
+  // that the tunnel forwards to, and an invite is REQUIRED to carry wss://. Signing a fixed scheme therefore
+  // refuses a correct relay for a cosmetic difference — measured: it failed 8 real cases in
+  // an-invite-cannot-choose-your-relay.test.mjs, every one of them a legitimate box.
+  //
+  // A forwarder asserting `x-forwarded-proto` gains nothing: it can choose which scheme we echo, never which
+  // host we will sign, and the client compares the whole thing against the address it dialled.
+  const want = host.toLowerCase();
+  const scheme = (proto === 'https' || proto === 'wss') ? 'wss:' : 'ws:';
+  // `for=` IS THE PATH BINDING, and it exists because this request cannot otherwise see one. The caller
+  // dials a SOCKET at `wss://host/relay`; the identity request that arrives here is a different HTTP request
+  // to `/relay-identity`, carrying no trace of the socket path. Without the caller naming it, a relay can
+  // only ever bind host+port — and a forwarder on another PATH of a legitimate host would inherit that
+  // relay's identity, which is the quiet half of the forwarding hole.
+  //
+  // So the caller states the address it is about to trust, and this box signs it ONLY if it is one of the
+  // addresses it declares. Declared is still the boundary; `for` only chooses among declared entries and can
+  // never introduce one. A caller that omits it (an older client) gets the host match, which is what this
+  // did before and is strictly no worse.
+  // `for` IS NOT CHECKED AGAINST THE ARRIVING Host, DELIBERATELY. It selects among addresses this box has
+  // already declared and can never introduce one, and the caller's own comparison is what binds the answer
+  // to what it dialled — so a forwarder asking for a declared address gets a proof naming THAT address,
+  // which is not the address the client dialled, and is refused. Requiring the two to agree would instead
+  // break every legitimate deployment whose proxy rewrites Host to an internal name, which is common.
+  if (want4) {
+    const wantKey = _addrKey(want4);
+    for (const d of declared) if (_addrKey(d) === wantKey) {
+      // The declared entry parsed cleanly when we keyed it; parse THAT rather than the caller's string, and
+      // fail closed if it somehow does not — a malformed `for` must never reach `new URL` unguarded and
+      // turn a refusal into a 500.
+      return scheme + '//' + _addrKey(d);
+    }
+    return '';   // named an address this box does not declare → refuse, never fall back to the host match
+  }
+  for (const d of declared) {
+    const k = _addrKey(d);
+    if (!k) continue;
+    const kHost = k.split('/')[0];
+    if (kHost !== want) continue;
+    return scheme + '//' + k;
+  }
+  return '';
+}
+function relayIdentityEvent(nonce, url) {
+  return finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
+    tags: [['u', 'relay-identity'], ['method', 'GET'], ['nonce', nonce], ['relay', url]], content: '' }, RELAY_SK);
+}
 // ── Relay name directory (Phase 2): a memorable handle a steward can TYPE to connect a church to a relay,
 // instead of a wss:// URL. Any gateway can serve a directory; in practice relays register with the shared
 // community host and consoles resolve there. A claim is SIGNED by the relay's own identity key, so a handle is
@@ -699,7 +948,9 @@ function startCloudflared() {
       if (done) return; done = true; CF_URL = url;
       try { writeFileSync(TUNNEL_FLAG, '1'); } catch {}
       if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} }
-      reclaimRelayName(); settle({ ok: true, url: CF_URL });
+      reclaimRelayName();
+      try { logDeclaredAddresses('quick tunnel opened'); } catch (e) {}   // the declared set just gained a public road
+      settle({ ok: true, url: CF_URL });
     };
     const onData = (d) => {
       const s = String(d); cfLog(s);
@@ -1027,6 +1278,25 @@ function rebuildMinors() { MINORS.clear(); for (const s of MINORS_BY.values()) f
 // deliberately allows them. hydrateMaps() therefore replays kind 0 explicitly. It did not, originally, and
 // this comment claimed it did; the claim was never checked and an audit disproved it with a restart probe.
 const CHILD_PHOTOS_OK = new Set();
+// Churches that have switched member photos OFF entirely (features.memberPhotos === false). The PARENT of the
+// children's switch above, and until now it had exactly the bug the child one had before 2026-08-28: it lived
+// only in the client, so a church that had turned photos off still had them accepted and served. Measured on
+// the live relay: with the switch off, an adult's photograph was stored without complaint.
+// Note the polarity — member photos are ON by default and a church opts OUT, so this records the churches
+// that said no, whereas CHILD_PHOTOS_OK records the ones that said yes.
+const MEMBER_PHOTOS_OFF = new Set();
+// A steward's per-member "reset this person's photo" — d=nophoto:<churchpub>, content {"pubkeys":[…]}.
+// The THIRD photo control, and until now the only one with no relay half at all: `nophoto:` was consulted
+// here solely to decide who may WRITE the list, never to decide what may be published. So the reset was a
+// display convention of the current app build — measured 2026-08-31 against a real gateway, a suppressed
+// ADULT and a suppressed CHILD each re-published a kind-0 carrying a photograph, both were accepted, and
+// both were then served to another member. Any older build, any modified build and every other Nostr client
+// showed the photograph the church had reset.
+// Kept DELIBERATELY separate from childPhotoBlocked: with church-wide child photos off (the default) a child
+// is already covered by that rule and the console back-fills every minor into this list, so the child case
+// looks fine while the adult case — which is what this control is mostly used for — never worked.
+const NOPHOTO_BY = new Map();   // churchpub -> Set(member pubkeys whose photo this church has reset)
+
 
 const APPROVED_BY = new Map(); // churchpub -> Set(approved-adult pubkeys)
 const APPROVED = new Set();
@@ -1125,6 +1395,22 @@ function childPhotoBlocked(pub) {
   for (const cp of cps) if (!CHILD_PHOTOS_OK.has(cp)) return true;
   return false;
 }
+// A CHURCH THAT SWITCHED PHOTOS OFF MEANT IT. If ANY church this person belongs to has turned member photos
+// off, their photograph does not land — the same shape as childPhotoBlocked, and deliberately the same
+// direction of travel: the strictest church a member belongs to decides, because the alternative is that
+// joining a second church quietly undoes the first one's decision.
+function memberPhotoBlocked(pub) {
+  for (const cp of churchesOf(pub)) if (MEMBER_PHOTOS_OFF.has(cp)) return true;
+  return false;
+}
+// A STEWARD'S RESET OF ONE PERSON'S PHOTOGRAPH. Scoped exactly like memberPhotoBlocked — over the churches
+// this person actually belongs to, so a church they have never joined cannot suppress them, and the
+// strictest church they HAVE joined decides. Independent of childPhotoBlocked on purpose: this one is the
+// only thing standing between a suppressed adult and re-publishing the photograph the church removed.
+function photoSuppressed(pub) {
+  for (const cp of churchesOf(pub)) { const s = NOPHOTO_BY.get(cp); if (s && s.has(pub)) return true; }
+  return false;
+}
 function safeguardAllows(minorPub, other) {
   const cps = minorGoverningChurches(minorPub);
   if (!cps.length) return true;
@@ -1155,6 +1441,20 @@ const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
 // the one safeguarding control that wasn't relay-enforced, while the kind-4 DM gate, the NIP-17 block and the
 // care-thread gate all are. Recorded here so accept()/canRead() can enforce it like the rest.
 const GROUP_CHILDSAFE = new Set();   // groupIds a church explicitly marked child-safe
+
+// WHO WAS A CANCELLED EVENT FOR? Cancelling an event is the only shape this product has ever had for "it is
+// not happening": removeEvent() publishes a TOMBSTONE at the same d-tag — empty content, ['deleted','1'] —
+// and nothing else. That tombstone carries no group tag, no title and no date, and store.put() has already
+// destroyed the version it replaces by the time any push code runs. So the audience for a cancellation can
+// only come from what was recorded when the EVENT itself arrived. note() fills this on live ingest and on
+// hydration alike, so it holds every event still standing after a restart.
+//
+// ABSENCE MEANS "WE DO NOT KNOW", AND THAT IS READ AS DO-NOT-NOTIFY — never as "the whole church". A relay
+// that only ever saw the tombstone cannot tell a church-wide event from one in a room the church has not
+// marked child-safe, and guessing the first would push the second to children. It is also what makes the
+// notification fire once: after the tombstone this entry is gone, so a second tombstone — a retry, a
+// republish, the whole corpus replaying on the next restart — has nothing to notify about.
+const EVENT_AUDIENCE = new Map();   // eventId -> { cp, gid, by } recorded when the event doc was stored
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
 const SUBS_FILE = join(DATA_DIR,'subscribers.json');
@@ -1258,8 +1558,19 @@ function maybePushMessage(evt) {
       const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
         : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
         : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
+      // SAFEGUARDING: THE ROOM'S NAME IS THE PUSH TITLE. canRead already refuses a minor the MESSAGES of a
+      // room their church has not marked child-safe — and this pushed that same room's name to their lock
+      // screen, which is the disclosure the withholding exists to prevent, on a path no client filter can
+      // reach. Found 2026-08-29, on the same day the member app's own room-name leak was closed; fixing one
+      // without the other would have moved the leak rather than removed it.
+      //
+      // Same rule, same maps, same fallback as the read gate twelve hundred lines below — deliberately
+      // written to look identical, because two safeguarding rules that are meant to agree should be
+      // recognisable as the same rule.
+      const gcpSafe = gcp || idNamesOwner(gid);
       for (const r of recips) {
         if (!r || r === evt.pubkey) continue;
+        if (gcpSafe && !GROUP_CHILDSAFE.has(gid) && (MINORS_BY.get(gcpSafe) || new Set()).has(r)) continue;
         pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
       }
     }
@@ -1287,6 +1598,64 @@ function maybePushSermon(evt) {
     for (const m of MEMBERS) {
       if (m === cp || !memberIn(m, cp)) continue;
       pushTo(m, { title: cname, body, url: '/', tag: 'sermon-' + String(s.id || s.sha256).slice(0, 10) }, 'announce');   // '/' → Today, where the New card is
+    }
+  } catch {}
+}
+// A CHURCH CANCELS SOMETHING — TELL THE PEOPLE IT WAS FOR, AND TELL THEM ALMOST NOTHING ELSE.
+//
+// There is one representation of "this is not happening" in this product and it is the TOMBSTONE that
+// removeEvent() publishes over trinityone/event:<id>. There is no status field; the event simply stops
+// existing, on the console and on every phone. So a cancellation is: a tombstone, over an event this relay
+// had actually recorded (EVENT_AUDIENCE), from someone who could have written that event.
+//
+// WHAT THE LOCK SCREEN IS ALLOWED TO SAY. "Sunday service cancelled — St Aidan's, Barnwell Green" tells
+// anyone who picks up that phone which church its owner attends, on a screen that needs no unlock. Under
+// this project's threat model — seizure, lawful compulsion, a congregation under pressure — that is a
+// disclosure WE made. The same reasoning closed the adults-only room-name leak in maybePushMessage above,
+// and the serving push has always got it right: "Can you serve? / Serving - Welcome team - Sunday" names
+// the role and never the church. So this names nothing at all: not the church, not the event, not the room.
+// It could not name the event even if that were safe — publishEvent SEALS the title, date and place under
+// the church name key, which this relay does not hold. Enough to make someone open the app; not enough to
+// identify them to a bystander who is holding it.
+//
+// WHO GETS IT, decided rather than inherited. Not "everyone who RSVP'd": RSVP is opt-in and sparse, and a
+// church cancelling Sunday service in the snow needs to reach the people who were simply going to turn up,
+// who are most of them and who have told the relay nothing. Not "the whole congregation" either, for a
+// group event: a youth-group workday being called off is not the whole church's business. So it is the
+// audience the relay would actually SERVE that event to — the group's people when it belongs to a group
+// (invite allowlist / team roster / the owning church's members), the church's members when it does not.
+// A cancellation is rare by nature, which is why the frequency argument for narrowing further does not bite.
+//
+// SAFEGUARDING. Same rule, same maps, same fallback as maybePushMessage and as the read gate: a young person
+// is not pushed about a room their church has not marked child-safe. Written to look identical on purpose.
+const CANCEL_PUSHED = new Set();
+function maybePushCancel(evt, was) {
+  try {
+    if (evt.kind !== 30078 || !was || !was.cp) return;             // no record of the event -> nothing we can safely address
+    const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (!d.startsWith(EVENT_D)) return;
+    if (!((evt.tags || []).some(t => t[0] === 'deleted') || !evt.content)) return;   // an EDIT, not a cancellation
+    const id = d.slice(EVENT_D.length); if (!id) return;
+    const cp = was.cp, gid = was.gid || '';
+    if (!CHURCH_PUBS.has(cp)) return;
+    // A REFUSAL RULE ON TOP OF accept(). kind-30078 is per-author, so a stranger's tombstone never replaces
+    // the church's event in the store — but it would still arrive here with the church's own EVENT_AUDIENCE
+    // entry beside it, and "anyone may make the congregation's phones buzz" is not a feature. The author of
+    // the original may retract it; otherwise it takes the church, its network, or a steward it trusts with
+    // content, which is who the console publishes as.
+    if (!(evt.pubkey === was.by || evt.pubkey === cp || networkOf(evt.pubkey, cp) || stewardCan(evt.pubkey, cp, 'content'))) return;
+    const key = cp + ':' + id;
+    if (CANCEL_PUSHED.has(key)) return; CANCEL_PUSHED.add(key);    // in-session belt; EVENT_AUDIENCE is the braces, and survives a restart
+    if (CANCEL_PUSHED.size > 5000) CANCEL_PUSHED.clear();          // bounded, like SAFETY_PUSHED — dedup only needs the recent ones
+    const recips = !gid ? [...MEMBERS].filter(m => memberIn(m, cp))
+      : (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
+      : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
+      : [...MEMBERS].filter(m => memberIn(m, cp));
+    const gcpSafe = gid ? (GROUP_CHURCH.get(gid) || idNamesOwner(gid) || cp) : '';
+    for (const r of recips) {
+      if (!r || r === evt.pubkey || r === cp) continue;
+      if (gid && gcpSafe && !GROUP_CHILDSAFE.has(gid) && (MINORS_BY.get(gcpSafe) || EMPTY_SET).has(r)) continue;
+      pushTo(r, { title: 'Event cancelled', body: 'Something on your calendar is no longer happening \u2014 open to see what.', url: '/', tag: 'evtoff-' + id.slice(0, 12) }, 'announce');
     }
   } catch {}
 }
@@ -1369,14 +1738,14 @@ let _hydrating = false;
 // read from disk rather than derived.
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
-                   GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY,
+                   GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS,
-                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE]) { try { m.clear(); } catch {} }
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
   // flag that lets minors read a room.
-  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK]) { try { s.clear(); } catch {} }
+  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK, MEMBER_PHOTOS_OFF]) { try { s.clear(); } catch {} }
 }
 let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
@@ -1471,9 +1840,14 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   // wasn't relay-enforced". It was not the only one.
   if (e.kind === 0) {
     if (CHURCH_PUBS.has(e.pubkey)) {
-      let allow = false;
-      try { const c = JSON.parse(e.content || '{}'); allow = !!(c && c.features && c.features.childPhotos === true); } catch {}
+      let allow = false, photosOff = false;
+      try {
+        const c = JSON.parse(e.content || '{}');
+        allow = !!(c && c.features && c.features.childPhotos === true);
+        photosOff = !!(c && c.features && c.features.memberPhotos === false);   // opt-OUT: absent means allowed
+      } catch {}
       if (allow) CHILD_PHOTOS_OK.add(e.pubkey); else CHILD_PHOTOS_OK.delete(e.pubkey);
+      if (photosOff) MEMBER_PHOTOS_OFF.add(e.pubkey); else MEMBER_PHOTOS_OFF.delete(e.pubkey);
     }
     return;
   }
@@ -1560,6 +1934,16 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     APPROVED_BY.set(cp, set); rebuildApproved();
   }
+  else if (d.startsWith(NOPHOTO_D) && CHURCH_PUBS.has(cp = d.slice(NOPHOTO_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding'))) {   // moderation: photo-suppression list — church key or a safeguarding steward, mirroring the write gate below
+    // Authorship mirrors accept()'s NOPHOTO_D branch exactly. Anything looser would let a member reinstate
+    // their own photograph by publishing the list without themselves on it.
+    // BACKWARDS COMPATIBLE BY CONSTRUCTION (owner: add, never repurpose). Consoles in the field have been
+    // writing this document for months and the relay rehydrates all history on every update, so this ingest
+    // runs retroactively over every one of them: absent, empty and malformed content all land as an empty
+    // set rather than throwing, and a `deleted` tag clears the church's list.
+    const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
+    NOPHOTO_BY.set(cp, set);
+  }
   else if (d.startsWith(GUARDIANS_D) && CHURCH_PUBS.has(cp = d.slice(GUARDIANS_D.length)) && e.pubkey === cp) {   // safeguarding v2: church's parent↔child map — OWNER-ONLY
     const map = new Map();
     if (!removed) { try { const links = (JSON.parse(e.content).links) || {}; for (const [c, ps] of Object.entries(links)) { const ch = toHexPub(c); if (!ch) continue; const set = new Set(); (ps || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); map.set(ch, set); } } catch {} }
@@ -1639,11 +2023,37 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (perDay.size || legacy) CARE_SKIPHASH.set(id, { perDay, legacy }); else CARE_SKIPHASH.delete(id);
     try { const r = toHexPub((JSON.parse(e.content) || {}).recipient || ''); if (r) CARE_RECIPIENT.set(id, r); else CARE_RECIPIENT.delete(id); } catch {}
   }
+  else if (d.startsWith(EVENT_D)) {   // a calendar event, or the tombstone that cancels one
+    // Record only WHERE it lands and WHO put it there — the church, the group (if any) and the author. Never
+    // the title, the date or the place: this map exists to address a notification, and the notification is
+    // deliberately allowed to say none of those things (see maybePushCancel). The content is sealed under the
+    // church name key anyway, so the relay could not read them if it wanted to.
+    const eid = d.slice(EVENT_D.length); if (!eid) return;
+    const gid = eventGroup(e);
+    const owner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (gid && GROUP_CHURCH.get(gid)) || '');
+    if (!owner || !CHURCH_PUBS.has(owner)) return;   // not attributable to a church we carry — record nothing
+    if (removed) { EVENT_AUDIENCE.delete(eid); return; }   // cancelled: forget it, which is also what makes the notice fire once
+    EVENT_AUDIENCE.set(eid, { cp: owner, gid, by: e.pubkey });
+  }
 }
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
 const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 function accept(e) {
-  if (!CHURCH_PUBS.size) return true;                            // unconfigured = open
+  // AN UNCONFIGURED BOX HOLDS NOBODY'S DATA, SO IT ACCEPTS NOBODY'S.
+  //
+  // This used to `return true` — a relay with no churches took every write from anyone. Defensible while a
+  // stranger's box was unreachable anyway; not since admission became "does it prove it runs our software",
+  // because a freshly installed relay is exactly such a box, and an address pointed at one would be handed a
+  // congregation's corpus by a client with no way to know better.
+  //
+  // FIRST REGISTRATION IS UNAFFECTED, checked rather than assumed: a church registers over HTTP at /config,
+  // which never reaches accept(), and CHURCH_PUBS loads from church.json and the environment at startup, not
+  // from replayed events. A fresh box still takes the named, church-key-signed, URL-bound self-registration
+  // the Suite and the phone both use — it just will not take a CORPUS until it knows whose it is.
+  //
+  // OPERATOR-FACING CHANGE WORTH NAMING: a relay restored WITHOUT its church.json now refuses every write
+  // instead of silently accepting the world. Loud beats wrong, but it is a different symptom.
+  if (!CHURCH_PUBS.size) return false;                           // unconfigured = holds nobody's data yet
   // a network a church belongs to may publish church-style content here (groups/events/plans/posts)
   // REVIEW-2026-07-20 B3: `NETWORKS.has(e.pubkey)` granted church-level WRITE authority for EVERY church on
   // the relay to any key ANY church had declared a network. Scoped: when the event names a church, that
@@ -1682,7 +2092,10 @@ function accept(e) {
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     // …but a minor's photograph is refused whatever their membership, unless their church allows it. Placed
     // FIRST so it cannot be fallen through: the member rule below returns true unconditionally.
-    if (childPhotoBlocked(e.pubkey) && _profileHasPhoto(e.content)) return false;
+    // …and so is a photograph a steward has RESET, for a member of any age. Three separate rules, all three
+    // ending at the same door: the church's children's switch, the church's members' switch, and this one
+    // person's reset. Only the third of them can stop a suppressed ADULT re-publishing.
+    if ((childPhotoBlocked(e.pubkey) || memberPhotoBlocked(e.pubkey) || photoSuppressed(e.pubkey)) && _profileHasPhoto(e.content)) return false;
     if (isMember) return true;                                   // members/leaders: always
     if (store.query({ kinds: [0], authors: [e.pubkey], limit: 1 }).length) return true;  // a stranger updating their own
     // SECURITY-AUDIT-2026-07-06 M6: reject in O(cap) once the stranger cap is reached, instead of scanning +
@@ -1718,6 +2131,15 @@ function accept(e) {
     // whose whole purpose is to catch a type nobody gave a rule to.
     if (d.startsWith(VOICE_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(VOICE_D.length) === e.pubkey;
     if (d.startsWith(STEWARDS_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey;   // OWNER-ONLY: only the church key edits its own steward roster
+    // THE CHURCH'S RELAY-NETWORK MEMBERSHIP. Owner-only, like the roster: this document is the sole thing
+    // that admits a self-hosted or third-party-hosted relay to a church's network, so the authority that
+    // gatekeeps writes is the authority that decides it. Not delegated to stewards — nothing asked for that
+    // and a delegated steward could otherwise widen where the whole corpus is published.
+    //
+    // These documents are keyed by (pubkey, kind, d), so a member writing this d-tag would only ever replace
+    // their OWN copy and never the church's — the cross-tenant overwrite that hit trinityone/voice: is not
+    // reachable here. This is a floor, not a patch: nothing but the church should be authoring it at all.
+    if (d === RELAY_NET_D) return CHURCH_PUBS.has(e.pubkey);
     if (d.startsWith(BLOCKED_D)) return leaderOf(d.slice(BLOCKED_D.length));   // OWNER-ONLY, and only your OWN blocklist                                                                // OWNER-ONLY: banning is not delegated to stewards
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide
       // SECURITY-AUDIT-2026-07-06 M5: bind authority to the church that actually OWNS the referenced group,
@@ -2237,6 +2659,26 @@ function canRead(e, authed) {
     // PUBLIC: joinpolicy is a bare {approval:bool} with no PII, and a not-yet-joined member must read it
     // before they can join — it is the one document that legitimately precedes membership.
     if (d.startsWith(JOINPOLICY_D)) return true;
+    // PUBLIC, and for exactly the same reason one level down (closed-network plan C4). This is the church's
+    // own statement of WHICH RELAY BOXES ARE ITS NETWORK, and under the client gate a phone will not publish
+    // to an address until it has read it — including the phone of somebody who has just scanned an invite
+    // and is not a member of anything yet. Gate it behind membership and a self-hosting church's newcomer
+    // can never publish their join to the church's own box, because the box will not tell them it is the
+    // church's box until they have joined. That is the bootstrap deadlock, arriving through the relay.
+    //
+    // WHAT IT DISCLOSES, weighed rather than waved past: a list of RELAY PUBKEYS, an optional advisory URL,
+    // and an alwaysOn flag. No member, no name, no content. The church's kind-10002 already publishes the
+    // same church's relay ADDRESSES to anyone at all (`if (e.kind === 10002) return true` below), so this
+    // reveals strictly less about where a church lives than what is already public.
+    //
+    // AND IT IS ENUMERABLE, which the first version of this note denied. It said "a reader must already know
+    // the church's pubkey to ask for it" — untrue: RELAY_NET_D is a BARE d-tag with no <churchpub> suffix
+    // (the compare above is an exact one), so a REQ carrying `#d: ['trinityone/relay-net']` and no `authors`
+    // returns every church's document on a shared relay. Our own clients always pass `authors: [cp]`; a
+    // stranger's need not. That does not change the decision — the already-public kind-10002 permits exactly
+    // the same enumeration, one line down — but the sentence was doing work it had not earned, and a reason
+    // that is false is worse than no reason at all.
+    if (d === RELAY_NET_D) return true;
     // Resolve the owning church. <prefix><churchpub> d-tags carry it directly; church-authored docs are
     // self-identifying; steward-authored content names it in ['church']; member-authored replies
     // (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:) p-tag it. If none of those resolve, we cannot prove
@@ -2341,6 +2783,31 @@ function canRead(e, authed) {
       if (vis === 'stewards') return false;                        // stewards already returned true above
       if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
     }
+    // A CHILD IS NOT ADVERTISED TO THE CONGREGATION AS AN AVAILABLE HELPER.
+    //
+    // The WRITE gate has refused a minor's `careavail:` since AUDIT-2026-07-30 (:2006), and stopped there —
+    // but a member who listed themselves BEFORE their church marked them a child already has one stored, and
+    // refusing the refresh does not retract it. Measured against a real relay, 2026-08-31: the church marks
+    // them, a refresh is refused, and the ORIGINAL keeps being served, with zero kind-5 deletions on the box.
+    // On every ordinary member's Care tab they stay under "Ready to help" with their own offer text, inviting
+    // adults to contact them. Marking an existing member as a child is common, not an edge case
+    // (reference/DOMAIN.md), so this is the ordinary path, not a race.
+    //
+    // THE CLIENT FILTER CANNOT REACH IT, and it is not the place to fix. CareAvailability really does filter
+    // minors out (app/screens-today.jsx) — from `safeguard.minors`, which this relay deliberately does not
+    // serve to ordinary members: it is the cleartext list of a congregation's children, and joining an
+    // open-join church is one self-signed publish (AUDIT-2026-07-27). Measured: `minors:` served to an
+    // ordinary member = 0. The filter is live, correct, and asked a question it can never have the answer to.
+    // Back-filling it onto member devices would undo that audit to fix this one. The knowledge is here.
+    //
+    // WHO STILL SEES IT, decided rather than inherited: the author (returned true at the top of this block —
+    // their own Care tab must not silently drop their listing out from under them), and the church, its
+    // network, its stewards and its care admins, all of whom returned true a few lines above. A steward MUST
+    // keep seeing it, or a person vanishing from the register is unexplainable from the console where the
+    // marking was made. Same shape as the CAREREQ_D branch: withhold from the congregation, not from the
+    // people accountable for the decision. Scoped with minorOf() — whether someone is a child is a judgement
+    // only their OWN church makes (AUDIT-2026-07-30 S3) — so a non-minor's listing is untouched.
+    if (d.startsWith(AVAIL_D) && minorOf(e.pubkey, cp)) return false;
     // A SERVING TEAM'S ROOM IS NOT ADVERTISED TO PEOPLE WHO ARE NOT ON IT. Gating only its MESSAGES left the
     // room listed in the member's chat list, where it accepted typing and silently discarded it — Nkechi,
     // round 10: "I typed a reply and pressed send; the box emptied but my message never appeared." Listing
@@ -2353,6 +2820,100 @@ function canRead(e, authed) {
       if (GROUP_VIS.get(gid) === 'team') {
         const ppl = ROSTER_PEOPLE.get(gid);
         return !!authed && !!(ppl && ppl.has(authed));
+      }
+      // AND AN ADULTS-ONLY ROOM IS NOT ADVERTISED TO A CHILD, for exactly the reason above. Measured against
+      // a real relay, 2026-08-31: with a room named `Marriage counselling` and `childsafe` absent, the minor's
+      // MESSAGES were correctly withheld (0 served; an adult got 1) and her post refused — and this DEFINITION
+      // was served to her, content {"name":"Marriage counselling","kind":"open"}. A room-list REQ as the minor
+      // returned both the child-safe room and that one. The NAME is the disclosure: a young person's chat list
+      // reads "Marriage counselling", "Safeguarding concerns", "Elders — pastoral", and tapping one opens an
+      // empty room that swallows what she types. app/screens-chat.jsx does filter the list; this is its
+      // backstop, not its duplicate — a client filter runs on the reader's own device, after a cache has
+      // painted, from a document that may not have arrived.
+      //
+      // Same test as the message gate below (the `g` branch), including its GROUP_CHURCH.get() ||
+      // idNamesOwner() fallback, so a relay holding a room's MESSAGES but not its definition still resolves
+      // the governing church. Scoped with minorOf(): whether someone is a child is a judgement only their OWN
+      // church makes (AUDIT-2026-07-30 S3), so a co-tenant church cannot blank another congregation's rooms.
+      //
+      // PLACED AFTER THE TEAM BRANCH, deliberately. That branch RETURNS, so a team room is decided by its
+      // ROSTER and never reaches this line — which is the right answer, not an oversight: a team room is
+      // already withheld from everyone the church has not staffed onto it, so the only person this could
+      // additionally hide it from is a young person the church deliberately put on that team. Telling her the
+      // name of the team she serves on is not a disclosure; blanking it would take the team's name and icon
+      // off her own serving view (app/app.jsx `_teamMeta`, fed by this same subscription). Ordinary and
+      // invite-only rooms have no such per-person grant, so they are gated here.
+      //
+      // A MINOR WHO LEADS AN ORDINARY ROOM is refused too, decided rather than inherited: the message gate
+      // already withholds every message in an adults-only room from a minor whatever their role, so serving
+      // the definition alone would list a room she can neither read nor post in — the precise defect this
+      // closes. The control is the church marking that room child-safe, which is one click in the console.
+      // (Her own event stays hers: a minor who AUTHORED the definition returned true at the top of this
+      // branch, as did the church key, its network, its stewards and its care admins — the console still sees
+      // every room.)
+      if (!GROUP_CHILDSAFE.has(gid)) {
+        const gcp = GROUP_CHURCH.get(gid) || idNamesOwner(gid);
+        if (gcp && minorOf(authed, gcp)) return false;
+      }
+    }
+    // AND AN ADULTS-ONLY GROUP'S EVENT IS NOT PUT ON A CHILD'S CALENDAR. Exact sibling of the room-name gate
+    // directly above (3bbfc23, 2026-08-31), same shape, same reasoning, different document type — and it was
+    // missed there. Measured against a real gateway on this branch, 2026-09-01: an event tagged to a group
+    // with `childsafe` absent was served to a MINOR member with its content readable — content
+    // {"title":"Marriage counselling supper","where":"The vicarage"} — byte-identical to what the adult got.
+    // canRead spans nine minorOf/GROUP_CHILDSAFE checks and had none for EVENT_D, so an event fell straight
+    // through to the ordinary effective-member rule below.
+    //
+    // THE TITLE AND THE PLACE ARE THE DISCLOSURE, and they are worse than the room name: the name says a
+    // subject exists, the event says it is happening on Thursday at the vicarage. It lands on a young
+    // person's Today card and on their calendar, next to youth club.
+    //
+    // HOW AN EVENT NAMES ITS GROUP: its non-NET `t` tag, which is what eventGroup() reads and what both
+    // writers set — src/steward.src.js publishEvent (`if (groupId) tags.push(['t', groupId])`) and
+    // src/fellowship.src.js publishGroupEvent (a leader posting into their own room). The sealed content
+    // ALSO carries `groupId`, but that is under the church name key and this relay cannot read it, so the tag
+    // is the only thing a gate can stand on. It is also why EVENT_AUDIENCE exists: the TOMBSTONE that cancels
+    // an event carries no `t` tag at all, so the audience has to be remembered at ingest. A tombstone reaching
+    // this line therefore has no group and is not gated — correctly: it is an empty document that says only
+    // "the thing at this id is gone", which is what every reader needs in order to drop a stale card.
+    //
+    // NO GROUP TAG MEANS THE WHOLE CHURCH, AND MUST STAY THAT WAY. Sunday service, the church weekend, the
+    // carol service — all published with no group. Over-gating here would take the church's own calendar off
+    // every young person's phone, which is a silent blank screen and worse than the leak (reference/DOMAIN.md
+    // on rooms; the same holds for the calendar). `gid &&` is that guard, and it is the first thing tested.
+    //
+    // A CHILD-SAFE GROUP'S EVENT STILL REACHES ITS CHILDREN — the youth-group workday is the whole point of
+    // a group calendar for a young person. GROUP_CHILDSAFE is the church's own one-click marking.
+    //
+    // FALLBACK CHAIN, and it is maybePushCancel's, not the room gate's. GROUP_CHURCH is populated only from a
+    // stored group DEFINITION, so a relay holding an event but not its group def would resolve no church and
+    // wave it through; idNamesOwner() reads the owner prefix out of the group id, and `cp` — this event doc's
+    // own owning church, resolved above — is the last resort. maybePushCancel already uses exactly
+    // `GROUP_CHURCH.get(gid) || idNamesOwner(gid) || cp` for the same question about the same document, and
+    // two safeguarding rules that are meant to agree should be recognisable as the same rule. An unknown
+    // group stays NOT child-safe, so an unresolvable one is withheld from a minor rather than served.
+    //
+    // SCOPED WITH minorOf(), so a co-tenant church cannot blank another congregation's calendar: whether
+    // someone is a child is a judgement only their OWN church makes (AUDIT-2026-07-30 S3).
+    //
+    // WHO IS UNAFFECTED: every adult member (this is the path that draws the whole congregation's calendar),
+    // the church key, its network, its stewards and its care admins — all returned true above, so the console
+    // still sees every event and can explain what a young person sees.
+    //
+    // RETROACTIVE, deliberately. The relay replays all stored history through ingest on every update, so
+    // GROUP_CHILDSAFE and MINORS_BY are rebuilt from the corpus and this gate applies to every event a church
+    // has ever published, not only new ones. A young person's calendar therefore loses adults-only group
+    // events it was already showing them; nothing is deleted and no adult's view changes.
+    //
+    // SERVICE_D IS NOT THE SAME GAP and is deliberately not touched: publishService, publishRoom and
+    // publishBooking tag only ['d', …] and ['t', NET] — no publisher anywhere sets a group tag on them and no
+    // reader filters them by one, so they are whole-church by construction and there is nothing to scope a
+    // gate to. EVENT_D is the only calendar document that carries a groupId.
+    if (d.startsWith(EVENT_D)) {
+      const gid = eventGroup(e);
+      if (gid && !GROUP_CHILDSAFE.has(gid)) {
+        const gcp = GROUP_CHURCH.get(gid) || idNamesOwner(gid) || cp;
+        if (gcp && minorOf(authed, gcp)) return false;
       }
     }
     const md = MEMBER_DOCS.get(cp);
@@ -2715,7 +3276,13 @@ function azRateLimited(ip) {
 // route that calls these is gated behind the admin token (adminOK) — nothing here is interpolated
 // into a shell (spawn with an arg array), and the only caller-supplied value (an optional auth key)
 // is format-checked first.
-const TS_BIN = 'tailscale';
+// Overridable so a box that keeps tailscale outside PATH still works — and so a TEST can put a relay into the
+// "no public address anywhere" state deliberately. That state is otherwise inherited from whatever machine the
+// suite runs on: this dev box has a funnel, so every spawned relay would pick up a public address and the
+// loopback-only cases would pass here and fail on a machine without tailscale, or the reverse.
+// Users: tsRun() below (every tailscale query — tsState, tsStateCached, /tailscale/*) and the funnel `serve`
+// spawn in the /tailscale/funnel route. Nothing else shells out to tailscale.
+const TS_BIN = process.env.TRINITY_TAILSCALE_BIN || 'tailscale';
 function tsRun(args, { timeoutMs = 12000 } = {}) {
   return new Promise((resolve) => {
     let out = '', err = '', done = false, child;
@@ -2791,6 +3358,35 @@ function serveStatic(req, res) {
     }));
     return;
   }
+  // C2 — PROOF OF POSSESSION. `GET /relay-identity?nonce=<32 hex>` → a kind-27235 event signed by this
+  // relay's identity key, binding the caller's nonce (see relayIdentityEvent above for why this exists at
+  // all). Public and unauthenticated on purpose: the question "are you the box you say you are?" has to be
+  // answerable by a client that has not yet decided to trust anything here.
+  //
+  // NOTHING IN THE PRODUCT CONSULTS THIS YET. The proof and the gates that read it land separately and
+  // deliberately: a relay older than this cannot answer, so the day something starts REQUIRING an answer is
+  // the day every un-upgraded relay drops out of its church's network. Adding the endpoint is safe alone.
+  if (route === '/relay-identity') {
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    let nonce = ''; try { nonce = new URL(req.url, 'http://x').searchParams.get('nonce') || ''; } catch {}
+    // EXACTLY 32 HEX. The entire freshness of a proof is the caller's nonce, so a missing or degenerate one
+    // is refused rather than signed over: a host that had once seen the proof for nonce "" or "0" could
+    // otherwise serve that same event for ever and every caller who asked lazily would accept it.
+    if (!/^[0-9a-f]{32}$/i.test(nonce)) { res.writeHead(400, H); res.end('{"error":"nonce must be 32 hex characters"}'); return; }
+    // UNDECLARED HOST → REFUSE, and say so in a shape an operator panel can read. Signing a host this box
+    // cannot vouch for is the forwarding hole; falling back to the Host header is what used to open it.
+    let wantFor = ''; try { wantFor = new URL(req.url, 'http://x').searchParams.get('for') || ''; } catch {}
+    const signUrl = relayIdentityUrl(req, wantFor);
+    if (!signUrl) {
+      res.writeHead(421, H);
+      res.end(JSON.stringify({ error: 'this relay does not declare the address you dialled',
+        code: 'undeclared-address', dialled: String(req.headers['host'] || ''), file: 'relay-addresses.json' }));
+      return;
+    }
+    res.writeHead(200, H);
+    res.end(JSON.stringify({ proof: relayIdentityEvent(nonce.toLowerCase(), signUrl) }));
+    return;
+  }
   if (route === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
     // OK MEANS "THIS RELAY IS DOING ITS JOB", not "the process is running". A relay that is up, listening and
@@ -2825,7 +3421,12 @@ function serveStatic(req, res) {
         } catch { return { ref, sha: null }; }
       })() } : {}),
       sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },   // is auto-sync actually working?
-      relayPub: RELAY_PUB,   // this relay's identity pubkey — a church authorises it as a trusted sync peer
+      // AN UNPROVEN CLAIM, and it must keep reading as one. This is a bare string over an unauthenticated
+      // GET: any host can serve this box's /status verbatim and be believed. It is fine for what it is used
+      // for (a church authorises this pubkey as a trusted sync peer; the relay-to-relay path then makes the
+      // box SIGN with the key before it gets anything). It is not evidence of who is answering — that is
+      // /relay-identity, which binds a caller-chosen nonce. Never treat this field as identification.
+      relayPub: RELAY_PUB,
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
       // the list from the token-gated /config; the counts below are now ALSO token-gated (red-team 2026-08-18).
@@ -2856,6 +3457,34 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // deliberately NO Access-Control-Allow-Origin
     if (loopbackSock && !proxied && loopbackHost) { res.writeHead(200, H); res.end(JSON.stringify({ token: ADMIN_TOKEN })); return; }
     res.writeHead(403, H); res.end('{"error":"not a local request"}'); return;
+  }
+  // WHAT THIS BOX WILL SIGN FOR — the list, not just the first entry. ADMIN-GATED.
+  //
+  // Read by scripts/relay-update.sh, which asks the box what it declares and then goes and dials every one of
+  // those addresses from outside before it will call an update healthy. Before this existed the update read
+  // `relayWss` out of /relay-names/mine — an adminOK route it sent no credential to, so the value was always
+  // empty, the "no public address" branch always ran, and EVERY update passed. That is the defect this route
+  // exists to close; see the probe block in relay-update.sh.
+  //
+  // NOT PUBLIC, deliberately. An unauthenticated route listing every address a relay answers at would be a
+  // permanent internet-facing disclosure on every box in the fleet, to catch an operator mistake. The caller
+  // is on the machine, so it can have the admin token from /local-token, which is already loopback-fenced.
+  //
+  // TEXT, NOT JSON, and this is the one place in this file that is. The only consumer is a POSIX shell script
+  // running as ROOT on boxes nobody can log in to, and its failure mode is a ROLLBACK. A JSON array cannot be
+  // parsed reliably by sed the moment an address is a bracketed IPv6 literal (`ws://[::1]:8000/relay` is in
+  // this very list), and requiring jq or node in the update path would roll back every relay on a box where
+  // neither is on root's PATH. One key and one value per line is parseable by awk and cannot be got wrong.
+  if (route === '/relay-addresses') {
+    const H = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // no Access-Control-Allow-Origin
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('error unauthorized\n'); return; }
+    const lines = ['loopbackOnly ' + (_loopbackOnlyOptIn() ? '1' : '0')];
+    // Whitespace would silently split a line into a different address, so drop it here rather than hand the
+    // updater something it will mis-parse. An address with a space in it is malformed anyway.
+    for (const u of _publicDeclaredAddresses()) if (!/\s/.test(u)) lines.push('public ' + u);
+    for (const u of AUTO_LOOPBACK_ADDRESSES) lines.push('loopback ' + u);
+    res.writeHead(200, H); res.end(lines.join('\n') + '\n');
+    return;
   }
   // Relay name directory — resolve a handle (public) or claim one (relay-key-signed). See _verifyRelayClaim.
   if (route.startsWith('/relay-names/')) {
@@ -3169,7 +3798,11 @@ function serveStatic(req, res) {
         // member's capability gate (_verifyEnforcing) refuses to adopt it and never routes gated reads (roster,
         // care PII) to a box that would serve them to anyone. Was hardcoded true, which made the gate a no-op.
         enforces: CHURCH_PUBS.size > 0, multiChurch: true,
-        relayPub: RELAY_PUB,                  // R3: this relay's identity key — lets a client tell two URLs apart as the SAME box (dedup the self-sufficiency count by failure-domain, not URL)
+        // R3: lets a client tell two URLs apart as the SAME box (dedup the self-sufficiency count by
+        // failure-domain, not URL). AN UNPROVEN CLAIM, exactly like /status's copy: unauthenticated, and
+        // trivially copied onto another host. Counting with it is safe; deciding with it is not. The
+        // provable form is /relay-identity, which signs a caller-chosen nonce with this key.
+        relayPub: RELAY_PUB,
         media: !MEDIA_OFF,                    // does this relay host self-hosted media (blobs)? — the client hides the upload UI when false
         // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
         // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches
@@ -4472,6 +5105,10 @@ wss.on('connection', (ws, req) => {
       // docs, so this survives relay restarts — a boot re-announce won't re-alert the steward. Captured before note().
       const _mdD = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
       const wasMember = _mdD.startsWith(MEMBER_D) && (MEMBER_DOCS.get(_mdD.slice(MEMBER_D.length)) || new Set()).has(evt.pubkey);
+      // …and, for the same reason and by the same means, what we knew about the EVENT a cancellation is for.
+      // store.put() destroys the version it replaces and note() forgets the entry, both of them below this
+      // line, so after either of those there is nothing left to address a cancellation notice to.
+      const wasEvent = _mdD.startsWith(EVENT_D) ? (EVENT_AUDIENCE.get(_mdD.slice(EVENT_D.length)) || null) : null;
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
       // A STORAGE FAILURE MUST NOT BE SILENT. store.put THROWS when the database cannot accept a write — a
@@ -4528,6 +5165,7 @@ wss.on('connection', (ws, req) => {
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
       maybePushSermon(evt);    // notify members when the church features a new sermon (video/audio)
+      maybePushCancel(evt, wasEvent);   // notify an event's own audience when the church cancels it
       maybePushSafety(evt);    // safety check: alert members on open, nudge the creator on responses
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       let _evtJson = null;   // E6: serialize the event ONCE (lazily, on first match) and reuse for every matching subscriber — was N JSON.stringify(evt) for N subs
@@ -4674,10 +5312,17 @@ wss.on('close', () => clearInterval(wsHeartbeat));
 const BIND_HOST = process.env.RELAY_HOST || '0.0.0.0';   // servers keep 0.0.0.0; the desktop app sets this explicitly (loopback unless the operator opts into LAN access — see relay-app/desktop/src-tauri/src/main.rs)
 server.listen(PORT, BIND_HOST, () =>
   console.log(`TrinityOne gateway on http://${BIND_HOST}:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
-    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
+    // NOT "open relay" ANY MORE. This line said "write policy OFF (open relay — anyone may write)" long after
+    // accept() started refusing every write from a box with no churches. An operator reading it would conclude
+    // their unconfigured relay was permissive when in fact it keeps nothing at all.
+    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  NO CHURCH CONFIGURED — this relay refuses every write until one is set up in the control dashboard`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}` +
     (!_strictWeb ? `\n  ⚠ CSP is LAX (unsafe-inline/eval) — served shells still carry in-browser Babel. Deploy a PRE-TRANSPILED build (or set STRICT_CSP=1) before go-live: the console holds the church key.` : '')));
+// AND SAY WHERE IT WILL ANSWER. Held until the first public-address refresh lands so a Tailscale funnel box is
+// not warned about a state it was never in. logDeclaredAddresses() dedupes, so this is normally the refresh's
+// own line and this call is the belt to its braces.
+_firstPublicRefresh.then(() => logDeclaredAddresses('startup')).catch(() => {});
 // "Stay public": if the operator turned on the tunnel before, re-open it on boot (a fresh quick-tunnel URL) and
 // re-point the relay's directory name at it — so a restart doesn't silently drop members' access.
 if (existsSync(TUNNEL_FLAG)) { setTimeout(() => { startCloudflared().then(r => console.log(r.ok ? `  tunnel re-opened: ${r.url}` : `  tunnel re-open failed: ${r.error || ''}`)).catch(() => {}); }, 2500); }

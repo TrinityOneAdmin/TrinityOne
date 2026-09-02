@@ -4,7 +4,7 @@
 
 const RLY = {
   address: 'relay.grace.org',
-  managedAddress: 'grace.relay.trinityone.app',
+  managedAddress: 'grace.relay.trinityone.church',
   church: { name: 'Grace Chapel', initials: 'GC', accent: 'var(--clay)' },
   version: 'v1.4.2',
   uptime: '14d 6h',
@@ -205,7 +205,7 @@ function RelayDashboard({ os, setOs }) {
                 {RLY.log.map((l, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px', borderRadius: 8, fontFamily: 'var(--mono)', fontSize: 12 }}>
                     <span style={{ color: 'var(--ink-3)', flexShrink: 0 }}>{l.t}</span>
-                    <span style={{ flexShrink: 0, width: 16, color: l.dir === 'in' ? 'var(--sage)' : 'var(--clay)' }}>{l.dir === 'in' ? '▼' : '▲'}</span>
+                    <span style={{ flexShrink: 0, width: 16, color: l.dir === 'in' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{l.dir === 'in' ? '▼' : '▲'}</span>
                     <span style={{ flexShrink: 0, fontWeight: 700, color: 'var(--ink-2)', minWidth: 92 }}>{l.kind}</span>
                     <span style={{ color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.who} · {l.note}</span>
                   </div>
@@ -223,18 +223,18 @@ function RelayDashboard({ os, setOs }) {
                     { ic: 'globe', t: 'Public address', s: 'Port 443 · IPv4 + IPv6', ok: 'Open' },
                   ].map(r => (
                     <div key={r.t} style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface-2)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={r.ic} size={16} color="currentColor" /></div>
+                      <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface-2)', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={r.ic} size={16} color="currentColor" /></div>
                       <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5 }}>{r.t}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.s}</div></div>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: 'var(--sage)', flexShrink: 0 }}><Icon name="check" size={14} stroke={2.6} color="var(--sage)" /> {r.ok}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: 'var(--sage-ink)', flexShrink: 0 }}><Icon name="check" size={14} stroke={2.6} color="var(--sage)" /> {r.ok}</span>
                     </div>
                   ))}
                 </div>
               </RCard>
               <RCard>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="bank" size={18} color="currentColor" /></div>
+                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="bank" size={18} color="currentColor" /></div>
                   <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 13.5 }}>Nightly backup</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>Encrypted · last night 3:00am</div></div>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: 'var(--sage)' }}><Icon name="cloudCheck" size={15} color="var(--sage)" /> Done</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: 'var(--sage-ink)' }}><Icon name="cloudCheck" size={15} color="var(--sage)" /> Done</span>
                 </div>
               </RCard>
             </div>

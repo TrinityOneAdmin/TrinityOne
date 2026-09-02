@@ -100,9 +100,16 @@ test('a refusal of our OWN superseded write does not alarm the steward', () => {
     'nothing records which of our writes the relay accepted, so a "newer version already stored" refusal of ' +
     'our own older copy is indistinguishable from a real failure');
   assert.match(body, /newer version/i, 're-anchor: the refusal is no longer recognised by its reason');
-  const at = body.indexOf('_lastOk.get');
-  const fire = body.indexOf('steward-publish-error');
-  assert.ok(at > 0 && at < fire,
+  // SCOPED TO THE CATCH BLOCK, and it has to be. publish() now raises steward-publish-error from a SECOND,
+  // earlier place too — an empty publish set under the closed-network gate (plan C4), where nothing was
+  // written and a superseded copy of our own is not even possible. Comparing whole-body offsets would read
+  // that unrelated dispatch as the alarm this test is about, and report a correct ordering as broken.
+  const catchAt = body.indexOf('catch (e) {');
+  assert.ok(catchAt > 0, 're-anchor: publish() no longer has a catch block');
+  const cb = body.slice(catchAt);
+  const at = cb.indexOf('_lastOk.get');
+  const fire = cb.indexOf('steward-publish-error');
+  assert.ok(at > 0 && fire > 0 && at < fire,
     'the check runs after the alarm is already raised, so the steward still sees "could not be saved" for a ' +
     'change that is saved');
 });

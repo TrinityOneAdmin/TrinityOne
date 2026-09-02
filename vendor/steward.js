@@ -6271,6 +6271,7 @@
   function _pickWinner(vers, trusted) {
     let best = null;
     for (const rec of vers.values()) {
+      if (rec && rec._tomb) continue;
       if (trusted && !trusted(rec)) continue;
       if (!best) {
         best = rec;
@@ -6288,7 +6289,7 @@
       return null;
     }
     const winKey = String(win._by || "");
-    const others = [...vers.keys()].filter((k) => k !== winKey);
+    const others = [...vers.keys()].filter((k) => k !== winKey && !(vers.get(k) || {})._tomb);
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
@@ -6316,28 +6317,46 @@
     }
     const by = String(rec._by || "");
     const had = vers.get(by);
+    if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
   }
-  function _forgetById(versions, byId, id, by, ts, trusted) {
+  function _tombstoneTargets(e) {
+    return (e && e.tags || []).filter((t) => t[0] === "for").map((t) => String(t[1] || "")).filter(Boolean);
+  }
+  function _forgetById(versions, byId, id, by, ts, trusted, opts) {
+    const k0 = String(by || "");
+    const cp = String(opts && opts.churchPub || "");
+    const named = opts && opts.targets || [];
+    const _authority = opts && typeof opts.mayName === "function" ? opts.mayName : trusted;
+    const mayName = typeof _authority === "function" ? !!_authority({ _by: by }) : false;
+    const keys = [k0];
+    if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
+    const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });
     const vers = versions.get(id);
     if (!vers) {
-      if (byId.has(id)) {
+      const had = byId.has(id);
+      const fresh = /* @__PURE__ */ new Map();
+      for (const k of keys) fresh.set(k, tomb(k));
+      versions.set(id, fresh);
+      if (had) {
         byId.delete(id);
         return true;
       }
       return false;
     }
-    const k = String(by || "");
-    const had = vers.get(k);
-    if (!had) return false;
-    if ((had.ts || 0) > (ts || 0)) return false;
-    vers.delete(k);
-    if (!vers.size) versions.delete(id);
+    let did = false;
+    for (const k of keys) {
+      const held = vers.get(k);
+      if (held && !held._tomb && (held.ts || 0) > (ts || 0)) continue;
+      if (held && held._tomb && (held.ts || 0) >= (ts || 0)) continue;
+      if (held && !held._tomb) did = true;
+      vers.set(k, tomb(k));
+    }
     _reduceVersions(vers, byId, id, trusted);
-    return true;
+    return did;
   }
 
   // node_modules/nostr-tools/lib/esm/pure.js
@@ -6418,6 +6437,352 @@
   var getPublicKey2 = i2.getPublicKey;
   var finalizeEvent2 = i2.finalizeEvent;
   var verifyEvent2 = i2.verifyEvent;
+
+  // src/relay-identity.src.js
+  var RELAY_PROOF_WINDOW_SEC = 300;
+  function relayIdentityNonce() {
+    try {
+      const c = typeof globalThis !== "undefined" && globalThis.crypto || null;
+      if (!c || typeof c.getRandomValues !== "function") return "";
+      const b = new Uint8Array(16);
+      c.getRandomValues(b);
+      let out = "";
+      for (let i3 = 0; i3 < b.length; i3++) out += b[i3].toString(16).padStart(2, "0");
+      return out;
+    } catch {
+      return "";
+    }
+  }
+  function relayHttpBase(wssUrl) {
+    return String(wssUrl || "").replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+  }
+  function relayAddrKey(u) {
+    let str = String(u || "").trim();
+    if (!str) return "";
+    str = str.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
+    try {
+      const p = new URL(str);
+      const proto = p.protocol.toLowerCase();
+      const port = p.port === "80" && proto === "ws:" || p.port === "443" && proto === "wss:" ? "" : p.port;
+      const path = p.pathname.replace(/\/+$/, "");
+      return p.hostname.toLowerCase() + (port ? ":" + port : "") + path;
+    } catch {
+      return str.toLowerCase().replace(/^wss?:\/\//, "").replace(/\/+$/, "");
+    }
+  }
+  async function verifyRelayIdentity(wssUrl) {
+    try {
+      const base = relayHttpBase(wssUrl);
+      if (!base) return null;
+      const nonce = relayIdentityNonce();
+      if (!nonce) return null;
+      const ctrl = new AbortController();
+      const to = setTimeout(() => {
+        try {
+          ctrl.abort();
+        } catch (e) {
+        }
+      }, 6e3);
+      let body = null;
+      try {
+        body = await Promise.race([
+          (async () => {
+            const res = await fetch(
+              base + "/relay-identity?nonce=" + nonce + "&for=" + encodeURIComponent(String(wssUrl || "")),
+              { signal: ctrl.signal, cache: "no-store" }
+            );
+            return res.ok ? res.json() : null;
+          })(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("relay-identity timeout")), 6500))
+        ]);
+      } finally {
+        clearTimeout(to);
+      }
+      const ev = body && body.proof;
+      if (!ev || ev.kind !== 27235) return null;
+      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return null;
+      if (!verifyEvent2(ev)) return null;
+      const tag = (n) => {
+        const t = (ev.tags || []).find((x) => Array.isArray(x) && x[0] === n);
+        return t ? String(t[1] || "") : "";
+      };
+      if (tag("nonce").toLowerCase() !== nonce) return null;
+      if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
+      const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
+      if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
+      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
+    } catch {
+      return null;
+    }
+  }
+
+  // src/relay-net.src.js
+  var RELAY_NET_D = "trinityone/relay-net";
+  var SHARED_RELAY_KEYS = Object.freeze([
+    "6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"
+  ]);
+  var SHARED_RELAY_HINTS = Object.freeze([
+    "wss://app.trinityone.church/relay",
+    "wss://trinityone-master-01.tailbeaac0.ts.net/relay"
+  ]);
+  var CANONICAL_RELAY_PUBS = Object.freeze(
+    Object.fromEntries(SHARED_RELAY_HINTS.map((u) => [u, SHARED_RELAY_KEYS]))
+  );
+  function _relayKey(url) {
+    try {
+      return normalizeURL2(String(url || ""));
+    } catch {
+      return String(url || "");
+    }
+  }
+  var _isHex64 = (s) => /^[0-9a-f]{64}$/.test(String(s || "").toLowerCase());
+  function isSharedAddress(url, pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const want = _relayKey(url);
+    if (!want) return false;
+    for (const k of Object.keys(map)) if (_relayKey(k) === want) return true;
+    return false;
+  }
+  function sharedRelayKeys(pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const out = [];
+    for (const v of Object.values(map)) for (const p of v || []) {
+      const h = String(p).toLowerCase();
+      if (_isHex64(h) && !out.includes(h)) out.push(h);
+    }
+    return out;
+  }
+  function canonicalPinsFor(url, pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const want = _relayKey(url);
+    if (!want) return [];
+    for (const k of Object.keys(map)) {
+      if (_relayKey(k) === want) return (map[k] || []).map((p) => String(p).toLowerCase()).filter(_isHex64);
+    }
+    return [];
+  }
+  function parseRelayNet(content) {
+    let arr = content;
+    if (typeof arr === "string") {
+      try {
+        arr = JSON.parse(arr || "[]");
+      } catch {
+        return [];
+      }
+    }
+    if (!Array.isArray(arr)) return [];
+    const out = [], seen = /* @__PURE__ */ new Set();
+    for (const e of arr) {
+      if (!e || typeof e !== "object") continue;
+      const pubkey = String(e.pubkey || "").toLowerCase();
+      if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
+      seen.add(pubkey);
+      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+    }
+    return out;
+  }
+  function _originKey(httpUrl) {
+    let s = String(httpUrl || "").trim().toLowerCase().replace(/\/+$/, "");
+    if (!/^https?:\/\/[^/]+$/.test(s)) return "";
+    return s.replace(/^(https:\/\/[^/:]+):443$/, "$1").replace(/^(http:\/\/[^/:]+):80$/, "$1");
+  }
+  function sameOriginRelay(url, origin) {
+    const a = _originKey(relayHttpBase(url));
+    const b = _originKey(origin);
+    return !!a && !!b && a === b;
+  }
+  async function proveRelay(cp, url, deps) {
+    const d = deps || {};
+    const no = { root: "", pub: "" };
+    if (!url) return no;
+    let proof = null;
+    try {
+      proof = await (d.verify || verifyRelayIdentity)(url);
+    } catch {
+      proof = null;
+    }
+    const provenPub = String(proof && proof.relayPub || "").toLowerCase();
+    if (!_isHex64(provenPub)) return no;
+    if (isSharedAddress(url, d.pins) && !sharedRelayKeys(d.pins).includes(provenPub)) return { root: "", pub: provenPub };
+    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: "canonical", pub: provenPub };
+    if (sameOriginRelay(url, d.origin)) return { root: "origin", pub: provenPub };
+    let entries = null;
+    try {
+      entries = d.netEntries ? await d.netEntries(cp) : null;
+    } catch {
+      entries = null;
+    }
+    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return { root: "church", pub: provenPub };
+    return { root: "software", pub: provenPub };
+  }
+  async function isNetworkRelay(cp, url, deps) {
+    return !!(await proveRelay(cp, url, deps)).root;
+  }
+  var VERIFIED_KEY = "trinityone.relays.verified";
+  var VERIFIED_TTL_SEC = 30 * 24 * 3600;
+  var VERIFIED_REFRESH_SEC = 6 * 3600;
+  var VERIFY_RETRY_SEC = 60;
+  function readVerified(store) {
+    const out = /* @__PURE__ */ new Map();
+    let raw = null;
+    try {
+      raw = store && store.getItem ? store.getItem(VERIFIED_KEY) : null;
+    } catch {
+      raw = null;
+    }
+    let obj = null;
+    try {
+      obj = JSON.parse(raw || "{}");
+    } catch {
+      return out;
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+    for (const [k, v] of Object.entries(obj)) {
+      if (!v || typeof v !== "object") continue;
+      const pub2 = String(v.pub || "").toLowerCase();
+      if (!_isHex64(pub2)) continue;
+      const until = Number(v.until) || 0, at = Number(v.at) || 0;
+      const cp = _isHex64(v.cp) ? String(v.cp).toLowerCase() : "";
+      out.set(_relayKey(k), { pub: pub2, cp, at, until });
+    }
+    return out;
+  }
+  function writeVerified(store, map) {
+    try {
+      if (!store || !store.setItem) return;
+      const obj = {};
+      for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until };
+      store.setItem(VERIFIED_KEY, JSON.stringify(obj));
+    } catch {
+    }
+  }
+  function admitCached(map, url, cp, nowSec) {
+    const e = map.get(_relayKey(url));
+    if (!e || !(e.until > nowSec)) return false;
+    if (!e.cp) return true;
+    return !cp || e.cp === String(cp).toLowerCase();
+  }
+  function rememberVerified(map, url, pub2, cp, nowSec) {
+    const k = _relayKey(url);
+    if (!k || !_isHex64(pub2)) return;
+    map.set(k, { pub: String(pub2).toLowerCase(), cp: _isHex64(cp) ? String(cp).toLowerCase() : "", at: nowSec, until: nowSec + VERIFIED_TTL_SEC });
+  }
+  function createRelayGate(deps) {
+    const d = deps || {};
+    const nowSec = () => d.now ? d.now() : Math.floor(Date.now() / 1e3);
+    const map = readVerified(d.store);
+    const inflight = /* @__PURE__ */ new Map();
+    const attempted = /* @__PURE__ */ new Map();
+    const changed = () => {
+      try {
+        if (d.onChange) d.onChange();
+      } catch {
+      }
+    };
+    function origin() {
+      try {
+        return typeof d.origin === "function" ? d.origin() : d.origin || "";
+      } catch {
+        return "";
+      }
+    }
+    async function prove(url, cp) {
+      const k = _relayKey(url);
+      let res = { root: "", pub: "" };
+      try {
+        res = await proveRelay(cp, url, { verify: d.verify, netEntries: d.netEntries, origin: origin(), pins: d.pins });
+      } catch {
+      }
+      const had = map.get(k);
+      if (res.root) {
+        const scope = res.root === "church" ? String(cp || "").toLowerCase() : "";
+        if (res.root === "church" && !_isHex64(scope)) {
+          attempted.set(k, nowSec());
+          return false;
+        }
+        rememberVerified(map, url, res.pub, scope, nowSec());
+        writeVerified(d.store, map);
+        if (!had || had.pub !== res.pub || had.cp !== scope) changed();
+        return true;
+      }
+      attempted.set(k, nowSec());
+      if (had && res.pub && res.pub !== had.pub) {
+        map.delete(k);
+        writeVerified(d.store, map);
+        changed();
+      }
+      return false;
+    }
+    function start(url, cp) {
+      const k = _relayKey(url);
+      const running = inflight.get(k);
+      if (running) return running;
+      const p = Promise.resolve().then(() => prove(url, cp)).catch(() => false).then((v) => {
+        inflight.delete(k);
+        return v;
+      });
+      inflight.set(k, p);
+      return p;
+    }
+    function schedule(url, cp) {
+      const k = _relayKey(url);
+      if (!k || inflight.has(k)) return;
+      const last = attempted.get(k) || 0;
+      if (last && nowSec() - last < VERIFY_RETRY_SEC) return;
+      attempted.set(k, nowSec());
+      start(url, cp);
+    }
+    return {
+      // THE SYNCHRONOUS FILTER. Cache only. Anything it cannot admit is scheduled, never awaited.
+      admit(list, cp) {
+        const t = nowSec(), out = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          if (!u) continue;
+          const e = map.get(_relayKey(u));
+          if (admitCached(map, u, cp, t)) {
+            out.push(u);
+            if (!e.at || t - e.at > VERIFIED_REFRESH_SEC) schedule(u, cp);
+          } else schedule(u, cp);
+        }
+        return out;
+      },
+      // Ask about ONE address without opening anything — what a relay panel needs to say "connected" or
+      // "not yet proved" honestly.
+      admits(url, cp) {
+        return admitCached(map, url, cp, nowSec());
+      },
+      // Prove a whole list NOW, awaited. For the moments where waiting is right: the list just changed, or the
+      // app has just booted and would rather spend a second than start with an empty publish set.
+      async refresh(list, cp) {
+        const seen = /* @__PURE__ */ new Set(), waiting = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          const k = _relayKey(u);
+          if (!u || seen.has(k)) continue;
+          seen.add(k);
+          attempted.set(k, nowSec());
+          waiting.push(start(u, cp));
+        }
+        try {
+          await Promise.all(waiting);
+        } catch {
+        }
+        return this.admit(list, cp);
+      },
+      // What the gate would drop, so a screen can name the address and say why rather than losing it silently.
+      dropped(list, cp) {
+        const t = nowSec();
+        return (Array.isArray(list) ? list : []).filter((u) => u && !admitCached(map, u, cp, t));
+      },
+      forget(url) {
+        const k = _relayKey(url);
+        if (map.delete(k)) {
+          writeVerified(d.store, map);
+          changed();
+        }
+      },
+      _map: map
+    };
+  }
 
   // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
   function isBytes2(a) {
@@ -14587,6 +14952,7 @@ zoo`.split("\n");
   var _careKeyChecked = false;
   var _careRoster = /* @__PURE__ */ new Set();
   var _careRosterKnown = false;
+  var _careRosterSeen = false;
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   var _mediaKeyRing = [];
@@ -14871,20 +15237,30 @@ zoo`.split("\n");
     }
     return out;
   }
-  async function resolveRelayName(handle) {
+  async function resolveRelayName(handle, opts) {
     const h = String(handle || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
     if (!h) return null;
+    const memberToo = !(opts && opts.member === false);
     for (const base of _dirBases()) {
       try {
         const r = await fetch(base + "/relay-names/resolve/" + encodeURIComponent(h), { cache: "no-store", signal: AbortSignal.timeout(6e3) });
-        if (r.ok) {
-          const j = await r.json();
-          if (j && j.url) return j;
-        }
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (!j || typeof j.url !== "string" || !/^wss:\/\//i.test(j.url)) continue;
+        if (memberToo ? !await admitRemoteRelay(j.url) : !await verifyRelayIdentity(j.url)) continue;
+        return j;
       } catch (e) {
       }
     }
     return null;
+  }
+  async function admitRemoteRelay(url) {
+    if (!url) return false;
+    try {
+      return (await _gate.refresh([url], pub)).includes(url);
+    } catch (e) {
+      return false;
+    }
   }
   function getNamedRelays() {
     try {
@@ -14918,12 +15294,12 @@ zoo`.split("\n");
       try {
         const j = await resolveRelayName(entry.name);
         const newUrl = normRelay(j && j.url);
-        if (newUrl && newUrl !== entry.url) {
-          extra = extra.filter((u) => u !== entry.url);
-          extra.push(newUrl);
-          entry.url = newUrl;
-          changed = true;
-        }
+        if (!newUrl || newUrl === entry.url) continue;
+        if (!await admitRemoteRelay(newUrl)) continue;
+        extra = extra.filter((u) => u !== entry.url);
+        extra.push(newUrl);
+        entry.url = newUrl;
+        changed = true;
       } catch (e) {
       }
     }
@@ -15039,7 +15415,7 @@ zoo`.split("\n");
     window.addEventListener("focus", refreshSelfPublicRelay);
   } catch (e) {
   }
-  function relays() {
+  function relaysRaw() {
     const own = ownRelay();
     const out = [own];
     for (const r of CANONICAL_RELAYS) {
@@ -15050,6 +15426,34 @@ zoo`.split("\n");
     }
     return out;
   }
+  var _gate = createRelayGate({
+    store: typeof localStorage !== "undefined" ? localStorage : null,
+    verify: verifyRelayIdentity,
+    netEntries: (cp) => relayNetEntries(cp),
+    origin: () => _ownOrigin(),
+    pins: CANONICAL_RELAY_PUBS,
+    // `steward-relays` repaints the Relays card; `steward-relay-returned` is the console's advisory
+    // re-subscribe/flush signal, and a relay entering the publish set is exactly that. Without the second, a
+    // console that booted before its relays were proved would sit on an empty set until something else churned.
+    onChange: () => {
+      try {
+        window.dispatchEvent(new CustomEvent("steward-relays"));
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url: "" } }));
+      } catch (e) {
+      }
+    }
+  });
+  function relays() {
+    try {
+      return _gate.admit(relaysRaw(), pub);
+    } catch (e) {
+      return [];
+    }
+  }
+  var NO_NETWORK_RELAY = "no-network-relay";
   function _blobBase() {
     const r = ownRelay();
     return r.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
@@ -15167,6 +15571,7 @@ zoo`.split("\n");
     const probed = await Promise.all(seed.map(async (url) => {
       const t = await _relayInfo(url);
       if (!(t && t.enforces === true && t.open === true && !t.full)) return null;
+      if (!await admitRemoteRelay(url)) return null;
       const canonical = (CANONICAL_RELAYS || []).includes(url);
       if (!canonical) {
         const v = await _probeRelayEnforces(url);
@@ -15206,6 +15611,27 @@ zoo`.split("\n");
     return picked;
   }
   var pool = new SimplePool();
+  var _poolSubMany = pool.subscribeMany.bind(pool);
+  pool.subscribeMany = (urls, filters, handlers) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    if (u.length) return _poolSubMany(u, filters, handlers);
+    try {
+      setTimeout(() => {
+        try {
+          if (handlers && handlers.oneose) handlers.oneose();
+        } catch (e) {
+        }
+      }, 0);
+    } catch (e) {
+    }
+    return { close() {
+    } };
+  };
+  var _poolQuerySync = pool.querySync.bind(pool);
+  pool.querySync = (urls, filter, opts) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+  };
   var _relaysTouched = /* @__PURE__ */ new Set();
   var _subbedOn = /* @__PURE__ */ new Map();
   pool.onRelayConnectionSuccess = (url) => {
@@ -15302,9 +15728,35 @@ zoo`.split("\n");
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
+  function _consoleDisplay(rec) {
+    if (!_careRosterKnown) return true;
+    const by = String(rec && rec._by || "");
+    if (!by) return true;
+    if (by === pub) return true;
+    if (!_careRosterSeen) return true;
+    if (!_careRoster.has(by)) return false;
+    const caps = _capsOf(by);
+    return !caps || caps.length > 0;
+  }
+  function _capsOf(by) {
+    const caps = _stewardCaps[by];
+    if (!Array.isArray(caps)) return null;
+    return caps.filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
+  }
+  function _consoleChurchVoice(rec) {
+    const by = String(rec && rec._by || "");
+    if (!by) return false;
+    if (by === pub) return true;
+    if (!_careRosterKnown || !_careRoster.has(by)) return false;
+    const caps = _capsOf(by);
+    return !caps || caps.includes("content");
+  }
   function feChurch(tmpl, signer) {
     if (actingChurch && !(tmpl.tags || []).some((t) => t[0] === "church")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["church", actingChurch]] };
+    }
+    if (actingChurch && (tmpl.tags || []).some((t) => t[0] === "deleted") && !(tmpl.tags || []).some((t) => t[0] === "for")) {
+      tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["for", actingChurch]] };
     }
     return finalizeEvent2(_monotonic(tmpl), signer || sk);
   }
@@ -15335,6 +15787,10 @@ zoo`.split("\n");
       _refreshBoxHostsUs();
     } catch (e) {
     }
+    try {
+      _gate.refresh(relaysRaw(), pub);
+    } catch (e) {
+    }
     window.Steward.activePub = pub;
     window.Steward.hasKey = true;
   }
@@ -15345,6 +15801,10 @@ zoo`.split("\n");
     _clearanceSent.clear();
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
+    _careRosterSeen = false;
+    _stewardCaps = {};
+    _stewardNames = {};
+    _stewardSince = {};
     _nameKeyRing = [];
     _nameKeyDocKeys = null;
     _nameKeyChecked = false;
@@ -15740,8 +16200,18 @@ zoo`.split("\n");
   }
   async function publish(evt) {
     await _waitForRegistration();
+    const _targets = relays();
+    if (!_targets.length) {
+      const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
+      console.warn("[steward] publish blocked \u2014", reason);
+      try {
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+      } catch (x) {
+      }
+      return false;
+    }
     try {
-      await Promise.any(pool.publish(relays(), evt).map((p) => p.then((v) => {
+      await Promise.any(pool.publish(_targets, evt).map((p) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
         return v;
       })));
@@ -15837,7 +16307,15 @@ zoo`.split("\n");
     await _waitForRegistration();
     const live = _connectedRelays();
     const targets = urls && urls.length ? urls : live.length ? live : relays();
-    if (!targets.length) return false;
+    if (!targets.length) {
+      const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
+      console.warn("[steward] all-relay publish blocked \u2014", reason);
+      try {
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+      } catch (x) {
+      }
+      return false;
+    }
     try {
       for (const u of targets) {
         const r = pool.relays && pool.relays.get(u);
@@ -15916,7 +16394,35 @@ zoo`.split("\n");
       }
     }
   }
+  var PROOF_GATE_MS = 8e3;
+  var _proofWaited = false;
+  function _awaitFirstAdmission(ms) {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = () => {
+        let n = 0;
+        try {
+          n = _gate.admit(relaysRaw(), pub).length;
+        } catch (e) {
+          n = 0;
+        }
+        if (n > 0 || Date.now() - t0 >= ms) {
+          resolve(n > 0);
+          return;
+        }
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
+  }
   async function _waitForRegistration() {
+    if (_regGate && !_proofWaited) {
+      _proofWaited = true;
+      try {
+        await _awaitFirstAdmission(PROOF_GATE_MS);
+      } catch (e) {
+      }
+    }
     if (!_regGate) return;
     const g = _regGate;
     try {
@@ -15965,6 +16471,122 @@ zoo`.split("\n");
         }
       });
       setTimeout(finish, ms);
+    });
+  }
+  function _ownOrigin() {
+    if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return "";
+    const l = typeof location !== "undefined" ? location : null;
+    if (!l || !l.host) return "";
+    if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return "";
+    return l.protocol + "//" + l.host;
+  }
+  function relayNetCandidates(extra) {
+    const out = [];
+    const add2 = (u) => {
+      const s = String(u || "").trim();
+      if (s && !out.includes(s)) out.push(s);
+    };
+    const o = _ownOrigin();
+    if (o) add2(o.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") + "/relay");
+    for (const u of extraRelays()) add2(u);
+    for (const u of extra || []) add2(u);
+    return out;
+  }
+  function _oneComplete(filters, ms = 6e3) {
+    return new Promise((resolve) => {
+      let best = null, complete = false, done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try {
+          sub.close();
+        } catch {
+        }
+        resolve({ ev: best, complete });
+      };
+      const sub = pool.subscribeMany(relaysRaw(), filters, {
+        onevent(e) {
+          if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+        },
+        oneose() {
+          complete = true;
+          finish();
+        }
+      });
+      setTimeout(finish, ms);
+    });
+  }
+  function relayNetDoc() {
+    return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
+  }
+  async function relayNetEntries(cp) {
+    if (!pub || cp && cp !== pub) return [];
+    const { ev } = await relayNetDoc();
+    return ev && ev.pubkey === pub ? parseRelayNet(ev.content) : [];
+  }
+  async function enrolRelayNet(opts) {
+    const o = opts || {};
+    if (!sk || !pub) throw new Error("No church key on this device");
+    const { ev: existing, complete } = await relayNetDoc();
+    const mine = existing && existing.pubkey === pub ? existing : null;
+    if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    const entries = mine ? parseRelayNet(mine.content) : [];
+    const before = JSON.stringify(entries);
+    let seeded = 0;
+    if (!mine) {
+      let old = null, oldComplete = false;
+      try {
+        const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }]);
+        old = r.ev;
+        oldComplete = r.complete;
+      } catch {
+      }
+      if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+      let arr = [];
+      if (old && old.pubkey === pub) {
+        try {
+          arr = JSON.parse(old.content || "[]");
+        } catch {
+          arr = [];
+        }
+      }
+      for (const e of Array.isArray(arr) ? arr : []) {
+        const p = String(e && e.pubkey || "").toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(p) || entries.some((x) => x.pubkey === p)) continue;
+        entries.push({ pubkey: p, alwaysOn: true, url: e && typeof e.url === "string" ? e.url : "" });
+        seeded++;
+      }
+    }
+    const proven = [], unproven = [];
+    for (const url of relayNetCandidates(o.extra)) {
+      let proof = null;
+      try {
+        proof = await verifyRelayIdentity(url);
+      } catch {
+        proof = null;
+      }
+      const p = String(proof && proof.relayPub || "").toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(p)) {
+        unproven.push(url);
+        continue;
+      }
+      proven.push({ url, pubkey: p });
+      const cur = entries.find((x) => x.pubkey === p);
+      if (cur) {
+        if (url && cur.url !== url) cur.url = url;
+      } else entries.push({ pubkey: p, alwaysOn: true, url });
+    }
+    const changed = JSON.stringify(entries) !== before;
+    if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
+    const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+    return { published: !!ev, entries, proven, unproven, seeded };
+  }
+  function isNetworkRelay2(cp, url) {
+    return isNetworkRelay(cp, url, {
+      verify: verifyRelayIdentity,
+      netEntries: relayNetEntries,
+      origin: _ownOrigin(),
+      pins: CANONICAL_RELAY_PUBS
     });
   }
   var _beatsDoc = (a, b) => {
@@ -16157,6 +16779,30 @@ zoo`.split("\n");
     pubkey: null,
     npub: null,
     hasKey: false,
+    // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
+    // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
+    // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console
+    // reads for the redundancy count stays an unproven claim — it was never a gate and must not look like one.
+    verifyRelayIdentity,
+    // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
+    // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
+    // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
+    isNetworkRelay: isNetworkRelay2,
+    // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
+    // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
+    // deadlock rule above enrolRelayNet.
+    relayNet: relayNetEntries,
+    relayNetCandidates,
+    // Signs the boxes this console can prove into the church's own membership document. Additive: it never
+    // drops an entry that is merely unreachable.
+    //
+    // STILL NOT CALLED AUTOMATICALLY ANYWHERE, and with C4's gate live that is now a DEPLOYMENT BLOCKER rather
+    // than a loose end: a church whose relay is admitted by neither the canonical pin nor this console's own
+    // origin has no way to author the document that would admit it, so its members would find no relay they
+    // may publish to. Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own —
+    // and the Suite's common case (§6-quater) is covered meanwhile by the same-origin root, which needs no
+    // document at all.
+    enrolRelayNet,
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
     publishSigned: _publishSigned,
@@ -16397,8 +17043,15 @@ zoo`.split("\n");
       return _openBackup(envelope);
     },
     // resync: which of the church's relays are TrinityOne relays (expose a relayPub via /status) and thus can be
-    // kept in sync. Generic public relays (nos.lol etc.) have no relayPub — they're publish-only, never trusted
-    // with the gated corpus. Returns [{ url, base, pubkey, name, online }] for the UI + syncEnable().
+    // kept in sync. Returns [{ url, base, pubkey, name, online }] for the UI + syncEnable().
+    //
+    // WHAT THIS IS NOT. This comment used to say that a relay without a relayPub is "publish-only, never
+    // trusted with the gated corpus". That was false, and the console printed the same reassurance to
+    // stewards. The relayPub check is syncEnable()'s and syncEnable()'s only: it decides which boxes are
+    // told to exchange history with each other. It has never governed PUBLISH. Every console write goes out
+    // through publish() over relays() — the raw list — so a relay in that list receives the church's
+    // documents whether or not it advertises a relayPub, and a member client does the same over
+    // Fellowship.relays. Closing that is a gate, and a gate is not this function.
     async relayIdentities() {
       const out = [];
       for (const u of relays()) {
@@ -16526,10 +17179,23 @@ zoo`.split("\n");
     async cloneFromRelay(sourceUrl, { targetUrl, onProgress } = {}) {
       if (!sk || !pub) throw new Error("No church key on this device");
       const httpBase = (u) => String(u || "").replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
-      const src = httpBase(sourceUrl);
+      const wsForm = (u) => {
+        const v = String(u || "").trim().replace(/\/+$/, "");
+        if (/^wss?:\/\//i.test(v)) return v;
+        if (/^https:\/\//i.test(v)) return "wss://" + v.slice(8);
+        if (/^http:\/\//i.test(v)) return "ws://" + v.slice(7);
+        return v ? normRelay(v) : "";
+      };
+      const srcRelay = wsForm(sourceUrl);
+      const src = httpBase(srcRelay);
       if (!src) throw new Error("Enter the relay to copy from.");
-      const dst = targetUrl ? httpBase(targetUrl) : _blobBase();
+      const dstRelay = targetUrl ? wsForm(targetUrl) : ownRelay();
+      const dst = httpBase(dstRelay);
       if (src === dst) throw new Error("The source and destination are the same relay.");
+      if (!await verifyRelayIdentity(srcRelay))
+        throw new Error("That relay could not prove who it is, so your church\u2019s history was not requested from it. Check the address, or restore from a backup file instead.");
+      if (!await admitRemoteRelay(dstRelay))
+        throw new Error("The destination relay isn\u2019t in your church\u2019s network, so nothing was copied to it. Add it to your relay list and enrol it first.");
       if (onProgress) onProgress("reading", 0, 1);
       const er = await fetch(src + "/export", { headers: { Authorization: _nip98(src + "/export") } });
       if (!er.ok) throw new Error("Couldn\u2019t read your church\u2019s data from that relay (" + er.status + (er.status === 401 ? " \u2014 is it the right relay for this church?" : "") + ")");
@@ -17767,12 +18433,12 @@ zoo`.split("\n");
           const id = d.slice(FUND_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -17810,12 +18476,12 @@ zoo`.split("\n");
           const id = d.slice(CATEGORY_D.length);
           const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
           if (deleted) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -18919,6 +19585,7 @@ zoo`.split("\n");
           }
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
+          _careRosterSeen = true;
           onList(cur);
         },
         oneose() {
@@ -18942,7 +19609,7 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       const next = {};
       const src = caps && typeof caps === "object" ? caps : _stewardCaps;
-      for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter((c) => typeof c === "string");
+      for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
       const nextNames = {};
       const nsrc = names && typeof names === "object" ? names : _stewardNames;
       for (const p of list) {
@@ -19013,8 +19680,7 @@ zoo`.split("\n");
     // not on the roster, so they are unrestricted by construction.
     myStewardCaps() {
       if (!actingChurch) return null;
-      const c = _stewardCaps[churchPub];
-      return Array.isArray(c) ? c.slice() : null;
+      return _capsOf(churchPub);
     },
     // ---- encrypted church docs: NIP-44 self-encryption to the CHURCH key. Used by the optional Finance
     // module so sensitive donor PII + ledger never hit the relay in plaintext — only the church key (held
@@ -19410,7 +20076,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onGroups(cached);
         }
       } catch {
@@ -19425,12 +20091,12 @@ zoo`.split("\n");
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19477,7 +20143,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onPlans(cached);
         }
       } catch {
@@ -19488,12 +20154,12 @@ zoo`.split("\n");
           if (!d.startsWith(PLAN_D)) return;
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19542,7 +20208,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onDevos(cached);
         }
       } catch {
@@ -19553,13 +20219,13 @@ zoo`.split("\n");
           if (!d.startsWith(DEVO_D)) return;
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19584,7 +20250,7 @@ zoo`.split("\n");
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
-          _seedFromCache(versions, byId, cached);
+          _seedFromCache(versions, byId, cached, _consoleDisplay);
           if (cached.length) onItems(cached);
         }
       } catch {
@@ -19603,18 +20269,18 @@ zoo`.split("\n");
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
             const c = _openChurchDoc(e.content);
             if (c === null) {
-              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey });
+            _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }
@@ -19885,12 +20551,17 @@ zoo`.split("\n");
           if (e.pubkey !== pub && !e.tags.some((t) => (t[0] === "p" || t[0] === "church") && t[1] === pub)) return;
           const id = d.slice(EVENT_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at);
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
-            const c = JSON.parse(e.content);
+            const c = _openChurchDoc(e.content);
+            if (c === null) {
+              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey });
+              emit();
+              return;
+            }
             _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, groupId: c.groupId || groupId, image: c.image || "", _by: e.pubkey, ts: e.created_at });
             emit();
           } catch {
@@ -20366,6 +21037,10 @@ zoo`.split("\n");
       _clearanceSent.clear();
       _careRoster = /* @__PURE__ */ new Set();
       _careRosterKnown = false;
+      _careRosterSeen = false;
+      _stewardCaps = {};
+      _stewardNames = {};
+      _stewardSince = {};
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;
@@ -20720,7 +21395,14 @@ zoo`.split("\n");
       try {
         const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
         const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || "" }, auth }) });
-        return { ok: r.ok, status: r.status };
+        let why = "";
+        if (!r.ok) {
+          try {
+            why = (await r.json() || {}).error || "";
+          } catch (e) {
+          }
+        }
+        return { ok: r.ok, status: r.status, why };
       } catch (e) {
         return { ok: false, error: e && e.message || "network" };
       }
@@ -20742,9 +21424,11 @@ zoo`.split("\n");
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return true;
     },
-    // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not required)
-    resolveRelayName(name) {
-      return resolveRelayName(name);
+    // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not
+    // required). C5: the answer must be wss:// AND pass the network gate before it comes back. Pass
+    // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
+    resolveRelayName(name, opts) {
+      return resolveRelayName(name, opts);
     },
     // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
     rememberRelayName(name, url) {
@@ -20783,11 +21467,23 @@ zoo`.split("\n");
       }
       return picks;
     },
-    // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms }]
+    // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms, member }]
+    //
+    // EVERY CANDIDATE, NOT THE PUBLISH SET — and `member` says which is which. A relay this church's data no
+    // longer goes to must not simply VANISH from the panel: silently changing where a church's data goes is
+    // how the divergence in ROADMAP-NOTES §6 became invisible. Reachable and not-in-our-network are two
+    // different facts and the card shows both.
     relayStatus() {
-      return Promise.all(relays().map((url) => new Promise((res) => {
+      return Promise.all(relaysRaw().map((url) => new Promise((res) => {
         let done = false;
         const t0 = Date.now();
+        const member = (() => {
+          try {
+            return _gate.admits(url, pub);
+          } catch (e) {
+            return false;
+          }
+        })();
         const finish = (status) => {
           if (done) return;
           done = true;
@@ -20795,13 +21491,13 @@ zoo`.split("\n");
             ws.close();
           } catch {
           }
-          res({ url, status, ms: status === "on" ? Date.now() - t0 : null });
+          res({ url, status, ms: status === "on" ? Date.now() - t0 : null, member });
         };
         let ws;
         try {
           ws = new WebSocket(url);
         } catch {
-          return res({ url, status: "off", ms: null });
+          return res({ url, status: "off", ms: null, member });
         }
         const to = setTimeout(() => finish("off"), 2500);
         ws.onopen = () => {

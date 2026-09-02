@@ -19,6 +19,16 @@ const read = (f) => readFileSync(new URL('../' + f, import.meta.url), 'utf8');
 const CHAT = read('app/screens-chat.jsx');
 const MEALS = read('app/stew-meals.jsx');
 const DASH = read('app/stew-dashboard.jsx');
+const SCHED = read('app/stew-schedule.jsx');
+// Comments are stripped before any of the Groups/Rota assertions below: this repo has already shipped an
+// assertion that was satisfied by the comment explaining the rule.
+const stripC = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+const SCHED_CODE = stripC(SCHED), DASH_CODE = stripC(DASH);
+const lineWith = (src, needle) => {
+  const l = src.split('\n').find(x => x.includes(needle));
+  assert.ok(l, 're-anchor this test: could not find ' + needle);
+  return l;
+};
 
 // A button is "named" if it carries a NON-EMPTY aria-label or title. Merely CONTAINING the word aria-label is
 // not enough: `aria-label=""` passed the first version of this test while a screen reader announced nothing
@@ -32,6 +42,50 @@ const namedBy = (line, attr) => {
   // hardening: non-empty by length, silent to a screen reader.
   return t.length > 0 && t !== '""' && t !== "''" && t !== "' '" && t !== '" "' && /[^\s'"{}]/.test(t);
 };
+// VISIBLE TEXT IS AN ACCESSIBLE NAME TOO — but only when we can actually SEE the text.
+// The first version looked only at aria-label/title, so it reported two buttons reading "Not now" and
+// "Post to the church" as unnamed. The second version fixed that by slicing after the first `>` — and a
+// `>` appears inside `onClick={() => …}` long before the tag ends, and never at all when the opening tag
+// wraps across lines. Measured: 63 of 66 buttons in screens-chat.jsx were skipped, and removing
+// `aria-label="Send"` from the member app's chat send button — the defect this file was written for —
+// left every test green. A scanner that cries wolf gets ignored; one that never barks is worse.
+//
+// So find the real end of the opening tag: the `>` that is not inside a string and not inside a JSX
+// expression. If the tag does not close on this line we cannot tell what its body is, and UNKNOWN MUST
+// FAIL TOWARDS REPORTING — a missed control is the thing this file exists to catch.
+function tagEnd(line, from) {
+  let depth = 0, q = '';
+  for (let i = from; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === q && line[i - 1] !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') depth--;
+    else if (c === '>' && depth === 0) return i;
+  }
+  return -1;
+}
+// A button's opening tag and its body routinely span several lines in this codebase, so read forward until
+// the tag closes and then until </button>. Returning "unknown" for every wrapped tag was safe but useless —
+// it flagged 61 controls, most of which say their own name two lines further down.
+function buttonText(lines, i) {
+  let joined = lines[i], end = tagEnd(joined, joined.indexOf('<button') + 7), n = i;
+  while (end === -1 && n - i < 12 && n + 1 < lines.length) { joined += '\n' + lines[++n]; end = tagEnd(joined, joined.indexOf('<button') + 7); }
+  if (end === -1) return null;                                  // genuinely cannot tell
+  let body = joined.slice(end + 1), m = n;
+  while (!body.includes('</button>') && m - i < 12 && m + 1 < lines.length) body += '\n' + lines[++m];
+  return body.slice(0, body.indexOf('</button>') === -1 ? body.length : body.indexOf('</button>'));
+}
+function hasVisibleText(lines, i) {
+  const body = buttonText(lines, i);
+  if (body === null) return false;                              // unknown must fail towards reporting
+  // Everything here is BODY, past the opening tag, so a brace holds content rather than attributes — and
+  // content is what a person reads, whether it is a literal, a variable, or a ternary of both. Tags are
+  // stripped first so a nested <Icon/> or fragment cannot masquerade as words.
+  const withoutTags = body.replace(/<[^>]*>/g, ' ').replace(/[{}]/g, ' ');
+  return /[A-Za-z]{2,}/.test(withoutTags);
+}
+
 function unnamedIconButtons(src, iconName) {
   const lines = src.split('\n');
   const bad = [];
@@ -39,6 +93,7 @@ function unnamedIconButtons(src, iconName) {
     const l = lines[i];
     if (!l.includes('<button')) continue;
     if (namedBy(l, 'aria-label') || namedBy(l, 'title')) continue;
+    if (hasVisibleText(lines, i)) continue;
     if (!lines.slice(i, i + 4).join('\n').includes(`name="${iconName}"`)) continue;
     bad.push(i + 1);
   }
@@ -90,4 +145,217 @@ test('the console’s care conversation is a real dialog, and Escape closes it',
     'backdrop, which is not a way out at all');
   assert.match(MEALS_CODE.slice(keyAt, keyAt + 120), /onClose\(\)/,
     'the Escape handler exists but does not close anything');
+});
+
+
+// ── SWEEP DEFECT 4, and the audit of it, 2026-08-29 ──────────────────────────────────────────────────────
+// The first version of this section asserted that an IDENTIFIER appeared on a line — `l.includes('r.name')`.
+// An auditor changed `'Remove the role ' + (r.name || '')` to `(r.name && '')`, which announces nothing at
+// all, and every one of these passed. Four realistic regressions shipped green, including a brand-new
+// unnamed button, because nothing here scanned for one.
+//
+// So these no longer look at the source shape. They pull the aria-label EXPRESSION out of the shipped file
+// and EVALUATE it, and assert the sentence a screen reader is actually handed. A comment cannot satisfy
+// that, and neither can dead code that merely mentions the right variable.
+function ariaExpr(src, marker) {
+  const line = src.split('\n').find(l => l.includes(marker) && l.includes('aria-label='));
+  assert.ok(line, `no aria-label on the line carrying ${marker} — re-anchor this test, do not delete it`);
+  const at = line.indexOf('aria-label={');
+  assert.notEqual(at, -1, `${marker}: aria-label is a static string; these controls must describe live state`);
+  let depth = 0, i = at + 'aria-label='.length, start = i;
+  for (; i < line.length; i++) {
+    if (line[i] === '{') depth++;
+    else if (line[i] === '}' && --depth === 0) return line.slice(start + 1, i);
+  }
+  assert.fail(`could not read the aria-label expression for ${marker}`);
+}
+// Evaluate it with the values the console would really have.
+const announce = (expr, vars) => new Function(...Object.keys(vars), `return (${expr});`)(...Object.values(vars));
+
+test('an empty rota slot says what it will assign, instead of running the role into the word Assign', () => {
+  const said = announce(ariaExpr(SCHED_CODE, "'Assign someone to '"), { role: { name: 'Door' } });
+  assert.equal(said, 'Assign someone to Door',
+    'the empty rota slot announced "' + said + '" — it used to run the role name into the word Assign');
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Assign someone to '"), { role: {} }), 'Assign someone to this role',
+    'a role document with no name makes the button announce the literal word "undefined"');
+});
+
+test('a filled rota slot names the role, the person and their reply', () => {
+  const e = ariaExpr(SCHED_CODE, 'Change who’s on this slot" aria-label=');
+  assert.equal(announce(e, { role: { name: 'Door' }, a: { name: 'Sam Reed' }, vm: { label: 'Declined' } }),
+    'Door: Sam Reed — Declined. Change who’s on this slot');
+  assert.equal(announce(e, { role: { name: 'Door' }, a: { name: 'Jo Ash' }, vm: { label: '' } }),
+    'Door: Jo Ash. Change who’s on this slot', 'a slot with no reply announces a dangling em-dash');
+  assert.equal(announce(e, { role: {}, a: { name: 'Jo Ash' }, vm: { label: '' } }),
+    'This role: Jo Ash. Change who’s on this slot');
+});
+
+test('every roster remove button says WHICH role, person or pod it removes', () => {
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Remove the role '"), { r: { name: 'Door' } }), 'Remove the role Door');
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Remove ' + (pp.name"), { pp: { name: 'Sam Reed' } }), 'Remove Sam Reed from the team');
+  assert.equal(announce(ariaExpr(SCHED_CODE, "'Remove the pod '"), { pod: { name: 'Pod A' } }), 'Remove the pod Pod A');
+  // …and a blank name must not produce a button that announces a bare verb. A steward can clear a pod's
+  // name through the shipped UI, and then the delete control said only "Remove the pod".
+  for (const [marker, vars, empty] of [
+    ["'Remove the role '", { r: { name: '' } }, 'Remove the role '],
+    ["'Remove the pod '", { pod: { name: '' } }, 'Remove the pod '],
+  ]) {
+    const said = announce(ariaExpr(SCHED_CODE, marker), vars);
+    assert.notEqual(said, empty, `a nameless item announces "${empty}" — no cue at all as to what goes`);
+  }
+});
+
+test('the pods editor is not a column of blank comboboxes', () => {
+  assert.equal(announce(ariaExpr(SCHED_CODE, 'setPodFill(pod.id, r.id'), { r: { name: 'Door' }, pod: { name: 'Pod A' } }),
+    'Who fills Door in Pod A',
+    'a steward building a six-role pod tabs through six identical "combo box, blank"');
+  for (const marker of ['setPodName(pod.id', 'setLinkPub(e.target.value)']) {
+    const line = SCHED_CODE.split('\n').find(l => l.includes(marker));
+    assert.match(line, /aria-label="[^"]+"/, `${marker} has no accessible name`);
+  }
+});
+
+test('the rota-visibility button announces what it governs, and is not announced as a menu', () => {
+  const said = announce(ariaExpr(SCHED_CODE, 'aria-expanded={!!visMenu}'),
+    { ROTA_VIS_LABEL: { church: 'Everyone' }, rotaVis: 'church' });
+  assert.match(said, /^Who can see the rota: Everyone/,
+    'the visibility button announced "' + said + '" — its value, with nothing saying what it sets');
+  // It is two plain buttons, not a menu. Announcing one promises arrow-key navigation that does not exist.
+  assert.doesNotMatch(SCHED_CODE, /aria-haspopup="menu"/,
+    'a popup is announced as a menu again, but has no menu roles and no arrow-key handling');
+  // …and Escape must close it, or a keyboard steward is trapped.
+  assert.match(SCHED_CODE, /e\.key === 'Escape' && visMenu/, 'Escape no longer closes the visibility popup');
+  assert.match(SCHED_CODE, /visBtnRef\.current\.focus\(\)/, 'focus is not returned to the control that opened it');
+});
+
+// Pinned to the exact expressions, as the giving toggle above is: `aria-pressed={false}` and
+// `aria-pressed={!it.childsafe}` both mention the state and both announce the wrong one.
+test('the Child-safe and Encrypt toggles report their REAL state and name their group', () => {
+  const cs = lineWith(DASH_CODE, 'childsafe: !it.childsafe');
+  assert.match(cs, /aria-pressed=\{!!it\.childsafe\}/,
+    'Child-safe does not announce whether it is on — check it is not negated or pinned to a constant');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !it.childsafe'), { it: { name: 'Youth', childsafe: true } }),
+    'Youth — child-safe is on. Press to restrict it to adults');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !it.childsafe'), { it: { name: '', childsafe: false } }),
+    'This group — child-safe is off. Press to let members marked as a child join');
+
+  const en = lineWith(DASH_CODE, 'onClick={() => toggleEncrypt(it)}');
+  assert.match(en, /aria-pressed=\{!!it\.encrypted\}/,
+    'Encrypt does not announce whether it is on — check it is not negated or pinned to a constant');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'onClick={() => toggleEncrypt(it)}'), { it: { name: 'Youth', encrypted: false } }),
+    'Youth — encryption is off. Press to seal it end-to-end');
+});
+
+test('selection in a row of chips is never carried by colour alone', () => {
+  // Three separate controls where the only cue was a coloured fill. The Repeat selector decides whether
+  // "Add a service" creates one service or thirteen; the Groups filter decides which rooms you are about to
+  // flip a child-safe switch on.
+  assert.match(lineWith(SCHED_CODE, 'onClick={() => setRepeat(v)}'), /aria-pressed=\{repeat === v\}/,
+    'the Repeat selector does not say which option is chosen');
+  assert.match(lineWith(DASH_CODE, 'onClick={() => setKindF(f.key)}'), /aria-pressed=\{on\}/,
+    'the Groups filter chips do not say which is selected');
+  assert.match(lineWith(SCHED_CODE, 'setFillMenu(v => !v)'), /aria-expanded=\{!!fillMenu\}/,
+    'Auto-fill opens a popup and reports nothing');
+});
+
+test('the console’s care conversation can be sent and closed by a screen reader', () => {
+  // The header of this file records the defect it was written for: the member app's send buttons had no
+  // accessible name. The console's own — on the screen where a steward answers somebody asking for help —
+  // had none either, and nothing here scanned that file for one.
+  const send = lineWith(MEALS, 'onClick={send}');
+  assert.match(send, /aria-label="[^"]+"/, 'a steward replying to a request for help hears only "button"');
+  const bad = unnamedIconButtons(MEALS, 'send');
+  assert.deepEqual(bad, [], `unnamed send buttons at app/stew-meals.jsx:${bad.join(', ')}`);
+});
+
+test('a roster save failure is announced, not just drawn', () => {
+  // Its text includes "anyone you removed CAN STILL READ IT until this succeeds".
+  assert.match(lineWith(SCHED_CODE, '{saveErr ? <div'), /role="alert"/,
+    'a security-relevant failure is never read out to a steward using a screen reader');
+});
+
+// ── A HEADING THAT IS NOT ATTACHED TO ITS BOX IS DECORATION ───────────────────────────────────────────────
+// The console's house pattern is a small styled div — NAME, DATE, TIME — above an input. Obvious to look at,
+// and invisible to a screen reader, which reads the box and not the decoration around it: a steward hears
+// "edit text, blank" and has to guess by counting. This sweep is self-maintaining: it re-derives the pairs
+// from the source, so a NEW heading-and-box added without a name fails here rather than shipping.
+const SCHED_RAW = read('app/stew-schedule.jsx');
+const MEALS_RAW = read('app/stew-meals.jsx');
+const LBL = 'style=\\{(?:schLbl|mealsLbl|roomLbl|lbl)[^}]*\\}>([^<{]+)</div>';
+function unnamedLabelledFields(src) {
+  const lines = src.split('\n');
+  const bad = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const m = /<(input|select|textarea)\b/.exec(l);
+    if (!m) continue;
+    if (l.includes('aria-label') || l.includes('aria-labelledby')) continue;
+    if (l.includes('type="checkbox"') || l.includes('type="radio"')) continue;
+    let heading = null;
+    // (a) the heading sits on the SAME line, immediately before the field
+    const before = l.slice(0, m.index);
+    const same = [...before.matchAll(new RegExp(LBL, 'g'))];
+    if (same.length && before.slice(same[same.length - 1].index + same[same.length - 1][0].length).trim() === '') {
+      heading = same[same.length - 1][1];
+    }
+    // (b) the whole preceding line is nothing but the heading
+    if (!heading && i > 0) {
+      const prev = new RegExp('^\\s*<div ' + LBL + '\\s*$').exec(lines[i - 1]);
+      if (prev) heading = prev[1];
+    }
+    if (heading) bad.push(`${i + 1} (${heading.trim()})`);
+  }
+  return bad;
+}
+test('every console field with a heading above it carries that heading as its name', () => {
+  for (const [file, src] of [['app/stew-schedule.jsx', SCHED_RAW], ['app/stew-dashboard.jsx', DASH], ['app/stew-meals.jsx', MEALS_RAW]]) {
+    const bad = unnamedLabelledFields(src);
+    assert.deepEqual(bad, [],
+      `${file}: a heading sits above these fields and is not attached to them, so a screen reader ` +
+      `announces "edit text, blank" — ${bad.join('; ')}`);
+  }
+});
+
+test('the two PIN boxes do not announce identically', () => {
+  // They sat under one heading, so naming them from it would have given a steward two identical fields.
+  const a = lineWith(DASH_CODE, 'value={pinA}'), b = lineWith(DASH_CODE, 'value={pinB}');
+  const nameOf = (l) => (/aria-label="([^"]+)"/.exec(l) || [])[1];
+  assert.ok(nameOf(a) && nameOf(b), 'a PIN box has no accessible name');
+  assert.notEqual(nameOf(a), nameOf(b), 'both PIN boxes announce the same thing — which is which?');
+});
+
+// ── REORDERING WITHOUT A MOUSE ───────────────────────────────────────────────────────────────────────────
+test('groups can be reordered from the keyboard, and by the right index', () => {
+  const up = lineWith(DASH_CODE, 'move(ri, -1)'), down = lineWith(DASH_CODE, 'move(ri, 1)');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'move(ri, -1)'), { it: { name: 'Youth' } }), 'Move Youth up');
+  assert.equal(announce(ariaExpr(DASH_CODE, 'move(ri, 1)'), { it: { name: 'Youth' } }), 'Move Youth down');
+  assert.match(up, /disabled=\{first\}/, 'the first row can be moved above itself');
+  assert.match(down, /disabled=\{last\}/, 'the last row can be moved below itself');
+  // THE INDEX MUST COME FROM `items`, NOT THE ROW'S POSITION. `list` can be a filtered or mid-drag
+  // permutation, so moving by the rendered index moves a different group — silently, and on a screen whose
+  // whole purpose is "this is the order your members see".
+  assert.match(DASH_CODE, /const ri = items\.indexOf\(it\);/,
+    'the move buttons take the row’s position instead of the item’s real index');
+});
+
+// ── CONTRAST, COMPUTED FROM THE REAL TOKENS ──────────────────────────────────────────────────────────────
+// Not a static assertion about a hex value: this reads the palette, mixes the tint the control actually
+// uses, and computes the ratio — so changing a brand colour later is checked rather than assumed.
+const BRAND = read('brand.css');
+const tok = (n) => { const m = new RegExp('--' + n + ':\\s*(#[0-9a-fA-F]{6})').exec(BRAND); assert.ok(m, `--${n} is gone from brand.css`); return m[1]; };
+const chan = (h) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+const lum = (h) => { const [r, g, b] = chan(h).map(c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+const tint = (a, b, p) => '#' + chan(a).map((v, i) => Math.round((v * p + chan(b)[i] * (1 - p)) * 255).toString(16).padStart(2, '0')).join('');
+
+test('the Child-safe and Encrypt toggles are legible in the state that protects someone', () => {
+  // The ON states are the ones that matter — "yes, this room is safe for under-18s" has to read at a glance —
+  // and they were the ones failing, at 3.5:1 and 3.9:1 against a 4.5:1 minimum for small bold text.
+  for (const [what, ink, base] of [['Child-safe', 'sage-ink', 'sage'], ['Encrypt', 'clay-ink', 'clay']]) {
+    const bg = tint(tok(base), tok('surface'), 0.08);
+    const r = contrast(tok(ink), bg);
+    assert.ok(r >= 4.5, `${what} ON is ${r.toFixed(2)}:1 on its own tint — WCAG AA needs 4.5:1`);
+  }
+  assert.match(lineWith(DASH_CODE, 'childsafe: !it.childsafe'), /var\(--sage-ink\)/, 'Child-safe ON went back to the unreadable sage');
+  assert.match(lineWith(DASH_CODE, 'toggleEncrypt(it)'), /var\(--clay-ink\)/, 'Encrypt ON went back to the unreadable clay');
 });

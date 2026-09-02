@@ -16,8 +16,14 @@
 // that the CONSOLE has to write to the same set unconditionally, or the rules and the traffic land on
 // different relays.
 //
-// The test drives the real relays() lifted from source with ownRelay/extraRelays stubbed, and asserts the
+// The test drives the real ASSEMBLER lifted from source with ownRelay/extraRelays stubbed, and asserts the
 // canonical set is present for EVERY value of `own` — not that some particular line exists.
+//
+// WHICH FUNCTION THAT IS, since it moved. The assembler is `relaysRaw()`; `relays()` is now that list with
+// the closed-network gate applied (plan C4), so the canonical set is a CANDIDATE unconditionally — which is
+// what this file has always been about — and reaches the publish set by proving itself against the pubkey
+// pinned beside its URL. The second half is scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs;
+// this file is the guard on the first, and the two together are the claim in the title.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -26,11 +32,11 @@ import { fnBody } from './test-slice.mjs';
 const SRC = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
 const CANON = ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay'];
 
-// lift relays() and run it against controllable own/extra
+// lift the assembler and run it against controllable own/extra
 function makeRelays(own, extra) {
-  const body = fnBody(SRC, 'function relays()');
+  const body = fnBody(SRC, 'function relaysRaw()');
   const fn = new Function('ownRelay', 'extraRelays', 'CANONICAL_RELAY', 'CANONICAL_RELAYS',
-    body + '\n; return relays;')(
+    body + '\n; return relaysRaw;')(
     () => own, () => (extra || []), CANON[0], CANON);
   return fn();   // invoke it — the array of relays, not the function
 }

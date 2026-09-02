@@ -185,7 +185,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
             const icon = idn.kind === 'network' ? 'globe' : idn.kind === 'steward' ? 'shield' : 'bank';
             return (
               <button key={idn.pub} onClick={() => pick(idn.pub)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', fontFamily: 'var(--font-ui)' }}>
-                <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay)' }}><Icon name={icon} size={15} /></div>
+                <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)' }}><Icon name={icon} size={15} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
                   <div style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{subtitle}</div>
@@ -571,12 +571,44 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [teamName, setTeamName] = React.useState('');
   // Same rule as the Groups page: absent means ON, only an explicit false is a steward's decision to opt out.
   const encByDefaultWiz = !church.features || church.features.encryptComms !== false;
+  // THE WHOLE-CHURCH ROOM IS A CONVERSATION; ANNOUNCEMENTS ARE THEIR OWN ROOM.
+  //
+  // "Whole Church" used to ship as kind:'broadcast', so the one room every new church got was the one room
+  // nobody in the congregation could speak in. Owner, 2026-09-01: the whole-church room should be a chat
+  // everyone can post in, with broadcast a distinctly separate thing.
+  //
+  // WHY A BROADCAST ROOM IS ADDED RATHER THAN DROPPED. `kind` is not only a posting restriction — it is the
+  // only thing that marks a room as the church's own voice, and five separate features look for a broadcast
+  // room BY KIND and find nothing when a church has none:
+  //   · scripts/gateway.mjs   note()      c.kind === 'broadcast' -> BROADCAST.add(id); this is the ONLY writer
+  //   · scripts/gateway.mjs   push        a kind-1 post is pushed to the congregation only if BROADCAST.has(gid),
+  //                                       so a church with no broadcast room can notify its members of NOTHING
+  //   · scripts/gateway.mjs   write gate  a broadcast is the church's own voice (church/network/steward only)
+  //   · app/stew-finance.jsx, app/stew-meals.jsx, app/stew-dashboard.jsx (Today)
+  //                                       groups.find(g => g.kind === 'broadcast') — share a statement, announce
+  //                                       a meal train, post a notice: all of them silently target `undefined`
+  //   · app/app.jsx           the member app's announcement feed is the broadcast groups' messages
+  // Flipping `whole` to a group with nothing replacing it would therefore have taken a brand-new church's
+  // ability to announce anything away, with no error anywhere. So the default set still contains EXACTLY ONE
+  // broadcast room; it is simply no longer the room the congregation talks in.
+  //
+  // This is a DEFAULTS change only. BROADCAST is derived per-group from each group document, not from any
+  // fixed id, and nothing here rewrites a room that already exists — a church set up before today keeps the
+  // rooms it has, exactly as they are, including a "Whole Church" that is still a broadcast.
+  //
+  // EVERY BLURB IS DISTINCT, ON PURPOSE. scripts/wizard-no-imposed-groups.test.mjs exists because two seeders
+  // once drew the same strings and members met two rooms with identical descriptions and no way to tell them
+  // apart. Adding a fourth room is exactly the moment that happens again, so no two of these share a `sub`,
+  // and none of them says "Announcements" except the room that IS the announcements. These strings are
+  // not console-only: `sub` is published on the group document and is what a MEMBER reads under the room
+  // name in their chat list, so none of them may be written from the steward's side of the room.
   const STARTERS = [
-    { id: 'whole', name: 'Whole Church', kind: 'broadcast', sub: 'Announcements for everyone' },
+    { id: 'whole', name: 'Whole Church', kind: 'group', sub: 'One room for everyone, and everyone can post' },
+    { id: 'notices', name: 'Notices', kind: 'broadcast', sub: 'Dates, news and what’s on' },
     { id: 'prayer', name: 'Prayer', kind: 'group', sub: 'Share & lift requests' },
     { id: 'life', name: 'Life Group', kind: 'group', sub: 'A midweek small group' },
   ];
-  const [picks, setPicks] = React.useState(() => new Set(['whole', 'prayer']));
+  const [picks, setPicks] = React.useState(() => new Set(['whole', 'notices', 'prayer']));
   const toggle = (id) => setPicks(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   // step 1 — key backup + optional relay registration
   const [saved, setSaved] = React.useState(false);
@@ -766,7 +798,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>CHURCH NAME</div>
-      <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="Your church’s name" style={fld} />
+      <input aria-label="Church name" autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="Your church’s name" style={fld} />
     </WizShell>
   );
 
@@ -834,8 +866,8 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
               );
             })}
           </div>
-          {verified ? <div style={{ fontSize: 12.5, color: 'var(--sage)', marginTop: 7, fontWeight: 600 }}>✓ Got them — your church is safely backed up.</div>
-            : vw.some(x => x.trim()) ? <div style={{ fontSize: 12.5, color: 'var(--clay)', marginTop: 7 }}>Not quite — check your written list.</div> : null}
+          {verified ? <div style={{ fontSize: 12.5, color: 'var(--sage-ink)', marginTop: 7, fontWeight: 600 }}>✓ Got them — your church is safely backed up.</div>
+            : vw.some(x => x.trim()) ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 7 }}>Not quite — check your written list.</div> : null}
         </div>
       ) : null}
       {!phrase ? (
@@ -851,7 +883,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
               <input value={relayToken} onChange={e => setRelayToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doRegister(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ ...fld, height: 44, fontWeight: 400 }} />
               <button onClick={doRegister} disabled={relayBusy || !relayToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (relayBusy || !relayToken.trim()) ? .5 : 1 }}>Connect</button>
             </div>
-            {relayMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: relayMsg[0] === '✓' ? 'var(--sage)' : relayMsg[0] === '✗' ? 'var(--clay)' : 'var(--ink-3)' }}>{relayMsg}</div> : null}
+            {relayMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: relayMsg[0] === '✓' ? 'var(--sage-ink)' : relayMsg[0] === '✗' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{relayMsg}</div> : null}
             {/* Restores the capability lost when WizRelays was deleted with the second wizard: this panel took
                 only an admin TOKEN (which registers the church ON a relay), with no way to tell the church which
                 relay ADDRESS to publish to and read from. A church-in-a-box operator finished setup with their
@@ -868,7 +900,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
                   <input value={relayAddr} onChange={e => setRelayAddr(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
                   <button onClick={addOwnRelay} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
                 </div>
-                {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage)' : 'var(--clay)' }}>{addrMsg}</div> : null}
+                {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{addrMsg}</div> : null}
               </div>
             )}
           </div>
@@ -895,10 +927,10 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={savePin} disabled={pinBusy || !pinA || !pinB} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (pinBusy || !pinA || !pinB) ? .5 : 1 }}>{pinBusy ? 'Setting…' : 'Set a PIN'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>PIN OR PASSPHRASE</div>
-      <input type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 — digits are fine" autoComplete="new-password" style={fld} />
+      <input aria-label="PIN or passphrase" type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 — digits are fine" autoComplete="new-password" style={fld} />
       <div style={{ ...lbl, marginTop: 12 }}>CONFIRM</div>
-      <input type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" autoComplete="new-password" style={fld} />
-      {pinErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', marginTop: 9, fontWeight: 600 }}>{pinErr}</div> : null}
+      <input aria-label="Repeat the PIN or passphrase" type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" autoComplete="new-password" style={fld} />
+      {pinErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 9, fontWeight: 600 }}>{pinErr}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Security</b>.</div>
     </WizShell>
   );
@@ -953,7 +985,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>FIRST TEAM (OPTIONAL)</div>
-      <input value={teamName} onChange={e => setTeamName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTeam(); }} placeholder="e.g. Welcome Team" style={fld} />
+      <input aria-label="First team (optional)" value={teamName} onChange={e => setTeamName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTeam(); }} placeholder="e.g. Welcome Team" style={fld} />
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.5 }}>You’ll add who’s on the team and build the schedule from the Rota tab.</div>
     </WizShell>
   );
@@ -971,7 +1003,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
           ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.', () => { if (onTab) onTab('settings'); if (onDone) onDone(); }],
         ].map(([ic, t, d, act]) => (
           <button key={t} onClick={act} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', width: '100%', fontFamily: 'var(--font-ui)' }}>
-            <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--clay)' }}><Icon name={ic} size={17} color="currentColor" /></div>
+            <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--clay-ink)' }}><Icon name={ic} size={17} color="currentColor" /></div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{t}</div><div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{d}</div></div>
             <Icon name="chevR" size={16} color="var(--ink-3)" />
           </button>
@@ -1281,8 +1313,12 @@ function StewDashboard({ initial = 'overview' }) {
               {actions}
             </div>
             <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
+            {/* The page heading. Off-screen on a phone — the narrow header has no room for it — but a
+                screen reader still announces which section of the console it has landed in, and the card
+                headings below it now have something to hang from. */}
+            <h1 style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', clipPath: 'inset(50%)', whiteSpace: 'nowrap', margin: 0 }}>{(nav.find(n => n.key === tab) || {}).label || 'Console'}</h1>
             {/* tabs WRAP onto multiple rows rather than scrolling sideways (no awkward horizontal scroll) */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <nav aria-label="Console sections" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {nav.map(n => {
                 const on = n.key === tab;
                 return (
@@ -1292,12 +1328,12 @@ function StewDashboard({ initial = 'overview' }) {
                   </button>
                 );
               })}
-            </div>
+            </nav>
           </div>
           <PublishErrorBanner />
-          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
+          <main className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
             {content}
-          </div>
+          </main>
         </div>
       </ConsoleChrome>
     );
@@ -1321,7 +1357,7 @@ function StewDashboard({ initial = 'overview' }) {
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px', marginLeft: 'auto' }}>STEWARD</span>
           </div>
           <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <nav aria-label="Console sections" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {nav.map(n => {
               const on = n.key === tab;
               return (
@@ -1331,7 +1367,7 @@ function StewDashboard({ initial = 'overview' }) {
                 </button>
               );
             })}
-          </div>
+          </nav>
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
             <Icon name="lock" size={16} color="var(--sage)" />
@@ -1369,16 +1405,16 @@ function StewDashboard({ initial = 'overview' }) {
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {/* topbar */}
           <div style={{ height: 64, flexShrink: 0, borderBottom: '1px solid var(--line)', background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', display: 'flex', alignItems: 'center', padding: '0 28px', gap: 16 }}>
-            <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20 }}>{(nav.find(n => n.key === tab) || {}).label || ''}</div></div>
+            <div><h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20, margin: 0 }}>{(nav.find(n => n.key === tab) || {}).label || ''}</h1></div>
             {church.isNetwork ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '5px 11px' }}><Icon name="globe" size={13} color="var(--clay)" /> Network view · {churchName}</span> : null}
             <div style={{ flex: 1 }} />
             {actions}
           </div>
           <PublishErrorBanner />
-          {/* content */}
-          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
+          {/* content — the console's MAIN landmark, so a screen reader can jump past the sidebar to it */}
+          <main className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
             {content}
-          </div>
+          </main>
         </div>
       </div>
     </ConsoleChrome>
@@ -1642,7 +1678,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Join ' + (church.name || 'your church')} tabIndex={-1} className="invite-poster" onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '100%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, position: 'relative', margin: 'auto', outline: 'none' }}>
         <button onClick={onClose} title="Close" className="no-print" style={{ position: 'absolute', top: 13, right: 13, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-2)' }}><Icon name="x" size={18} color="currentColor" /></button>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '1.6px', color: 'var(--clay)', marginBottom: 8 }}>TRINITYONE</div>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '1.6px', color: 'var(--clay-ink)', marginBottom: 8 }}>TRINITYONE</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, lineHeight: 1.1, marginBottom: 8 }}>Join {church.name || 'your church'}</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16, maxWidth: 320, marginLeft: 'auto', marginRight: 'auto' }}>A private, offline-first place to read and belong — no sign-up, no tracking.</div>
           <div style={{ display: 'inline-flex', padding: 12, background: '#fff', borderRadius: 16, border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
@@ -1730,7 +1766,7 @@ function GoPublicPanel({ gate }) {
   if (pub === null) return <div style={{ fontSize: 14, color: 'var(--ink-3)', display: 'inline-flex', alignItems: 'center', gap: 9, padding: '6px 0' }}><span style={{ width: 15, height: 15, border: '2px solid var(--line)', borderTopColor: 'var(--clay)', borderRadius: '50%', display: 'inline-block', animation: 'trinitySpin .7s linear infinite' }} /> Checking whether your relay is reachable…</div>;
   return (
     <div>
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--clay)', fontWeight: 700, fontSize: 15 }}><Icon name="globe" size={18} color="var(--clay)" /> Make your church reachable</div>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--clay-ink)', fontWeight: 700, fontSize: 15 }}><Icon name="globe" size={18} color="var(--clay)" /> Make your church reachable</div>
       <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0', maxWidth: 560 }}>Right now your relay only answers on this building’s wifi, so an invite would fail on anyone else’s phone. Turn on a secure tunnel — <b style={{ color: 'var(--ink)' }}>free, no account</b>, no router or port setup — and your church becomes reachable worldwide.</p>
       <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 13, flexWrap: 'wrap' }}>
         <button className="sk-btn sk-btn--clay" onClick={goPublic} disabled={busy} style={busy ? { opacity: .6, cursor: 'wait' } : undefined}>
@@ -1909,7 +1945,7 @@ function Panel({ title, action, children, style = {}, scroll = false }) {
     <div style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', padding: 22, ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
       <div style={{ display: 'flex', flexDirection: (narrow && action) ? 'column' : 'row', alignItems: (narrow && action) ? 'stretch' : 'center', gap: (narrow && action) ? 11 : 0, marginBottom: 16, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5 }}>{title}</div>
+          <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, margin: 0 }}>{title}</h2>
           <div style={{ flex: 1, minWidth: 24 }} />
           {!narrow ? action : null}
         </div>
@@ -2070,7 +2106,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
         {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
         {groups.map(g => (
           <button key={g.id} onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g }))} title="Open chat" style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'none', border: 'none', borderRadius: 11, padding: '6px 8px', margin: '0 -8px', cursor: 'pointer', fontFamily: 'var(--font-ui)', transition: 'background .12s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'} onMouseLeave={e => e.currentTarget.style.background = 'none'}>
-            <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
+            <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{groupLiveSub(g, realCount, rosters)}</div></div>
             {g.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             <Icon name="chat" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} />
@@ -2152,7 +2188,7 @@ function DashGiving() {
       {funds.map(f => (
         <div key={f.id} style={{ display: 'grid', gridTemplateColumns: '2.2fr 1.3fr 1fr 1fr 0.4fr', alignItems: 'center', padding: '15px 8px', borderBottom: '1px solid var(--line-2)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={f.icon} size={18} color="currentColor" /></div>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={f.icon} size={18} color="currentColor" /></div>
             <div><div style={{ fontWeight: 700, fontSize: 14.5 }}>{f.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{f.sub}{f.goal ? ` · ${Math.round(f.raised / f.goal * 100)}% of $${(f.goal / 1000)}k` : ''}</div></div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--ink-2)', fontWeight: 600 }}><Icon name={(f.custody || '').includes('Strike') ? 'wallet' : 'bank'} size={15} color="var(--ink-3)" /> {f.custody || 'Custodial · Strike'}</div>
@@ -2208,7 +2244,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
       {filters && filters.length && items.length ? (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, flexShrink: 0 }}>
           {[{ key: 'all', label: 'All' }, ...filters].map(f => { const on = kindF === f.key; return (
-            <button key={f.key} onClick={() => setKindF(f.key)} style={{ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{f.label}</button>
+            <button key={f.key} onClick={() => setKindF(f.key)} aria-pressed={on} style={{ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{f.label}</button>
           ); })}
         </div>
       ) : null}
@@ -2225,7 +2261,25 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
             style={{ display: 'flex', flexDirection: 'column', gap: 11, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
               {canDrag ? <div title="Drag to reorder" style={{ cursor: 'grab', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, touchAction: 'none' }}><Icon name="dots" size={18} color="currentColor" /></div> : null}
-              <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>
+              {/* REORDERING WITHOUT A MOUSE. move() has been defined in this component since it was written
+                  and nothing ever called it: the only way to set the order members see was to drag. Both
+                  sibling lists in this file (categories, devotionals) already ship these, so this was an
+                  omission rather than a house style. The index is taken from `items` by identity, never from
+                  the row's position — `list` can be a filtered or mid-drag permutation, and moving by that
+                  index moves a different group. canDrag already excludes an active search or type filter,
+                  where "up" has no honest meaning. */}
+              {canDrag && items.length > 1 ? (() => {
+                const ri = items.indexOf(it);
+                const mv = (off) => ({ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '2px 5px', cursor: off ? 'default' : 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, opacity: off ? .35 : 1 });
+                const first = ri <= 0, last = ri < 0 || ri >= items.length - 1;
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexShrink: 0 }}>
+                    <button onClick={() => move(ri, -1)} disabled={first} title="Move up" aria-label={'Move ' + (it.name || 'this one') + ' up'} style={mv(first)}><Icon name="chevU" size={13} color="currentColor" /></button>
+                    <button onClick={() => move(ri, 1)} disabled={last} title="Move down" aria-label={'Move ' + (it.name || 'this one') + ' down'} style={mv(last)}><Icon name="chevD" size={13} color="currentColor" /></button>
+                  </div>
+                );
+              })() : null}
+              <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>
               <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>
               {renderAside ? <div style={{ flexShrink: 0 }}>{renderAside(it)}</div> : null}
             </div>
@@ -2316,12 +2370,12 @@ function NewGroupModal({ open, onClose }) {
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>New group</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>A chat room (or a broadcast channel) for your church. It’s published as a signed event your members can join.</div>
           <div style={lbl}>NAME</div>
-          <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sunday Service" style={{ ...fld, fontWeight: 600, marginBottom: 16 }} />
+          <input aria-label="Name" autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sunday Service" style={{ ...fld, fontWeight: 600, marginBottom: 16 }} />
           <div style={lbl}>TYPE</div>
           <SkToggle value={kind} onChange={setKind} options={[{ value: 'group', label: 'Group chat', icon: 'chat' }, { value: 'broadcast', label: 'Broadcast', icon: 'send' }]} style={{ marginBottom: 6 }} />
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '6px 0 16px', lineHeight: 1.45 }}>{kind === 'broadcast' ? 'Only stewards post; everyone reads. Good for announcements.' : 'Everyone in the group can post and reply.'}</div>
           <div style={lbl}>DESCRIPTION</div>
-          <input value={sub} onChange={e => setSub(e.target.value)} placeholder="Optional — e.g. Whole church" style={{ ...fld, fontSize: 14.5 }} />
+          <input aria-label="Description" value={sub} onChange={e => setSub(e.target.value)} placeholder="Optional — e.g. Whole church" style={{ ...fld, fontSize: 14.5 }} />
           {cats.length ? (
             <React.Fragment>
               <div style={{ ...lbl, margin: '16px 0 7px' }}>CATEGORY</div>
@@ -2354,7 +2408,7 @@ function NewGroupModal({ open, onClose }) {
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to add this person to the group, untick to leave them out" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
                           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
-                          <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage)' : 'var(--ink-3)', fontWeight: nameHandle(m) ? 700 : 400, fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
+                          <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: nameHandle(m) ? 700 : 400, fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
                         </button>
                       ); })}
                     </div>
@@ -2466,7 +2520,7 @@ function EditGroupMembersModal({ group, onClose }) {
             <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to keep this person in the group, untick to remove them" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
               <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
-              <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage)' : 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
+              <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
             </button>
           ); })}
           {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
@@ -2583,7 +2637,7 @@ function GroupChatModal({ group, onClose }) {
                   {menuFor === m.id ? (
                     <div style={{ position: 'absolute', top: 22, [m.mine ? 'left' : 'right']: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <button onClick={() => (pin && pin.msgId === m.id) ? doUnpin() : doPin(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="#8a6717" /> {(pin && pin.msgId === m.id) ? 'Unpin message' : 'Pin message'}</button>
-                      <button onClick={() => doRemove(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button>
+                      <button onClick={() => doRemove(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay-ink)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button>
                     </div>
                   ) : null}
                 </div>
@@ -2660,7 +2714,7 @@ function CategoriesModal({ cats, groups, onClose }) {
                       <button onClick={() => move(i, -1)} disabled={i === 0} title="Move up" style={iconBtn({ opacity: i === 0 ? .35 : 1 })}><Icon name="chevU" size={15} color="currentColor" /></button>
                       <button onClick={() => move(i, 1)} disabled={i === cats.length - 1} title="Move down" style={iconBtn({ opacity: i === cats.length - 1 ? .35 : 1 })}><Icon name="chevD" size={15} color="currentColor" /></button>
                       <button onClick={() => { setEditId(c.id); setEditName(c.name); }} title="Rename" style={iconBtn()}><Icon name="pen" size={15} color="currentColor" /></button>
-                      <button onClick={() => setPendingDelete(c)} title="Delete category" style={iconBtn({ color: 'var(--clay)' })}><Icon name="trash" size={15} color="currentColor" /></button>
+                      <button onClick={() => setPendingDelete(c)} title="Delete category" style={iconBtn({ color: 'var(--clay-ink)' })}><Icon name="trash" size={15} color="currentColor" /></button>
                     </React.Fragment>
                   )}
                 </div>
@@ -2679,7 +2733,7 @@ function CategoriesModal({ cats, groups, onClose }) {
             <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px' }}>The category is removed. Its {countIn(pendingDelete.id)} group{countIn(pendingDelete.id) === 1 ? '' : 's'} stay — they just become uncategorised.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setPendingDelete(null)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Keep it</button>
-              <button onClick={del} className="sk-btn" style={{ flex: 1, padding: 12, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="trash" size={15} color="var(--on-clay)" /> Delete</button>
+              <button onClick={del} className="sk-btn" style={{ flex: 1, padding: 12, background: 'var(--clay-ink)', color: 'var(--on-clay)' }}><Icon name="trash" size={15} color="var(--on-clay)" /> Delete</button>
             </div>
           </div>
         </div>
@@ -2764,14 +2818,14 @@ function DashGroups() {
         <div onClick={() => setPendingDelete(null)} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <div ref={pdDlgRef} role="dialog" aria-modal="true" aria-label={'Delete ' + pendingDelete.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 8 }}>
-              <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="trash" size={21} /></div>
+              <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="trash" size={21} /></div>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Delete “{pendingDelete.name}”?</div>
             </div>
             <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 8px' }}>This removes the {pendingDelete.kind === 'team' ? 'team and its rota roles' : 'group'} for everyone. Members will no longer see it{pendingDelete.kind === 'team' ? ', and its rota assignments stop applying' : ' or its chat'}.</p>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 20px' }}>Past messages stay on the relay but won’t be shown. You can undo this for a few seconds.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setPendingDelete(null)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Keep it</button>
-              <button onClick={confirmDelete} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="trash" size={15} color="var(--on-clay)" /> Delete</button>
+              <button onClick={confirmDelete} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: 'var(--clay-ink)', color: 'var(--on-clay)' }}><Icon name="trash" size={15} color="var(--on-clay)" /> Delete</button>
             </div>
           </div>
         </div>
@@ -2789,7 +2843,7 @@ function DashGroups() {
         renderRight={(it) => (
           <React.Fragment>
             {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => window.Steward.publishGroup({ ...it, category: e.target.value || undefined })} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              <select value={it.category || ''} onChange={(e) => window.Steward.publishGroup({ ...it, category: e.target.value || undefined })} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
                 <option value="">No category</option>
                 {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -2797,11 +2851,11 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => window.Steward.publishGroup({ ...it, childsafe: !it.childsafe })} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
-            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
-            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
-            <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
-            <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
+            <button onClick={() => window.Steward.publishGroup({ ...it, childsafe: !it.childsafe })} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
+            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
+            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
+            <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
+            <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
           </React.Fragment>
         )}
         renderAside={(it) => (
@@ -2814,7 +2868,7 @@ function DashGroups() {
         <div onClick={() => setTeamMembers(null)} style={{ position: 'absolute', inset: 0, zIndex: 92, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <div ref={tmDlgRef} role="dialog" aria-modal="true" aria-label={teamMembers.team.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', maxHeight: '80%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${teamMembers.team.accent || 'var(--clay)'} 16%, var(--surface))`, color: teamMembers.team.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={teamMembers.team.icon || 'shield'} size={20} /></div>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${teamMembers.team.accent || 'var(--clay)'} 16%, var(--surface))`, color: teamMembers.team.accent || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={teamMembers.team.icon || 'shield'} size={20} /></div>
               <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{teamMembers.team.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{teamMembers.people.length} member{teamMembers.people.length === 1 ? '' : 's'}</div></div>
               <button onClick={() => setTeamMembers(null)} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
             </div>
@@ -2844,18 +2898,70 @@ function GroupLeadersModal({ group, onClose }) {
   const [sel, setSel] = React.useState(() => new Set(group.leaders || []));
   const [pol, setPol] = React.useState(() => (['leaders', 'stewards', 'everyone'].includes(group.eventPolicy) ? group.eventPolicy : 'leaders'));
   const [saving, setSaving] = React.useState(false);
+  const [notTold, setNotTold] = React.useState([]);   // new leaders the "you're now a leader" DM never reached
+  const [saveErr, setSaveErr] = React.useState('');   // the leadership change itself did not reach any relay
+  // WHAT THE RELAY ACTUALLY HOLDS, and WHO HAS ACTUALLY BEEN TOLD — both of which move when Save succeeds,
+  // and neither of which the `group` PROP ever hears about. `before` was read from that prop, and this modal
+  // deliberately stays open after a partial success, so a second Save re-computed "newly added" from the
+  // leaders the group had when the modal opened: everyone promoted on the first press was messaged a second
+  // time, congratulating them again on a job they already had. AUDIT-2026-08-30.
+  const [savedLeaders, setSavedLeaders] = React.useState(() => new Set(group.leaders || []));
+  const [told, setTold] = React.useState(() => new Set());
   const toggle = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const save = async () => {
-    setSaving(true);
-    const before = new Set(group.leaders || []);
+    setSaving(true); setSaveErr(''); setNotTold([]);
+    const before = new Set(savedLeaders);
     // ONE publish, not two. publishGroup rebuilds the group document from scratch, and both setGroupLeaders
     // and setGroupEventPolicy spread the SAME `group` prop — so calling them in sequence would have the second
     // publish rebuild from the stale copy and silently undo the first. Set both fields together.
-    await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol });
+    //
+    // AND THE RESULT IS THE ONLY THING THAT KNOWS WHETHER IT SAVED. `publishGroup` returns null three ways —
+    // no signing key, every relay refused, or a PARTIAL write (it returns `accepted === targets.length ? evt
+    // : false`, deliberately, because a group rule that reached one relay of three is enforced on one of
+    // three). This discarded it. With no signing key it and sendDM return null TOGETHER, and the modal then
+    // rendered "The change is saved, but we couldn’t message Ronald…" over a change that was not saved; when
+    // the publish failed and the DMs went through, it closed silently with no error at all. That is the
+    // exact defect the commit titled "a control that failed no longer says it worked" was written to remove,
+    // one modal along. AUDIT-2026-08-30.
+    let saved = null;
+    try { saved = await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol }); }
+    catch (e) { saved = null; }
+    if (!saved) {
+      // NOTHING IS SENT AND NOBODY IS TOLD. Announcing leadership to people whose leadership did not save is
+      // worse than silence: they are told to go and post events the relay will refuse.
+      setSaveErr('This didn’t save. Your church’s relay didn’t accept the change — or accepted it on only some ' +
+        'of your relays, which would leave the rule enforced in some places and not others. Nobody has been ' +
+        'messaged. Check you’re online and press Save again.');
+      setSaving(false);
+      return;
+    }
+    setSavedLeaders(new Set(sel));
     // tell newly-added leaders, so they know they can now manage this group
-    const added = [...sel].filter(pk => !before.has(pk));
+    //
+    // WHO WAS ACTUALLY TOLD. Steward.sendDM returns null on three paths — no signing key, no peer hex, or the
+    // encrypt throwing — and every one of them is BEFORE the outbox push, so nothing was sent and nothing is
+    // waiting to be. This discarded the result entirely and closed, and the panel above promises in so many
+    // words "we’ll message them to let them know". So a steward believed every new leader had been told, and
+    // the leader never posts an event because nobody ever told them they could. A QUEUED send is fine — it
+    // returns the event with _queued and the console outbox flushes it — only a null is a real loss.
+    // AUDIT-2026-08-30.
+    // `before` is what the relay held BEFORE this press, and `told` is who has already had the message, so a
+    // second Save messages only people who are genuinely new and have genuinely not heard.
+    const added = [...sel].filter(pk => !before.has(pk) && !told.has(pk));
+    const unTold = [];
+    const nowTold = new Set(told);
     for (const pk of added) {
-      try { await window.Steward.sendDM(pk, `You’re now a leader of “${group.name}”. You can post events for it from your app — open the group and tap “Event”.`); } catch {}
+      let ok = false;
+      try { ok = !!(await window.Steward.sendDM(pk, `You’re now a leader of “${group.name}”. You can post events for it from your app — open the group and tap “Event”.`)); } catch {}
+      if (ok) nowTold.add(pk); else unTold.push(pk);
+    }
+    setTold(nowTold);
+    if (unTold.length) {
+      // The leadership change itself DID publish; only the notification failed. Say exactly that much, and
+      // stay open, so the steward can tell them another way rather than assuming it was handled.
+      setNotTold(unTold.map(pk => (members.find(m => m.pubkey === pk) || {}).name || 'a new leader'));
+      setSaving(false);
+      return;
     }
     onClose();
   };
@@ -2864,7 +2970,7 @@ function GroupLeadersModal({ group, onClose }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Group leaders" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', maxHeight: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="users" size={20} /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="users" size={20} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Group leaders</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{group.name}</div></div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Leaders help run this group. They can create events for it from their app (shown on everyone’s calendar and in the group’s chat), and we’ll message them to let them know. You can change this anytime.</p>
@@ -2905,8 +3011,22 @@ function GroupLeadersModal({ group, onClose }) {
               );
             })}
         </div>
+        {/* THE SAVE ITSELF FAILED. Rendered ahead of the "couldn’t message" banner and never beside it: the
+            two are mutually exclusive, because a failed publish messages nobody. */}
+        {saveErr ? (
+          <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginTop: 14 }}>
+            <Icon name="alert" size={15} color="var(--clay)" />
+            <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>{saveErr}</div>
+          </div>
+        ) : null}
+        {notTold.length ? (
+          <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginTop: 14 }}>
+            <Icon name="alert" size={15} color="var(--clay)" />
+            <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>The change is saved, but we couldn’t message {notTold.join(', ')} — nothing was sent and nothing is waiting to send. Please tell {notTold.length > 1 ? 'them' : 'them'} another way.</div>
+          </div>
+        ) : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>{notTold.length ? 'Close' : 'Cancel'}</button>
           <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
@@ -2961,11 +3081,11 @@ function NewTeamModal({ open, onClose }) {
           })}
         </div>
         <div style={lbl}>Name</div>
-        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Worship Team" style={fld} />
+        <input aria-label="Name" value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Worship Team" style={fld} />
         <div style={lbl}>Roles to fill (one per line)</div>
-        <textarea value={roles} onChange={e => setRoles(e.target.value)} rows={5} placeholder={'Lead\nVocals\nKeys\nSound'} style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+        <textarea aria-label="Roles to fill (one per line)" value={roles} onChange={e => setRoles(e.target.value)} rows={5} placeholder={'Lead\nVocals\nKeys\nSound'} style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
         <div style={lbl}>What's it for (optional)</div>
-        <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
+        <input aria-label="What's it for (optional)" value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
         <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
           <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create team</button>
@@ -2994,12 +3114,18 @@ function DashRunRelayCard() {
           <a key={label} href={'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/' + file} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
         ))}
       </div>
-      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay)' }}>Other builds</a> (Debian package, older Macs). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay-ink)' }}>Other builds</a> (Debian package, older Macs). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
     </Panel>
   );
 }
 
 function DashRelaysCard() {
+  // THE CHURCH'S NAME, because connect-by-name registers this church at the relay it just found and a
+  // nameless registration is refused (gateway.mjs H4: a NEW self-registration with no name is a 400, written
+  // after one box accumulated 37 rows the operator could only see as a bare npub). This card used to pass ''
+  // — harmless while an unconfigured relay accepted everything, and since the closed-network work a fresh box
+  // refuses every write instead, so the steward connected to a relay that would never take a word they wrote.
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
   const host = (typeof location !== 'undefined' && location.host) || '';
   const online = status.filter(r => r.status === 'on').length;
@@ -3027,7 +3153,7 @@ function DashRelaysCard() {
   const [addedNote, setAddedNote] = React.useState('');
   const addRelay = () => {
     const r = window.Steward.addRelay && window.Steward.addRelay(draft);
-    if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); setAddedNote(''); return; }
+    if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
     setDraft(''); setErr('');
     setAddedNote(String(r));
   };
@@ -3041,12 +3167,23 @@ function DashRelaysCard() {
     setByNameMsg({ text: 'Looking up “' + n + '”…' });
     try {
       const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
-      if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ No relay is registered under “' + n + '”.' }); return; }
+      // C5: the resolver now refuses two things it used to pass on — a cleartext (ws://) answer, and an
+      // address this church has not signed into its own relay-net document. "No relay is registered under
+      // that name" would be a plain untruth for the second, and this project has shipped six controls that
+      // told a steward a comforting story about something that did not happen. Say both possibilities.
+      if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
       window.Steward.addRelay(j.url);
       window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
       setByNameMsg({ text: 'Connecting your church…' });
-      let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, ''); } catch (e) {}
-      setByNameMsg({ ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
+      let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, church.name); } catch (e) {}
+      // THE MISSING-NAME REFUSAL IS A NOT-YET, NOT A VERDICT, and it is the one the steward can fix. Telling
+      // them "the relay operator may need to approve your church" here would send them to somebody else about
+      // a field on their own settings screen. Mirrors _regNeedsName in src/steward.src.js, which reads the
+      // relay's reason the same way.
+      const needsName = !reg.ok && /name/i.test(String(reg.why || ''));
+      setByNameMsg(needsName
+        ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
+        : { ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };
@@ -3060,7 +3197,11 @@ function DashRelaysCard() {
     try {
       let url = raw;
       if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the mirrored directory
-        const jj = await window.Steward.resolveRelayName(raw);
+        // C5: `member: false` — the possession proof, without the membership check. A clone SOURCE is the box
+        // this church is leaving, and it may be one the church never vouched for; requiring membership of it
+        // would block exactly the migration this control exists for. The DESTINATION still takes the full
+        // gate, inside cloneFromRelay. This is the only caller allowed to pass it.
+        const jj = await window.Steward.resolveRelayName(raw, { member: false });
         if (!jj || !jj.url) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
         url = jj.url;
       }
@@ -3122,13 +3263,13 @@ function DashRelaysCard() {
     setRegBusy(false);
   };
   return (
-      <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
+      <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. Add your own relay (self-host it with the TrinityOne Suite) and public ones for redundancy — if one is offline, members reach another.</div>
         {/* D2: single-point-of-failure nudge (counts DISTINCT relay boxes by identity — two routes to one box don't
             count as redundancy) — or a "backup on" reassurance once the church runs 2+ separate relays that mirror. */}
         {backup && backup.boxes < 2 ? (
           <div style={{ display: 'flex', gap: 11, padding: '12px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--clay)', marginBottom: 14 }}>
-            <div style={{ flexShrink: 0, color: 'var(--clay)', fontSize: 16, lineHeight: 1.3, fontWeight: 800 }}>⚠</div>
+            <div style={{ flexShrink: 0, color: 'var(--clay-ink)', fontSize: 16, lineHeight: 1.3, fontWeight: 800 }}>⚠</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}><b style={{ color: 'var(--ink)' }}>One relay is a single point of failure.</b> If it goes offline, members can’t reach your church. Add a second relay your church runs — self-host with the TrinityOne Suite, or connect one by name below — and your data will mirror across both automatically.</div>
           </div>
         ) : backup && backup.syncOn ? (
@@ -3138,6 +3279,15 @@ function DashRelaysCard() {
           </div>
         ) : null}
         {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
+        {status.some(r => r.member === false) ? (
+          <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--clay-ink)', flexShrink: 0, marginTop: 5 }} />
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--ink)' }}>Nothing is published to an address until it proves it is one of your relays.</b>{' '}
+              The ones marked “Not in your network” haven’t proved it — they may be running an older build, or
+              your church may not have signed them in. They stay listed and are checked again.</div>
+          </div>
+        ) : null}
         {/* One line per relay: address, role, health. It used to stack the URL over an indented meta row —
             right for a narrow card, but this card is wide now and two relays were eating a third of it for
             two short addresses. Everything sits inline and wraps only if the card actually gets narrow. */}
@@ -3147,11 +3297,17 @@ function DashRelaysCard() {
             const up = r.status === 'on';
             return (
               <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-                <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
+                <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
                   {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Live' : 'Offline'}</span>
+                  {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
+                      the other must not look fine. Under the closed network nothing is published to an
+                      address until it has PROVED it holds a key this church's network contains, so a live
+                      socket to an address we send nothing to is exactly the invisible divergence this work
+                      exists to end. It stays in the list and keeps being re-checked; it just says so. */}
+                  {r.member === false ? <SkPill tint="clay">Not in your network</SkPill> : null}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Live' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
                   {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
@@ -3161,11 +3317,18 @@ function DashRelaysCard() {
         </div>
         {/* relay actions → responsive 2-column grid so the many sections sit side by side on a wide card */}
         <div className="relay-grid">
-        {/* add a public relay (redundancy) */}
+        {/* ADD ANOTHER RELAY THIS CHURCH RUNS (redundancy) — never somebody else's.
+            The placeholder below used to name two generic public Nostr relays and the error under it named
+            a third. A steward who typed one of those in was following the product's own instructions, and
+            every publish — sealed care requests included — then fanned out to a
+            machine with none of this product's gates on it. TrinityOne relays are a closed network
+            (reference/DOMAIN.md). The box still TAKES a typed address, because a church legitimately adds
+            the second box it runs itself; what is gone is the suggestion of anybody else's. */}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
-              placeholder="nos.lol  ·  relay.damus.io  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
+              aria-label="Relay address to add"
+              placeholder="wss://relay.yourchurch.org" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
             <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
@@ -3198,7 +3361,7 @@ function DashRelaysCard() {
                 style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
               <button onClick={connectByName} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
             </div>
-            {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay)' : byNameMsg.ok ? 'var(--sage)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
+            {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay-ink)' : byNameMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
           </div>
         </div>
         {/* Only after a relay has actually refused a write. Named for the symptom the steward has, not for
@@ -3212,10 +3375,10 @@ function DashRelaysCard() {
             <div style={{ padding: 13, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>One of your relays wouldn’t save a recent change, because it only carries churches on its own list and yours isn’t on it yet. Adding it is the relay operator’s call — if that’s you, paste the relay’s <b>admin token</b> to add this church now. It’s in the TrinityOne Suite window, or the installer output. <b>Anyone with that token controls the whole relay</b>, so don’t ask for it if the relay isn’t yours — ask its operator to add your church instead.</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input value={regToken} onChange={e => setRegToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') register(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
+                <input value={regToken} onChange={e => setRegToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') register(); }} type="password" aria-label="Relay admin token" placeholder="relay admin token" autoComplete="off" style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
                 <button onClick={register} disabled={regBusy || !regToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (regBusy || !regToken.trim()) ? .5 : 1 }}>Register</button>
               </div>
-              {regMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: regMsg[0] === '✓' ? 'var(--sage)' : regMsg[0] === '✗' ? 'var(--clay)' : 'var(--ink-3)' }}>{regMsg}</div> : null}
+              {regMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: regMsg[0] === '✓' ? 'var(--sage-ink)' : regMsg[0] === '✗' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{regMsg}</div> : null}
             </div>
           )}
         </div>
@@ -3226,23 +3389,24 @@ function DashRelaysCard() {
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copies every message, record and file your church has onto <b>{cloneDest || 'this relay'}</b>{cloneDest ? ' — the relay serving this console' : ''}. Use it when your history lives somewhere else and this relay is starting empty: after restoring from your recovery phrase, or when moving your church onto your own box. Nothing is removed from the relay you copy from, and nothing already here is overwritten. Name the relay to copy <b>from</b>.</div>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={cloneSrc} onChange={e => { setCloneSrc(e.target.value); setCloneMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') cloneFromHere(); }}
+              aria-label="Relay to copy your history from"
               placeholder="grace-city  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
             <button onClick={cloneFromHere} disabled={cloning || !cloneSrc.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (cloning || !cloneSrc.trim()) ? .5 : 1 }}>{cloning ? 'Copying…' : 'Copy across'}</button>
           </div>
-          {cloneMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: cloneMsg.ok === false ? 'var(--clay)' : cloneMsg.ok ? 'var(--sage)' : 'var(--ink-3)' }}>{cloneMsg.text}</div> : null}
+          {cloneMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: cloneMsg.ok === false ? 'var(--clay-ink)' : cloneMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{cloneMsg.text}</div> : null}
         </div>
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Keep your relays in sync</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on — public relays (nos.lol etc.) stay publish-only, so gated content never leaves your own infrastructure.') : 'Checking…'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
           {backup != null && backup.boxes >= 2 ? (
             <div style={{ display: 'flex', gap: 9 }}>
               <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
               <button onClick={() => doSync(false)} disabled={syncBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Turn off</button>
             </div>
           ) : null}
-          {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{syncMsg.text}</div> : null}
+          {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
         </div>
         </div>{/* end relay-actions grid */}
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
@@ -3298,7 +3462,7 @@ function NewPlanModal({ onClose }) {
         {schedAt ? (
           <React.Fragment>
             <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', margin: '8px 0 6px' }} />
-            <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay)' }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
+            <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)' }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
         ) : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
@@ -3320,7 +3484,7 @@ function DashPlans() {
   const planDrafts = shared.filter(p => p.draft);
   const PlanRow = ({ p, isShared }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: p.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: p.accent || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 7 }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isShared && p.draft ? 0.7 : 1 }}>{p.title}</span>
@@ -3416,14 +3580,14 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
         {schedAt ? (
           <React.Fragment>
             <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 6 }} />
-            <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay)', marginBottom: 14 }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
+            <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)', marginBottom: 14 }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
         ) : null}
         <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
           <Icon name="read" size={20} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 14, color: file && !file.error ? 'var(--ink)' : 'var(--ink-2)' }}>{file && file.name ? file.name : (editing ? 'Replace the text file (optional)' : 'Choose a .txt or .md file')}</div>
-            <div style={{ fontSize: 12, color: file && file.error ? 'var(--clay)' : 'var(--ink-3)' }}>{file && file.error ? file.error : (file && file.type ? file.type.toUpperCase() + ' ready' : (editing ? 'Keeping the current text unless you pick a new file' : 'Tap to pick a file'))}</div>
+            <div style={{ fontSize: 12, color: file && file.error ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{file && file.error ? file.error : (file && file.type ? file.type.toUpperCase() + ' ready' : (editing ? 'Keeping the current text unless you pick a new file' : 'Tap to pick a file'))}</div>
           </div>
           <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
         </label>
@@ -3557,7 +3721,7 @@ function DashDevotionals() {
                   <button onClick={() => move(i, -1)} disabled={i === 0} title="Move up" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 7, padding: '0 4px', cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.35 : 1, color: 'var(--ink-2)', display: 'flex' }}><Icon name="chevU" size={13} color="currentColor" /></button>
                   <button onClick={() => move(i, 1)} disabled={i === devos.length - 1} title="Move down" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 7, padding: '0 4px', cursor: i === devos.length - 1 ? 'default' : 'pointer', opacity: i === devos.length - 1 ? 0.35 : 1, color: 'var(--ink-2)', display: 'flex' }}><Icon name="chevD" size={13} color="currentColor" /></button>
                 </div>
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 7 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: d.draft ? 0.7 : 1 }}>{d.title}</span>
@@ -3568,8 +3732,8 @@ function DashDevotionals() {
                 </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0, justifyContent: narrow ? 'flex-end' : 'initial' }}>
-                {d.draft ? <button onClick={() => republish(d, { draft: false })} title="Publish this one now" style={{ border: 'none', background: 'var(--clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
-                <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
+                {d.draft ? <button onClick={() => republish(d, { draft: false })} title="Publish this one now" style={{ border: 'none', background: 'var(--clay-ink)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
+                <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
                 </div>
               </div>
@@ -3579,7 +3743,7 @@ function DashDevotionals() {
                 <div key={g.key} style={{ border: '1px solid var(--line)', borderRadius: 13, overflow: 'hidden' }}>
                   <div onClick={() => setSeriesOpen(s => ({ ...s, [g.key]: !s[g.key] }))} style={{ width: '100%', display: 'flex', flexDirection: narrow ? 'column' : 'row', alignItems: narrow ? 'stretch' : 'center', gap: narrow ? 10 : 11, padding: '11px 13px', background: 'var(--surface-2)', cursor: 'pointer' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0, flex: narrow ? 'none' : 1 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={17} color="currentColor" /></div>
+                      <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={17} color="currentColor" /></div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</div>
                         <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals{g.named ? '' : ' · unnamed'}{g.items.some(d => d.draft) ? ` · ${g.items.filter(d => d.draft).length} draft` : ''}</div>
@@ -3588,9 +3752,9 @@ function DashDevotionals() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0, paddingLeft: narrow ? 43 : 0 }}>
                       <button onClick={(e) => { e.stopPropagation(); setSeriesSchedule({ items: g.items, label: g.label }); }}
-                        title="Drip-release this series on a cadence" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="clock" size={13} color="currentColor" /> Schedule</button>
+                        title="Drip-release this series on a cadence" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="clock" size={13} color="currentColor" /> Schedule</button>
                       <button onClick={(e) => { e.stopPropagation(); setSeriesRename({ items: g.items, current: g.named ? g.label : '' }); }}
-                        title={g.named ? 'Rename series' : 'Name this series'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> {g.named ? 'Rename' : 'Name'}</button>
+                        title={g.named ? 'Rename series' : 'Name this series'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> {g.named ? 'Rename' : 'Name'}</button>
                       {!narrow ? <Icon name={seriesOpen[g.key] ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" /> : null}
                     </div>
                   </div>
@@ -3687,7 +3851,7 @@ function BulkUploadModal({ kind, onClose }) {
               <Icon name={it.error ? 'x' : (isPlans ? 'read' : 'receipt')} size={17} color={it.error ? 'var(--clay)' : 'var(--clay)'} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.title}</div>
-                <div style={{ fontSize: 11.5, color: it.error ? 'var(--clay)' : 'var(--ink-3)' }}>{it.error ? it.error : (isPlans ? it.count + ' readings' : ((it.ref ? it.ref + ' · ' : '') + it.text.length + ' chars'))} · {it.name}</div>
+                <div style={{ fontSize: 11.5, color: it.error ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{it.error ? it.error : (isPlans ? it.count + ' readings' : ((it.ref ? it.ref + ' · ' : '') + it.text.length + ' chars'))} · {it.name}</div>
               </div>
               {!busy ? <button onClick={() => setItems(items.filter((_, x) => x !== i))} title="Remove this file from the list" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} /></button> : null}
             </div>
@@ -3708,7 +3872,7 @@ function DashResources() {
   const [bulk, setBulk] = React.useState(false);
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
   const btn = (k, label) => (
-    <button onClick={() => setView(k)} style={{ padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
+    <button onClick={() => setView(k)} style={{ padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay-ink)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
   );
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -3816,7 +3980,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
           Only do this if you know it is really them. It gives that new key {memberName}’s name and place in your church, and their access to your ordinary groups. Invite-only groups you will need to add them to again by hand. Their old private messages and any sealed care records stay unreadable — those went with the lost key, and nothing can bring them back.
         </p>
         {isMinor ? (
-          <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--clay)', fontWeight: 700, border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', borderRadius: 12, padding: '9px 11px', margin: '0 0 12px' }}>
+          <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--clay-ink)', fontWeight: 700, border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', borderRadius: 12, padding: '9px 11px', margin: '0 0 12px' }}>
             This member is marked as a child. Confirm with their parent or guardian before you reconnect them.
           </div>
         ) : null}
@@ -3836,9 +4000,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
         )}
         <input value={text} onChange={e => { setText(e.target.value); setErr(''); }} placeholder="…or paste their new code / npub"
           style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', marginBottom: 8 }} />
-        {text && !newPub ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>That isn’t a TrinityOne member code.</div> : null}
-        {same ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>That’s the key they already have — nothing to reconnect.</div> : null}
-        {err ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>{err}</div> : null}
+        {text && !newPub ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginBottom: 8 }}>That isn’t a TrinityOne member code.</div> : null}
+        {same ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginBottom: 8 }}>That’s the key they already have — nothing to reconnect.</div> : null}
+        {err ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginBottom: 8 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} className="sk-btn" style={{ flex: 1, padding: '10px 14px' }}>Cancel</button>
           <button onClick={confirm} disabled={!newPub || same || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: '10px 14px', opacity: (!newPub || same || busy) ? .5 : 1 }}>
@@ -4395,7 +4559,7 @@ function DashMembers() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
               <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>{label}</span>
               {nameHandle(m)
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage)', fontWeight: 700, flexShrink: 0 }} title={m.nip05 || m.npub}>@{nameHandle(m)} <Icon name="check" size={11} stroke={3} color="var(--sage)" /></span>
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 0 }} title={m.nip05 || m.npub}>@{nameHandle(m)} <Icon name="check" size={11} stroke={3} color="var(--sage)" /></span>
                 : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.npub}>{shortNpub(m.npub)}</span>}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
@@ -4405,7 +4569,7 @@ function DashMembers() {
               <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
             {confirmBlock === m.pubkey
               ? <React.Fragment>
-                  <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                  <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
                   <button onClick={() => setConfirmBlock(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="x" size={15} color="currentColor" /></button>
                 </React.Fragment>
               : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="shield" size={15} color="currentColor" /></button>}
@@ -4419,7 +4583,7 @@ function DashMembers() {
           {(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="sage">parent: {guardians[m.pubkey].map(p => nameByPub[p] || 'linked').join(', ')}</SkPill> : null}
           {minorsSet.has(m.pubkey) && !(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="ink">no guardian</SkPill> : null}
           {parentSet.has(m.pubkey) ? <SkPill tint="sage">parent account</SkPill> : null}
-          <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="chat" size={15} color="currentColor" /> Chat</button>
           {/* WHAT EACH CONTROL ACTUALLY NEEDS, rather than "are you the owner". One `!delegated` wrapper used to
               hide all five of these from every delegated steward, including the two the relay would have
@@ -4435,12 +4599,12 @@ function DashMembers() {
             </div>
           ) : null}
           {!delegated ? (<React.Fragment>
-          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
           <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="shield" size={14} color="currentColor" /> {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
           {minorsSet.has(m.pubkey) ? (
-            <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="users" size={14} color="currentColor" /> {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
           ) : null}
           </React.Fragment>) : null}
@@ -4449,7 +4613,7 @@ function DashMembers() {
             <Icon name="swap" size={14} color="currentColor" /> Reconnect</button>
           ) : null}
           {stewCapState('safeguarding').allowed && photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
-            <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="refresh" size={14} color="currentColor" /> {nophotoSet.has(m.pubkey) ? 'Photos off ✓' : 'Turn off photo'}</button>
           ) : null}
         </div>
@@ -4524,7 +4688,7 @@ function DashMembers() {
         })() : null}
         {pendingJoins.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="qr" size={15} color="currentColor" /> Requests to join · {pendingJoins.length}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay-ink)' }}><Icon name="qr" size={15} color="currentColor" /> Requests to join · {pendingJoins.length}
               {pendingJoins.length > 4 ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>scroll for the rest</span> : null}
               {pendingJoins.length > 1 ? <button onClick={() => { setAdmitAllErr(''); setConfirmAdmitAll(true); }} className="sk-btn sk-btn--ghost" style={{ marginLeft: pendingJoins.length > 4 ? 10 : 'auto', padding: '5px 10px', fontSize: 12 }}>Admit all {pendingJoins.length}</button> : null}</div>
             {/* The list scrolls INSIDE the panel. It used to grow without limit, so a church with a queue of
@@ -4551,7 +4715,7 @@ function DashMembers() {
         ) : null}
         {!delegated && pendingReqs.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="pray" size={15} color="currentColor" /> Parent / child links to confirm · {pendingReqs.length}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay-ink)' }}><Icon name="pray" size={15} color="currentColor" /> Parent / child links to confirm · {pendingReqs.length}</div>
             <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto', overscrollBehavior: 'contain' }}>
             {pendingReqs.map(r => (
               // SECURITY-AUDIT-2026-07-20 C1: this card used to read "<parentName> set up a child account for
@@ -4564,7 +4728,7 @@ function DashMembers() {
                 <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.4 }}>
                   <div><b style={{ color: 'var(--ink)' }}>{knownName(r.parent)}</b> asks to be linked as a parent{r.claimedParentName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedParentName}”</span> : null}</div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>parent {idOf(r.parent)}</div>
-                  <div style={{ marginTop: 4 }}>of <b style={{ color: 'var(--ink)' }}>{knownName(r.child)}</b>{r.claimedChildName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedChildName}”</span> : null}{minorsSet.has(r.child) ? null : <span style={{ color: 'var(--clay)' }}> — not currently marked as a child</span>}</div>
+                  <div style={{ marginTop: 4 }}>of <b style={{ color: 'var(--ink)' }}>{knownName(r.child)}</b>{r.claimedChildName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedChildName}”</span> : null}{minorsSet.has(r.child) ? null : <span style={{ color: 'var(--clay-ink)' }}> — not currently marked as a child</span>}</div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>child {idOf(r.child)}</div>
                   <div style={{ marginTop: 5, fontSize: 11.5, color: 'var(--ink-3)' }}>Confirming lets this person DM the child directly and marks the child as under-18. Check both npubs are who you expect.</div>
                 </div>
@@ -4617,17 +4781,17 @@ function DashMembers() {
           ) : null}
           {blockedList.length ? (
             <React.Fragment>
-              <button onClick={() => setShowBlocked(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'var(--surface)', cursor: 'pointer', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
+              <button onClick={() => setShowBlocked(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'var(--surface)', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
                 <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedList.length}
               </button>
               {showBlocked ? blockedList.map(pk => (
                 <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', opacity: 0.85 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
+                  <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>Blocked member</div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{String(pk).slice(0, 12)}…</div>
                   </div>
-                  <button onClick={() => unblock(pk)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>
+                  <button onClick={() => unblock(pk)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>
                 </div>
               )) : null}
             </React.Fragment>
@@ -4665,7 +4829,7 @@ function CheckinPicker({ available, nameFor, guardiansOf, onPick, onClose }) {
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
           {available.map(c => { const gs = guardiansOf(c); return (
             <button key={c} onClick={() => onPick(c)} title="Check this child in" style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
-              <div style={{ width: 36, height: 36, borderRadius: 999, background: 'var(--clay-soft)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="child" size={18} /></div>
+              <div style={{ width: 36, height: 36, borderRadius: 999, background: 'var(--clay-soft)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="child" size={18} /></div>
               <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{nameFor(c)}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{gs.length ? 'Pickup: ' + gs.join(', ') : 'No guardian linked'}</div></div>
               <Icon name="plus" size={16} color="var(--clay)" />
             </button>
@@ -4837,7 +5001,7 @@ function StewBackupModal({ church, onClose }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Back up your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 470, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, maxHeight: '92%', overflowY: 'auto', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="lock" size={21} /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="lock" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Back up your church</div>
         </div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 18px' }}>One encrypted file you can keep safe (cloud drive, USB stick). You’ll need your passphrase or PIN to restore it.</p>
@@ -4850,7 +5014,7 @@ function StewBackupModal({ church, onClose }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
           {incl.map(([ic, t, s]) => (
             <div key={t} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--surface)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={ic} size={16} /></div>
+              <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--surface)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={ic} size={16} /></div>
               <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{t}</div><div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>{s}</div></div>
             </div>
           ))}
@@ -4882,7 +5046,7 @@ function NetworkRow({ net, onLeave }) {
   React.useEffect(() => window.Steward.subscribeNetworkProfile(net.networkPub, (p) => { if (p && p.name) setName(p.name); }), [net.networkPub]);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-      <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={18} /></div>
+      <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={18} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: name ? 'var(--ink)' : 'var(--ink-3)' }}>{name || 'Resolving…'}</div>
         <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{net.npub.slice(0, 22)}…</div>
@@ -4961,7 +5125,7 @@ function DashNetworksPanel() {
         <div onClick={() => setNaming(false)} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <div ref={namingRef} role="dialog" aria-modal="true" aria-label="Create a network" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Create a network</div>
             </div>
             <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Give it a name your churches will recognise — a region (“Sussex Gospel Partnership”), a family of churches (“Regions Beyond”), or a denomination. You can rename it later from its own console.</p>
@@ -4994,6 +5158,7 @@ function DashNetworksPanel() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, margin: '4px 0 12px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />OR JOIN ONE<div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
+              aria-label="Network code (npub) to join"
               placeholder="npub1… (a network’s code)" style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', outline: 'none' }} />
             <button onClick={join} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13 }}>Join</button>
           </div>
@@ -5220,7 +5385,7 @@ function DashStewardsPanel({ church }) {
         {confirmRemove === pk ? null : <button onClick={() => setScoping(scoping === pk ? null : pk)} title="What this steward may do" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginRight: 6, whiteSpace: 'nowrap' }}>{Array.isArray(caps[pk]) ? (caps[pk].length ? caps[pk].length + ' of ' + capNames.length : 'nothing') : 'everything'}</button>}
         {confirmRemove === pk
           ? <React.Fragment>
-              <button onClick={() => remove(pk)} title="Confirm — revoke this steward immediately" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
+              <button onClick={() => remove(pk)} title="Confirm — revoke this steward immediately" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
               <button onClick={() => setConfirmRemove(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>
             </React.Fragment>
           : <button onClick={() => setConfirmRemove(pk)} title="Revoke this steward" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>}
@@ -5255,7 +5420,7 @@ function DashStewardsPanel({ church }) {
                 <button onClick={confirmApprove} className="sk-btn sk-btn--clay" style={{ padding: '8px 12px', fontSize: 12.5 }}>Approve</button>
                 <button onClick={() => setApproving(null)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 10px', fontSize: 12.5 }}>Cancel</button>
               </div>
-              {approveErr ? <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{approveErr}</div> : null}
+              {approveErr ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 6 }}>{approveErr}</div> : null}
             </div> : null}
           </div>
         ))}
@@ -5305,9 +5470,9 @@ function DashStewardsPanel({ church }) {
               <input value={code} onChange={e => { setCode(e.target.value); setAddErr(''); }} autoFocus placeholder="Paste their steward code / npub…" style={{ flex: 1, minWidth: 240, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
               <button onClick={() => addByCode(code)} disabled={!code.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13, opacity: code.trim() ? 1 : 0.5, flexShrink: 0 }}>{'Add' + (newCaps.length === capNames.length ? ' with everything' : newCaps.length ? ' with ' + newCaps.map(c => CAP_LABEL[c] || c).join(', ') : ' with no access yet')}</button>
             </div>
-            {(() => { const pv = code.trim() && window.Steward.stewardCodeToPub ? window.Steward.stewardCodeToPub(code) : null; return pv ? <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 700, margin: '2px 0 8px' }}>Adds: {niceName(pv)} — check this matches what they told you.</div> : null; })()}
+            {(() => { const pv = code.trim() && window.Steward.stewardCodeToPub ? window.Steward.stewardCodeToPub(code) : null; return pv ? <div style={{ fontSize: 12.5, color: 'var(--sage-ink)', fontWeight: 700, margin: '2px 0 8px' }}>Adds: {niceName(pv)} — check this matches what they told you.</div> : null; })()}
             {(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ? <button onClick={() => { setAddErr(''); setScanning(true); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 12.5 }}><Icon name="qr" size={14} color="currentColor" /> Scan their QR</button> : null}
-            {addErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{addErr}</div> : null}
+            {addErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{addErr}</div> : null}
             {/* secondary convenience: promote a member who uses this SAME key in the Steward app */}
             {candidates.length ? <React.Fragment>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 8px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>or pick a member</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
@@ -5360,11 +5525,11 @@ function DashBecomeStewardPanel() {
             <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '9px 0 6px' }}>No camera? Paste the invite the owner sent you:</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <input value={inviteText} onChange={e => { setInviteText(e.target.value); setReqMsg(''); }} placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
+              <input value={inviteText} onChange={e => { setInviteText(e.target.value); setReqMsg(''); }} aria-label="Church invite code" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
               <button onClick={() => onInvite(inviteText)} disabled={!inviteText.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: inviteText.trim() ? 1 : 0.5, flexShrink: 0 }}>Send</button>
             </div>
           </div>}
-      {reqMsg ? <div style={{ fontSize: 12.5, color: reqMsg.startsWith('✓') ? 'var(--sage)' : 'var(--clay)', fontWeight: 600, marginTop: 9, lineHeight: 1.45 }}>{reqMsg}</div> : null}
+      {reqMsg ? <div style={{ fontSize: 12.5, color: reqMsg.startsWith('✓') ? 'var(--sage-ink)' : 'var(--clay-ink)', fontWeight: 600, marginTop: 9, lineHeight: 1.45 }}>{reqMsg}</div> : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '16px 0 12px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>or give the owner your code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
       <div style={{ padding: '12px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 10 }}>
         <div title="A memorable name generated from your key — the same key always makes this exact name. The owner compares it when adding you, so it's a quick human cross-check that they've got the right person. It isn't a display name; your npub is the real identifier." style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', cursor: 'help' }}>Your steward name</div>
@@ -5396,7 +5561,7 @@ function DashMediaPanel({ church }) {
       <div style={lbl}>Video channel · Watch tab</div>
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — or an <b>unlisted YouTube playlist</b> (not publicly searchable — a private set only your members see). Videos appear in members’ Watch tab, auto-updated.</div>
       <div style={{ display: 'flex', gap: 9 }}>
-        <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" placeholder="youtube.com/@yourchurch · youtube.com/playlist?list=… · rumble.com/c/…" style={inp} />
+        <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" aria-label="Video channel address" placeholder="youtube.com/@yourchurch · youtube.com/playlist?list=… · rumble.com/c/…" style={inp} />
         <button onClick={saveVid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={vidSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {vidSaved ? 'Saved' : 'Save'}</button>
       </div>
       {church.channel ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.channel}</span></div> : null}
@@ -5404,7 +5569,7 @@ function DashMediaPanel({ church }) {
       <div style={lbl}>Audio / podcast · Listen tab</div>
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link. An <b>unlisted / private feed URL works too</b> — keep the link unguessable and it stays members-only.</div>
       <div style={{ display: 'flex', gap: 9 }}>
-        <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
+        <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" aria-label="Podcast RSS feed address" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
         <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {audSaved ? 'Saved' : 'Save'}</button>
       </div>
       {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
@@ -5442,7 +5607,7 @@ function SermonEditModal({ sermon, onSave, onClose, upload }) {
     <div onClick={guardedClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Edit ' + (isVideo ? 'video' : 'audio') + ' details'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{upload ? 'Name this ' + (isVideo ? 'video' : 'recording') : 'Edit ' + (isVideo ? 'video' : 'audio') + ' details'}</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>{upload ? 'This is what members see in the list. ' + (upload.name || '') + ' \u00b7 ' + upload.sizeText + ' \u2014 nothing is uploaded until you press Upload.' : 'Rename it and add details.'}</p>
@@ -5611,7 +5776,7 @@ function DashSermons() {
         <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
         <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="var(--on-clay)" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
         {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
-        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Big videos are slow to upload and, if encrypted, slow to play. Record or export at <b>~720p</b> and keep clips short — a few minutes is usually a few MB. <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#keeping-video-small-and-fast" target="_blank" rel="noopener" style={{ color: 'var(--clay)', textDecoration: 'none', fontWeight: 600 }}>How to shrink a video →</a></div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Big videos are slow to upload and, if encrypted, slow to play. Record or export at <b>~720p</b> and keep clips short — a few minutes is usually a few MB. <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#keeping-video-small-and-fast" target="_blank" rel="noopener" style={{ color: 'var(--clay-ink)', textDecoration: 'none', fontWeight: 600 }}>How to shrink a video →</a></div>
       </Panel>
     </div>
   );
@@ -5660,7 +5825,7 @@ function DashChatTagsPanel({ church }) {
           <div key={i} style={{ borderRadius: 11, border: '1px solid ' + (open ? 'color-mix(in oklab, var(--clay) 30%, var(--line))' : 'var(--line)'), background: 'var(--surface-2)', padding: 7 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, ' + ac + ' 12%, var(--surface))', color: ac }}><Icon name={t.icon} size={16} color={ac} /></div>
-              <input value={t.label} onChange={e => setRow(i, { label: e.target.value.slice(0, 24) })} placeholder="Tag name" maxLength={24} style={{ flex: 1, minWidth: 0, height: 32, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              <input value={t.label} onChange={e => setRow(i, { label: e.target.value.slice(0, 24) })} aria-label="Tag name" placeholder="Tag name" maxLength={24} style={{ flex: 1, minWidth: 0, height: 32, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
               <button onClick={() => setEditIdx(open ? -1 : i)} aria-label="Icon &amp; colour" title="Change icon &amp; colour" style={sq(open)}><Icon name="pen" size={14} color={open ? 'var(--clay)' : 'var(--ink-3)'} /></button>
               <button onClick={() => remove(i)} aria-label="Remove tag" title="Remove tag" style={sq(false)}><Icon name="trash" size={14} color="var(--ink-3)" /></button>
             </div>
@@ -5718,6 +5883,10 @@ function DashFeaturesPanel({ church }) {
   // seals them — because a church shown a protection it does not have is the one failure this project cannot
   // afford. Teams are excluded: the encrypt control is not offered for them (see the group list).
   const encUnsealed = (allGroups || []).filter(g => g && g.kind !== 'team' && !g.encrypted);
+  // …and the switch must SAY so. The confirmation was corrected to name the exclusion; the always-visible
+  // row above it still read “every group sealed end-to-end”, which is the claim a steward actually lives
+  // with. Only shown to a church that HAS a serving team, so nobody is warned about a room they don't have.
+  const encTeams = (allGroups || []).filter(g => g && g.kind === 'team');
   const encOn = f.encryptComms !== false && encUnsealed.length === 0;
   const [confirmEnc, setConfirmEnc] = React.useState(false);
   const encRecips = (g) => g.visibility === 'invite' ? (g.members || []) : allMembers.map(m => m.pubkey);
@@ -5731,6 +5900,12 @@ function DashFeaturesPanel({ church }) {
     setConfirmEnc(false);
     const failed = [], partial = [];
     for (const g of allGroups) {
+      // Teams are skipped DELIBERATELY — they have no encryption control of their own, and encRecips() below
+      // would seal a team room to every member of the church rather than to its roster, which is the wrong
+      // audience for a serving team's private channel. The confirmation now says so out loud: it used to
+      // promise "every group's messages will be sealed", which was more than this does. Found by a device
+      // sweep, 2026-08-28: with the switch ON, a team room was still storing messages in clear, exactly as
+      // this line intends and the copy denied.
       if (g.kind === 'team' || g.encrypted) continue;
       let r = null;
       try { r = await window.Steward.sealGroup(g, encRecips(g)); } catch (e) { r = null; }
@@ -5755,6 +5930,7 @@ function DashFeaturesPanel({ church }) {
   const approval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const rules = church.rules || {};
   const fullName = !!rules.fullName;
+  const toggleFullName = () => window.Steward.publishProfile({ rules: { ...rules, fullName: !fullName } });
   const fMembers = window.useStewardMembers ? window.useStewardMembers() : [];
   const fAdmitted = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const toggleApproval = () => {
@@ -5788,52 +5964,67 @@ function DashFeaturesPanel({ church }) {
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Today (home) and Giving are controlled separately. Members see changes on their next sync.</div>
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
-      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Extras</div>
+      {/* A REAL HEADING. Giving used to be a card and so had an <h2> of its own; it is a row in this group
+          now, and someone moving through the console by heading would otherwise have lost the only landmark
+          between "Congregation features" and the next card. h3 because Panel's title is the h2 above it. */}
+      <h3 style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '0 0 6px' }}>Extras</h3>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Same rule as ITEMS above: the row is the target. This block was copied from ITEMS and did not get
+            the row handler, so "Kids check-in" was one of the two rows a steward could press all day without
+            anything happening. */}
         {EXTRAS.map(([k, label, sub]) => (
-          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} onClick={() => toggleOpt(k)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{onOpt(k) ? 'On' : 'Off'} — {sub}</div>
             </div>
-            <button onClick={() => toggleOpt(k)} aria-label={'Toggle ' + label} role="switch" aria-checked={onOpt(k)} title={(onOpt(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: onOpt(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); toggleOpt(k); }} aria-label={'Toggle ' + label} role="switch" aria-checked={onOpt(k)} title={(onOpt(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: onOpt(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: onOpt(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
         ))}
+        {/* PRACTICAL CARE AND GIVING ARE ROWS HERE, not cards of their own. Both were a Panel wrapping a
+            single switch, and the Features tab read as five boxes of equal weight when two of them were one
+            toggle each. Practical care first: it is a live control a church turns on and uses. Giving last,
+            because it is locked for the pilot and does nothing yet — it does not belong between two working
+            switches. Each renders its own configuration underneath itself when it has any. */}
+        <DashMealsPanel church={church} />
+        <DashGivingPanel church={church} />
       </div>
     </Panel>
 
     <Panel title="Rules & privacy">
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Privacy</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      {/* Every row in this panel is the target for its own switch — see the note in "Congregation features".
+          These five were the same markup with no row handler. */}
+      <div onClick={toggleEncryptAll} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Encrypt all group chat</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? 'On — every group sealed end-to-end; the relay can’t read them.' : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? ('On — every group and broadcast room sealed end-to-end; the relay can’t read them.' + (encTeams.length ? ' Serving team rooms are not included.' : '')) : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
         </div>
-        <button onClick={toggleEncryptAll} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group’s messages end-to-end so not even the relay can read them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); toggleEncryptAll(); }} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group and broadcast room end-to-end so not even the relay can read them — serving team rooms are not included" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: encOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
-      {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body="Every group’s messages will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default too." onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
+      {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body={'Every group and broadcast room will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default.\n\nNew broadcast rooms are not sealed by default — a broadcast is the church’s own voice to everyone. You can seal one from the Groups list.\n\nServing team rooms are not included: they don’t have an encryption control of their own, so this leaves them as they are.'} onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+      <div onClick={togglePhotos} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow member photos</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adults may set a real photo. Children only if allowed below.' : 'Off — colour, initial or symbol only (recommended for privacy).'}</div>
         </div>
-        <button onClick={togglePhotos} aria-label="Toggle member photos" role="switch" aria-checked={photosOn} title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); togglePhotos(); }} aria-label="Toggle member photos" role="switch" aria-checked={photosOn} title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: photosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
       {photosOn ? (
         <React.Fragment>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+          <div onClick={toggleKidPhotos} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow children’s photos</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{kidPhotosOn ? 'On — members marked as a child may also set a photo. Use with care.' : 'Off — children use a colour, initial or symbol. Recommended for safeguarding.'}</div>
             </div>
-            <button onClick={toggleKidPhotos} aria-label="Toggle children’s photos" role="switch" aria-checked={kidPhotosOn} title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); toggleKidPhotos(); }} aria-label="Toggle children’s photos" role="switch" aria-checked={kidPhotosOn} title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: kidPhotosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
@@ -5843,24 +6034,24 @@ function DashFeaturesPanel({ church }) {
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Joining</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      <div onClick={toggleApproval} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require approval to join</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{approval ? 'On — new joiners wait in “Requests to join” (Members) until you approve.' : 'Off — anyone with your code or QR joins straight away.'}</div>
         </div>
-        <button onClick={toggleApproval} aria-label="Toggle approval to join" role="switch" aria-checked={approval} title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); toggleApproval(); }} aria-label="Toggle approval to join" role="switch" aria-checked={approval} title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: approval ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Member names</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+      <div onClick={toggleFullName} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require a real first &amp; last name</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{fullName ? 'On — members are asked to set a full name (e.g. “Jane Smith”); those without one are nudged to add a surname.' : 'Off — members may use a single name or stay anonymous.'}</div>
         </div>
-        <button onClick={() => window.Steward.publishProfile({ rules: { ...rules, fullName: !fullName } })} aria-label="Toggle require full name" role="switch" aria-checked={fullName} title="Ask members to set a full first and last name instead of staying anonymous" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: fullName ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); toggleFullName(); }} aria-label="Toggle require full name" role="switch" aria-checked={fullName} title="Ask members to set a full first and last name instead of staying anonymous" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: fullName ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: fullName ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
@@ -5895,27 +6086,32 @@ function DashGivingPanel({ church }) {
 
   const toggleGiving = () => window.Steward.publishProfile({ giving: !church.giving });
 
+  // A ROW IN "Congregation features → Extras", not a card. It was a Panel of its own holding one switch, and
+  // the card chrome plus the pilot-lock banner cost more height than the control. The lock now reads on the
+  // row's own second line, where the switch it explains is, instead of in a banner above it.
   return (
-    <Panel title="Giving">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14 }}>
-        <Icon name="lock" size={16} color="var(--clay-ink)" style={{ flexShrink: 0 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>Locked during the pilot.</b> This opens up once testing is finished.</div>
-      </div>
+    <React.Fragment>
       {/* steward owns the switch: giving only appears for members when this church turns it on */}
+      {/* DELIBERATELY NOT a clickable row. Every other settings row in the console toggles when its words are
+          pressed; this switch is `disabled` for the pilot, and a row handler would sail straight past that and
+          publish `giving:true` from a press on the label. Same for Manna in stew-manna.jsx. If the pilot lock
+          is ever lifted, add the row handler THEN, with stopPropagation on the switch. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)',
-        background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: showConfig ? 16 : 0 }}>
-        <div style={{ flex: 1 }}>
+        background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{church.giving ? 'On — members can give to this church.' : 'Off — members won’t see giving.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}><b style={{ color: 'var(--clay-ink)' }}>Locked during the pilot</b> — {church.giving ? 'on: members can give to this church.' : 'off: members won’t see giving.'} This opens up once testing is finished.</div>
         </div>
         <button onClick={toggleGiving} disabled aria-label="Toggle giving" role="switch" aria-checked={!!church.giving} title="Giving is locked during the pilot" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'not-allowed', opacity: .4, flexShrink: 0,
           background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: church.giving ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
-      {/* when giving is OFF the setup collapses to a single link, so the panel doesn't sit there full of dead fields */}
+      {/* when giving is OFF the setup collapses to a single link, so the row doesn't sit there full of dead fields.
+          One box either way, so this whole block is one item of the Extras list and keeps its own spacing. */}
+      <div>
       {!showConfig ? (
-        <button onClick={() => setExpanded(true)} style={{ border: 'none', background: 'none', padding: '10px 0 0', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <button onClick={() => setExpanded(true)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           <Icon name="pen" size={13} color="currentColor" /> {(church.lud16 || church.lnaddr) ? 'Edit the Lightning address' : 'Set up the Lightning address'}
         </button>
       ) : (
@@ -5928,12 +6124,13 @@ function DashGivingPanel({ church }) {
             <button onClick={verify} disabled={!valid || check === 'checking'} title="Check this Lightning address really works before saving" className="sk-btn sk-btn--ghost" style={{ padding: '0 14px', fontSize: 13 }}>{check === 'checking' ? '…' : 'Check'}</button>
             <button onClick={save} disabled={!valid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {saved ? 'Saved' : 'Save'}</button>
           </div>
-          {check === 'ok' ? <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={13} stroke={3} color="var(--sage)" /> Valid Lightning address — ready to receive.</div> : null}
-          {check === 'bad' ? <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700, marginTop: 8 }}>That doesn’t resolve to a Lightning pay address — double-check it.</div> : null}
+          {check === 'ok' ? <div style={{ fontSize: 12, color: 'var(--sage-ink)', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={13} stroke={3} color="var(--sage)" /> Valid Lightning address — ready to receive.</div> : null}
+          {check === 'bad' ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 8 }}>That doesn’t resolve to a Lightning pay address — double-check it.</div> : null}
           {(church.lud16 || church.lnaddr) ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.lud16 || church.lnaddr}</span></div> : null}
         </React.Fragment>
       )}
-    </Panel>
+      </div>
+    </React.Fragment>
   );
 }
 
@@ -5948,7 +6145,7 @@ function NameEditModal({ current, isNetwork, onSave, onClose }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={current ? ('Rename ' + label) : ('Name your ' + label)} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isNetwork ? 'globe' : 'bank'} size={21} /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isNetwork ? 'globe' : 'bank'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? `Rename ${label}` : `Name your ${label}`}</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>This is the name your {isNetwork ? 'churches' : 'members'} see in the app. You can change it anytime.</p>
@@ -5973,7 +6170,7 @@ function SeriesNameModal({ current, count, onSave, onClose }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={current ? 'Rename series' : 'Name this series'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={21} /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? 'Rename series' : 'Name this series'}</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Groups these {count} devotionals under one heading in your members’ apps. You can change it anytime.</p>
@@ -6008,7 +6205,7 @@ function SeriesScheduleModal({ label, count, onApply, onClear, onClose }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Schedule release" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="clock" size={21} /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="clock" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Schedule release</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Drip <b>{label}</b> out to your members — its {count} devotionals release one at a time, in their current order.</p>
@@ -6050,11 +6247,11 @@ function WebAddressModal({ church, onClose }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Church web address" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Church web address</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>Your church’s own domain (optional). Just the domain — no <span style={{ fontFamily: 'var(--mono)' }}>https://</span>. Members always join with your <b>{churchHandle(church) || '@handle'}</b>; leave this blank to use the default.</p>
-        <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#your-churchs-own-web-address-custom-domain" target="_blank" rel="noopener" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 600, color: 'var(--clay)', textDecoration: 'none', marginBottom: 16 }}><Icon name="book" size={14} color="currentColor" /> How to connect your own domain →</a>
+        <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#your-churchs-own-web-address-custom-domain" target="_blank" rel="noopener" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)', textDecoration: 'none', marginBottom: 16 }}><Icon name="book" size={14} color="currentColor" /> How to connect your own domain →</a>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Web address</div>
         <input value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(val); }} autoFocus placeholder="yourchurch.org" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
         <div style={{ display: 'flex', gap: 10 }}>
@@ -6206,11 +6403,11 @@ function DashBrandingPanel({ church }) {
       {/* big spectrum-picker tile + a prominent # hex field */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: acc, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
-          <input type="color" value={acc} onChange={e => onAccent(e.target.value)} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+          <input type="color" value={acc} onChange={e => onAccent(e.target.value)} aria-label="Brand colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
         </label>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
-          <input value={hexDraft.replace(/^#/, '')} onChange={e => onHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} placeholder="C25A38"
+          <input value={hexDraft.replace(/^#/, '')} onChange={e => onHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Brand colour hex code" placeholder="C25A38"
             style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
           {accent ? <button onClick={resetAccent} title="Reset to default" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
         </div>
@@ -6270,7 +6467,7 @@ function PinModal({ action, onClose }) {
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginBottom: 8 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 9, marginTop: 6 }}>
           <button onClick={() => onClose(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '11px' }}>Cancel</button>
-          <button onClick={save} disabled={busy} className={remove ? 'sk-btn sk-btn--ghost' : 'sk-btn sk-btn--clay'} style={{ flex: 1, padding: '11px', opacity: busy ? .6 : 1, color: remove ? 'var(--clay)' : undefined }}><Icon name={remove ? 'x' : 'lock'} size={15} color={remove ? 'currentColor' : '#fff'} /> {busy ? (remove ? 'Removing…' : 'Saving…') : (remove ? 'Remove lock' : change ? 'Update PIN' : 'Set PIN')}</button>
+          <button onClick={save} disabled={busy} className={remove ? 'sk-btn sk-btn--ghost' : 'sk-btn sk-btn--clay'} style={{ flex: 1, padding: '11px', opacity: busy ? .6 : 1, color: remove ? 'var(--clay-ink)' : undefined }}><Icon name={remove ? 'x' : 'lock'} size={15} color={remove ? 'currentColor' : '#fff'} /> {busy ? (remove ? 'Removing…' : 'Saving…') : (remove ? 'Remove lock' : change ? 'Update PIN' : 'Set PIN')}</button>
         </div>
       </div>
     </div>
@@ -6377,7 +6574,7 @@ function DashBackup() {
         </label>
       ) : null}
       <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="var(--on-clay)" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
-      {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage)' : 'var(--clay)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
+      {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remind me to back up</div>
@@ -6408,7 +6605,7 @@ function DashBackup() {
                 <button onClick={doRestore} disabled={restoreBusy} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 13.5 }}>{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
               </div>
             ) : null}
-            {restoreMsg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: restoreMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{restoreMsg.ok ? '✓ ' : '✗ '}{restoreMsg.text}</div> : null}
+            {restoreMsg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: restoreMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{restoreMsg.ok ? '✓ ' : '✗ '}{restoreMsg.text}</div> : null}
           </div>
         ) : null}
       </div>
@@ -6431,6 +6628,22 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   // 'relays' was its own tab until it merged into 'network'; anything still deep-linking to it (a saved
   // link, an older screen's onTab call) must land on the page that now holds it, not on a blank panel.
   const [section, setSection] = React.useState(initialSection === 'relays' ? 'network' : (initialSection || 'church'));
+  // THE SUB-TABS ARE A REAL TAB WIDGET, not four styled buttons. They were four <button>s carrying no role
+  // and no aria-selected, so a screen reader announced four unrelated buttons with nothing to say which
+  // section was open, and the arrow keys — the only way most people using one move along a tab strip — did
+  // nothing at all. Roving tabindex (only the selected tab is in the Tab order), Left/Right wrap, Home/End.
+  const SECTIONS = [['church', 'Church'], ['features', 'Features'], ['network', 'Network & relays'], ['security', 'Security']];
+  const tabRefs = React.useRef([]);
+  const onTabKey = (e, i) => {
+    const k = e.key;
+    if (k !== 'ArrowRight' && k !== 'ArrowLeft' && k !== 'Home' && k !== 'End') return;
+    e.preventDefault();
+    const n = k === 'Home' ? 0 : k === 'End' ? SECTIONS.length - 1
+      : k === 'ArrowRight' ? (i + 1) % SECTIONS.length : (i - 1 + SECTIONS.length) % SECTIONS.length;
+    setSection(SECTIONS[n][0]);
+    const el = tabRefs.current[n];
+    if (el && el.focus) el.focus();
+  };
   React.useEffect(() => { if (initialIntent === 'pin' && !hasPin) setPinAction('set'); if (initialSection && onSectionConsumed) onSectionConsumed(); }, []);   // clear the one-shot intent + run a one-shot action (e.g. open Set-PIN)
   const [picBusy, setPicBusy] = React.useState(false);
   const [picFile, setPicFile] = React.useState(null);
@@ -6526,13 +6739,31 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        {[['church', 'Church'], ['features', 'Features'], ['network', 'Network & relays'], ['security', 'Security']].map(([k, label]) => (
-          <button key={k} onClick={() => setSection(k)} style={{ padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (section === k ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', background: section === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: section === k ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>{label}</button>
-        ))}
+      <div role="tablist" aria-label="Settings sections" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+        {SECTIONS.map(([k, label], i) => {
+          const sel = section === k;
+          return (
+          // WHICH TAB IS OPEN IS NOT SAID IN COLOUR ALONE. It was a clay tint, a clay border and clay text —
+          // three ways of saying the same thing, and none of them reaches anyone who cannot separate clay
+          // from ink. The filled dot and the heavier weight say it again without colour. The dot keeps its
+          // space when hollow so the strip does not shift as the selection moves.
+          <button key={k} ref={el => { tabRefs.current[i] = el; }} onClick={() => setSection(k)} onKeyDown={e => onTabKey(e, i)}
+            role="tab" aria-selected={sel} aria-controls={sel ? 'sk-panel-' + k : undefined} id={'sk-tab-' + k} tabIndex={sel ? 0 : -1}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (sel ? 'var(--clay-ink)' : 'var(--line)'), cursor: 'pointer', background: sel ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: sel ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: sel ? 800 : 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>
+            <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 999, flexShrink: 0, background: sel ? 'var(--clay-ink)' : 'transparent', border: sel ? 'none' : '1px solid var(--line)' }} />
+            {label}
+          </button>
+          );
+        })}
       </div>
-      <div className={section === 'network' ? 'net-grid' : 'sk-masonry'}>
+      {/* EVERY CARD BELOW SITS IN A STACK THAT SOMEBODY CHOSE. .sk-cols is a two-track grid and each direct
+          child is one authored column (see steward.html); a card is never a direct child of the panel, or it
+          would claim a track of its own and the two-column shape would come apart as cards are added.
+          This replaced a CSS multi-column masonry, which packed the cards by height and so decided the
+          reading order, the Tab order and the split point for us — all three moving whenever a card grew. */}
+      <div role="tabpanel" id={'sk-panel-' + section} aria-labelledby={'sk-tab-' + section} className={section === 'network' ? 'net-grid' : 'sk-cols'}>
       {section === 'church' ? <React.Fragment>
+      <div>
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <label title="Upload a church picture" style={{ position: 'relative', cursor: picBusy ? 'default' : 'pointer', flexShrink: 0, opacity: picBusy ? .6 : 1 }}>
@@ -6557,22 +6788,23 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       </Panel>
 
       <DashBrandingPanel church={church} />
-
+      </div>
+      <div>
       <DashMediaPanel church={church} />
 
       <DashBackup />
+      </div>
       </React.Fragment> : null}
 
       {section === 'features' ? <React.Fragment>
+      <div>
       <DashFeaturesPanel church={church} />
-
+      </div>
+      {/* Giving and Practical care used to be cards of their own here. They are rows inside "Congregation
+          features → Extras" now, which is where the rest of the church's feature switches live. */}
+      <div>
       <DashChatTagsPanel church={church} />
-
-      {/* Giving is a short card — place it right after the short Chat-tags card so the masonry column flow
-          packs it there, instead of stranding it at the bottom of the tall Practical-care column. */}
-      <DashGivingPanel church={church} />
-
-      <DashMealsPanel church={church} />
+      </div>
       </React.Fragment> : null}
 
       {/* Network and relays are one page. Apart, the Relays card was the only child of .net-grid and so
@@ -6591,20 +6823,53 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       </React.Fragment> : null}
 
       {section === 'security' && delegated ? (
+      // One stack, capped at a column's width. .sk-cols collapses the tracks it has no stack for, so a lone
+      // stack is handed the whole 1120px — measured — and this card is one short paragraph.
+      <div style={{ maxWidth: 552 }}>
       <Panel title="Security">
         <div style={{ display: 'flex', gap: 11, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 24%, var(--line))' }}>
           <Icon name="shield" size={18} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>You’re acting as a <b style={{ color: 'var(--ink)' }}>steward</b> of this church — you can post and help manage it, but its key, recovery phrase, blocklist and steward list belong to the owner. Switch back to your own identity (top-left) to manage your own key.</div>
         </div>
       </Panel>
+      </div>
       ) : null}
       {section === 'security' && !delegated ? <React.Fragment>
+      <div>
       <Panel title="Church key">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 12 }}>
           <Icon name="lock" size={18} color="var(--sage)" />
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Held on this device</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Pilot key custody · a Keykeeper signer comes later</div></div>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--sage)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} /> Active</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--sage-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} /> Active</span>
+        </div>
+        {/* CONSOLE LOCK — a card of its own until now, sitting directly under this one. Both said the same
+            subject out loud: whether the one key this device holds is protected. Two boxes made them read as
+            two decisions, and the strip immediately above is the sentence this answers — the key is held
+            here, and this is whether anyone who opens the browser can use it. */}
+        <div style={{ padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 11 }}>
+            <Icon name={hasPin ? 'lock' : 'key'} size={18} color={hasPin ? 'var(--sage)' : 'var(--clay-ink)'} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {/* A HEADING, not a bold div. 2f84cf1 folded this card into Church key and gave Giving's
+                  folded row an h3 for exactly this reason — heading navigation is how most screen-reader
+                  users move around a page — but left this one a plain div. It is the control that decides
+                  whether the church key sits encrypted on this computer, so it is the last one that should
+                  be unreachable that way. Found in a browser pass over the real console, 2026-09-01. */}
+              <h3 style={{ fontWeight: 700, fontSize: 14, margin: 0, fontFamily: 'inherit' }}>Console lock</h3>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{hasPin
+                ? 'Locked with a PIN — the church key is encrypted on this device and auto-locks after 10 minutes idle.'
+                : 'Not locked. Anyone who opens this browser can post as the church. A PIN encrypts the key on this device; a longer PIN or passphrase is safer.'}</div>
+            </div>
+          </div>
+          {!hasPin ? (
+            <button onClick={() => setPinAction('set')} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="lock" size={15} color="var(--on-clay)" /> Lock with a PIN</button>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => setPinAction('change')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Change PIN</button>
+              <button onClick={() => setPinAction('remove')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay-ink)' }}><Icon name="x" size={15} color="currentColor" /> Remove lock</button>
+            </div>
+          )}
         </div>
         {!revealed ? (
           <button onClick={reveal} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Reveal recovery phrase</button>
@@ -6624,7 +6889,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         {/* The passphrase step, in this screen, and only once a file has been recognised. */}
         {cFile ? (
           <div style={{ marginTop: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 700, marginBottom: 7 }}>✓ {cFile.name}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--sage-ink)', fontWeight: 700, marginBottom: 7 }}>✓ {cFile.name}</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input type={cShow ? 'text' : 'password'} value={cPass} autoCapitalize="none" autoCorrect="off" spellCheck={false}
                 onChange={e => { setCPass(e.target.value); setCErr(''); }}
@@ -6644,7 +6909,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
             <div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Paste a church’s 12-word recovery phrase to make <b>this</b> device that church. Use this if the console lost its key, or to move a church to a new machine.</div>
               <textarea value={restorePhrase} onChange={e => setRestorePhrase(e.target.value)} rows={3} placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
-              {restoreErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{restoreErr}</div> : null}
+              {restoreErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 6 }}>{restoreErr}</div> : null}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button onClick={doRestore} disabled={!restorePhrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13, opacity: restorePhrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={14} color="var(--on-clay)" /> Restore church</button>
                 <button onClick={() => { setRestoreOpen(false); setRestorePhrase(''); setRestoreErr(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
@@ -6652,20 +6917,6 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
             </div>
           )}
         </div>
-      </Panel>
-
-      <Panel title="Console lock">
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>{hasPin
-          ? 'This console is locked with a PIN — the church key is encrypted on this device and auto-locks after 10 minutes idle.'
-          : 'Add a PIN to encrypt the church key on this device. Without it, anyone who opens this browser can post as the church. A longer PIN or passphrase is safer.'}</div>
-        {!hasPin ? (
-          <button onClick={() => setPinAction('set')} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="lock" size={15} color="var(--on-clay)" /> Lock with a PIN</button>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={() => setPinAction('change')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Change PIN</button>
-            <button onClick={() => setPinAction('remove')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay)' }}><Icon name="x" size={15} color="currentColor" /> Remove lock</button>
-          </div>
-        )}
       </Panel>
 
       <Panel title="Stewards & handoff">
@@ -6717,7 +6968,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           )}
         </div>
         {!confirmRemove ? (
-          <button onClick={() => setConfirmRemove(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay)' }}><Icon name="x" size={15} color="currentColor" /> Remove this church from this device</button>
+          <button onClick={() => setConfirmRemove(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay-ink)' }}><Icon name="x" size={15} color="currentColor" /> Remove this church from this device</button>
         ) : (
           <div style={{ padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
@@ -6733,7 +6984,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
               <button onClick={async () => {
                 try { await Promise.race([window.Steward.removeKey(), new Promise(r => setTimeout(r, 3000))]); } catch (e) {}
                 window.location.reload();
-              }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
+              }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay-ink)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
               <button onClick={() => setConfirmRemove(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
             </div>
           </div>
@@ -6742,10 +6993,12 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <Icon name="pray" size={14} color="var(--ink-3)" /> See who’s joined in the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
         </div>
       </Panel>
-
+      </div>
+      <div>
       <DashStewardsPanel church={church} />
 
       <DashBecomeStewardPanel />
+      </div>
       </React.Fragment> : null}
       </div>
       <StewVersion />
@@ -6785,9 +7038,24 @@ function StewDmWindow({ peer, offset, onClose }) {
   const [min, setMin] = React.useState(false);
   const scRef = React.useRef(null);
   const [rxFor, setRxFor] = React.useState('');   // msg id whose emoji picker is open
+  const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey]);
   React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, min]);
-  const send = () => { if (!text.trim()) return; window.Steward.sendDM(peer.pubkey, text.trim()); setText(''); };
+  // NOTHING ON THIS SCREEN EVER RENDERED A FAILURE. The send was fire-and-forget, the composer was cleared
+  // regardless, and the thread below only shows what comes BACK off the relay — so when Steward.sendDM
+  // returned null (no key, no peer hex, or the encrypt threw, all of them before the outbox push) the
+  // steward's message was not sent, not queued, and not displayed, and they were told nothing at all. A
+  // vicar answering a member in distress had no way to know the reply never left the console.
+  // AUDIT-2026-08-30.
+  const send = () => {
+    if (!text.trim()) return;
+    const body = text.trim();
+    setErr('');
+    Promise.resolve(window.Steward.sendDM(peer.pubkey, body))
+      .then(evt => { if (!evt) { setText(t => t || body); setErr('Not sent — this message couldn’t be encrypted, so nothing was sent and nothing is waiting to send. Your words are still here.'); } })
+      .catch(() => { setText(t => t || body); setErr('Not sent — something went wrong sending this. Your words are still here.'); });
+    setText('');
+  };
   const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
@@ -6795,7 +7063,7 @@ function StewDmWindow({ peer, offset, onClose }) {
     <div style={{ width: 316, background: 'var(--surface)', borderRadius: '14px 14px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: min ? 48 : 420, transition: 'height .18s' }}>
       <div onClick={() => setMin(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', cursor: 'pointer', background: 'var(--surface)', borderBottom: min ? 'none' : '1px solid var(--line)', flexShrink: 0 }}>
         <SkBadge initials={initials} size={28} radius={9} accent={SK_TINT.gold.fg} />
-        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peer.name || 'Member'}</div><div style={{ fontSize: 10.5, color: nameHandle(peer) ? 'var(--sage)' : 'var(--ink-3)', fontWeight: nameHandle(peer) ? 700 : 400, fontFamily: nameHandle(peer) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(peer) ? '@' + nameHandle(peer) : shortNpub(peer.npub)}</div></div>
+        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peer.name || 'Member'}</div><div style={{ fontSize: 10.5, color: nameHandle(peer) ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: nameHandle(peer) ? 700 : 400, fontFamily: nameHandle(peer) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(peer) ? '@' + nameHandle(peer) : shortNpub(peer.npub)}</div></div>
         <button onClick={(e) => { e.stopPropagation(); setMin(v => !v); }} title={min ? 'Expand this chat' : 'Minimise this chat'} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3 }}><Icon name={min ? 'chevU' : 'chevD'} size={16} /></button>
         <button onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close chat" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3 }}><Icon name="x" size={16} /></button>
       </div>
@@ -6823,6 +7091,13 @@ function StewDmWindow({ peer, offset, onClose }) {
               </div>
             ))}
           </div>
+          {err ? (
+            <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 7, padding: '8px 11px', borderTop: '1px solid var(--line)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', flexShrink: 0 }}>
+              <Icon name="alert" size={14} color="var(--clay)" />
+              <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: 'var(--ink-2)' }}>{err}</div>
+              <button onClick={() => setErr('')} title="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 1, flexShrink: 0 }}><Icon name="x" size={13} /></button>
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
             <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} autoFocus placeholder="Message…" style={{ flex: 1, height: 38, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 13px', opacity: text.trim() ? 1 : 0.5 }}><Icon name="send" size={15} color="var(--on-clay)" /></button>

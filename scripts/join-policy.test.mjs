@@ -3,12 +3,19 @@
 //
 // AUDIT-2026-07-28 F10. "A new church gates joins by default" was published at wizard step 0, before the
 // relay had been told the church exists. accept() refuses any kind-30078 write from a key that is not a
-// configured church of that relay — and its first line is `if (!CHURCH_PUBS.size) return true`, so an
-// UNCONFIGURED relay accepts everything. Measured against a real gateway:
+// configured church of that relay. Measured against a real gateway:
 //
-//     relay hosts NOTHING,        new church sets approval  -> accepted
 //     relay hosts church A,       church A sets approval    -> accepted
 //     relay hosts church A,   NEW church B sets approval    -> REFUSED  "blocked: not a member…"
+//
+// CORRECTED 2026-09-02. This header used to open with "its first line is `if (!CHURCH_PUBS.size) return
+// true`, so an UNCONFIGURED relay accepts everything", and a table row reading `relay hosts NOTHING -> accepted`.
+// Both are now the OPPOSITE of the code: that line is `return false` since the closed-network work, because a
+// freshly installed box is exactly the box a stranger's address might point at, and it must not be handed a
+// congregation's corpus. The comment is corrected rather than deleted because a reader who trusted it would
+// conclude that a fresh relay is permissive, which is the reasoning that has to change. This repo has one
+// recorded incident of 935 tests staying green over a reintroduced safeguarding bug because a COMMENT
+// satisfied an ordering assertion; a comment asserting the reverse of the code is the same hazard upstream.
 //
 // The wizard swallowed the refusal and advanced, and the relay reads "no policy published" as OPEN. So every
 // church set up on a relay that already hosts a congregation — which is every shared relay, and a8 — was

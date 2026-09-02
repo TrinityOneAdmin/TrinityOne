@@ -81,7 +81,6 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const [invite, setInvite] = useC(null);    // {mnemonic, profile}
   const [nameInput, setNameInput] = useC('');
   const [avInput, setAvInput] = useC(null);   // editable mark in the profile pane
-  const [relayInput, setRelayInput] = useC('');
   const ID = window.TrinityIdentity;
   const FS = window.Fellowship;
 
@@ -112,9 +111,11 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     window.addEventListener('trinity-relays', load);
     return () => { live = false; clearInterval(iv); window.removeEventListener('trinity-relays', load); };
   }, [open]);
-  // addRelay returns false (never throws) for a duplicate or an address we already use — don't claim success
-  // for something that didn't happen; the member would think their church had another carrier when it doesn't.
-  const addRelay = () => { const u = relayInput.trim(); if (!/^wss?:\/\//i.test(u)) { ctx.toast('Use a ws:// or wss:// URL'); return; } const added = FS.addRelay(u); if (added) { setRelayInput(''); ctx.toast('Relay added'); } else ctx.toast('Already in your list, or not a valid address'); };
+  // THERE WAS AN `addRelay` HERE and it was never rendered — no input, no button, nothing on any screen
+  // called it. It accepted `ws://` as readily as `wss://`, i.e. an unencrypted socket to any host a member
+  // typed. TrinityOne relays are a closed network (reference/DOMAIN.md) and a member gets their church's
+  // relay by joining the church, so there is nothing for this to do. Deleted 2026-09-01 with its unused
+  // `relayInput` state; the relay LIST above still renders, and FS.addRelay itself is untouched.
 
   const copyNpub = () => { if (ID && ID.copyNpub) ID.copyNpub(); else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {}); ctx.toast('Public key copied'); };
   // A NEW IDENTITY IS IRREVERSIBLE — regenerate() clears the stored key and writes a fresh mnemonic, so the
@@ -278,6 +279,28 @@ function miniBtn() {
     color: 'var(--ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' };
 }
 
+// ── telling a broadcast room apart, in words a churchwarden would say ──
+//
+// A broadcast room's ONLY signal in the room list was a pill reading "Broadcast". That names the mechanism
+// rather than the thing, and it does not tell anybody the one fact they need before they tap: there will be
+// no message box in there. So a member opened the room every church has, found nowhere to type, and the
+// screen offered no account of itself. This says who speaks in the room instead — in the list, and again
+// inside the room where the composer would be.
+//
+// It is deliberately not a warning. A broadcast room is the church speaking to everyone, which is a normal
+// and useful thing for a church to have; it is not a restriction placed on the member, and it must not read
+// as one. NOTHING HERE CHANGES WHO MAY POST — that is the relay's decision (BROADCAST in scripts/gateway.mjs)
+// and it is correct. This is only about saying, plainly, what the room already is.
+//
+// `kind` itself is left exactly as it was, because three other things read it: the search filter matches on
+// it (so a member who types "broadcast" still finds the room), ChatRoom's isBroadcast reads it, and the
+// share sheet's `postable` filter excludes it case-insensitively. A separate label and a separate boolean
+// are added alongside rather than replacing it.
+const ROOM_KIND_LABEL = { Broadcast: 'From your church', Team: 'Team', Group: 'Group' };
+const roomKindLabel = (g) => (g && ROOM_KIND_LABEL[g.kind]) || (g && g.kind) || 'Group';
+// the icon the steward console has always used for a broadcast room, so the two surfaces agree
+const roomIcon = (g) => (g && g.broadcast) ? 'send' : (g && g.team) ? 'shield' : (g && g.prayer) ? 'pray' : 'chat';
+
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
   const D = window.TrinityData;
@@ -331,12 +354,32 @@ function ChatScreen({ ctx }) {
   // real, steward-defined groups when the church has them; otherwise the sample set for this church.
   // invite-only groups are hidden unless I'm on their member list (the relay also enforces posting).
   const myPub = window.Fellowship && window.Fellowship.myPubkey;
-  const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);   // safeguarding: a child sees only child-safe groups
+  // SAFEGUARDING: a child sees only child-safe groups. `isMinor` alone is not enough to decide that here.
+  // It has no cache, defaults to FALSE, and waits on a 1.2s timer plus a relay round-trip — while this list
+  // paints from its own cache immediately ("paint cached groups before the shared hub replays/answers"), so
+  // a returning child had every adults-only room on screen, by name, before the app knew who was reading.
+  // Verified 2026-08-29: the relay withholds a group's MESSAGES from a minor but serves the DEFINITION, so
+  // the names are ours to hide. Transient on a good link; on a thin one, or offline, it lasts the session —
+  // and thin links are what this product is for.
+  //
+  // So ask the engine, which distinguishes "this church says they are not a child" from "we have not heard",
+  // and remembers the answer. Start from what we already know so nothing flickers.
+  const [assumeMinor, setAssumeMinor] = React.useState(false);
+  React.useEffect(() => {
+    let live = true;
+    const np = ctx.church && ctx.church.npub;
+    if (!np || !(window.Fellowship && window.Fellowship.assumeMinor)) return;
+    Promise.resolve(window.Fellowship.assumeMinor(np))
+      .then(v => { if (live) setAssumeMinor(!!v); })
+      .catch(() => { if (live) setAssumeMinor(true); });
+    return () => { live = false; };
+  }, [ctx.church && ctx.church.npub, ctx.safeguard && ctx.safeguard.clearanceKnown, ctx.safeguard && ctx.safeguard.isMinor]);
+  const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor) || assumeMinor;
   const churchGroups = React.useMemo(() => realGroups.length   // P8: don't re-map the group list on every render (e.g. member-count ticks) — only when its inputs change
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
-        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
           // CARRY THE PERMISSION FIELDS. This map builds a NEW object from an explicit list, so anything
           // not named here is dropped — and `members` below is deliberately turned into a COUNT. The
           // event-permission check needs the church's chosen tier, the group's named leaders and, for an
@@ -351,7 +394,17 @@ function ChatScreen({ ctx }) {
           // Open groups carry no number and render "open to your church" instead.
           members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : null,
           openToChurch: g.visibility !== 'invite' && g.kind !== 'team' && g.kind !== 'Team' }))
-    : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, ctx.church]);   // eslint-disable-line
+    : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, assumeMinor, ctx.church]);   // eslint-disable-line
+  // DID THE CHILD-SAFE FILTER EMPTY THIS LIST? A young person whose church HAS rooms, none of them marked
+  // child-safe, was told "<church> hasn't opened any chat rooms yet". That is simply untrue, and it reads as
+  // something broken or as being shut out. A church may perfectly well decide its children get direct
+  // messages and no group rooms — so the empty state for that case has to read as ordinary, and point at what
+  // they CAN do. Computed from the SAME pre-filter list the memo above starts from (invite-only rooms they
+  // are not on are not "theirs" either, so they are excluded here too) — if every remaining room is
+  // child-safe, the list is empty for the ordinary reason and the ordinary wording is right.
+  const childSafeHidRooms = React.useMemo(() => !!(iAmMinor && realGroups.length && realGroups
+    .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
+    .some(g => !g.childsafe && g.kind !== 'team')), [realGroups, myPub, iAmMinor]);
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
   const plainGroups = churchGroups.filter(g => !g.team);
@@ -406,7 +459,7 @@ function ChatScreen({ ctx }) {
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <div style={{ width: 50, height: 50, borderRadius: 16, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`,
           display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent) }}>
-          <Icon name={g.team ? 'shield' : g.prayer ? 'pray' : 'chat'} size={25} stroke={1.8} />
+          <Icon name={roomIcon(g)} size={25} stroke={1.8} />
         </div>
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -419,8 +472,13 @@ function ChatScreen({ ctx }) {
           {(live ? unread[g.id] : g.unread) ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{live ? unread[g.id] : g.unread}</span> : null}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
-          {g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : (g.sub ? ` · ${g.sub}` : (g.openToChurch ? ' · open to your church' : ''))}
+          {/* A BROADCAST ROOM IS TINTED AND NAMED, not labelled with the word "Broadcast". The tint is the
+              same gold the steward console gives a broadcast room, so the two surfaces agree about which
+              rooms these are, and the pill says who speaks rather than what the mechanism is called. */}
+          <span style={{ background: g.broadcast ? 'color-mix(in oklab, var(--gold) 16%, var(--surface))' : 'var(--surface-2)', border: '1px solid ' + (g.broadcast ? 'color-mix(in oklab, var(--gold) 34%, var(--line))' : 'var(--line)'), color: g.broadcast ? '#8a6717' : 'inherit', padding: '1px 7px', borderRadius: 999, fontWeight: 600, flexShrink: 0 }}>{roomKindLabel(g)}</span>
+          {/* the tail can be long and this row has no ellipsis of its own — without minWidth:0 a wordy
+              blurb pushes the pill off the card instead of truncating */}
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : (g.sub ? ` · ${g.sub}` : (g.openToChurch ? ' · open to your church' : ''))}</span>
         </div>
       </div>
     </div>
@@ -589,10 +647,10 @@ function ChatScreen({ ctx }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: groupHits.length ? 22 : 0 }}>
           {groupHits.map(g => (
             <div key={g.id} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} onClick={() => openGroup(g)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
-              <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
+              <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={roomIcon(g)} size={22} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{hi(g.name)}</div>
-                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind}{g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : ''}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{roomKindLabel(g)}{g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : ''}</div>
               </div>
               <Icon name="chevR" size={17} color="var(--ink-3)" />
             </div>
@@ -675,7 +733,7 @@ function ChatScreen({ ctx }) {
           <div style={{ textAlign: 'center', padding: '38px 24px', color: 'var(--ink-3)', animation: 'trinityFade .4s ease both' }}>
             <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="chat" size={28} color="var(--ink-3)" /></div>
             <p style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-2)', margin: '0 0 4px' }}>No groups yet</p>
-            <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.'}</p>
+            <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{childSafeHidRooms ? 'No group chats here for you yet — you can still message people at your church directly.' : (ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.')}</p>
           </div>
         </React.Fragment>
       ) : (() => {
@@ -748,11 +806,11 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) 
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete }) {
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
-  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete };
+  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy };
   const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
@@ -989,8 +1047,8 @@ function Row({ me, m, children, ctx, mod }) {
                       impression that a private line to a 13-year-old is on offer. Hidden, not disabled: an
                       inert control invites the question "why not?" about a particular child. */}
                 {(!me && canDM && ctx && ctx.openDM) ? <button onClick={() => { if (M.onOpenMenu) M.onOpenMenu(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="lock" size={15} color="var(--sage)" /> Reply privately</button> : null}
-                {M.canModerate ? <button onClick={M.isPinned ? M.onUnpin : M.onPin} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button> : null}
-                {M.canModerate ? <button onClick={M.onRemove} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button> : null}
+                {M.canModerate ? <button onClick={M.isPinned ? M.onUnpin : M.onPin} disabled={!!M.modBusy} style={{ opacity: M.modBusy ? .45 : 1, display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: M.modBusy ? 'default' : 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button> : null}
+                {M.canModerate ? <button onClick={M.onRemove} disabled={!!M.modBusy} style={{ opacity: M.modBusy ? .45 : 1, display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: M.modBusy ? 'default' : 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button> : null}
                 {M.onDelete ? <button onClick={M.onDelete} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Delete</button> : null}
               </div>
             ) : null}
@@ -1064,7 +1122,7 @@ function ServingEntry({ ctx }) {
       <button onClick={() => ctx.openServing && ctx.openServing()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', background: 'var(--surface)', border: '1px solid var(--line)' }}>
         <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Serving &amp; events</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>What’s happening</div>
           <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>See what’s on · RSVP · your rota</div>
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
@@ -1165,7 +1223,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
   const isLeader = !!group && (ctx.myLeaderGroups || []).some(g => g.id === group.id);
   const churchNpub = ctx.church && ctx.church.npub;
-  const isBroadcast = !!group && group.kind === 'Broadcast';   // one-to-many: members read, only church/leaders post
+  // `broadcast` is carried through the room-list map; `kind` is the fallback for a room reached by any
+  // other route (a shared link, sample data, an older cached list) so this can never quietly become false
+  // for a room the relay will still refuse a post to.
+  const isBroadcast = !!group && (group.broadcast === true || group.kind === 'Broadcast');   // one-to-many: members read, only church/leaders post
   const id = useIdentity();
   const scRef = useCR();
   // { gid, ids } — the message ids already shown, kept ACROSS a reconnect so the relay's replay is deduped
@@ -1324,9 +1385,39 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   };
   // ── moderation (group leaders): pin a message, or remove (hide) it. Steward console can do both too. ──
   const canModerate = isLeader && !!churchNpub && !!(window.Fellowship && window.Fellowship.pinPost);
-  const doPin = (m) => { window.Fellowship.pinPost(churchNpub, group.id, m); setMenuFor(null); ctx.toast('Pinned'); };
-  const doUnpin = () => { window.Fellowship.unpin(churchNpub, group.id); ctx.toast('Unpinned'); };
-  const doRemove = (m) => { window.Fellowship.hideMessage(churchNpub, group.id, m.id); setMenuFor(null); ctx.toast('Message removed'); };
+  // ALL THREE DISCARDED THE RESULT. Each returns the event on success and null on failure, and each swallows
+  // its own publish error — so a leader removing a phone number a child had posted saw "Message removed" and
+  // it was still there for the whole group. Nothing retried and nothing queued. AUDIT-2026-08-29.
+  //
+  // …AND THEN NOTHING SAID IT WAS WORKING. Reporting the real outcome means AWAITING the publish, and the
+  // publish these three use gives a silent relay eleven seconds (WEDGE_ACK_MS) before it gives up. The menu
+  // closed on the tap, the post stayed on screen — it only goes when the tombstone echoes back on the
+  // subscription — no spinner appeared anywhere, and nothing stopped a second tap. So a leader removing an
+  // abusive post watched it sit there for up to eleven seconds with no sign the app had heard them, at the
+  // one moment they are least able to wait. That is worse than the instant lie it replaced.
+  // Three parts: a visible busy line, a re-entry guard a double tap cannot race, and (in fellowship.src.js)
+  // a BOUNDED publish so the wait is 12s at worst rather than open-ended.
+  const [modBusy, setModBusy] = useC('');   // '' or the sentence shown while a moderation publish is in flight
+  // The guard is the REF, not the state: setModBusy lands on the next render, and two taps a few milliseconds
+  // apart both read the old `modBusy` and both publish. The ref is written synchronously, so the second tap
+  // sees it. (`modBusy` still drives what is on screen and what is disabled.)
+  const modBusyRef = useCR(false);
+  const _moderated = (start, busy, done, failed) => {
+    if (modBusyRef.current) return;
+    modBusyRef.current = true; setModBusy(busy);
+    const finish = (msg) => { modBusyRef.current = false; setModBusy(''); ctx.toast(msg); };
+    // `start()` is called HERE, synchronously, not handed to `.then` — the publish must leave on the tap,
+    // not a microtask later, and a synchronous throw from it has to land in `finish` like any other failure.
+    let p; try { p = start(); } catch (e) { finish(failed); return; }
+    return Promise.resolve(p)
+      .then(evt => finish(evt ? done : failed))
+      .catch(() => finish(failed));
+  };
+  const doPin = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.pinPost(churchNpub, group.id, m), 'Pinning…', 'Pinned', 'Couldn’t pin that — it’s still as it was.'); };
+  // setMenuFor(null) here too: unpin is reachable from the bubble menu as well as the banner ✕, and that
+  // path left the menu sitting open over a message whose action was already in flight.
+  const doUnpin = () => { setMenuFor(null); _moderated(() => window.Fellowship.unpin(churchNpub, group.id), 'Unpinning…', 'Unpinned', 'Couldn’t unpin that — it’s still pinned.'); };
+  const doRemove = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.hideMessage(churchNpub, group.id, m.id), 'Removing…', 'Message removed', 'Couldn’t remove that — it’s still visible to the group.'); };
   const hideSet = hidden || new Set();
   // perf #6: memoize the visible set on [msgs, hidden] so it's a STABLE reference. It was rebuilt every render, and
   // the `bubbles` useMemo below lists it in its deps — so that memo recomputed on EVERY render (incl. each composer
@@ -1415,9 +1506,9 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
     onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
-    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />
+    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} />
   </React.Fragment>),
-    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
@@ -1437,7 +1528,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           {!docked ? <button aria-label="Back" onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button> : null}
           <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent), flexShrink: 0 }}>
-            <Icon name={group.prayer ? 'pray' : 'chat'} size={22} /></div>
+            <Icon name={isBroadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1448,6 +1539,29 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       </div>
       {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
 
+      {/* WHO SPEAKS IN THIS ROOM, SAID ONCE, AT THE TOP. Hiding the composer is not an explanation: a
+          member tapped in, found nowhere to type and was left to guess whether the room was broken, whether
+          they had done something wrong, or whether they were being kept out. This says what the room IS.
+          It is shown to LEADERS too — someone who posts here posts as the whole church, which is worth
+          knowing before you type — and it is stated calmly and once, not as a warning and not repeated.
+          role="note" so a screen reader reaches it in document order without it announcing itself. */}
+      {isBroadcast ? (
+        <div role="note" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', borderBottom: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
+          <Icon name="send" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
+          Only your church posts in here — everyone at your church reads it.
+        </div>
+      ) : null}
+
+      {/* THE ONLY SIGN THE APP HEARD THE TAP. It sits directly under the header, above the pinned banner and
+          the thread, because that is where the leader is looking after the menu closes over the message they
+          just acted on. role="status" so a screen reader announces it without stealing focus. */}
+      {modBusy ? (
+        <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', borderBottom: '1px solid var(--line)', fontSize: 13, fontWeight: 600, color: 'var(--ink-2)' }}>
+          <span style={{ width: 15, height: 15, flexShrink: 0, borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+          {modBusy}
+        </div>
+      ) : null}
+
       {pin && pin.msgId ? (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
           <Icon name="pin" size={15} color="var(--gold)" style={{ marginTop: 2, flexShrink: 0 }} />
@@ -1455,7 +1569,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', marginBottom: 1 }}>PINNED</div>
             <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{pin.text || '(message)'}</div>
           </div>
-          {canModerate ? <button onClick={doUnpin} title="Unpin" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
+          {canModerate ? <button onClick={doUnpin} disabled={!!modBusy} title="Unpin" style={{ border: 'none', background: 'none', cursor: modBusy ? 'default' : 'pointer', opacity: modBusy ? .45 : 1, color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
         </div>
       ) : null}
 
@@ -1538,20 +1652,20 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           </div>
         ) : (isBroadcast && !isLeader) ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
-            <Icon name="send" size={16} color="var(--ink-3)" /> Announcements only — your church posts here.
+            <Icon name="send" size={16} color="var(--ink-3)" /> Your church posts here — you’ll see everything it sends.
           </div>
         ) : (<React.Fragment>
         {flag ? (() => { const ac = flagCss(flag.accent); return (
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'color-mix(in oklab, ' + ac + ' 15%, var(--surface))', color: ac, border: '1px solid color-mix(in oklab, ' + ac + ' 35%, transparent)', padding: '5px 8px 5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
               <Icon name={flag.icon} size={13} color={ac} /> {flag.label}
-              <button onClick={() => setFlag(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: ac, display: 'flex', padding: 0 }}><Icon name="x" size={14} /></button>
+              <button onClick={() => setFlag(null)} aria-label="Clear this tag" title="Clear this tag" style={{ border: 'none', background: 'none', cursor: 'pointer', color: ac, display: 'flex', padding: 0 }}><Icon name="x" size={14} /></button>
             </span>
           </div>
         ); })() : null}
         {pollOpen ? (
           <div style={{ marginBottom: 8, padding: 11, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 8 }}><Icon name="sliders" size={13} color="var(--clay)" /> NEW POLL<button onClick={() => setPollOpen(false)} style={{ marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={15} /></button></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 8 }}><Icon name="sliders" size={13} color="var(--clay)" /> NEW POLL<button onClick={() => setPollOpen(false)} aria-label="Close the poll" title="Close the poll" style={{ marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={15} /></button></div>
             <input value={pollQ} onChange={e => setPollQ(e.target.value)} placeholder="Ask a question…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', background: 'var(--surface)', color: 'var(--ink)', outline: 'none', marginBottom: 7 }} />
             {pollOpts.map((o, i) => (
               <input key={i} value={o} onChange={e => setPollOpts(prev => prev.map((x, j) => j === i ? e.target.value : x))} placeholder={'Option ' + (i + 1)} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', background: 'var(--surface)', color: 'var(--ink)', outline: 'none', marginBottom: 6 }} />
@@ -1673,6 +1787,13 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // send began REFUSING to publish into an encrypted room without its key, that turned a leak into silent
     // loss wearing a confirmation: the verse was gone, the sheet closed, and the member was told it had been
     // shared. Losing something quietly while claiming it worked is the worst failure this app can produce.
+    // WHY THIS SIBLING NEEDS NO NULL GUARD, while sendToPerson twenty lines down does. Both read a falsy
+    // result into the success arm, but publishMessage cannot produce one: it has exactly three exits —
+    // { _refused: 'nokey' }, { _refused: 'sealfailed' }, and the finalised event — and never a bare null.
+    // sendDM does, from an encrypt step that runs before its outbox push. So this is latent only and is
+    // deliberately left as it is; the guard belongs where the null actually comes from. Checked, not
+    // assumed — see 'publishMessage has no null exit' in a-dm-that-never-sent-is-not-sent.test.mjs, which
+    // fails the day a fourth exit is added. AUDIT-2026-08-30.
     Promise.resolve(FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], { encrypted: !!g.encrypted }))
       .then(evt => {
         if (evt && evt._refused) { ctx.toast('Not shared — ' + g.name + ' is encrypted and your key hasn’t arrived yet. Try again shortly.'); return; }
@@ -1684,8 +1805,24 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   };
   const sendToPerson = (m) => {
     if (!FS || !FS.sendDM) { ctx.toast('Messaging isn’t available'); return; }
-    FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : ''));
-    ctx.toast('Sent to ' + (m.name || 'them')); onClose();
+    // sendDM reports BOTH outcomes and this ignored them: a send the relay permanently refused — a child
+    // appears in this list because safeguard.minors is empty on a member device by design — was announced as
+    // "Sent to Anna". Its sibling twelve lines up was fixed for exactly this and carries the reason: losing
+    // something quietly while claiming it worked is the worst failure this app can produce. Reuse
+    // dmFailWording rather than invent copy: _delivered === false means QUEUED, not lost.
+    Promise.resolve(FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : '')))
+      .then(evt => {
+        // A NULL RETURN IS NOT A SEND. sendDM returns null when it cannot encrypt, and that step runs BEFORE
+        // it queues — so nothing reached the wire, nothing is in the outbox, and there is nothing to retry.
+        // `null` is falsy, so it fell straight into the success arm and the member read "Sent to Anna" over a
+        // message that never existed anywhere. Do NOT hand null to dmFailWording either: with no _refused it
+        // returns "we’ll send it as soon as you’re back online", which promises a retry that cannot happen.
+        // AUDIT-2026-08-30.
+        if (!evt) { ctx.toast('Couldn’t send to ' + (m.name || 'them') + ' — nothing was sent. Please try again.'); return; }
+        ctx.toast(evt._refused || evt._delivered === false ? dmFailWording(evt) : 'Sent to ' + (m.name || 'them'));
+      })
+      .catch(() => ctx.toast('Couldn’t send — please try again.'));
+    onClose();
   };
   const lblStyle = { fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' };
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' };
@@ -1867,8 +2004,22 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   // and, until now, nothing in the DM thread ever called it.
   const send = () => {
     if (!draft.trim() || !FS || !allowDM) return;
-    Promise.resolve(FS.sendDM(peer, draft.trim(), dmReply))
-      .then(evt => { if (evt && evt._refused && ctx && ctx.toast) ctx.toast(dmFailWording(evt)); })
+    const text = draft.trim();
+    Promise.resolve(FS.sendDM(peer, text, dmReply))
+      .then(evt => {
+        // NULL MEANS NOTHING WAS QUEUED EITHER, and that is what makes clearing the composer unsafe here.
+        // The comment above is right that a failed PUBLISH is queued — but sendDM returns null from its
+        // encrypt step, which runs BEFORE the _outbox.push. On that path the words are not on the wire, not
+        // in the outbox, and not on the screen: outboxForPeer has nothing, so no pending bubble appears, and
+        // nothing was toasted. The member watched their message vanish in silence — the exact failure the
+        // outbox was built to end. Put the words back and say so. AUDIT-2026-08-30.
+        if (!evt) {
+          setDraft(d => d || text);
+          if (ctx && ctx.toast) ctx.toast('Couldn’t lock this message, so nothing was sent — your words are still here. Try again in a moment.');
+          return;
+        }
+        if (evt._refused && ctx && ctx.toast) ctx.toast(dmFailWording(evt));
+      })
       .catch(() => {});   // a plain failure is already queued and shown as pending; no toast needed
     setDraft(''); setDmReply(null);
   };

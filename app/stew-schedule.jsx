@@ -215,13 +215,13 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 9 }}>
         {roles.map(r => (
           <span key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 8px 6px 11px', borderRadius: 999, background: `color-mix(in oklab, ${m.accent} 12%, var(--surface))`, border: `1px solid color-mix(in oklab, ${m.accent} 26%, transparent)`, fontSize: 13, fontWeight: 700 }}>
-            {r.name}<button onClick={() => setRoles(x => x.filter(y => y.id !== r.id))} title="Remove this role" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={13} /></button></span>
+            {r.name}<button onClick={() => setRoles(x => x.filter(y => y.id !== r.id))} title="Remove this role" aria-label={'Remove the role ' + (r.name || 'with no name')} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 6, margin: -3 }}><Icon name="x" size={13} /></button></span>
         ))}
         {roles.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No roles yet.</span> : null}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <input value={newRole} onChange={e => setNewRole(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRole(); }} placeholder="Add a role — e.g. Sound" style={schFld} />
-        <button onClick={addRole} title="Add this role to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', flexShrink: 0 }}><Icon name="plus" size={15} color="currentColor" /></button>
+        <button onClick={addRole} title="Add this role to the team" aria-label="Add this role to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', flexShrink: 0 }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
       <div style={schLbl}>People who can serve</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 9 }}>
@@ -229,33 +229,33 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
           <div key={pp.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <div style={{ width: 30, height: 30, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{(pp.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{pp.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{pp.pub ? 'On the app · gets reminders' : 'Off-app'}</div></div>
-            <button onClick={() => setPeople(x => x.filter(y => y.id !== pp.id))} title="Remove this person from the team" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} /></button>
+            <button onClick={() => setPeople(x => x.filter(y => y.id !== pp.id))} title="Remove this person from the team" aria-label={'Remove ' + (pp.name || 'this person') + ' from the team'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} /></button>
           </div>
         ))}
         {people.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No one added yet.</span> : null}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}>
         <input value={newPerson} onChange={e => setNewPerson(e.target.value)} placeholder="Name" style={schFld} disabled={!!linkPub} />
-        <select value={linkPub} onChange={e => setLinkPub(e.target.value)} style={schFld}>
+        <select value={linkPub} onChange={e => setLinkPub(e.target.value)} aria-label="Link this person to a member account" style={schFld}>
           <option value="">…or link a member</option>
           {(members || []).filter(mm => !people.some(p => p.pub && p.pub === mm.pubkey)).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
         </select>
-        <button onClick={addPerson} title="Add this person to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
+        <button onClick={addPerson} title="Add this person to the team" aria-label="Add this person to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
       <div style={schLbl}>Serving pods <span style={{ fontWeight: 500, color: 'var(--ink-3)' }}>— a set of people who serve together; apply one to a service in a tap</span></div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 9 }}>
         {pods.map(pod => (
           <div key={pod.id} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 11, background: 'var(--surface-2)' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: roles.length ? 9 : 0 }}>
-              <input value={pod.name} onChange={e => setPodName(pod.id, e.target.value)} style={{ ...schFld, fontWeight: 700 }} />
-              <button onClick={() => delPod(pod.id)} title="Remove this pod" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} /></button>
+              <input value={pod.name} onChange={e => setPodName(pod.id, e.target.value)} aria-label="Name of this pod" style={{ ...schFld, fontWeight: 700 }} />
+              <button onClick={() => delPod(pod.id)} title="Remove this pod" aria-label={'Remove the pod ' + (pod.name || 'with no name')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} /></button>
             </div>
             {roles.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Add roles above first, then pick who fills each.</div> : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {roles.map(r => (
                   <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 12.5, color: 'var(--ink-2)', width: 96, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-                    <select value={pod.fills[r.id] || ''} onChange={e => setPodFill(pod.id, r.id, e.target.value)} style={{ ...schFld, flex: 1 }}>
+                    <select value={pod.fills[r.id] || ''} onChange={e => setPodFill(pod.id, r.id, e.target.value)} aria-label={'Who fills ' + (r.name || 'this role') + ' in ' + (pod.name || 'this pod')} style={{ ...schFld, flex: 1 }}>
                       <option value="">— unassigned —</option>
                       {people.map(pp => <option key={pp.id} value={pp.id}>{pp.name}</option>)}
                     </select>
@@ -271,7 +271,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
 
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        {saveErr ? <div style={{ flexBasis: '100%', fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)' }}>{saveErr}</div> : null}
+        {saveErr ? <div role="alert" style={{ flexBasis: '100%', fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)' }}>{saveErr}</div> : null}
         <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
       </div>
     </SchModal>
@@ -325,10 +325,10 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil }) {
       <div style={schLbl}>Repeat</div>
       <div style={{ display: 'flex', gap: 7 }}>
         {[['none', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([v, l]) => (
-          <button key={v} onClick={() => setRepeat(v)} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
+          <button key={v} onClick={() => setRepeat(v)} aria-pressed={repeat === v} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
         ))}
       </div>
-      {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
+      {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
     </React.Fragment>
   );
 }
@@ -348,10 +348,10 @@ function SchAddServiceModal({ onClose }) {
   return (
     <SchModal title="Add a service" onClose={onClose} width={420}>
       <div style={schLbl}>Name</div>
-      <input value={name} onChange={e => setName(e.target.value)} style={schFld} />
+      <input aria-label="Name" value={name} onChange={e => setName(e.target.value)} style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
-        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
@@ -419,6 +419,10 @@ function DashRota({ onNewTeam }) {
   // promise that relay is not keeping.
   const rotaVis = ((typeof window.useStewardRotaSettings === 'function') ? window.useStewardRotaSettings() : { visibility: 'church' }).visibility || 'church';
   const [visMenu, setVisMenu] = useSch(false);
+  // Escape must close this and focus must come back here. Without the ref, choosing an option dropped focus
+  // to <body> and a keyboard steward had to Tab from the top of the console to get anywhere.
+  const visBtnRef = useSchR(null);
+  const closeVisMenu = () => { setVisMenu(false); try { visBtnRef.current && visBtnRef.current.focus(); } catch (e) {} };
 
   // verdict for an assigned slot: 'accept' | 'decline' | 'swap' | 'pending' (asked, no reply) | '' (not asked)
   const replyById = {}; replies.forEach(r => { if (r.id) replyById[r.id] = r.v; });
@@ -579,7 +583,7 @@ function DashRota({ onNewTeam }) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', maxWidth: 380 }}>
-          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="hand" size={28} /></div>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="hand" size={28} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 6 }}>Build your first team</div>
           <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 16 }}>Create a ministry team (Welcome, Worship, Kids…) with the roles it fills. Then add a service and put people on — gaps glow gold so coverage reads at a glance.</p>
           <button onClick={onNewTeam} className="sk-btn sk-btn--clay" style={{ padding: '11px 18px' }}><Icon name="plus" size={16} color="var(--on-clay)" /> New team</button>
@@ -597,7 +601,7 @@ function DashRota({ onNewTeam }) {
           return (
             <button key={s.id} onClick={() => setSel(s.id)} title="Show this service’s rota" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
               border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)' }}>
-              <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
+              <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay-ink)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
               <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.mon} · {s.time}</div></div>
             </button>
           );
@@ -614,14 +618,14 @@ function DashRota({ onNewTeam }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: narrow ? 'none' : 1 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>{filled}/{total} <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--ink-3)' }}>roles filled</span></div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, marginTop: 2, color: gaps ? '#8a6717' : 'var(--sage)' }}>{gaps ? <><Icon name="sparkle" size={13} color="var(--gold)" /> {gaps} gap{gaps > 1 ? 's' : ''} to fill</> : <><Icon name="check" size={13} stroke={2.6} color="var(--sage)" /> Fully covered</>}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, marginTop: 2, color: gaps ? '#8a6717' : 'var(--sage-ink)' }}>{gaps ? <><Icon name="sparkle" size={13} color="var(--gold)" /> {gaps} gap{gaps > 1 ? 's' : ''} to fill</> : <><Icon name="check" size={13} stroke={2.6} color="var(--sage)" /> Fully covered</>}</div>
               </div>
               <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'var(--surface-2)', overflow: 'hidden', minWidth: 80 }}><div style={{ width: `${total ? (filled / total) * 100 : 0}%`, height: '100%', background: gaps ? 'linear-gradient(90deg, var(--sage), var(--gold))' : 'var(--sage)', borderRadius: 999, transition: 'width .3s' }} /></div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0, flexWrap: 'wrap', justifyContent: narrow ? 'flex-end' : 'initial' }}>
             <button onClick={copyLastWeek} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="copy" size={15} color="currentColor" /> Copy last week</button>
             <div style={{ position: 'relative' }}>
-              <button onClick={() => setFillMenu(v => !v)} title="Let the app suggest people to fill the empty roles" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
+              <button onClick={() => setFillMenu(v => !v)} title="Let the app suggest people to fill the empty roles" aria-expanded={!!fillMenu} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
               {fillMenu ? (
                 <React.Fragment>
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
@@ -642,12 +646,15 @@ function DashRota({ onNewTeam }) {
                 sealed under the church name key that EVERY member holds, so this changes who the relay will
                 SEND the rota to from now on — it cannot reach back onto a phone that already downloaded one.
                 Real protection against everyone who has not fetched it, and not a wall between members. */}
-            <div style={{ position: 'relative' }}>
-              <button onClick={() => setVisMenu(v => !v)} title="Choose who can see this church's rota" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>
+            <div style={{ position: 'relative' }} onKeyDown={e => { if (e.key === 'Escape' && visMenu) { e.stopPropagation(); closeVisMenu(); } }}>
+              {/* NOT aria-haspopup="menu". This popup is two plain buttons: it has no menu roles, the arrow
+                  keys a menu implies do nothing, and announcing one promises a keyboard model that is not
+                  here. aria-expanded is true and useful; the rest was a claim, so it is gone. */}
+              <button ref={visBtnRef} onClick={() => setVisMenu(v => !v)} title="Choose who can see this church's rota" aria-expanded={!!visMenu} aria-label={'Who can see the rota: ' + (ROTA_VIS_LABEL[rotaVis] || ROTA_VIS_LABEL.church) + '. Change this'} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>
                 <Icon name="users" size={15} color="currentColor" /> {ROTA_VIS_LABEL[rotaVis] || ROTA_VIS_LABEL.church} <Icon name="chevD" size={13} color="currentColor" /></button>
               {visMenu ? (
                 <React.Fragment>
-                  <div onClick={() => setVisMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div onClick={closeVisMenu} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
                   <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 268, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
                     {/* TWO SETTINGS, NOT THREE. A 'stewards only' option was built and then withdrawn by the
                         owner, for a reason worth keeping written down: a member's own "you're serving on
@@ -660,7 +667,7 @@ function DashRota({ onNewTeam }) {
                         'stewards' if it ever meets one, so the two surfaces cannot disagree. */}
                     {[['church', 'Everyone in the church', 'Any member can see who is serving'],
                       ['team', 'People on the serving teams', 'Only members on a team roster — they still see their own slots']].map(([v, t, s]) => (
-                      <button key={v} onClick={() => { setVisMenu(false); if (v !== rotaVis) window.Steward.publishRotaSettings(v); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                      <button key={v} aria-pressed={v === rotaVis} onClick={() => { closeVisMenu(); if (v !== rotaVis) window.Steward.publishRotaSettings(v); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}{v === rotaVis ? ' ✓' : ''}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
                       </button>
@@ -691,7 +698,7 @@ function DashRota({ onNewTeam }) {
                   <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{ width: 34, height: 34, borderRadius: 11, background: `color-mix(in oklab, ${m.accent} 16%, var(--surface))`, color: m.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={m.icon} size={19} /></div>
-                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
                       <button onClick={() => setRosterTeam(t)} title="Manage roster" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="users" size={14} /> Roster</button>
                     </div>
                     {(r.pods && r.pods.length) ? (
@@ -699,7 +706,7 @@ function DashRota({ onNewTeam }) {
                         const v = e.target.value; e.target.value = '';
                         if (v === '__rotate__') { if (window.confirm('Rotate ' + r.pods.length + ' pods across all upcoming services for ' + m.name + '?\n\nEach pod serves every ' + r.pods.length + ' weeks. This publishes them and asks everyone assigned.')) rotatePods(t); }
                         else { const pod = (r.pods || []).find(p => p.id === v); if (pod) applyPod(t, pod); }
-                      }} title="Apply a serving pod" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, appearance: 'auto' }}>
+                      }} title="Apply a serving pod" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, appearance: 'auto' }}>
                         <option value="">Apply a serving pod…</option>
                         {r.pods.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                         {r.pods.length > 1 ? <option value="__rotate__">↻ Rotate across upcoming weeks</option> : null}
@@ -722,7 +729,7 @@ function DashRota({ onNewTeam }) {
                         };
                         const vm = vmap[verdict] || vmap[''];
                         return (
-                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
+                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
@@ -733,7 +740,7 @@ function DashRota({ onNewTeam }) {
                         );
                       }
                       return (
-                        <button key={role.id} onClick={() => setAssignSlot(slot)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1.5px dashed color-mix(in oklab, var(--gold) 55%, var(--line))', background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))' }}>
+                        <button key={role.id} onClick={() => setAssignSlot(slot)} aria-label={'Assign someone to ' + (role.name || 'this role')} title={'Assign someone to ' + role.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1.5px dashed color-mix(in oklab, var(--gold) 55%, var(--line))', background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))' }}>
                           <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--gold) 20%, var(--surface))', color: '#8a6717', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="plus" size={15} /></div>
                           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}</div><div style={{ fontWeight: 700, fontSize: 13.5, color: '#8a6717' }}>Assign</div></div>
                         </button>
@@ -744,7 +751,7 @@ function DashRota({ onNewTeam }) {
               );
             })}
             {/* always-visible add-team card (the topbar button can scroll out of view) */}
-            <button onClick={onNewTeam} style={{ minHeight: 96, borderRadius: 18, border: '1.5px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14 }}><Icon name="plus" size={17} color="currentColor" /> New team</button>
+            <button onClick={onNewTeam} style={{ minHeight: 96, borderRadius: 18, border: '1.5px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14 }}><Icon name="plus" size={17} color="currentColor" /> New team</button>
           </div>
         </React.Fragment>
       )}
@@ -814,10 +821,10 @@ function SchEventModal({ day, onClose }) {
         </React.Fragment>
       ) : null}
       <div style={schLbl}>Title</div>
-      <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
+      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
-        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
@@ -826,7 +833,7 @@ function SchEventModal({ day, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
-      <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
+      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
       <div style={schLbl}>Type</div>
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
@@ -859,7 +866,7 @@ function SchEventModal({ day, onClose }) {
         </label>
       )}
       <div style={schLbl}>Note (optional)</div>
-      <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+      <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
@@ -948,7 +955,7 @@ function DashCalendar() {
             return (
               <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day" style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
                 border: pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay)' : 'var(--ink-2)' }}>{d}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d}</div>
                 {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
                 {it.events.map(e => <div key={e.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: `color-mix(in oklab, ${e.accent} 13%, var(--surface))`, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>)}
                 {it.bookings.map(b => <div key={b.id} title={(b.title || 'Booking') + ' · ' + roomName(b.roomId) + (b.start ? ' · ' + b.start + (b.end ? '–' + b.end : '') : '')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: '#345c41', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="marker" size={9} color="#345c41" />{b.start ? b.start + ' ' : ''}{roomName(b.roomId)}</div>)}
@@ -995,7 +1002,7 @@ function DashCalendar() {
                     return (
                       <div style={{ marginTop: 8, borderTop: '1px solid var(--line-2)', paddingTop: 8 }}>
                         <div style={{ display: 'flex', gap: 12, fontSize: 12, fontWeight: 700 }}>
-                          <span style={{ color: 'var(--sage)' }}>{rs.going.length} going</span>
+                          <span style={{ color: 'var(--sage-ink)' }}>{rs.going.length} going</span>
                           {rs.maybe.length ? <span style={{ color: '#8a6717' }}>{rs.maybe.length} maybe</span> : null}
                           {rs.no.length ? <span style={{ color: 'var(--ink-3)' }}>{rs.no.length} can’t</span> : null}
                         </div>
@@ -1022,7 +1029,7 @@ function DashCalendar() {
             {upcoming.map(s => { const c = coverageFor(s.id); return (
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 11, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
                 <SchDateBlock dateStr={s.date} />
-                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{s.name}</div><div style={{ fontSize: 12, color: c.total && c.filled === c.total ? 'var(--sage)' : '#8a6717', fontWeight: 600 }}>{c.filled}/{c.total} filled</div></div>
+                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{s.name}</div><div style={{ fontSize: 12, color: c.total && c.filled === c.total ? 'var(--sage-ink)' : '#8a6717', fontWeight: 600 }}>{c.filled}/{c.total} filled</div></div>
               </div>
             ); })}
           </div>
@@ -1040,7 +1047,7 @@ function DashCalendar() {
             <button onClick={() => { setCalRunsheet(svcDetail); setSvcDetail(null); }} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 13, fontSize: 14 }}>
               <Icon name="plans" size={15} color="var(--on-clay)" /> {sheet.length ? 'Order of service · ' + sheet.length + (sheet.length === 1 ? ' item' : ' items') : 'Write the order of service'}
             </button>
-            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 0 0' }}>Items, who's leading each, and songs. <b>The people serving on this service</b> see it in Serving &amp; events.</p>
+            <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 0 0' }}>Items, who's leading each, and songs. <b>The people serving on this service</b> see it in What’s happening.</p>
           </SchModal>
         );
       })() : null}
@@ -1096,30 +1103,30 @@ function SchEventEdit({ event, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Name</div>
-      <input value={title} onChange={ev => setTitle(ev.target.value)} style={schFld} autoFocus />
+      <input aria-label="Name" value={title} onChange={ev => setTitle(ev.target.value)} style={schFld} autoFocus />
       {series ? (
         <React.Fragment>
           <div style={schLbl}>Day</div>
-          <select value={day} onChange={ev => setDay(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+          <select aria-label="Day" value={day} onChange={ev => setDay(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => <option key={i} value={i}>{d}</option>)}
           </select>
           <div style={schLbl}>Repeats</div>
-          <select value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+          <select aria-label="Repeats" value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             <option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option>
           </select>
         </React.Fragment>
       ) : (
         <React.Fragment>
           <div style={schLbl}>Date</div>
-          <input type="date" value={date} onChange={ev => setDate(ev.target.value)} style={schFld} />
+          <input aria-label="Date" type="date" value={date} onChange={ev => setDate(ev.target.value)} style={schFld} />
         </React.Fragment>
       )}
       <div style={schLbl}>Time</div>
-      <input type="time" value={time} onChange={ev => setTime(ev.target.value)} style={schFld} />
+      <input aria-label="Time" type="time" value={time} onChange={ev => setTime(ev.target.value)} style={schFld} />
       <div style={schLbl}>Where</div>
-      <input value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
+      <input aria-label="Where" value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
       <div style={schLbl}>Details</div>
-      <textarea value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
+      <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>
@@ -1291,13 +1298,13 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
         <div style={{ padding: '20px 24px 6px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{bk.id ? 'Edit booking' : 'Book a room'}</div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 24px' }}>
           <div style={roomLbl}>ROOM</div>
-          <select value={roomId} onChange={e => setRoomId(e.target.value)} style={{ ...roomFld, appearance: 'auto', marginBottom: 12 }}>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
+          <select aria-label="Room" value={roomId} onChange={e => setRoomId(e.target.value)} style={{ ...roomFld, appearance: 'auto', marginBottom: 12 }}>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
           <div style={roomLbl}>WHAT FOR</div>
-          <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Youth group, Wedding rehearsal" style={{ ...roomFld, marginBottom: 12 }} />
+          <input aria-label="What for" autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Youth group, Wedding rehearsal" style={{ ...roomFld, marginBottom: 12 }} />
           <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1.2 }}><div style={roomLbl}>DATE</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={roomFld} /></div>
-            <div style={{ flex: 1 }}><div style={roomLbl}>FROM</div><input type="time" value={start} onChange={e => setStart(e.target.value)} style={roomFld} /></div>
-            <div style={{ flex: 1 }}><div style={roomLbl}>TO</div><input type="time" value={end} onChange={e => setEnd(e.target.value)} style={roomFld} /></div>
+            <div style={{ flex: 1.2 }}><div style={roomLbl}>DATE</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={roomFld} /></div>
+            <div style={{ flex: 1 }}><div style={roomLbl}>FROM</div><input aria-label="From" type="time" value={start} onChange={e => setStart(e.target.value)} style={roomFld} /></div>
+            <div style={{ flex: 1 }}><div style={roomLbl}>TO</div><input aria-label="To" type="time" value={end} onChange={e => setEnd(e.target.value)} style={roomFld} /></div>
           </div>
           {badTime ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 10 }}>The end time needs to be after the start time.</div> : null}
           {clashes.length ? (
@@ -1306,7 +1313,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>{(roomById[roomId] || {}).name || 'That room'} is already booked then</b> — {clashes.map(c => (c.title || 'a booking') + ' ' + c.start + '–' + c.end).join('; ')}. Pick another time or room.</div>
             </div>
           ) : null}
-          <div style={{ marginTop: 12 }}><div style={roomLbl}>NOTE (OPTIONAL)</div><input value={note} onChange={e => setNote(e.target.value)} placeholder="optional" style={roomFld} /></div>
+          <div style={{ marginTop: 12 }}><div style={roomLbl}>NOTE (OPTIONAL)</div><input aria-label="Note (optional)" value={note} onChange={e => setNote(e.target.value)} placeholder="optional" style={roomFld} /></div>
         </div>
         {!title.trim() ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '0 24px 4px', lineHeight: 1.4 }}>Add what the room’s for above to book it.</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '14px 24px 20px' }}>

@@ -28,7 +28,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8880;
+const PORT = 8885;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const MEMBER_D = 'trinityone/member:', MINORS_D = 'trinityone/minors:';
 const now = () => Math.floor(Date.now() / 1000);
@@ -147,4 +147,55 @@ test('switching it back off refuses again — the flag is live, not read once at
   await sleep(200);
   const [ok] = await publish(pub, profileWithPhoto(ellie));
   assert.equal(ok, false, 'the relay kept honouring a setting the church has since turned off');
+});
+
+// ── the PARENT switch: a church that turns member photos off entirely ───────────────────────────────────────
+// `features.memberPhotos === false` had exactly the bug the children's switch had before 2026-08-28: it lived
+// only in the client, so a church that had switched photos off still had them accepted and served. Measured on
+// the live relay, 28 Aug: with the switch off, an adult's photograph was stored without complaint.
+// Polarity differs from childPhotos on purpose — photos are ON by default and a church opts OUT.
+const churchProfileFull = (opts) => finalizeEvent({ kind: 0, created_at: stamp(), tags: [],
+  content: JSON.stringify({ name: 'St Test', features: opts }) }, church.sk);
+
+test('with member photos OFF, an ADULT’s photograph is refused', async () => {
+  assert.equal((await publish(pub, churchProfileFull({ memberPhotos: false })))[0], true, 'church profile refused');
+  await sleep(200);
+  const [ok] = await publish(pub, profileWithPhoto(edith));
+  assert.equal(ok, false,
+    'a church switched member photos off and an adult’s photograph was stored anyway — the switch is a UI ' +
+    'preference, exactly what the children’s one was before it was moved to the relay');
+});
+
+test('…and so is a minor’s, whatever the children’s setting says', async () => {
+  // The parent switch wins: turning children's photos ON cannot re-enable them for a church that has turned
+  // ALL photos off. Otherwise the narrower control silently overrides the broader one.
+  assert.equal((await publish(pub, churchProfileFull({ memberPhotos: false, childPhotos: true })))[0], true, 'refused');
+  await sleep(200);
+  const [ok] = await publish(pub, profileWithPhoto(ellie));
+  assert.equal(ok, false, 'children’s photos being ON re-enabled photos for a church that switched them all off');
+});
+
+test('a profile with no photo is still fine', async () => {
+  const [ok, why] = await publish(pub, profilePlain(edith));
+  assert.equal(ok, true, `a member cannot set their name or symbol while photos are off: ${why}`);
+});
+
+test('switching photos back ON restores them', async () => {
+  assert.equal((await publish(pub, churchProfileFull({})))[0], true, 'refused');
+  await sleep(200);
+  const [ok, why] = await publish(pub, profileWithPhoto(edith));
+  assert.equal(ok, true, `photos stayed blocked after the church allowed them again: ${why}`);
+});
+
+test('AND IT SURVIVES A RESTART — the set is rebuilt at boot', async () => {
+  assert.equal((await publish(pub, churchProfileFull({ memberPhotos: false })))[0], true, 'refused');
+  await sleep(200);
+  pub.close(); relay.kill('SIGKILL'); await sleep(400);
+  relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' }, stdio: 'ignore' });
+  await waitReady();
+  pub = await connect();
+  const [ok] = await publish(pub, profileWithPhoto(edith));
+  assert.equal(ok, false,
+    'after a restart the church’s decision was forgotten and photos were accepted again — CHILD_PHOTOS_OK ' +
+    'shipped with exactly this hole and only a restart in the test would have caught it');
 });

@@ -33,9 +33,10 @@ const SK = {
       { id: 'psalms-comfort', title: 'Psalms of Comfort', sub: '7 days', tag: 'Devotional', accent: 'var(--sage)', blurb: 'A week in the Psalms for anxious seasons.', days: psalms([23, 27, 34, 42, 91, 121, 139]) },
     ];
   })(),
+  // Mock-up data only — nothing reads SK.relays (grepped 2026-09-01). The two entries removed here named a
+  // host on a domain we do not run and a generic public Nostr relay; a church's relays are its own
+  // (reference/DOMAIN.md, "TrinityOne relays are a closed network").
   relays: [
-    { url: 'relay.trinityone.app', label: 'TrinityOne shared', status: 'on', kind: 'shared' },
-    { url: 'relay.damus.io', label: 'Public relay', status: 'on', kind: 'shared' },
     { url: 'relay.grace.org', label: 'Grace Chapel · self-hosted', status: 'on', kind: 'own' },
   ],
   // weekly giving, sats-ish bars (relative heights 0..1)
@@ -228,7 +229,7 @@ function SkKey({ value, label = 'npub', tint = 'clay', style = {} }) {
       ) : (
         <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
       )}
-      <button onClick={() => { copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1400); }} title={'Copy ' + label} style={{ border: 'none', background: 'none', cursor: 'pointer', color: copied ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', padding: 4 }}>
+      <button onClick={() => { copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1400); }} title={'Copy ' + label} style={{ border: 'none', background: 'none', cursor: 'pointer', color: copied ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', padding: 4 }}>
         <Icon name={copied ? 'check' : 'copy'} size={16} stroke={2} color="currentColor" />
       </button>
     </div>

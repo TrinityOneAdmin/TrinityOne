@@ -88,6 +88,10 @@ test('the gate holds a write until registration lands, then lets it go', async (
   let regGate = gate;
   const waitFor = lift('async function _waitForRegistration() {', '_waitForRegistration', {
     get _regGate() { return regGate; }, set _regGate(v) { regGate = v; },
+    // The proof gate, stubbed inert so these two cases keep measuring the REGISTRATION half in isolation.
+    // `_regGate` is truthy in both, so without this they would also exercise the proof wait and stop being
+    // about the thing they are named after. The proof half has its own cases below.
+    _proofWaited: true, PROOF_GATE_MS: 8000, _awaitFirstAdmission: async () => true,
     REG_GATE_MS: 8000,
   });
   let through = false;
@@ -105,6 +109,10 @@ test('a relay that never answers registration does NOT stop the church publishin
   let regGate = new Promise(() => {});
   const waitFor = lift('async function _waitForRegistration() {', '_waitForRegistration', {
     get _regGate() { return regGate; }, set _regGate(v) { regGate = v; },
+    // The proof gate, stubbed inert so these two cases keep measuring the REGISTRATION half in isolation.
+    // `_regGate` is truthy in both, so without this they would also exercise the proof wait and stop being
+    // about the thing they are named after. The proof half has its own cases below.
+    _proofWaited: true, PROOF_GATE_MS: 8000, _awaitFirstAdmission: async () => true,
     REG_GATE_MS: 30,
   });
   await waitFor();
@@ -186,4 +194,118 @@ test('and the screen that fires it asks the same question first', () => {
   assert.match(before, /S\.actingChurch/,
     'the dashboard fires self-registration for any console showing a church name, including a delegate ' +
     'viewing the church they help with — which is how the junk rows were created in the first place');
+});
+
+// ── THE OTHER GATE: a founding write must not race the FIRST PROOF ──────────────────────
+//
+// Same shape as the registration race above, one gate over, and it only became reachable when a client
+// started REQUIRING a relay to prove it runs our software. An established console coasts on a 30-day cache;
+// a church created on a FRESH DEVICE has an empty one, so the wizard's founding writes could go out before
+// anything was proved and fail in the church's first minute.
+//
+// THESE TWO CASES ALSO GUARD THE FIX'S SHAPE, which matters because the first attempt was wrong in a way the
+// tests above could not see: it awaited the whole refresh and stalled every write in the product. So the
+// third case here asserts an ESTABLISHED console does not wait at all.
+test('a founding write waits until a relay is actually admitted', async () => {
+  let admitted = [], regGate = {}, waited = 0;
+  const waitFor = lift('async function _waitForRegistration() {', '_waitForRegistration', {
+    get _regGate() { return regGate; }, set _regGate(v) { regGate = v; },
+    _proofWaited: false, PROOF_GATE_MS: 4000, REG_GATE_MS: 30,
+    _awaitFirstAdmission: async (ms) => { waited++; const t0 = Date.now();
+      while (!admitted.length && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 10));
+      return admitted.length > 0; },
+  });
+  let through = false;
+  const p = waitFor().then(() => { through = true; });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(through, false,
+    'a founding write went out before any relay was admitted. On a fresh device the cache is empty, so this ' +
+    'is the church\'s first minute: the publish set is empty and the person is told their church could not ' +
+    'be created.');
+  admitted = ['wss://proved.example/relay'];
+  await p;
+  assert.equal(through, true, 'the write never went out even after a relay was admitted');
+  assert.equal(waited, 1, 'the proof wait did not run exactly once');
+});
+
+test('an ESTABLISHED console does not wait for a proof at all', async () => {
+  // THE CASE THAT WOULD HAVE CAUGHT THE FIRST ATTEMPT. That version waited on every publisher, which put a
+  // multi-second stall in front of every write in the product to fix a race that exists only at founding.
+  // `_regGate` is null once a church exists, so nothing here may wait.
+  let waited = 0, regGate = null;
+  const waitFor = lift('async function _waitForRegistration() {', '_waitForRegistration', {
+    get _regGate() { return regGate; }, set _regGate(v) { regGate = v; },
+    _proofWaited: false, PROOF_GATE_MS: 8000, REG_GATE_MS: 30,
+    _awaitFirstAdmission: async () => { waited++; return true; },
+  });
+  const t0 = Date.now();
+  await waitFor();
+  assert.equal(waited, 0,
+    'an established console waited for a relay proof before an ordinary write. That is a stall in front of ' +
+    'every write in the product, to fix a race that only exists while a church is being created.');
+  assert.ok(Date.now() - t0 < 500, 'an ordinary write was delayed');
+});
+
+test('a relay that never proves itself does NOT hang the wizard for ever', async () => {
+  // Bounded for the same reason registration is: a console whose relays will never answer must still be able
+  // to work and must say so through the publish error, not by freezing the wizard's first screen.
+  let regGate = null;
+  const waitFor = lift('async function _waitForRegistration() {', '_waitForRegistration', {
+    get _regGate() { return regGate; }, set _regGate(v) { regGate = v; },
+    _proofWaited: false, PROOF_GATE_MS: 40, REG_GATE_MS: 30,
+    _awaitFirstAdmission: async (ms) => { await new Promise((r) => setTimeout(r, ms)); return false; },
+  });
+  regGate = {};
+  const t0 = Date.now();
+  await waitFor();
+  assert.ok(Date.now() - t0 < 2000, 'the wizard hung on relays that never answered');
+});
+
+test('an ESTABLISHED console pays the proof wait once a session, bounded, and never again', async () => {
+  // WHAT THE CASE ABOVE STAGES IS NOT WHAT THE PRODUCT DOES. It sets `_regGate = null`, and the commit that
+  // added it claimed "an established console never pays this at all". That is false. `_openRegGate()`
+  // RESOLVES the gate and never nulls it — only `_waitForRegistration` does — and app/stew-dashboard.jsx
+  // re-runs `selfRegister(church.name)` on every owner console the moment the church name resolves. So an
+  // established console arms the gate too, and the state it actually occupies is this one: a RESOLVED
+  // promise, not null. That case is kept, because null is still the state before a church name has loaded
+  // and it guards the founding scope. This is the other half.
+  //
+  // The real `_awaitFirstAdmission` runs here, not a stub — the cost being measured lives in ITS polling
+  // loop, and a stubbed one would answer the question the case is named after.
+  let admits = 0;
+  const awaitFirst = lift('function _awaitFirstAdmission(ms) {', '_awaitFirstAdmission', {
+    _gate: { admit: () => { admits++; return []; } },   // a COLD cache: nothing is admitted yet, so it polls the whole budget
+    relaysRaw: () => ['wss://cold.example/relay'],
+    pub: 'aa'.repeat(32),
+  });
+  let regGate = Promise.resolve();          // the established state: armed by selfRegister, then resolved
+  const waitFor = lift('async function _waitForRegistration() {', '_waitForRegistration', {
+    get _regGate() { return regGate; }, set _regGate(v) { regGate = v; },
+    _proofWaited: false, PROOF_GATE_MS: 300, REG_GATE_MS: 30,
+    _awaitFirstAdmission: awaitFirst,
+  });
+
+  const t0 = Date.now();
+  await waitFor();
+  const paid = Date.now() - t0;
+  assert.ok(admits > 1,
+    'the proof wait did not poll at all on an established console, so this case is not measuring the cost it ' +
+    'is named after');
+  assert.ok(paid >= 250,
+    'the wait ended early on a cache that never admits anything — the founding race it exists to close is ' +
+    'still open');
+  assert.ok(paid < 3000,
+    'the wait is not bounded by PROOF_GATE_MS. An established console whose relays never answer would hang ' +
+    'on its first write of every session, which is most of the console\'s users on a bad connection.');
+
+  // PAID AT MOST ONCE. Re-arm the gate the way a second selfRegister would, and require the poll not to run
+  // again: `_proofWaited` is the latch that stops this becoming a per-write tax.
+  const before = admits;
+  regGate = Promise.resolve();
+  const t1 = Date.now();
+  await waitFor();
+  assert.equal(admits, before,
+    'the proof wait ran a second time. It is bounded at PROOF_GATE_MS each time, so a console that re-arms ' +
+    'the gate would pay it again and again for the rest of the session.');
+  assert.ok(Date.now() - t1 < 500, 'the second write was delayed');
 });

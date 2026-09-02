@@ -24,8 +24,8 @@ const MN_AV = ['var(--clay)','var(--sage)','var(--gold)','var(--clay-deep)','#6B
 /* ---- module-local primitives (port of the Halo kit; real tokens, real <Icon>/<Halo>) ---- */
 const MN_SZ = { sm:{padding:'8px 14px',fontSize:13,gap:7,ic:16}, md:{padding:'12px 18px',fontSize:14.5,gap:8,ic:18}, lg:{padding:'15px 24px',fontSize:15.5,gap:9,ic:19} };
 const MN_VAR = {
-  clay:{background:'var(--clay)',color:'#fff',boxShadow:'0 1px 2px rgba(34,28,22,.14)'},
-  sage:{background:'var(--sage)',color:'#fff'},
+  clay:{background:'var(--clay-ink)',color:'#fff',boxShadow:'0 1px 2px rgba(34,28,22,.14)'},
+  sage:{background:'var(--sage-ink)',color:'#fff'},
   gold:{background:'var(--gold)',color:'var(--midnight)'},
   dark:{background:'var(--midnight)',color:'var(--paper)'},
   soft:{background:'var(--clay-soft)',color:'var(--clay-ink)'},
@@ -68,7 +68,7 @@ function MnStat({ icon, label, value, sub, tint='ink' }) {
 function MnLabel({ children, action, onAction }) {
   return <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'0 0 12px' }}>
     <span style={{ fontWeight:700, fontSize:19, letterSpacing:'-.01em' }}>{children}</span>
-    {action && <span onClick={onAction} style={{ fontSize:13, fontWeight:600, color:'var(--clay)', cursor:'pointer' }}>{action}</span>}</div>;
+    {action && <span onClick={onAction} style={{ fontSize:13, fontWeight:600, color:'var(--clay-ink)', cursor:'pointer' }}>{action}</span>}</div>;
 }
 
 /* ============================== Settings: opt-in enable card ============================== */
@@ -90,6 +90,9 @@ function DashMannaPanel({ church }) {
         <Icon name="lock" size={17} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Manna is the <b>money-out</b> counterpart to Finance: how your church gives to its own in need. Like Finance, it keeps <b>named, identified</b> records (it names the people you help) — so every record is <b>encrypted</b>, minimised, and never a watch-list. Manna shares the <b>Finance</b> key, so anyone you give Finance to can read these records too — bear that in mind before granting it. Payments themselves stay <b>off</b> until you wire a wallet. Use it only under your church’s safeguarding &amp; privacy policy.</div>
       </div>
+      {/* DELIBERATELY NOT a clickable row, unlike the settings rows in stew-dashboard.jsx and the practical-care
+          row in stew-meals.jsx. This switch is `disabled` during the pilot, and a row handler would bypass that
+          and enable Manna from a press on the words. Add one only when the lock is lifted. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Disbursements (Manna)</div>
@@ -256,7 +259,7 @@ function MannaNominate({ requests, vouches, vsOf, M }) {
       </div>
       <p className="scripture" style={{ fontSize: 16, color: 'var(--clay-ink)', margin: '0 0 14px' }}>“Carry each other’s burdens.”</p>
       <div style={{ background: 'var(--surface)', borderRadius: 16, padding: '15px 16px', marginBottom: 18 }}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}><span style={{ color: 'var(--clay)', marginTop: 1 }}><Icon name="hand" size={20} /></span>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}><span style={{ color: 'var(--clay-ink)', marginTop: 1 }}><Icon name="hand" size={20} /></span>
           <p style={{ margin: 0, fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55 }}>By vouching, you’re not approving a request — you’re saying <b style={{ color: 'var(--ink)' }}>“I’ll walk with this person.”</b> You’ll be the steady hand they can reach, and the one who quietly checks in.{sel.tier === 'covenant' && vs.missingNominator ? ' This covenant gift still needs a sponsor.' : ''}</p></div>
       </div>
       {done ? (
@@ -360,7 +363,7 @@ function MannaApprove({ requests, vouches, vsOf, M, payoutReady }) {
 
         {released ? (
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderRadius: 16, background: 'var(--sage)', color: '#fff' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderRadius: 16, background: 'var(--sage-ink)', color: '#fff' }}>
               <Icon name="check" size={22} stroke={2.4} /><span style={{ fontSize: 14.5, fontWeight: 700 }}>Approved &amp; signed.</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12.5, color: 'var(--ink-3)' }}>

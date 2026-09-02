@@ -101,12 +101,29 @@
     return JSON.parse(TD.decode(pt));
   }
 
+  // A RESTORE SHOULD RECOVER A CHURCH, NOT A ROUTING TABLE (closed-network plan C5).
+  //
+  // These keys say WHERE a congregation's data goes, and a backup file is the worst possible carrier for
+  // that: stale on the way out (last year's list re-points a phone at an address the church has since left,
+  // and the address may now belong to somebody else entirely) and untrusted on the way in — a crafted file
+  // needs only to sit inside an allowed prefix to name a machine of its author's choosing. Nothing is lost
+  // by leaving them behind: the relay list is rebuilt from the canonical pool and the church's own signed
+  // membership document, which is the only thing entitled to decide it.
+  //
+  // `trinityone.relays` is simply ABSENT from MEMBER_PREFIXES below rather than named here — which also
+  // keeps the C4 verified-set cache (`trinityone.relays.verified`, a prefix match) out of the file. The two
+  // steward keys DO need naming, because they sit under `trinityone.steward`, which stays allowed.
+  //
+  // Applied on BOTH sides on purpose: excluded from the export so the addresses never leave the device, and
+  // from the import so an older file that already carries them cannot write them.
+  const ROUTING_KEYS = new Set(['trinityone.steward.extra-relays', 'trinityone.steward.relay-names']);
+
   function snapshot(prefixes, exact) {
     const out = {};
     const ex = new Set(exact || []);
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);
+      if (k && !ROUTING_KEYS.has(k) && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);
     }
     return out;
   }
@@ -125,6 +142,7 @@
     // crafted file write `trinityone.profiles` — overwriting the member's whole view of who is in their church
     // with names of an attacker's choosing. Import is the side that faces an untrusted file.
     const ok = (k) => (exSet.has(String(k)) || (allow || []).some(p => String(k).startsWith(p)))
+      && !ROUTING_KEYS.has(String(k))                // never where a church's data goes — see ROUTING_KEYS
       && !/^trinityone\.nostr\.mnemonic/.test(k)    // never the seed, whatever the prefix list says
       // …and never a DEVICE-BOUND key wrap. church-key.enc is bound to the machine that wrote it: on web it is
       // ciphertext only that device's PIN opens, and on native it is merely the MARKER saying the real blob is
@@ -141,7 +159,10 @@
     return skipped;
   }
 
-  const MEMBER_PREFIXES = ['trinityone.mydata', 'trinityone.followedChurches', 'trinityone.activeChurch', 'trinityone.reminders', 'trinityone.onboarded', 'trinityone.relays', 'trinityone.dark', 'trinityone.theme', 'trinityone.settings'];
+  // `trinityone.relays` was here and is deliberately gone — see ROUTING_KEYS above. It matched the relay
+  // list AND the C4 verified-set cache, so a restored file used to hand a phone both a routing table and the
+  // proofs that made it look already-checked.
+  const MEMBER_PREFIXES = ['trinityone.mydata', 'trinityone.followedChurches', 'trinityone.activeChurch', 'trinityone.reminders', 'trinityone.onboarded', 'trinityone.dark', 'trinityone.theme', 'trinityone.settings'];
   // EXACT keys, never prefixes — and the difference is a privacy one, not a tidiness one.
   //
   // `trinityone.profile` is the member's OWN display name and avatar. It was never in the backup at all, so a
@@ -213,15 +234,32 @@
   // can be written at all, this throws — a caller must not be able to turn "nothing happened" into "saved".
   //
   // mode 'local' = device only, no sheet. Anything else = device + offer to share.
-  async function saveFile(filename, text, mode) {
+  // `opts` lets a non-backup caller reuse this chain rather than reinventing the half of it that works.
+  // Defaults keep every existing call identical.
+  //
+  // …AND THE WORDING IS PART OF THAT. `mime`/`title`/`blurb` were parameterised; the three sentences this
+  // function can THROW were not, and neither was the raw Capacitor string it lets through. So the member who
+  // tapped "Add to my calendar" could be told to "make a backup" in a browser, or to press "Save to device"
+  // — a button that only exists on the backup card — or simply "Share canceled", which is a plugin's words,
+  // not English anyone owes a member. Every default below is the sentence that was there before, so the four
+  // backup callers are unchanged; only a caller that passes its own gets different words.
+  // Callers (CLAUDE.md rule 2 — complete list): app/identity-extras.jsx doExport, app/screens-library.jsx
+  // doExport, app/stew-dashboard.jsx (the church-key backup), app/screens-serving.jsx svDownloadICS.
+  async function saveFile(filename, text, mode, opts) {
+    const _mime = (opts && opts.mime) || 'application/json';
+    const _title = (opts && opts.title) || 'TrinityOne backup';
+    const _blurb = (opts && opts.blurb) || 'Save this somewhere safe (Drive, OneDrive…)';
+    const _cantWrite = (opts && opts.cantWrite) || 'This app can’t write the file here. Update the app, or use “Save to device”.';
+    const _cantHand = (opts && opts.cantHand) || 'This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.';
+    const _shareFailed = (opts && opts.shareFailed) || 'Nothing was kept — the sharing sheet closed before the file went anywhere. Please try again.';
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
     const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
     const native = !!(P && P.Filesystem && isNative);
     // The browser download. Real in a browser or PWA; a no-op inside a WebView, so refuse there rather than
     // claim it worked. `saved: false` is not enough — every caller treats a returned object as success.
     const anchorSave = () => {
-      if (isNative) throw new Error('This app can’t write the file here. Update the app, or use “Save to device”.');
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      if (isNative) throw new Error(_cantWrite);
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: _mime }));
       a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
       return { saved: true, where: 'downloads' };
     };
@@ -245,9 +283,14 @@
         // CACHE needs no permission. It is also cleared at Android's discretion, so this copy is a courier,
         // not a backup — which is exactly what the member has to be told, because dismissing the sheet here
         // really does leave them with nothing.
-        if (!P.Share) throw new Error('This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.');
+        if (!P.Share) throw new Error(_cantHand);
         const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-        await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
+        // A REJECTION HERE IS THE PLUGIN'S WORDS, NOT OURS. @capacitor/share rejects a dismissed sheet with
+        // the bare string "Share canceled", and every caller of this function puts e.message straight in
+        // front of the member. Say what it means for them instead — the CACHE copy is a courier Android may
+        // delete, so a sheet that was closed really did leave nothing behind.
+        try { await P.Share.share({ title: _title, text: _blurb, url: c.uri }); }
+        catch (e) { throw new Error(_shareFailed); }
         return { saved: true, where: 'shared', uri: c.uri,
           warn: 'This phone wouldn’t let the app save the file itself, so it was handed to whatever you chose. If you closed that without saving it, no copy was kept — please try again and save it somewhere.' };
       }
@@ -257,7 +300,7 @@
         // already written, so that is a choice, not a failure.
         try {
           const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-          await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: c.uri });
+          await P.Share.share({ title: _title, text: _blurb, url: c.uri });
         } catch (e) {}
       }
       // Report which BUTTON was pressed, not only where the bytes landed. Both modes now write to DOCUMENTS,
@@ -267,8 +310,12 @@
     }
     if (mode === 'local') return anchorSave();
     try {
-      const file = new File([text], filename, { type: 'application/json' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'TrinityOne backup' }); return { saved: true, where: 'cloud' }; }
+      // THE BROWSER SHARE PATH TAKES THE OPTIONS TOO. The three native paths were parameterised and this one
+      // was missed, so on a PWA a calendar file was offered to the chooser as `application/json` titled
+      // "TrinityOne backup" — and calendar apps, which filter by MIME type, removed themselves from the list.
+      // The member saw no way to add the event and nothing said why.
+      const file = new File([text], filename, { type: _mime });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: _title }); return { saved: true, where: 'cloud' }; }
     } catch {}
     return anchorSave();
   }

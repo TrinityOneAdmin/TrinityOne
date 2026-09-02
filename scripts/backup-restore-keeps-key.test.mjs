@@ -45,7 +45,13 @@ function harness(store) {
   };
   const restored = [];
   const Steward = { restoreKey: (m) => { restored.push(m); return { npub: 'npub1fake' }; } };
+  // LIFTED, not re-declared. restoreLocal now also refuses the two keys that say WHERE a church's data goes
+  // (closed-network plan C5), and a copy of that list written here would silently stop matching the shipped
+  // one the moment either changed.
+  const routing = (SRC.match(/const ROUTING_KEYS = new Set\(\[[^\]]*\]\);/) || [])[0];
+  assert.ok(routing, 'ROUTING_KEYS is gone from app/backup.jsx — re-anchor this test');
   const body = [
+    routing,
     grab(SRC, 'function restoreLocal(map, allow, exact)'),
     grab(SRC, 'function applySteward(obj)'),
     "const STEWARD_PREFIXES = ['trinityone.steward'];",

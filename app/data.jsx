@@ -320,12 +320,14 @@ const CHAT_IDENTITY = {
   color: '#5E8C6A',
 };
 
-const RELAYS = [
-  { url: 'relay.damus.io', status: 'on' },
-  { url: 'nos.lol', status: 'on' },
-  { url: 'relay.trinityone.faith', status: 'on' },
-  { url: 'relay.snort.social', status: 'off' },
-];
+// KEEP THE BINDING, EMPTY THE LIST. app/*.jsx are classic scripts sharing one global scope, so deleting
+// `RELAYS` is a ReferenceError at every reader and blanks the whole console/app. Readers (rule 2, grepped
+// 2026-09-01): app/identity-extras.jsx:520 (`window.TrinityData.RELAYS || []`), app/screens-chat.jsx:105
+// and :322, app/identity.jsx:1609 — all four are display-only fallbacks for when window.Fellowship is
+// absent, and all four render correctly with an empty list. The sample rows used to name three generic
+// public Nostr relays: TrinityOne relays are a closed network (reference/DOMAIN.md), so the product must
+// not name a relay that is not one.
+const RELAYS = [];
 
 // Churches the member follows; groups + giving funds are scoped to the active one.
 const CHURCHES = [];   // no sample churches — the member follows their real church by npub (scan/paste)

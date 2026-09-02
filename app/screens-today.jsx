@@ -86,7 +86,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
         <div style={{ width: 40, height: 40, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: accent }}><Icon name={CARE_TYPE_ICON[need.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{CARE_TYPE_LABEL[need.type] || 'Care'} · {cover.text}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{careTypeLabel(need)} · {cover.text}</div>
         </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: cover.done ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>
         <Icon name={expanded ? 'chevD' : 'chevR'} size={16} color="var(--ink-3)" />
@@ -233,6 +233,9 @@ function careTypeLabel(r) {
   return names.length ? names.join(' \u00b7 ') : 'Help';
 }
 const CARE_WHEN = [['once', 'Just once'], ['ongoing', 'For a while'], ['unsure', 'Not sure yet']];
+// Same list the console offers when the care team opens a need, so a need reads the same whoever opened it.
+const CARE_DIET = ['Vegetarian', 'Vegan', 'Pescatarian', 'Gluten-free', 'Dairy-free', 'Nut-free'];
+const CARE_MEALS = [['breakfast', 'Breakfast'], ['lunch', 'Lunch'], ['dinner', 'Dinner']];
 const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No rush']];
 
 // The row wraps. On a 360px phone the icon (38) plus "Message" and "Withdraw" (neither shrinks, ~200 together)
@@ -489,7 +492,18 @@ function CareRequests({ ctx }) {
   // Anyone who is not a care admin is served ONLY children's requests by the relay (their clearance is what
   // grants it), so "assume confidential" is the right default for what remains here — but it is a default, not
   // knowledge. My own request is excluded upstream, which is the case it used to get wrong.
-  const fromChild = (r) => (isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true);
+  // MY OWN REQUEST IS NEVER FROM A CHILD — I know who I am, whatever list I am or am not served.
+  // 78531b1 excluded all of my own requests from this queue; 744e459 rightly narrowed that, because a care
+  // admin filing on behalf of somebody housebound must still see it to approve it. But the narrowing only
+  // kept back requests I raised FOR MYSELF, and `fromChild` answers "yes" unconditionally for anyone who is
+  // not a care admin. So a cleared youth worker asking for help for a neighbour found their own request
+  // under "FROM A YOUNG PERSON · CONFIDENTIAL" with the safeguarding explainer — and row() passes
+  // onApprove = null for anything marked as a child, so it could not be actioned from the only screen that
+  // shows it. Audit, 2026-08-29.
+  const fromChild = (r) => {
+    if (String(r.from || '').toLowerCase() === myPub) return false;
+    return isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true;
+  };
   const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
   const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
   return (
@@ -533,11 +547,20 @@ const CARE_SEND_REFUSAL = {
   // matters most. This build cannot itself produce that refusal — it always mints a naming id — so it is
   // insurance for the NEXT time the relay has to refuse an old app, not for this change.
   'stale-app': 'Please update the app to ask for help — this version can’t send a request. If you can’t update right now, speak to a leader in person.',
+  // NOT SENT, and not the member's connection. Under the closed relay network nothing is published to an
+  // address that has not shown it is one of this church's relays, so the request can fail with a perfectly
+  // good signal — and "check your connection" would send someone asking for help to stare at their wifi.
+  // Say plainly that it did not go, and point them at a person, because that is the route that still works.
+  'no-network-relay': 'Your request was NOT sent — we couldn’t reach a relay your church runs. Please speak to a leader in person, and try again later.',
 };
 function careSentWording(res) {
   // A YOUNG PERSON DID NOT WRITE TO THE CARE TEAM. Their request goes to the adults their church has cleared,
   // and telling them otherwise names a group of people they did not choose to tell — unsettling in itself, and
   // untrue. Kept deliberately vague about WHO: a child does not need a roster, they need to know it arrived.
+  // An OPENED need is not a message to anybody — it is a public thing people sign up to, and how public
+  // depends on the church's own visibility setting. Checked first: a need result carries no teamCount, so the
+  // "no care team is set up yet" line below would otherwise claim it went to a church leader.
+  if (res && res.need) return res.teamOnly ? 'Opened \u2014 your care team is shown it and can sign up' : 'Opened \u2014 your church can see it and sign up to help';
   if (res && res.toChildAudience) return 'Sent \u2014 someone at your church who can help will see this';
   if (res && res.narrowed) return 'Sent to your church leader \u2014 we couldn\u2019t reach the care team list';
   if (res && !res.teamCount) return 'Sent to your church leader \u2014 no care team is set up yet';
@@ -550,6 +573,35 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   // child-aware and the sheet had not, so one screen said "Tell someone at your church" and the sheet
   // directly beneath it said "This goes privately to your care team". Both were mine; I changed one.
   const _isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  // WHEN THE CHURCH HAS SAID MEMBERS MAY OPEN NEEDS, this sheet opens one instead of asking for one. Same
+  // button in the same place: a second control to go hunting for is exactly how the care page got lost before.
+  // A child never opens a need — the relay says so too — so they keep the private request they always had.
+  const _care = ctx.care || {};
+  // The church's setting is NECESSARY and never SUFFICIENT. `isMinor` has no cache, defaults to false, and
+  // waits on a 1.2s timer plus a relay round-trip, while `openedBy` beside it is restored from localStorage
+  // instantly — so restating the rule as `!_isMinor && openedBy === 'member'` showed a CHILD the public-need
+  // wording for the first seconds of every cold start. Ask the engine, which distinguishes "not a child" from
+  // "we have not heard yet", and start from the private wording until it answers. Never over-promise, then
+  // settle; the reverse is the harm.
+  const _churchAllowsNeeds = !_isMinor && ((_care.settings && _care.settings.openedBy) === 'member');
+  const [_engineAllows, setEngineAllows] = React.useState(false);
+  React.useEffect(() => {
+    if (!_churchAllowsNeeds) { setEngineAllows(false); return; }
+    let live = true;
+    Promise.resolve(window.Fellowship && window.Fellowship.canOpenCareNeed ? window.Fellowship.canOpenCareNeed() : false)
+      .then(ok => { if (live) setEngineAllows(!!ok); })
+      .catch(() => { if (live) setEngineAllows(false); });
+    return () => { live = false; };
+  }, [_churchAllowsNeeds]);
+  const _opensNeed = _churchAllowsNeeds && _engineAllows;
+  const _teamOnly = (_care.settings && _care.settings.visibility) === 'team';
+  const [dates, setDates] = React.useState([]);
+  const [pick, setPick] = React.useState('');
+  const addDate = () => { if (pick && !dates.includes(pick)) setDates(d => [...d, pick].sort()); setPick(''); };
+  const [more, setMore] = React.useState(false);
+  const [meals, setMeals] = React.useState(['dinner']);
+  const [diet, setDiet] = React.useState([]);
+  const toggleMeal = (m) => setMeals(ms => ms.includes(m) ? (ms.length > 1 ? ms.filter(x => x !== m) : ms) : [...ms, m]);
   const [forSelf, setForSelf] = React.useState(true);
   const [forName, setForName] = React.useState('');
   const [types, setTypes] = React.useState([]);
@@ -563,9 +615,20 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' };
   const submit = async () => {
     if (!types.length) { setErr('Pick what would help.'); return; }
+    if (_opensNeed && !dates.length) { setErr('Pick at least one day people can help on.'); return; }
     setBusy(true); setErr('');
     let ok = null;
-    try { ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
+    try {
+      // A NEED IS PUBLIC AND A REQUEST IS NOT. publishCareNeed refuses for a child, and refuses when this
+      // church uses safeguarding and has not yet told this phone which this member is. Either way we fall
+      // back to the private request — the behaviour that already existed — rather than pressing on or
+      // stopping the member from asking at all.
+      if (_opensNeed) {
+        const r = await window.Fellowship.publishCareNeed({ types, forSelf, forName: forSelf ? '' : forName, note, dates, meals, dietary: diet });
+        if (r && !r.error) ok = { ...r, teamOnly: _teamOnly };
+      }
+      if (!ok) ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note });
+    } catch (e) {}
     setBusy(false);
     // A REFUSAL IS AN OBJECT TOO. publishCareRequest answers with a reason when it will not send a child's
     // request — it could not tell whether the sender is a child, could not establish who may receive it, or
@@ -580,7 +643,13 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
           <Icon name="heart" size={20} color="var(--clay)" />
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Ask for help</div>
         </div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 4px' }}>{_isMinor ? 'This goes privately to the people at your church who can help young people — no one else sees it. Tell them what would help.' : 'This goes privately to your care team — no one else sees it. Tell them what would help.'}</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 4px' }}>{_isMinor
+          ? 'This goes privately to the people at your church who can help young people — no one else sees it. Tell them what would help.'
+          : _opensNeed
+            ? (_teamOnly
+              ? 'Your church lets anyone open a need. Your care team is shown this and can sign up to help — but it is not sealed to them, and anyone at your church could read it. Say only what you are happy for the church to read.'
+              : 'Your church lets anyone open a need. Everyone at your church will see this and can sign up to help — so say only what you are happy for the church to read.')
+            : 'This goes privately to your care team — no one else sees it. Tell them what would help.'}</p>
 
         <div style={lbl}>Who's this for?</div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -596,6 +665,44 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
             return <button key={t} role="checkbox" aria-checked={on} onClick={() => setTypes(on ? types.filter(x => x !== t) : [...types, t])} style={chip(on)}><Icon name={on ? 'check' : CARE_TYPE_ICON[t]} size={14} color="currentColor" /> {CARE_TYPE_LABEL[t]}</button>;
           })}
         </div>
+
+        {_opensNeed ? (
+          <React.Fragment>
+            <div style={lbl}>Which days? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600, color: 'var(--ink-3)' }}>People sign up per day</span></div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="date" value={pick} min={todayISO()} onChange={e => setPick(e.target.value)} aria-label="Pick a day people can help on" style={{ flex: 1, boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
+              <button onClick={addDate} disabled={!pick} style={{ ...chip(false), opacity: pick ? 1 : .5, cursor: pick ? 'pointer' : 'default' }}>Add day</button>
+            </div>
+            {dates.length ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                {dates.map(d => <button key={d} onClick={() => setDates(ds => ds.filter(x => x !== d))} aria-label={'Remove ' + d} style={chip(true)}>{d} <Icon name="x" size={12} color="currentColor" /></button>)}
+              </div>
+            ) : null}
+
+            {/* EXPANDABLE, not a second screen. Everything below is optional detail the care team can fill in
+                afterwards; the need is already usable without it. Dietary sits here rather than in the short
+                form only because it is meals-only — it is the one field where an omission actually matters. */}
+            <button onClick={() => setMore(v => !v)} aria-expanded={more} style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13, color: 'var(--clay)' }}>
+              <Icon name={more ? 'chevD' : 'chevR'} size={14} color="currentColor" /> {more ? 'Fewer details' : 'Add details (optional)'}
+            </button>
+            {more ? (
+              <React.Fragment>
+                {types.indexOf('meals') >= 0 ? (
+                  <React.Fragment>
+                    <div style={lbl}>Which meals?</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {CARE_MEALS.map(([k, l]) => <button key={k} role="checkbox" aria-checked={meals.indexOf(k) >= 0} onClick={() => toggleMeal(k)} style={chip(meals.indexOf(k) >= 0)}>{l}</button>)}
+                    </div>
+                    <div style={lbl}>Anything they can't eat?</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {CARE_DIET.map(dd => <button key={dd} role="checkbox" aria-checked={diet.indexOf(dd) >= 0} onClick={() => setDiet(ds => ds.indexOf(dd) >= 0 ? ds.filter(x => x !== dd) : [...ds, dd])} style={chip(diet.indexOf(dd) >= 0)}>{dd}</button>)}
+                    </div>
+                  </React.Fragment>
+                ) : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>Nothing else to add for this kind of help — your care team can fill in the rest.</div>}
+              </React.Fragment>
+            ) : null}
+          </React.Fragment>
+        ) : null}
 
         <div style={lbl}>When?</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -613,7 +720,7 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Sending…' : (_isMinor ? 'Send' : 'Send to care team')}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? (_opensNeed ? 'Opening…' : 'Sending…') : (_isMinor ? 'Send' : _opensNeed ? 'Open this need' : 'Send to care team')}</button>
         </div>
       </div>
     </div>
@@ -690,7 +797,9 @@ function AskForHelp({ ctx, linkOnly }) {
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>{isMinor ? 'Tell someone at your church what would help — privately.' : 'Tell your care team what would help — privately.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>{isMinor ? 'Tell someone at your church what would help — privately.'
+              : (care.settings && care.settings.openedBy) === 'member' ? 'Tell your church what would help.'
+              : 'Tell your care team what would help — privately.'}</div>
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
@@ -810,6 +919,9 @@ function CareCard({ ctx, embedded }) {
   const care = ctx.care || {};
   // The Care tab's own framing is read by children too, and for them "your care team" is not who receives it.
   const _minorHere = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  // The church-level setting only. Enough to stop the section promising privacy it may not deliver; the
+  // sheet below asks the engine whether THIS person may actually open one.
+  const _needsOpenToMembers = !_minorHere && ((ctx.care && ctx.care.settings && ctx.care.settings.openedBy) === 'member');
   const s = care.settings || {};
   const [openId, setOpenId] = React.useState(() => (embedded && ctx.careFocus) || null);   // deep-link: auto-open the focused need
   if (!s.enabled) return null;
@@ -878,7 +990,7 @@ function CareCard({ ctx, embedded }) {
     return (
       <React.Fragment>
         <CareRequests ctx={ctx} />
-        <CareSection id="need" icon="heart" title="If you need help" sub={_minorHere ? "Tell someone at your church, or reach someone who’s offered" : "Ask your care team, or reach someone who’s offered"}>
+        <CareSection id="need" icon="heart" title="If you need help" sub={_minorHere ? "Tell someone at your church, or reach someone who’s offered" : _needsOpenToMembers ? "Tell your church, or reach someone who’s offered" : "Ask your care team, or reach someone who’s offered"}>
           <AskForHelp ctx={ctx} />
           <CareAvailability ctx={ctx} part="others" />
           {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>{_minorHere ? 'Nobody else has listed themselves as available yet — asking above reaches the people at your church who can help.' : 'Nobody else has listed themselves as available yet — asking your care team above reaches them directly.'}</div> : null}
@@ -1172,14 +1284,87 @@ function RecoveryNudge({ ctx }) {
 }
 window.RecoveryNudge = RecoveryNudge;
 
+// ── "something new" on the Serving & events card ────────────────────────────────────────────────────────────
+// NEVER BADGE SOMETHING THE MEMBER CANNOT THEN OPEN. This counts `ctx.churchEvents` and nothing else, because
+// that is the EXACT list the Serving overlay's Events tab renders (app/screens-serving.jsx, `const events =
+// ctx.churchEvents || []`) — what the relay served THIS member, not what the church published. Counting from
+// the church's corpus instead would put a dot on a rota or a run sheet this member is deliberately not shown
+// (rotaVis 'team'/'stewards', enforced by the relay): the dot would open onto nothing, and it would also leak
+// that SOMETHING EXISTS to exactly the person the church chose not to show it to.
+//
+// A `_locked` entry is dropped for the same reason. It is an event sealed under a church name key that has not
+// reached this phone: the Events tab can only say "1 event you can't open yet", so it is not something new to
+// go and read. (When the key does arrive the whole calendar opens at once, which is a bigger moment than a dot;
+// this does not promise a badge for it.)
+//
+// The member's own actions are structurally absent: an RSVP is a separate document (subscribeMyRsvps) and
+// never rewrites the church's event, so `ts` cannot move because of something this member did.
+//
+// `ts` is the event document's created_at, one document per event (`trinityone/event:<id>`), so a steward
+// EDITING an event republishes it with a newer ts and it counts again — "or a change to one". Occurrences of
+// a recurring event are expanded from one document and share its id, so they are counted once.
+const SERV_NEW_CAP = 9;
+function servingNewCount(ctx, seenTs) {
+  const seen = Number(seenTs) || 0;
+  if (!seen) return 0;   // no mark yet -> nothing is new. A member who joined a church with fifty events on
+                         // its calendar this morning is not fifty things behind.
+  const ids = new Set();
+  for (const e of ((ctx && ctx.churchEvents) || [])) {
+    if (!e || e._locked || !e.id) continue;
+    if ((Number(e.ts) || 0) > seen) ids.add(e.id);
+  }
+  return ids.size;
+}
+const servingNewLabel = (n) => (n > SERV_NEW_CAP ? SERV_NEW_CAP + '+' : String(n));
+
+// THE OTHER HALF OF THE SAME RULE, kept next to it so the two cannot drift apart: given everything this member
+// is served (unexpanded — app/app.jsx holds the three source lists) and the current time in seconds, what does
+// opening the card stamp? app/app.jsx's markServingSeen() calls this and writes the result; nothing else does.
+//
+// `now` on its own would leave a document published by a device whose clock runs fast counted for ever — a dot
+// that survives being looked straight at. The newest visible ts on its own would not move at all for a member
+// with nothing yet, so the mark would stay 0 and the first arrival would badge them. It is the maximum of the
+// two. `_locked` entries are skipped because a sealed document carries the PUBLISHING device's created_at,
+// which can sit ahead of this phone's clock: letting one set the mark would stamp past things not yet
+// published and swallow them when they are.
+function servingSeenStamp(events, nowSec) {
+  let top = Number(nowSec) || 0;
+  for (const e of (events || [])) {
+    if (!e || e._locked) continue;
+    const ts = Number(e.ts) || 0;
+    if (ts > top) top = ts;
+  }
+  return top;
+}
+
+// A mark, not a demand: clay, not red; no sound, no push, no animation. Sits after the card's title.
+function ServingNewDot({ n }) {
+  if (!n) return null;
+  const label = servingNewLabel(n);
+  return (
+    <span aria-label={(n === 1 ? 'one thing' : label + ' things') + ' the church has posted since you last looked'}
+      title="New since you last opened this"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0, marginLeft: 7,
+        color: 'var(--clay-ink)', fontSize: 11.5, fontWeight: 800, fontFamily: 'var(--font-ui)',
+        verticalAlign: 'middle', lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+      <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />
+      {label}
+    </span>
+  );
+}
+
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
   // U6: the pinned-sermon card can be dismissed (per sermon id, persisted) and stops saying "New" once it ages,
   // so it doesn't hold the prime Today slot forever. A newly-pinned sermon (different id) reappears.
   const [sermonSeen, setSermonSeen] = React.useState(() => { try { return localStorage.getItem('trinityone.sermon-seen') || ''; } catch { return ''; } });
-  // Verse of the day can be minimised to a compact bar (preference persists); tap the bar to reopen it.
-  const [votdMin, setVotdMin] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-min') === '1'; } catch { return false; } });
+  // Verse of the day STARTS MINIMISED as a compact bar you tap to open (owner, 2026-09-01); the preference
+  // persists, and an explicit choice outranks the default. The stored key tells the three cases apart:
+  // ABSENT = never touched it (gets the new default, minimised), '0' = chose expanded, '1' = chose minimised.
+  // Only the absent case moves, so no member's existing choice is discarded. `!== '0'` and not `!== '1'` is
+  // deliberate: an unreadable or unrecognised value falls to the default, never to the old one.
+  const [votdMin, setVotdMin] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-min') !== '0'; } catch { return true; } });
   const toggleVotd = () => setVotdMin(v => { const nv = !v; try { localStorage.setItem('trinityone.votd-min', nv ? '1' : '0'); } catch {} return nv; });
 
   // real date + time-of-day greeting
@@ -1244,6 +1429,9 @@ function TodayScreen({ ctx }) {
   const servNext = ctx.servNext;
   // (top bar sits just below the status bar; care + serving cards, then the verse — see the ScreenScroll top below)
   const servPendingN = (ctx.servPending || []).length;
+  // how many things the church has posted, that THIS member is served, since they last opened this card.
+  // `ctx.servingSeenTs` is the per-church mark; app/app.jsx stamps it forward from ctx.openServing().
+  const servNew = servingNewCount(ctx, ctx.servingSeenTs);
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
 
   return (
@@ -1251,13 +1439,53 @@ function TodayScreen({ ctx }) {
       <SafetyBanner ctx={ctx} />
       <RecoveryNudge ctx={ctx} />
       {/* greeting */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
-        <div>
+      {/* The greeting column shrinks to a FLOOR; the controls do not shrink at all, and the row wraps rather
+          than squeeze past that floor. All numbers below were measured by
+          scripts/todays-header-fits-the-phone.test.mjs — nothing here is estimated.
+
+          The original bug: the column was 191px in a 324px row and the control group would not go below 200px,
+          so the row's contents needed 391px and the streak pill was drawn from x=353 to x=408 — outside a 360px
+          viewport, its digit cut in half; `overflow-x: hidden` on the scroll container clipped it rather than
+          scrolling to it. The 191px was the CHURCH-NAME BUTTON's min-content: a `white-space: nowrap` run
+          contributes its whole text width to min-content, so the `text-overflow: ellipsis` already on that name
+          never got the chance to act, and the column's default `min-width: auto` forbade shrinking below it.
+
+          `minWidth: 0` alone then over-corrected: at 320px with a long church name and a three-digit streak the
+          column was squeezed to 56px, and the `overflow-wrap: anywhere` that was there to stop the spill
+          inherited into the date and the greeting and broke them MID-WORD ("Wedne/sday", "mornin/g"), while the
+          church name collapsed to a bare 14px ellipsis and the row grew from 87px to 169px tall.
+
+          So the column now carries a floor instead of a licence to shrink for ever:
+            · flex 1 1 96px  — 96 clears the date line's measured min-content of 90px (the widest unbreakable
+                               word, "WEDNESDAY"/"SEPTEMBER" in Sora 13px), so a word never has to break; the
+                               column still grows into whatever room is left over.
+            · minWidth 0     — without it the column's automatic minimum size is that same 191px. That was the
+                               original overflow; with wrapping on it shows up instead as the header dropping
+                               to two lines at 360px and 390px, which have the room to stay on one.
+            · flexWrap wrap  — when the floor plus the controls genuinely do not fit (320px, or 360px with a
+                               three-digit streak) the controls drop to their own line instead of crushing the
+                               greeting. Flexbox decides that from the flex BASIS, which is why the floor is
+                               written as a basis and not as a min-width.
+            · marginLeft auto on the controls — keeps them against the right edge on a line of their own, which
+                               `justify-content: space-between` does not do for a single item.
+            · maxWidth min(220px, 100%) on the church button — a `white-space: nowrap` name IS its own
+                               min-content and an inline-flex box never shrinks below that, so without the cap
+                               the pill lays out at the full width of the name: measured at 334px, running
+                               32px off a 320px screen, for "The Cathedral Church of Saint Peter and Saint
+                               Paul". The cap is what hands the shortening to the ellipsis instead.
+          The church name's ellipsis needs no `min-width: 0` of its own: `overflow: hidden` on that span already
+          makes its automatic minimum size zero. That was measured, so it is gone.
+          Trimming the pill's padding instead would have come back at 320px, or at a 365-day streak. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
+        <div style={{ flex: '1 1 96px', minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', textTransform: 'uppercase' }}>{dateStr}</div>
           <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.05 }}>{greet}</h1>
-          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 220, boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
+          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 'min(220px, 100%)', boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        {/* marginLeft auto right-aligns this group on a line of its own (space-between does not);
+            flexShrink 0 is MEASURED INERT — the buttons' own automatic minimum size already floors the
+            group at 200px — and is kept only as a statement of intent. */}
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
           {(() => {
             const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
               background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
@@ -1316,12 +1544,12 @@ function TodayScreen({ ctx }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             {servPendingN ? (
               <React.Fragment>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Can you serve?</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Can you serve?<ServingNewDot n={servNew} /></div>
                 <div style={{ fontSize: 12.5, color: '#8a6717', fontWeight: 600 }}>{servPendingN} request{servPendingN > 1 ? 's' : ''} waiting for your reply</div>
               </React.Fragment>
             ) : (
               <React.Fragment>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>You’re serving · {servNext.teamName}</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>You’re serving · {servNext.teamName}<ServingNewDot n={servNew} /></div>
                 <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 600 }}>{servNext.role} · {fmtServe(servNext.date)}</div>
               </React.Fragment>
             )}
@@ -1333,7 +1561,14 @@ function TodayScreen({ ctx }) {
         <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both', background: 'var(--surface)', border: '1px solid var(--line)' }}>
           <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Serving &amp; events</div>
+            {/* The title and its dot are ONE line. "What’s happening" plus a "9+" badge is wider than the
+                old "Serving & events" was, and at 320px it wrapped and grew the card 79px -> 95px
+                (serving-card-says-whats-new.test.mjs catches exactly this). nowrap + ellipsis keeps the
+                dot beside the title instead of under it; minWidth:0 lets the ellipsis actually engage. */}
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, display: 'flex', alignItems: 'center', minWidth: 0 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>What’s happening</span>
+              <ServingNewDot n={servNew} />
+            </div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>See what’s on · RSVP · your rota</div>
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
@@ -1342,11 +1577,11 @@ function TodayScreen({ ctx }) {
 
       {/* Verse of the day — minimisable hero (below the care + serving cards) */}
       {votdMin ? (
-        <div onClick={toggleVotd} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+        <button type="button" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
           <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
           <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
-        </div>
+        </button>
       ) : (
       <div onClick={() => ctx.openShareSheet(votd)} style={{
         position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',

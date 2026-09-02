@@ -23,6 +23,7 @@
 
   --sage:       #5E8C6A;
   --sage-soft:  #D8E6DC;
+  --sage-ink:   #4A7355;  /* a11y: --sage on a sage-8% tint is 3.5:1 (fails AA for small bold text) → 4.97:1. Used where sage is TEXT on its own tint, e.g. the Groups "Child-safe" toggle when it is on — the protective state, and the one that has to be legible at a glance. Mirrors --clay-ink. */
 
   --midnight:   #17120B;
   --midnight-2: #241C12;

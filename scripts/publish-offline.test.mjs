@@ -42,9 +42,17 @@ function realPublishAny(pool, seen) {
   // publishes: the pool refuses the duplicate with "duplicate url", and that refusal used to read as the relay
   // TALKING, wiping the stall count for the relay that had just gone quiet.
   const src = [lift('_wedgeKey'), lift('_dedupeRelays'), lift('_classify'), lift('_publishAny')].join('\n') + '; return _publishAny;';
-  return new Function('pool', '_PUB_FAILED', '_PUB_SILENT', '_noteSendResult', 'normalizeURL2', 'WEDGE_ACK_MS', src)(
+  // _netRelays is the closed-network gate (plan C4), and it is passed through UNCHANGED here on purpose.
+  // This file's subject is what a DEAD ENDPOINT does to the success/failure decision — the relay is dialled
+  // and refuses at the socket. Which relays are allowed to be dialled at all is a different question with its
+  // own file (scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs), and running the real gate here
+  // would empty the list before a socket was ever opened, so these tests would pass without ever reaching the
+  // code they are named after.
+  return new Function('pool', '_PUB_FAILED', '_PUB_SILENT', '_noteSendResult', 'normalizeURL2', 'WEDGE_ACK_MS',
+    '_netRelays', 'churchRelaysRaw', 'NO_NETWORK_RELAY', src)(
     pool, new RegExp(m[1].slice(1, -2), 'i'), new RegExp(sm[1].slice(1, -2), 'i'),
-    (url, outcome) => { if (seen) seen.push(outcome); }, normalizeURL, 11000);
+    (url, outcome) => { if (seen) seen.push(outcome); }, normalizeURL, 11000,
+    (list) => list, () => [], 'no-network-relay');
 }
 
 const evt = () => finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'probe' }, generateSecretKey());

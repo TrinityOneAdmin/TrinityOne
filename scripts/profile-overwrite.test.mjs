@@ -48,8 +48,39 @@ const BODY = grabMethod(FELLOWSHIP, 'async setProfile(meta)');
 const FE_NAME = (BODY.match(/\bfinalizeEvent\d*\b/) || [])[0];
 assert.ok(FE_NAME, 'setProfile no longer signs an event — re-anchor this test');
 
+// setProfile also consults the church-wide member-photo policy before it publishes. Those helpers live at
+// module scope in the bundle, so the lifted method cannot see them — lift the REAL ones in beside it rather
+// than stubbing, or this file would be testing a setProfile that is not the shipped one.
+// With no church policy loaded, _photosOffChurches is empty and the strip is a no-op — exactly production's
+// state for a member whose church has not turned photos off, which is what every case below assumes.
+function grabFn(src, name) {
+  const re = new RegExp('\\n  function ' + name + '\\([\\s\\S]*?\\n  \\}');
+  const m = re.exec(src);
+  assert.ok(m, 'could not lift ' + name + ' from the shipped bundle — re-anchor this test, do not delete it');
+  return m[0];
+}
+function grabVar(src, name) {
+  const re = new RegExp('\\n  (?:var|let|const) ' + name + ' = [\\s\\S]*?;');
+  const m = re.exec(src);
+  assert.ok(m, 'could not lift ' + name + ' from the shipped bundle — re-anchor this test, do not delete it');
+  return m[0];
+}
+const HELPERS = [
+  grabVar(FELLOWSHIP, 'AV_SYMBOLS'),
+  grabVar(FELLOWSHIP, '_photosOffChurches'),
+  grabFn(FELLOWSHIP, 'hashStr'),
+  grabFn(FELLOWSHIP, '_churchPhotosOff'),
+  grabFn(FELLOWSHIP, '_stripPhoto'),
+  // The PER-ACCOUNT half of the same door: a steward has reset THIS member's photograph. Lifted rather than
+  // stubbed, because whether the member is on the list is the decision these two tests are named after.
+  grabVar(FELLOWSHIP, 'normPub'),
+  grabFn(FELLOWSHIP, 'isPhotoSuppressed'),
+  'let _noPhoto = new Set();',
+  grabFn(FELLOWSHIP, '_myPhotoReset'),
+].join('\n');
+
 // A member-side scope we control: a relay that never answers unless we say so, and a wire we can inspect.
-function memberSide({ seen = false, cached = {}, answerAfterMs = null } = {}) {
+function memberSide({ seen = false, cached = {}, answerAfterMs = null, photosOff = '', noPhoto = null } = {}) {
   const sk = generateSecretKey(), pub = getPublicKey(sk);
   const state = { published: [], toasts: [], sealedSynced: 0, requested: 0, saved: {} };
   const scope = {
@@ -81,7 +112,11 @@ function memberSide({ seen = false, cached = {}, answerAfterMs = null } = {}) {
   };
   scope.window.trinityToast = scope.window.trinityToast;   // the engine reaches it as window.trinityToast
   const args = Object.keys(scope);
-  const fn = new Function(...args, FE_NAME, `return ({ ${BODY} }).setProfile;`)
+  // Seed the church's photo policy INSIDE the lifted scope — _photosOffChurches is module state in the
+  // bundle, so this is the only way to exercise the publish door rather than assert that its source exists.
+  const seed = (photosOff ? `_photosOffChurches.add(${JSON.stringify(photosOff)});` : '')
+    + (noPhoto ? `_noPhoto = new Set(${JSON.stringify(noPhoto === 'self' ? [pub] : [getPublicKey(generateSecretKey())])});` : '');
+  const fn = new Function(...args, FE_NAME, `${HELPERS}\n${seed}\nreturn ({ ${BODY} }).setProfile;`)
     (...args.map(k => scope[k]), finalizeEvent);
   return { call: (meta) => fn(meta), state, scope, pub };
 }
@@ -171,4 +206,57 @@ test('the directory opt-out is never cleared by an unread profile', async () => 
   await m.call({ name: 'Maria' });
   assert.deepEqual(m.state.published, [],
     'a member who had opted OUT of the member directory was silently republished as visible');
+});
+
+// ── AUDIT 2026-08-29: the publish door was asserted, never executed ──────────────────────────────────────
+// The two photo tests in church-photos-off-means-off.test.mjs are greps over the source and compare indexOf
+// positions. An auditor changed the door to `if (false && _churchPhotosOff())` and every one of them stayed
+// green — so "a forbidden photo is stripped before publishing" had never actually been run. This file lifts
+// the real setProfile and inspects the wire, so it is the right place to prove it.
+//
+// What the regression costs: the relay REFUSES a kind-0 carrying a photo the church has switched off
+// (gateway.mjs accept), so the whole profile update is rejected — and the member's NAME CHANGE and their
+// directory opt-out go with it, while the app says the profile was saved.
+test('a photo the church has turned off never reaches the wire', async () => {
+  const m = memberSide({ seen: true, cached: { name: 'Maria' }, photosOff: 'churchpub' });
+  await m.call({ name: 'Maria', picture: 'data:image/webp;base64,AAAA', av: { kind: 'photo', photo: 'p', color: 'c' } });
+  assert.equal(m.state.published.length, 1, 'nothing was published at all');
+  const k0 = JSON.parse(m.state.published[0].content);
+  assert.equal(k0.picture || '', '', 'the forbidden photo went out on the wire — the relay refuses the whole ' +
+    'event, so the member’s name change and directory opt-out are lost with it');
+  assert.notEqual(k0.av && k0.av.kind, 'photo', 'the photo survived as an avatar instead');
+});
+
+test('a photo a STEWARD reset for this one member never reaches the wire either', async () => {
+  // The same door, the other list — and the one the church-wide switch does NOT cover. The relay now refuses
+  // a kind-0 carrying a photograph from anyone on this church's reset list, so carrying the old photo forward
+  // would make every later edit unpublishable: the "about" line and the hide-me-from-the-directory toggle
+  // are carried in the SAME kind-0, so a whole-event refusal loses them while the app says it saved.
+  // (The display name is sealed separately since Stage 2 and survives a refusal — see the test above.)
+  // This RUNS the shipped setProfile.
+  const m = memberSide({ seen: true, cached: { name: 'Maria' }, noPhoto: 'self' });
+  await m.call({ about: 'Sings in the choir', hidden: true, picture: PHOTO, av: { kind: 'photo', photo: 'p', color: 'c' } });
+  assert.equal(m.state.published.length, 1, 'nothing was published at all');
+  const k0 = JSON.parse(m.state.published[0].content);
+  assert.equal(k0.picture || '', '', 'the reset photo went out on the wire — the relay refuses the whole ' +
+    'event, so everything else in it is lost too and the member is not told');
+  assert.notEqual(k0.av && k0.av.kind, 'photo', 'the photo survived as an avatar instead');
+  assert.equal(k0.about, 'Sings in the choir', 're-anchor: the edit the member came to make was dropped too');
+  assert.equal(k0.hidden, true, 're-anchor: the directory opt-out was dropped too');
+});
+
+test('…and a member who is NOT on that list keeps their photograph', async () => {
+  // The control. Without it the test above passes just as well with every photo stripped from everybody.
+  const m = memberSide({ seen: true, cached: { name: 'Maria' }, noPhoto: 'other' });
+  await m.call({ name: 'Maria', picture: PHOTO });
+  const k0 = JSON.parse(m.state.published[0].content);
+  assert.equal(k0.picture, PHOTO, 'one member’s photo reset took everybody else’s photograph as well');
+});
+
+test('…and with no such policy the same photo travels normally', async () => {
+  const m = memberSide({ seen: true, cached: { name: 'Maria' } });
+  await m.call({ name: 'Maria', picture: 'data:image/webp;base64,AAAA' });
+  const k0 = JSON.parse(m.state.published[0].content);
+  assert.equal(k0.picture, 'data:image/webp;base64,AAAA',
+    'a church that allows photographs just lost them for everybody');
 });

@@ -18,7 +18,7 @@ function ExtFrame({ children, site = 'console.trinityone.app' }) {
           <div style={{ width: 30, height: 30, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="bookmark" size={17} color="currentColor" /></div>
           <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', border: '1.5px solid var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', boxShadow: 'var(--shadow-sm)' }}>
             <Halo size={20} color="var(--ink)" spark="var(--clay)" />
-            <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>1</span>
+            <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999, background: 'var(--clay-ink)', color: 'var(--on-clay)', fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>1</span>
           </div>
         </div>
       </div>

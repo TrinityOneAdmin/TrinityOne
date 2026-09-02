@@ -1,0 +1,310 @@
+// A CONTROL REPORTS WHAT HAPPENED, NOT WHAT WAS ATTEMPTED.
+// Run: node --test scripts/controls-report-what-happened.test.mjs
+//
+// AUDIT 2026-08-29 (member-app round). Four controls announced success over an action that had not happened:
+//   · the directory opt-out toasted "Hidden from the church directory" BEFORE the save ran, and the save is
+//     fire-and-forget — so a member who chose to be hidden was still listed, and told otherwise;
+//   · sharing to a person announced "Sent to Anna" over a send the relay had permanently refused;
+//   · remove / pin / unpin toasted success and discarded the result, so a leader removing a phone number a
+//     child had posted saw "Message removed" while it stayed up for the whole group;
+//   · the serving-reminder scheduler never re-ran when a rota was published.
+//
+// This repo has shipped six of these at once before. The rule it settled on is in screens-chat.jsx's own
+// words: losing something quietly while claiming it worked is the worst failure this app can produce.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { stmt } from './test-slice.mjs';
+
+const read = (f) => readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+const CHAT = read('app/screens-chat.jsx');
+const APP = read('app/app.jsx');
+const IDENT = read('app/identity.jsx');
+const FELLOW = read('vendor/fellowship.js');
+const line = (src, needle) => {
+  const l = src.split('\n').find(x => x.includes(needle));
+  assert.ok(l, 'could not find ' + needle + ' — re-anchor this test, do not delete it');
+  return l;
+};
+
+// ── sharing to a person ──────────────────────────────────────────────────────────────────────────────────
+function shareTo({ result }) {
+  const toasts = [];
+  const src = (() => {
+    const at = CHAT.indexOf('const sendToPerson = (m) => {');
+    assert.notEqual(at, -1, 'sendToPerson has moved — re-anchor this test');
+    let depth = 0, q = '';
+    for (let i = CHAT.indexOf('{', at + 25); i < CHAT.length; i++) {
+      const c = CHAT[i], p = CHAT[i - 1];
+      if (q) { if (c === q && p !== '\\') q = ''; continue; }
+      if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+      if (c === '{') depth++; else if (c === '}' && --depth === 0) return CHAT.slice(at, i + 1);
+    }
+    assert.fail('could not find the end of sendToPerson');
+  })();
+  const scope = {
+    FS: { sendDM: async () => result },
+    ctx: { toast: (m) => toasts.push(m) },
+    asText: 'hello', comment: { trim: () => '' },
+    onClose: () => {},
+    dmFailWording: (evt) => (evt && evt._refused ? 'REFUSED' : 'QUEUED'),
+    Promise,
+  };
+  const args = Object.keys(scope);
+  const fn = new Function(...args, src + '\nreturn sendToPerson;')(...args.map(k => scope[k]));
+  return { run: () => fn({ pubkey: 'p', name: 'Anna' }), toasts };
+}
+
+test('a share the relay REFUSED is not announced as sent', async () => {
+  const s = shareTo({ result: { _refused: true } });
+  await s.run(); await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(s.toasts, ['REFUSED'], 'the member was told it reached Anna when the relay refused it');
+});
+
+test('a share that is only QUEUED says so rather than claiming delivery', async () => {
+  const s = shareTo({ result: { _delivered: false } });
+  await s.run(); await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(s.toasts, ['QUEUED']);
+});
+
+test('…and a share that really went says it went', async () => {
+  const s = shareTo({ result: { id: 'evt1', _delivered: true } });
+  await s.run(); await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(s.toasts, ['Sent to Anna']);
+});
+
+// ── moderation ───────────────────────────────────────────────────────────────────────────────────────────
+test('remove, pin and unpin report the real outcome', async () => {
+  // RE-ANCHORED 2026-08-30. `_moderated` grew a busy state and a re-entry guard (see
+  // moderation-shows-its-work.test.mjs), so it now takes a THUNK and a busy sentence and no longer ends at
+  // its own `.catch(`. Take the whole statement rather than counting lines to it — the line walk this
+  // replaced would have silently stopped covering the helper the moment it grew a line.
+  const src = stmt(CHAT, 'const _moderated = ', '_moderated').replace(/^const _moderated = /, 'return ');
+  const toasts = [];
+  const busyRef = { current: false };
+  const busySeen = [];
+  const fn = new Function('ctx', 'Promise', 'modBusyRef', 'setModBusy', src)(
+    { toast: (m) => toasts.push(m) }, Promise, busyRef, (v) => busySeen.push(v));
+  await fn(() => Promise.resolve(null), 'Pinning…', 'Pinned', 'Couldn’t pin that');
+  await fn(() => Promise.resolve({ id: 'e' }), 'Pinning…', 'Pinned', 'Couldn’t pin that');
+  await fn(() => Promise.reject(new Error('x')), 'Pinning…', 'Pinned', 'Couldn’t pin that');
+  assert.deepEqual(toasts, ['Couldn’t pin that', 'Pinned', 'Couldn’t pin that'],
+    'a moderation action that never published was reported as done');
+  // …and every one of those three left the control usable again, which is the other half of the guard.
+  assert.equal(busyRef.current, false, 'the guard is never released, so the leader can never act again');
+  assert.deepEqual(busySeen, ['Pinning…', '', 'Pinning…', '', 'Pinning…', ''],
+    'the busy state is not raised on the way in and cleared on the way out');
+});
+
+test('every moderation control goes through it', () => {
+  for (const [what, needle] of [['remove', 'hideMessage(churchNpub'], ['pin', 'pinPost(churchNpub'], ['unpin', 'unpin(churchNpub']]) {
+    assert.match(line(CHAT, needle), /_moderated\(/, `${what} still discards its result and toasts success`);
+  }
+});
+
+// ── the serving reminder ─────────────────────────────────────────────────────────────────────────────────
+// CLAUDE.md rule 3, and the reason it is written down. The test that used to live here read the LINE and
+// checked the dependency names appeared on it. An auditor wrapped the call as
+//     useAE(() => { if (false && window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [...])
+// and it stayed green 8/8 — every word of the line was still there, and reminders would never be scheduled
+// for anyone, ever. app/*.jsx ships unbundled, so no assertion that matches its text can tell a live call
+// from a dead one. RUN the effect instead.
+// Anchor on the CALL, then take the whole statement around it — never on the guard itself, or a sabotage
+// of the guard would show up as "re-anchor this test" instead of "no reminder was ever scheduled".
+const REMINDER_EFFECT = (() => {
+  const at = APP.indexOf('TrinityReminders.sync(servConfirmed)');
+  assert.notEqual(at, -1,
+    'nothing anywhere in app.jsx calls the serving-reminder scheduler — re-anchor this test only after ' +
+    'checking that reminders are still scheduled somewhere');
+  const rest = APP.slice(APP.lastIndexOf('\n', at) + 1);
+  assert.match(rest.slice(0, 40), /^\s*useAE\(/, 'the reminder call has moved out of its effect — re-anchor');
+  return stmt(rest, 'useAE(', 'the reminder effect');
+})();
+// The line that decides WHEN it re-runs. Kept with the effect deliberately — see reminderEffect below.
+const REMINDER_KEY = (() => {
+  const l = APP.split('\n').find(x => x.includes('const servKey ='));
+  assert.ok(l, 'the reminder effect no longer computes a stable key — re-anchor this test only after ' +
+    'checking it does not depend on an array rebuilt on every render');
+  return l;
+})();
+
+const SLOT = { serviceId: 'sun', teamId: 'welcome', roleId: 'door', date: '2026-09-06' };
+// The effect is lifted WITH the line above it that computes its dependency key, because the two are one
+// decision: what makes this re-run. Taking the useAE alone would let the key be anything.
+function reminderEffect({ reminders, slots = [SLOT] }) {
+  const seen = { calls: [], deps: null };
+  const scope = {
+    useAE: (fn, deps) => { seen.deps = deps; fn(); },
+    window: { TrinityReminders: reminders },
+    servConfirmed: slots,
+    servReqs: ['req'], servReplies: {}, churchRotas: ['rota'], churchServices: ['svc'],
+    churchRosters: ['roster'], churchTeams: ['team'],
+    console,
+  };
+  const args = Object.keys(scope);
+  new Function(...args, REMINDER_KEY + '\n' + REMINDER_EFFECT)(...args.map(k => scope[k]));
+  return { seen, scope };
+}
+
+test('the reminder scheduler is actually CALLED — not merely mentioned', () => {
+  const calls = [];
+  const r = reminderEffect({ reminders: { sync: (slots) => calls.push(slots) } });
+  assert.equal(calls.length, 1,
+    'nothing schedules a serving reminder. The screen promises "we’ll remind you the day before you serve" ' +
+    'and no reminder is ever set, for anybody');
+  assert.deepEqual(calls[0], r.scope.servConfirmed,
+    'the scheduler was handed something other than the member’s confirmed slots');
+});
+
+test('…and it survives a phone with no reminder plugin at all', () => {
+  // The guard exists for a reason: web builds have no TrinityReminders. It must skip, not throw.
+  assert.doesNotThrow(() => reminderEffect({ reminders: undefined }));
+});
+
+test('the reminder scheduler re-runs when the slots change, and NOT on a bare re-render', () => {
+  // THE FIX FOR THE MISSING DEPS INTRODUCED THE OPPOSITE BUG. servConfirmed is rebuilt in the component
+  // body, so depending on the array itself fired the effect on every toast and every arriving message —
+  // and sync() re-asks for notification permission until it is granted, so a member who declined was asked
+  // again and again. Assert the DEPENDENCY VALUES, which is what React actually compares.
+  const same = reminderEffect({ reminders: { sync: () => {} } });
+  const rerender = reminderEffect({ reminders: { sync: () => {} }, slots: [{ ...SLOT }] });
+  assert.ok(Array.isArray(same.seen.deps) && same.seen.deps.length,
+    'the effect has no dependency array, so it re-runs on every render');
+  // COMPARE THE WAY REACT DOES. The first version of this used deepEqual, which compares by VALUE — so two
+  // freshly-built arrays holding the same slots looked identical to the test and different to React, and the
+  // sabotage that reintroduced the every-render bug passed. React uses Object.is: identity, per element.
+  const sameDeps = same.seen.deps.length === rerender.seen.deps.length
+    && same.seen.deps.every((d, i) => Object.is(d, rerender.seen.deps[i]));
+  assert.ok(sameDeps,
+    're-rendering with the same slots produces dependencies React sees as CHANGED, so the effect fires on ' +
+    'every render — and sync() re-asks for notification permission until it is granted, so a member who ' +
+    'declined is asked again and again');
+
+  const published = reminderEffect({ reminders: { sync: () => {} }, slots: [SLOT, { ...SLOT, roleId: 'welcome' }] });
+  assert.ok(!published.seen.deps.every((d, i) => Object.is(d, same.seen.deps[i])),
+    'publishing a rota does not re-run the scheduler, so "we’ll remind you the day before you serve" never ' +
+    'fires for anything scheduled after launch');
+
+  const moved = reminderEffect({ reminders: { sync: () => {} }, slots: [{ ...SLOT, date: '2026-09-13' }] });
+  assert.ok(!moved.seen.deps.every((d, i) => Object.is(d, same.seen.deps[i])),
+    'a slot moving to another date does not reschedule it');
+});
+
+test('the directory switch does not assert a change that has not happened yet', () => {
+  const l = line(IDENT, 'const flip = () =>');
+  assert.doesNotMatch(l, /'Hidden from the church directory'/,
+    'the switch claims the opt-out has taken effect before the fire-and-forget save has even run');
+  assert.match(l, /Hiding you from the church directory…/);
+});
+
+test('a profile publish that no relay accepted tells the member', () => {
+  // The withheld branch already spoke up; the branch that DID try and failed said nothing, while the change
+  // was written to this device either way — so the switch sat in its new position and the church saw the
+  // old profile. `hidden` is the one that matters: it is a privacy control.
+  const at = FELLOW.indexOf('profile publish failed');
+  assert.notEqual(at, -1, 're-anchor: the failed-publish branch has moved');
+  // NOT a fixed-character window. This took 700 characters, and the branch outgrew that the moment it
+  // learned to tell the two directions of the directory switch apart — so the test went red over correct
+  // code, which is precisely the failure mode test-slice.mjs was written to cure. Bound it by the NEXT
+  // branch instead: it cannot silently stop covering the thing it names, and it cannot silently grow to
+  // cover the neighbour either. AUDIT-2026-08-30.
+  const end = FELLOW.indexOf('profile publish withheld', at);
+  assert.ok(end > at, 're-anchor: the withheld branch that used to follow this one has moved');
+  const near = FELLOW.slice(at, end);
+  assert.match(near, /trinityToast/, 'a failed profile publish is still silent');
+  assert.match(near, /still listed in the directory/, 'the member is not told the opt-out did not land');
+});
+
+test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
+  // The test above matches text in the bundle, and the bundler does strip dead code — so it catches a
+  // `if (false)`. It does NOT catch the deletion an auditor actually made: dropping 'hidden' from
+  //     ['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)
+  // leaves `trinityToast` and "still listed in the directory" sitting right there in the window it reads,
+  // and the test stays green while a member who chose to be hidden is silently left in the church
+  // directory. `hidden` is the one entry in that list that is a privacy control. So run the real
+  // setProfile against a relay that refuses, and assert the member is told.
+  const at = FELLOW.indexOf('async setProfile(meta) {');
+  assert.notEqual(at, -1, 'setProfile is gone from the shipped bundle — re-anchor this test, do not delete it');
+  const BODY = (() => {
+    let depth = 0, q = '';
+    for (let i = FELLOW.indexOf('{', at + 20); i < FELLOW.length; i++) {
+      const c = FELLOW[i], p = FELLOW[i - 1];
+      if (q) { if (c === q && p !== '\\') q = ''; continue; }
+      if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+      if (c === '/' && FELLOW[i + 1] === '/') { i = FELLOW.indexOf('\n', i); if (i === -1) break; continue; }
+      if (c === '{') depth++; else if (c === '}' && --depth === 0) return FELLOW.slice(at, i + 1);
+    }
+    assert.fail('could not find the end of setProfile');
+  })();
+  // esbuild renumbers its imports (finalizeEvent2, …); bind whatever this body actually calls.
+  const finalizeName = (BODY.match(/\bfinalizeEvent\d*\b/) || ['finalizeEvent'])[0];
+
+  const ME = 'a'.repeat(64);
+  const run = async ({ meta, publishFails = true }) => {
+    const toasts = [];
+    const scope = {
+      sk: new Uint8Array(32), pub: ME,
+      _k0Seen: new Set([ME]),           // our own kind-0 has arrived, so this is the DID-TRY branch
+      profiles: {},
+      // Both photo doors stubbed OPEN — this test is about the failed-publish REPORT, not about photos, and
+      // neither is the decision it is named after. (setProfile calls _myPhotoReset since the per-account
+      // photo reset became relay-enforced; scripts/profile-overwrite.test.mjs runs the real one.)
+      _churchPhotosOff: () => false,
+      _myPhotoReset: () => false,
+      _stripPhoto: (p, av) => av,
+      _profilePubFor: null, _profilePubBody: null,
+      PROFILE_KEY: 'trinityone.profile',
+      [finalizeName]: (t) => ({ ...t, id: 'e1', sig: 'x' }),
+      _publishAny: async () => { if (publishFails) throw new Error('no relay accepted it'); },
+      window: {
+        Fellowship: { relays: ['wss://test.invalid'], ready: Promise.resolve(), requestProfiles: () => {}, syncSealedNames: () => {} },
+        trinityToast: (m) => toasts.push(m),
+        dispatchEvent: () => {},
+      },
+      localStorage: { setItem: () => {} },
+      console: { warn() {} },
+      CustomEvent: class { constructor(n, o) { this.n = n; this.o = o; } },
+      Promise, Set, JSON, Date, Math, Object, setTimeout,
+    };
+    const args = Object.keys(scope);
+    const fn = new Function(...args, `return ({ ${BODY} }).setProfile;`)(...args.map(k => scope[k]));
+    await fn(meta);
+    return toasts;
+  };
+
+  const hidden = await run({ meta: { hidden: true } });
+  assert.equal(hidden.length, 1,
+    'a member tapped "hide me from the church directory", no relay accepted it, and they were told nothing ' +
+    '— the switch sits in its new position and the church still lists them');
+  assert.match(hidden[0], /still listed in the directory/,
+    'the member was told something, but not the thing that is actually true of them right now');
+
+  // BOTH DIRECTIONS. Only the hidden:true case was ever driven here, and the branch that picked the wording
+  // was `meta.hidden != null` — which `false` satisfies. So a member turning visibility back ON, whose
+  // publish was refused, was told "you are still listed in the directory", the exact opposite of the truth:
+  // the church still holds their old kind-0 with `hidden: true`, so they are still hidden. This test passed
+  // 11/11 over that for as long as it only ever drove one direction. AUDIT-2026-08-30.
+  const shown = await run({ meta: { hidden: false } });
+  assert.equal(shown.length, 1,
+    'a member tapped "show me in the directory", no relay accepted it, and they were told nothing');
+  assert.doesNotMatch(shown[0], /still listed in the directory/,
+    'a member who asked to be LISTED, and whose publish was refused, is told they are still listed — they ' +
+    'are still HIDDEN, which is the state they just asked to leave');
+  assert.match(shown[0], /still hidden from the directory/,
+    'the member is not told the state they are actually in');
+
+  // the wording must be specific to the opt-out, not the generic profile message
+  const about = await run({ meta: { about: 'Hello' } });
+  assert.equal(about.length, 1, 'a failed profile save is silent again');
+  assert.doesNotMatch(about[0], /still listed in the directory/,
+    'an ordinary profile save now claims the member is listed in a directory, which is not what happened');
+
+  // and a save that lost nothing must not cry wolf
+  assert.deepEqual(await run({ meta: { name: 'Ruth' } }), [],
+    'a name-only save warns that nothing was saved — the name does not travel in kind-0 at all, so that is ' +
+    'a false alarm');
+
+  // …and a publish that WORKED says nothing
+  assert.deepEqual(await run({ meta: { hidden: true }, publishFails: false }), [],
+    'a successful opt-out tells the member it failed');
+});

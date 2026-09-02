@@ -64,7 +64,7 @@ function DismissibleNote({ id, icon, tone, children, style }) {
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, ' + cv + ' 8%, var(--surface))', border: '1px solid color-mix(in oklab, ' + cv + ' 24%, var(--line))', ...(style || {}) }}>
       {icon ? <Icon name={icon} size={16} color={ic} style={{ flexShrink: 0, marginTop: 1 }} /> : null}
       <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>{children}</div>
-      <button onClick={() => { try { localStorage.setItem(key, '1'); } catch (e) {} setGone(true); }} aria-label="Dismiss this note" title="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, margin: '-2px -3px 0 0' }}><Icon name="x" size={15} color="currentColor" /></button>
+      <button onClick={() => { try { localStorage.setItem(key, '1'); } catch (e) {} setGone(true); }} aria-label="Dismiss this note" title="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, padding: 0, margin: '-4px -5px 0 0' }}><Icon name="x" size={15} color="currentColor" /></button>
     </div>
   );
 }

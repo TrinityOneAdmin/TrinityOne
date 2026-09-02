@@ -17,7 +17,14 @@ import { SimplePool } from 'nostr-tools/pool';
 // lookup misses and the health check silently answers about nothing. Use the library's own function rather
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
-import { _absorbById, _forgetById, _seedFromCache } from './church-doc-store.src.js';
+import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
+// Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
+// Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
+import { verifyRelayIdentity } from './relay-identity.src.js';
+// …and then decide whether the key it proved is one this church's network contains, and write the document
+// that says so. Shared with the member app so both surfaces answer that question the same way.
+// …and C4's gate, which is what keeps this church's documents off a relay that cannot prove itself.
+import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -272,6 +279,12 @@ let _careRoster = new Set();     // the church's current steward pubkeys — who
 // Set only when a roster DOCUMENT has been read — not on the React round-trip through setCareRoster, whose
 // initial value is [] and which therefore cannot distinguish the two. AUDIT-8 (2026-08-01).
 let _careRosterKnown = false;
+// …AND DID THAT ANSWER COME FROM A DOCUMENT, or from an EOSE that told us nothing? `_careRosterKnown` cannot
+// tell the difference: it is also set from subscribeStewards' oneose, and a relay that CLOSEs counts towards
+// that EOSE, so a church WITH stewards can be recorded as having none. This is set only where a roster
+// document was actually read, and only _consoleDisplay uses it — see the note there for why an unread empty
+// roster must not be allowed to filter the console's own documents off the screen. (2026-08-29)
+let _careRosterSeen = false;
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
 let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
@@ -551,6 +564,10 @@ function ownRelay() {
   // _refreshBoxHostsUs. Until it answers, the box stays IN the list, because the two mistakes are not equal:
   // an extra relay holding nothing costs one dead connection; dropping the one that holds the church loses
   // the church.
+  //
+  // AND NOTHING THAT ENROLS A RELAY MAY CALL THIS FUNCTION. The line below caches a "no" that then removes
+  // the box from relays(), from relayIdentities() and therefore from anything that could ever sign it in.
+  // See the deadlock rule above enrolRelayNet(): the census reads location directly.
   if (_boxHostsUs === false) return CANONICAL_RELAY;
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return CANONICAL_RELAY;
@@ -607,15 +624,49 @@ function _dirBases() {
   }
   return out;
 }
-async function resolveRelayName(handle) {
+// C5: A DIRECTORY RECORD IS AN ANSWER FROM SOMEBODY ELSE'S MACHINE, so it is a candidate and not an
+// instruction. Two checks, in this order, and both of them were missing here:
+//
+//   • THE SCHEME. Its member-side twin has refused anything but wss:// since the 2026-07-06 audit (L5); this
+//     one took whatever string the directory returned, so a re-pointed record could put a church's entire
+//     traffic on a cleartext socket for any network in the path to read.
+//   • MEMBERSHIP. Whoever holds a name decides where it points, and it can be re-pointed between two calls
+//     of refreshNamedRelays. So the address that comes back is verified the same way every other address is
+//     — the C2 possession proof plus one of the three roots — before it is handed to anything that adopts.
+//
+// `opts.member === false` asks for the POSSESSION PROOF ONLY, and there is exactly one caller: the clone
+// SOURCE (see cloneFromRelay). A box a church is leaving is by definition one it may never have vouched for,
+// and requiring membership of it inverts time — a church vouches the box it is arriving at, not the one it
+// is escaping. Nothing else may use it.
+async function resolveRelayName(handle, opts) {
   const h = String(handle || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
   if (!h) return null;
+  const memberToo = !(opts && opts.member === false);
   for (const base of _dirBases()) {
     // 6s hard timeout so a black-holed directory host (common on a censored network) can't stall the whole
     // resolve — we just fall through to the next mirror.
-    try { const r = await fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store', signal: AbortSignal.timeout(6000) }); if (r.ok) { const j = await r.json(); if (j && j.url) return j; } } catch (e) {}
+    try {
+      const r = await fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (!j || typeof j.url !== 'string' || !/^wss:\/\//i.test(j.url)) continue;
+      if (memberToo ? !(await admitRemoteRelay(j.url)) : !(await verifyRelayIdentity(j.url))) continue;
+      return j;
+    } catch (e) {}
   }
   return null;
+}
+// C5: the one place an address that arrived from somewhere REMOTE — a directory record, a named-relay swap,
+// a discovery offer, a clone destination — is admitted or refused.
+//
+// THROUGH THE C4 GATE, not a bare isNetworkRelay(), for one reason that matters at 90-second intervals: the
+// gate CACHES what it proved. refreshNamedRelays runs on load, then every 90 seconds, then on every window
+// focus, for ever — a bare proof there would be one HTTP round trip per named relay per pass for the life of
+// the console. The gate re-proves an entry once it is a few hours old and answers from the cache in between,
+// and `refresh` waits for a first proof rather than returning "not yet" the way the synchronous filter does.
+async function admitRemoteRelay(url) {
+  if (!url) return false;
+  try { return (await _gate.refresh([url], pub)).includes(url); } catch (e) { return false; }
 }
 function getNamedRelays() { try { const a = JSON.parse(lsGet(NAMES_LS) || '[]'); return Array.isArray(a) ? a.filter(e => e && e.name) : []; } catch { return []; } }
 function setNamedRelays(a) { try { lsSet(NAMES_LS, JSON.stringify(a)); } catch (e) {} }
@@ -629,7 +680,19 @@ async function refreshNamedRelays() {
   for (const entry of named) {
     try {
       const j = await resolveRelayName(entry.name); const newUrl = normRelay(j && j.url);
-      if (newUrl && newUrl !== entry.url) { extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true; }
+      if (!newUrl || newUrl === entry.url) continue;
+      // C5 — AND THIS IS THE PATH NOBODY WATCHES. It runs 2.5 seconds after load, then every 90 seconds,
+      // then on every window focus, for ever, with NO user action after the first connect. A name is held by
+      // whoever claimed it, so a record re-pointed at another machine would otherwise swap the address a
+      // church publishes to, silently, in the background, weeks after anybody typed anything.
+      //
+      // RE-VERIFIED ON EVERY SWAP, not merely the first. The question is not "was this name trustworthy when
+      // the steward typed it" — it is "is the address it points at RIGHT NOW one this church vouched for",
+      // and that answer can change between two passes of this very loop. resolveRelayName already refuses a
+      // non-member address; this is the check at the point the list is actually written, so a future edit
+      // that loosens the resolver cannot quietly un-gate the swap.
+      if (!(await admitRemoteRelay(newUrl))) continue;
+      extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true;
     } catch (e) {}
   }
   if (changed) { _writeExtraRelays(extra); setNamedRelays(named); }
@@ -700,7 +763,12 @@ async function refreshSelfPublicRelay() {
 }
 try { setTimeout(refreshSelfPublicRelay, 1500); setInterval(refreshSelfPublicRelay, 60000); window.addEventListener('focus', refreshSelfPublicRelay); } catch (e) {}
 
-function relays() {
+// THE CANDIDATE LIST. Every address this console might use, with the never-empty guard (the canonical pool
+// is appended unconditionally, below) intact. It is what the background verifier works from, what the Relays
+// card shows, and what the ENROLMENT reads go over — a census or a membership read built on the filtered
+// list could never see the box that would admit itself (plan §6-bis, the bootstrap deadlock). Nothing
+// publishes over this: relays(), just below, is the publish set.
+function relaysRaw() {
   const own = ownRelay();
   const out = [own];
   // ALWAYS THE SHARED PUBLIC POOL, not only when this console happens to sit on it. Owner's model, 2026-08-18:
@@ -717,10 +785,45 @@ function relays() {
   for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }
   return out;
 }
+
+// ── C4: THE GATE, one per surface ───────────────────────────────────────────────────────────────────────
+//
+// The persisted verified set and the synchronous filter over it, created once. How it decides — the cache,
+// why the filter runs AFTER the never-empty guard and not before it, why an unknown address is scheduled
+// rather than awaited — is all in src/relay-net.src.js; this is the wiring.
+//
+// EXTRARELAYS() IS DELIBERATELY NOT FILTERED, and the plan's own C4 bullet asking for it is superseded by
+// its own §6-bis amendment. `extraRelays()` is the relay panel's raw store, and it is one of the sources the
+// enrolment census reads. Filtering it would mean a box that has not been admitted yet is invisible to the
+// only code that could ever admit it — the deadlock, reintroduced at a different line. The gate belongs on
+// the ASSEMBLED list, which is what relays() is.
+const _gate = createRelayGate({
+  store: (typeof localStorage !== 'undefined') ? localStorage : null,
+  verify: verifyRelayIdentity,
+  netEntries: (cp) => relayNetEntries(cp),
+  origin: () => _ownOrigin(),
+  pins: CANONICAL_RELAY_PUBS,
+  // `steward-relays` repaints the Relays card; `steward-relay-returned` is the console's advisory
+  // re-subscribe/flush signal, and a relay entering the publish set is exactly that. Without the second, a
+  // console that booted before its relays were proved would sit on an empty set until something else churned.
+  onChange: () => {
+    try { window.dispatchEvent(new CustomEvent('steward-relays')); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url: '' } })); } catch (e) {}
+  },
+});
+// THE PUBLISH SET. The assembled list with the gate applied — the church's own key is the `cp`, because this
+// console speaks for exactly one church and it is that church's signature that admits a relay. May be empty,
+// and when it is, publish() below says so through the error event it already had.
+function relays() { try { return _gate.admit(relaysRaw(), pub); } catch (e) { return []; } }
+// A publish that had candidates and none of them proved is not "no relay is configured", and the steward has
+// to be told which. Stable prefix; the console has no general write queue and this item does not add one.
+const NO_NETWORK_RELAY = 'no-network-relay';
 // Phase 5 Tier 2: the media host = this relay's HTTPS origin (self-hosted blobs live beside the relay).
 function _blobBase() { const r = ownRelay(); return r.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, ''); }
 // FEDERATION Phase 3 — relay discovery for the steward console (mirrors the member engine). Probe a relay's
 // NIP-11 doc for its trinityone capability/offer block; cached so each relay is probed once. Fail-closed.
+// `enforces` here is a relay REPORTING ON ITSELF over an unauthenticated GET — a candidate filter, never the
+// membership gate. See the note above _probeRelayEnforces and isNetworkRelay().
 const _relayInfoCache = new Map();
 function _relayInfo(wssUrl) {
   if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
@@ -762,6 +865,18 @@ let _discoverySeed = [];
 //
 // What this cannot prove: that the operator is not simply reading their own database. Nothing remote can. It
 // raises the floor from "says the right thing" to "does the right thing".
+//
+// AND IT IS NOT THE NETWORK-MEMBERSHIP GATE — stated here so the next reader does not promote it into one.
+// This is a CANDIDATE FILTER: it stops discovery / Auto-find steering a church at a relay that would not
+// apply the rules. What ADMITS a relay is isNetworkRelay() — the C2 possession proof plus the church's own
+// signature — and behaving correctly for a throwaway key is not a signature. Keep it this way round: a box
+// that passes this probe and is in nobody's relay-net document is a well-behaved stranger, and a box the
+// church signed for is a member whether or not it happened to answer a probe this minute.
+//
+// SAID ONCE MORE IN THE PLAN'S OWN WORDS (closed-network C5), because it has been promoted into a gate here
+// before: THIS IS A GOOD BEHAVIOURAL TEST AND A BAD MEMBERSHIP TEST. It runs SECOND in discoverRelayOffers,
+// after admitRemoteRelay(), and it is not permitted to stand in for it. The two questions are "does this box
+// apply the rules?" and "did this church vouch for it?", and neither answer implies the other.
 function _probeRelayEnforces(wssUrl, timeoutMs) {
   return new Promise((resolve) => {
     let ws = null, done = false;
@@ -807,8 +922,27 @@ async function discoverRelayOffers(seedExtra, region) {
   const probed = await Promise.all(seed.map(async (url) => {
     const t = await _relayInfo(url);
     if (!(t && t.enforces === true && t.open === true && !t.full)) return null;   // its own claim: necessary, not sufficient
+    // C5 — MEMBERSHIP IS THE PRIMARY FILTER, and it is a different question from either check above.
+    //
+    // An offer is a stranger's advertisement. `enforces`/`open`/`full` are that stranger REPORTING ON ITSELF
+    // over an unauthenticated GET, and _probeRelayEnforces below is the box being made to DEMONSTRATE the
+    // claim — a good behavioural test and a bad membership test, because behaving correctly for a throwaway
+    // key is not a signature. A well-behaved stranger is still a stranger, and this list feeds Auto-find,
+    // which ADOPTS what it picks. So the gate is the same one every other address passes: the C2 possession
+    // proof plus one of the three roots (canonical pin, this console's own origin, this church's signature).
+    //
+    // WHAT THIS COSTS, said plainly: a church cannot Auto-find its way onto a relay it has never vouched
+    // for, which is what a closed network means. What Auto-find still does is re-adopt a box this church HAS
+    // signed into its membership document whose address the console no longer has — a relay that moved.
+    // Offering a stranger's box as a place to PUT a congregation belongs to whatever ships the "sign this
+    // key into your network" step; it is not something discovery may do on its own.
+    if (!(await admitRemoteRelay(url))) return null;
     // …and now make it prove it. `enforces` is self-reported; a relay that will accept a stranger's
-    // safeguarding list must never be offered as a place to put a congregation's roster.
+    // safeguarding list must never be offered as a place to put a congregation's roster. The probe stays,
+    // SECONDARY: it answers "does this box apply the rules?", which membership does not — a church can sign
+    // a key into its document and the box behind it still be misconfigured. Both, in this order, or neither
+    // means much. (AUDIT-2026-07-27 is why the probe exists at all; it was promoted into a membership gate
+    // once already and must not be again.)
     const canonical = (CANONICAL_RELAYS || []).includes(url);
     if (!canonical) { const v = await _probeRelayEnforces(url); if (!v.ok) { try { console.warn('[relay-offers] rejected', url, '—', v.why); } catch (e) {} return null; } }
     return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
@@ -826,6 +960,33 @@ function pickRelays(offers, n) {
 }
 
 const pool = new SimplePool();
+
+// AN EMPTY RELAY LIST MUST ANSWER, NOT HANG (closed-network plan C4).
+//
+// Until the gate landed, no list handed to the pool could be empty: loadRelays() refuses to return `[]` and
+// the console appends the canonical pool unconditionally. The PUBLISH SET is allowed to be empty — that is
+// what fail-closed means — so `pool.querySync([])` and `pool.subscribeMany([], …)` are now reachable, and
+// measured against nostr-tools 2.x they never settle: querySync's promise stays pending for ever and no
+// `oneose` is ever delivered. Every screen that waits for one would spin with no error anywhere, which is
+// this codebase's worst failure class (memory: silent-blank-app-bugs).
+//
+// So an empty list answers the way an UNREACHABLE one already does. That is not an invention: a relay whose
+// socket closes counts towards SimplePool's EOSE, so "we asked and got nothing" is the answer every reader
+// here is already written to survive — and the careful ones (_oneComplete, _newestByD, _fetchMyClearance)
+// separate it from "the church has nothing" by other means, which this does not disturb. Not answering at
+// all would be a NEW state that nothing in the app has ever had to handle.
+const _poolSubMany = pool.subscribeMany.bind(pool);
+pool.subscribeMany = (urls, filters, handlers) => {
+  const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+  if (u.length) return _poolSubMany(u, filters, handlers);
+  try { setTimeout(() => { try { if (handlers && handlers.oneose) handlers.oneose(); } catch (e) {} }, 0); } catch (e) {}
+  return { close() {} };
+};
+const _poolQuerySync = pool.querySync.bind(pool);
+pool.querySync = (urls, filter, opts) => {
+  const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+  return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+};
 // HANDOFF-2026-07-31 (4). Relays this console has actually TRIED to open, by normalised url. relaysHealthy()
 // needs this because nostr-tools does not record a dead relay as down — `ensureRelay` sets
 // `relay.onclose = () => this.relays.delete(url)` and `enableReconnect` is false, so a dropped relay has no
@@ -1009,9 +1170,118 @@ let actingChurch = '';
 const stewardedChurches = new Map();   // cp(hex) -> { name } — churches whose roster lists OUR key
 // finalize a CHURCH-CONTENT event, stamping ['church',<cp>] when delegated so the relay accepts our key.
 // Signs with the active key `sk` (our own key in delegated mode; the church/network key otherwise).
+// WHO MAY SPEAK FOR THIS CHURCH, as this console sees it. The member app has _churchVoice for exactly this
+// and the console had nothing — every reader here passed no predicate at all, which the doc store used to
+// read as "anybody". That mattered the moment a tombstone could name the CHURCH'S copy: two of these readers
+// admit foreign authors (an event `p`-tagged to the church is enough), so a group leader could withdraw the
+// church's own event from this console while it stayed on every member's phone.
+//
+// Fails closed on purpose. If the roster has not arrived we do not guess — the cost is that a just-arrived
+// tombstone from a colleague may take a moment to take effect here, which is a cosmetic lag on one screen;
+// the cost of guessing is a document destroyed for a congregation.
+// WHAT THIS CONSOLE WILL SHOW. Deliberately NOT the same predicate as _consoleChurchVoice below, and
+// deliberately the same one at every door of a reader — absorb, cache-seed and delete.
+//
+// The 2026-08-29 audit: the delete path was given a predicate and absorb was left with none, so a delete
+// silently re-filtered the display. A steward deleted an event, watched the row vanish, and every phone
+// kept showing the group LEADER's original wording — the bug that work was fixing, inverted.
+//
+// Permissive until the roster lands, because the alternative is a console that blanks its own church while
+// it waits. Tightening later only ever REMOVES a revoked author's copy, which is the safe direction; the
+// withdrawal grant below stays strict and fails closed, because that one destroys something.
+//
+// IT ASKS 'ANY CAPABILITY', NOT 'CONTENT', and that is the whole point of it being a separate function.
+// The first version of this delegated straight to _consoleChurchVoice, which is the WITHDRAWAL question, so
+// the console's display filter demanded the content capability. The relay does not — scripts/gateway.mjs
+// draws the same distinction in the same two places:
+//   • the WRITE gate (gateway.mjs:1927) is `stewardCan(pubkey, cp, 'content')` — which is what
+//     _consoleChurchVoice mirrors, correctly, for "may you withdraw the church's copy";
+//   • the RETRACTION gate (gateway.mjs:2341), which decides what still gets SERVED, is deliberately
+//     `'any'`, "so that narrowing a delegate to Finance does not make every group they ever created stop
+//     being served to the congregation".
+// Measured against the shipped bundles: an owner unticking "Groups, rotas, services, events, posts" for an
+// existing steward — one ordinary checkbox — emptied their own console of every group, rota, service, plan,
+// devotional and event that steward had ever authored, while the relay kept serving all of them and every
+// phone kept showing them. Console ["Sunday Prayer"], phones ["Sunday Prayer","Youth","Mums & Tots"].
+// `caps.length > 0` is exactly the relay's `'any'`: an EXPLICIT empty list still means "nothing".
+//
+// AN EMPTY ROSTER WE NEVER READ IS A WRONG ANSWER, NOT AN ANSWER. `_careRosterKnown` is set from
+// subscribeStewards' oneose whenever ANY relay is authenticated — and in SimplePool a relay that CLOSEs
+// (or fails to connect) counts towards that EOSE, so a second relay that served nothing turns "we asked and
+// got nothing" into "this church has no stewards". There is no _reduceAll in this bundle, so that answer is
+// never revisited for the rest of the session, and each reader writes the filtered list back to
+// localStorage, where it survives into the next cold start. Before the capability defect above was fixed
+// that could only leave a revoked steward's document on screen; with a real filter it removes legitimate
+// ones. So distinguish the two empties: `_careRosterSeen` is set only when a roster DOCUMENT was actually
+// read. Not seen and empty → show everything, exactly as while we are still waiting.
+//
+// Deliberately NOT `!_careRoster.size` on its own. A church that revokes its last steward publishes a real,
+// empty roster; the relay then stops serving that ex-steward's documents to the congregation, and a console
+// that ignored an empty-but-read roster would go on showing the office documents the members had lost —
+// which is the disagreement two-authors-one-document.test.mjs records as the known gap, reintroduced.
+function _consoleDisplay(rec) {
+  if (!_careRosterKnown) return true;
+  const by = String((rec && rec._by) || '');
+  if (!by) return true;                   // an old cache entry with no author recorded — paint it, let it be superseded
+  if (by === pub) return true;            // the church itself — in delegated mode `pub` IS the church
+  // NOT SEEN MEANS NOT SEEN, whatever `_careRoster` happens to hold. This read `!_careRosterSeen &&
+  // !_careRoster.size`, which assumes the roster can only be non-empty once a document has been read. It
+  // cannot: `setCareRoster` (the React round-trip) writes `_careRoster` and touches NEITHER flag, and the
+  // console's subscription hooks paint from a per-church localStorage cache before any relay answers
+  // (app/steward-root.jsx `_subCache`, read in the hook's useState initialiser and pushed straight into
+  // setCareRoster by app/stew-dashboard.jsx:439). So after a restore, or on any tab remount where the
+  // authenticated EOSE arrives with no roster document, the pair is `size > 0` with `seen` false — and the
+  // escape hatch that exists precisely for "we never read one" silently did not fire, enforcing a filter
+  // against a roster this session never saw. AUDIT-2026-08-30.
+  if (!_careRosterSeen) return true;
+  if (!_careRoster.has(by)) return false;
+  const caps = _capsOf(by);
+  return !caps || caps.length > 0;   // the relay's 'any' — see gateway.mjs:2341
+}
+// WHAT THE RELAY THINKS THIS STEWARD HOLDS. `null` = unscoped = everything (no entry, or a `caps` value that
+// is not an array — gateway.mjs skips those, leaving the steward full authority). Otherwise the list AS THE
+// RELAY BUILDS IT: `new Set(v.filter(x => typeof x === 'string' && x).map(x => x.toLowerCase()))`,
+// gateway.mjs:1611. The console counted the RAW length instead, so `['']`, `[null]` and `[{}]` all read as
+// "one capability" here and as NOTHING at the relay — the console shows documents the relay has already
+// stopped serving to every phone. `['']` is not hypothetical: setStewards() below keeps any entry that is a
+// string, empty included. Case matters for the same reason: the relay lower-cases, so a `caps` entry of
+// 'Content' grants withdrawal at the relay while _consoleChurchVoice refuses it.
+function _capsOf(by) {
+  const caps = _stewardCaps[by];
+  if (!Array.isArray(caps)) return null;
+  return caps.filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());
+}
+// WHO MAY WITHDRAW THE CHURCH'S OWN COPY. Strict on purpose: this one destroys something, so it keeps the
+// content capability and the fail-closed unknown-roster branch. Do NOT fold it back into _consoleDisplay.
+function _consoleChurchVoice(rec) {
+  const by = String((rec && rec._by) || '');
+  if (!by) return false;
+  if (by === pub) return true;            // the church itself — in delegated mode `pub` IS the church
+  // NO SHORTCUT FOR OUR OWN KEY. The first version of this trusted `churchPub` outright to dodge the
+  // roster-arrival race, and that walked straight past the capability check below: a steward the church had
+  // narrowed to Finance watched their own console drop a rota the relay was never going to accept. Being the
+  // one holding the pen is not authority; the church's signed roster is.
+  if (!_careRosterKnown || !_careRoster.has(by)) return false;
+  // A steward the church narrowed to Finance does not get to withdraw its rotas. No caps entry means every
+  // capability, which is what every roster written before capabilities existed means — and the relay's WRITE
+  // gate (gateway.mjs:1927) reads it the same way. Its retraction gate does not; see _consoleDisplay.
+  const caps = _capsOf(by);
+  return !caps || caps.includes('content');
+}
 function feChurch(tmpl, signer) {
   if (actingChurch && !(tmpl.tags || []).some(t => t[0] === 'church')) {
     tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['church', actingChurch]] };
+  }
+  // A DELEGATED STEWARD'S DELETE MUST NAME THE CHURCH'S COPY, OR IT WITHDRAWS NOTHING.
+  // In delegated mode our own key signs while `pub` is the church (see the mode switch below), so a
+  // tombstone is authored by the steward and binds only a version the steward never wrote. Members kept
+  // showing the group, rota or service for ever while this console showed it gone. `for` says whose copy is
+  // meant; the readers honour it for the church's copy alone, never a colleague's. Stamped HERE for the same
+  // reason the church tag is — fifteen call sites publish tombstones and every one of them comes through
+  // this function.
+  if (actingChurch && (tmpl.tags || []).some(t => t[0] === 'deleted')
+      && !(tmpl.tags || []).some(t => t[0] === 'for')) {
+    tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['for', actingChurch]] };
   }
   // Stamp HERE, where every church document is signed. The first attempt at this put it behind
   // _publishSigned() — which turned out to have exactly one caller, while forty-two paths call
@@ -1040,6 +1310,19 @@ function setKey(mnemonic) {
   window.Steward.churchPub = pub;
   // …and find out whether this computer actually holds this church, now that we know which church it is.
   try { _loadBoxHosts(); _refreshBoxHostsUs(); } catch (e) {}
+  // C4: prove this church's relays now that we know which church is asking. Membership is per church — the
+  // signature that admits a relay is this church's — so the answers cached for a different church on this
+  // computer say nothing about this one. The gate schedules the same work lazily anyway, so this only means
+  // the first thing the steward saves is not waiting on a probe.
+  //
+  // BUT THE PROMISE IS KEPT NOW, and that is the fix. Fire-and-forget was right while nothing REQUIRED a
+  // proof: an established console coasts on its 30-day cache and the probe is a background nicety. A church
+  // being created on a fresh device has an EMPTY cache, so the wizard's founding writes raced the very first
+  // proof and could land on an empty admitted set — a publish error in the church's first minute of
+  // existence. Same shape as the registration race one gate over (see _regGate below, and the measured
+  // incident that produced it), and it wants the same answer rather than a second ad-hoc await.
+  // Fire-and-forget, and the cold-start race above is the known cost of that. See _waitForRegistration.
+  try { _gate.refresh(relaysRaw(), pub); } catch (e) {}
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
   // NO RELAY-LIST PUBLISH ON UNLOCK. This used to fire publishRelayList() here, deferred and
@@ -1073,7 +1356,17 @@ function _resetChurchScopedState() {
   lastProfile = {}; _profileLoaded = false;
   _clearedTrail = { cp: '', map: {}, list: [], loaded: false };   // safeguarding: whose clearance record this is
   _clearanceSent.clear();
-  _careRoster = new Set(); _careRosterKnown = false;
+  _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
+  // …AND WHAT THAT ROSTER GRANTED EACH OF THEM. `_stewardCaps` is the roster's other half and was left out
+  // of both resets, so church A's capability map judged church B's authors: an owner who had scoped a
+  // delegate to nothing in A lost, from their own console, every group, rota, service, run sheet, room,
+  // booking, event and team roster that delegate authored IN B — and each reader writes its filtered list
+  // back to localStorage (subscribeGroups/Plans/Devos/Items all setItem(CACHE_KEY) from the filtered map),
+  // so it survives the next cold start while the relay goes on serving all of it to every phone.
+  // `_stewardNames` and `_stewardSince` belong to the same document and leak the same way: setStewards()
+  // CARRIES THEM FORWARD on every edit, so adding one steward in church B would have published church A's
+  // labels and join dates into B's roster. AUDIT-2026-08-30.
+  _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
   // church A's blocks must not suppress church B's members from B's envelopes (item B)
   _localBlocked = new Set();
@@ -1624,8 +1917,23 @@ async function publish(evt) {
   // "not a member or not permitted for this group". Bounded: a relay that never answers must not stop a
   // church writing to the relays that did. See _regGate.
   await _waitForRegistration();
+  // THE LAST LINE OF THE GATE (plan C4). The publish set may legitimately be empty — that is what fail-closed
+  // means — and when it is, this takes the failure surface the console ALREADY has rather than inventing a
+  // queue: steward-publish-error, exactly as a relay-refused-everything would, and the document is
+  // republished from live state by the code that owns it on the next change. The reason is spelled out
+  // rather than left blank, because "your change could not be saved" with no cause sends a steward looking
+  // at their connection when the connection is fine.
+  const _targets = relays();
+  if (!_targets.length) {
+    const reason = relaysRaw().length
+      ? NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours, so nothing was published'
+      : 'no relay is configured for this church';
+    console.warn('[steward] publish blocked —', reason);
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    return false;
+  }
   try {
-    await Promise.any(pool.publish(relays(), evt).map(p => p.then(v => {
+    await Promise.any(pool.publish(_targets, evt).map(p => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
       return v;
     })));
@@ -1729,7 +2037,34 @@ async function _publishToRelays(evt, urls) {
   // console reporting honestly rather than silently doing nothing.
   const live = _connectedRelays();
   const targets = (urls && urls.length) ? urls : (live.length ? live : relays());
-  if (!targets.length) return false;
+  // AND WHEN THERE IS NOWHERE TO WRITE, SAY SO — the same surface publish() takes, at the same line.
+  //
+  // This return was UNREACHABLE until C4 made the publish set allowed to be empty, and it raised nothing at
+  // all: no event, no console line, `false` to a caller. C4's own precondition was degraded-set honesty and
+  // its message claimed "a console document write raises steward-publish-error", which was true of publish()
+  // and false here. It is not a hypothetical path either — on the day C4 merges the fleet still answers 404
+  // to /relay-identity, so every canonical proof fails and this is the GUARANTEED state; afterwards it is
+  // the cold-cache window, because setKey's gate refresh is fire-and-forget and a steward's first action can
+  // beat the proofs.
+  //
+  // SIX CALLERS ARRIVE HERE, and they do not all arrive in the same condition. `targets` can only be empty
+  // when relays() is (live is a filter over it, and a non-empty `urls` is used as given), and _isRelayAuthed
+  // iterates relays() — so setBlocked, setMinors, setApproved and setGuardians are stopped one line earlier
+  // by _requireTrustedView, which raises steward-write-blocked and throws. publishGroup and publishClearance
+  // have no such guard and had nothing at all: a child-safe toggle, a group definition, a category change,
+  // a member's sealed clearance, all failing in complete silence.
+  //
+  // Written INLINE rather than shared with publish(): both functions are lifted out of the bundle and run by
+  // the tests, and a name resolved from the enclosing IIFE is undefined there — a green suite proving
+  // nothing. Same reason the connection-failure prefix above is spelled out twice.
+  if (!targets.length) {
+    const reason = relaysRaw().length
+      ? NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours, so nothing was published'
+      : 'no relay is configured for this church';
+    console.warn('[steward] all-relay publish blocked —', reason);
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    return false;
+  }
   // GIVE A SLOW RELAY TIME TO SAY YES. The vendored library waits 4.4s for each relay's acknowledgement
   // (vendor publishTimeout) and then reports failure — but a late OK is not a refusal, and the EVENT has
   // usually been stored by then. On a congested pipe that turns "saved" into "couldn't save", and the console
@@ -1810,7 +2145,60 @@ function _openRegGate() { const f = _openGate; _openGate = null; if (f) { try { 
 // EVERY publisher must wait, not just the one you happened to fix. publish() was guarded first and the
 // seeded groups went out anyway, because they travel by _publishToRelays() — the all-relays variant. Two
 // publishers, one gate.
+// AND THE FIRST PROOF, which is a second gate and needs its own shape.
+//
+// THE RACE: `_gate.refresh()` at setKey is fire-and-forget. An established console coasts on its 30-day
+// cache, but a church created on a FRESH DEVICE has an empty one, so the wizard's founding writes could go
+// out before any relay was proved and land on an empty admitted set — a publish failure in the church's
+// first minute. That is the owner's "a console starting a church must reach relays immediately".
+//
+// TWO THINGS THIS GETS RIGHT THAT THE FIRST ATTEMPT DID NOT, both measured the hard way on 2026-09-02:
+//
+//   FIRST ADMISSION, NOT THE WHOLE REFRESH. Awaiting `refresh()` waits for EVERY candidate to settle, and
+//   `relaysRaw()` always includes the canonical addresses — unreachable in a test and slow anywhere. That
+//   put a multi-second stall in front of every write and turned 30 of 41 cases in console-publish-honesty
+//   red, the CONTROL among them. One admitted relay is all a publish needs, so this resolves the moment the
+//   cache holds one and never waits on a slow candidate that nothing is waiting for.
+//
+//   ONCE PER SESSION, NOT ONCE PER CHURCH — and the commit that introduced this said otherwise. It claimed
+//   "an established console never pays this at all", and that is FALSE. `_armRegGate()` runs at createKey
+//   AND inside selfRegister, `_openRegGate()` RESOLVES the gate but never nulls it (only
+//   `_waitForRegistration` does), and app/stew-dashboard.jsx re-runs `selfRegister(church.name)` on every
+//   owner console the moment the church name resolves. So an established console arms the gate too, and its
+//   FIRST publish of the session goes through the proof wait.
+//
+//   That is affordable, and it was measured rather than assumed (2026-09-02): with a warm relay cache the
+//   wait ends on the first tick — 0 ms, one `admit()` call — because the cache already holds an admitted
+//   relay. With a cold cache it costs the full PROOF_GATE_MS budget ONCE, about 80 polls at 10/sec: no spin,
+//   and no probe storm, because `schedule()` is guarded by `inflight` plus a 60 s backoff. Both latches then
+//   shut it for the rest of the session — `_proofWaited`, and `_regGate` being nulled below.
+//
+//   What "founding only" DOES still buy is scope: nothing here runs for a console that has never had a
+//   church key, and nothing runs twice. The per-write tax the first attempt introduced is still gone.
+//
+// Bounded like its neighbour, and for the same reason: a console whose relays will never answer must still
+// be able to work and say so through the publish error, not by hanging on the wizard's first screen.
+const PROOF_GATE_MS = 8000;
+let _proofWaited = false;
+function _awaitFirstAdmission(ms) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      let n = 0;
+      try { n = _gate.admit(relaysRaw(), pub).length; } catch (e) { n = 0; }
+      if (n > 0 || (Date.now() - t0) >= ms) { resolve(n > 0); return; }
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
 async function _waitForRegistration() {
+  // The proof half, and ONLY while a church is being founded — see the note above for why both halves of
+  // that sentence are load-bearing.
+  if (_regGate && !_proofWaited) {
+    _proofWaited = true;
+    try { await _awaitFirstAdmission(PROOF_GATE_MS); } catch (e) {}
+  }
   if (!_regGate) return;
   const g = _regGate;
   try { await Promise.race([g, new Promise((r) => setTimeout(r, REG_GATE_MS))]); } catch (e) {}
@@ -1845,6 +2233,174 @@ function _one(filters, ms = 4000) {
       oneose() { finish(); },
     });
     setTimeout(finish, ms);
+  });
+}
+
+// ── THE CHURCH'S RELAY NETWORK (closed-network plan C3) ─────────────────────────────────────────────────
+//
+// Two things live here and they must not be confused with each other. ENROLMENT writes the church's
+// membership document. The PREDICATE reads it. Neither one filters a relay list — that is the gate's job,
+// and the gate is `relays()` far above (plan C4). What matters HERE is the opposite direction: both of these
+// must stay OFF the filtered list, because they are the evidence it decides on.
+//
+// ══ THE DEADLOCK RULE, and it is the reason this block exists at all ═══════════════════════════════════
+//
+// ENROLMENT ENUMERATES RAW CANDIDATE SOURCES. Never relays(). Never ownRelay(). Never the _boxHostsUs cache.
+//
+// The failure it prevents is already latent in the shipped console and it is permanent, not transient. Once
+// `_boxHostsUs === false` is cached, ownRelay() returns the canonical URL, so relays() stops naming this
+// box, so relayIdentities() — which enumerates from relays() — never sees it, so syncEnable(), which is fed
+// by relayIdentities(), can never include it. A census built from the list is a census that cannot see the
+// thing it is meant to enrol. Once C4 filters relays() on membership, the identical loop traps ANY
+// not-yet-admitted box: excluded by the gate, therefore never enumerated, therefore never signed in,
+// therefore excluded for ever. A self-hosting church would be permanently orphaned from its own machine —
+// the finding that made an earlier version of this plan a no-go.
+//
+// So the census is location, the relay panel's own configured entries, and anything explicitly handed in.
+// The filtered list is for PUBLISHING. Using it as the enrolment census is the deadlock.
+
+// The console's own serving origin, or '' when the page was not served by anything that could be a relay.
+// Two such cases, both already decided elsewhere in this file for the relay list itself: a Capacitor APK,
+// where location.host is the literal string "localhost" and the page came out of the app bundle rather than
+// off a network — a local process answering there is not "the box that served me the console"; and a static
+// CDN host, which serves no relay on its origin. '' can only ever refuse, so an unknown origin fails closed.
+//
+// READ STRAIGHT OFF location. NOT ownRelay(), which consults _boxHostsUs — see the deadlock rule above.
+function _ownOrigin() {
+  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return '';
+  const l = (typeof location !== 'undefined') ? location : null;
+  if (!l || !l.host) return '';
+  if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return '';
+  return l.protocol + '//' + l.host;
+}
+// The RAW census. Every source here is something a person put there or something the browser tells us
+// directly; not one of them has been through a membership filter or a cached verdict.
+//
+// The origin step is written INLINE rather than as its own little helper, deliberately. A one-caller helper
+// is invisible to the tests the moment the sabotage that removes its caller runs: esbuild tree-shakes it out
+// of the bundle, the lift that reads it fails to find it, and several unrelated tests then go red with a
+// "could not anchor" error instead of the one test going red with the real message. That has already cost
+// this repo a misread sabotage run, and it is cheaper to keep the line here than to explain the artefact.
+function relayNetCandidates(extra) {
+  const out = [];
+  const add = (u) => { const s = String(u || '').trim(); if (s && !out.includes(s)) out.push(s); };
+  const o = _ownOrigin();              // the box that served this console — location, NOT ownRelay()
+  if (o) add(o.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/relay');
+  for (const u of extraRelays()) add(u);   // the relay panel's own configured entries, as typed
+  for (const u of (extra || [])) add(u);   // a pasted candidate the caller is asking about
+  return out;
+}
+
+// A one-shot read that also says whether the relay FINISHED answering.
+//
+// `_one` above cannot: it resolves `null` both when the church has no such document and when we simply
+// stopped waiting, and those are opposite facts. A writer that cannot tell them apart will publish a
+// document built from "the church has signed nothing" over a real membership on a slow link — un-admitting
+// every box that was in it. That is the same mistake as reading "this record is absent" from an
+// unauthenticated read, and it produced a false "6 of 8 children did not receive their record" the last time
+// it was made here. Same shape as _newestByD's `complete`, and the same reason.
+//
+// (It reads over relays(), the raw list today. C4 must keep the READER off a filtered list for the same
+// reason enrolment stays off one — see the deadlock rule above.)
+function _oneComplete(filters, ms = 6000) {
+  return new Promise((resolve) => {
+    let best = null, complete = false, done = false;
+    const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve({ ev: best, complete }); };
+    // RAW, NOT THE PUBLISH SET — the read side of the deadlock rule. This is the reader that fetches the
+    // church's membership document, so routing it through the gate that document feeds would mean a box the
+    // church has signed for can never be asked for the signature that admits it.
+    const sub = pool.subscribeMany(relaysRaw(), filters, {
+      onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
+      oneose() { complete = true; finish(); },
+    });
+    setTimeout(finish, ms);
+  });
+}
+// This church's own signed membership document, newest wins.
+function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAY_NET_D] }]); }
+async function relayNetEntries(cp) {
+  if (!pub || (cp && cp !== pub)) return [];   // this console speaks for one church: its own
+  const { ev } = await relayNetDoc();
+  // The author filter is in the REQ, but a relay is not obliged to honour a filter and this document decides
+  // who the church's data may reach. Re-check the signature's author rather than trusting what came back.
+  return (ev && ev.pubkey === pub) ? parseRelayNet(ev.content) : [];
+}
+
+// Sign the boxes this console can PROVE into the church's own membership document.
+//
+// ADDITIVE, NEVER SUBTRACTIVE. An entry already in the document is kept even when its box does not answer
+// right now — a parish-office machine switched off at night, a tunnel between addresses, a flat connection.
+// Dropping an entry because a probe failed would make "my relay went away for an hour" into "my church
+// un-admitted its own relay", which is the fail-closed-in-the-wrong-place mistake §5 exists to refuse.
+// Removing a relay is a deliberate act by the church, and there is no UI for it in this item.
+//
+// THE ONE-TIME SEED (§6-ter). A church that already runs cross-relay sync has a trinityone/relays document
+// naming the boxes it trusts. If there is no relay-net document at all, those pubkeys seed the new one once,
+// alongside whatever the origin box proves. It is a seed, never a live mirror: trinityone/relays keeps its
+// own meaning (sync is on, at least two boxes, `[]` means off) and nothing here writes to it.
+//
+// WHAT `alwaysOn` DOES HERE: a new entry gets `true`, an existing entry keeps whatever the church set. It is
+// the owner's "this machine is not on 24/7" flag and nothing in this item reads it (plan C11 owns its
+// consumers and the checkbox that sets it) — but the writer has to carry it or a later console would erase
+// the answer every time it enrolled.
+//
+// AND "I DON'T KNOW YET" IS NOT "THE CHURCH HAS SIGNED NOTHING". If the read of the church's own document
+// did not finish, this writes nothing at all and says so (`unknown: true`). Treating a timed-out read as an
+// empty church is precisely how the additive promise above would be broken on a slow link: the writer would
+// build a document from scratch, publish it with a newer timestamp, and un-admit every box the church had
+// already signed for. The same rule covers the one-time seed, which is one-time and so gets exactly one
+// chance to read the old document correctly.
+async function enrolRelayNet(opts) {
+  const o = opts || {};
+  if (!sk || !pub) throw new Error('No church key on this device');
+  const { ev: existing, complete } = await relayNetDoc();
+  const mine = (existing && existing.pubkey === pub) ? existing : null;
+  if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+  const entries = mine ? parseRelayNet(mine.content) : [];
+  const before = JSON.stringify(entries);
+  let seeded = 0;
+  if (!mine) {
+    let old = null, oldComplete = false;
+    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }]); old = r.ev; oldComplete = r.complete; } catch {}
+    if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    let arr = [];
+    if (old && old.pubkey === pub) { try { arr = JSON.parse(old.content || '[]'); } catch { arr = []; } }
+    for (const e of (Array.isArray(arr) ? arr : [])) {
+      const p = String((e && e.pubkey) || '').toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(p) || entries.some(x => x.pubkey === p)) continue;
+      entries.push({ pubkey: p, alwaysOn: true, url: (e && typeof e.url === 'string') ? e.url : '' });
+      seeded++;
+    }
+  }
+  const proven = [], unproven = [];
+  for (const url of relayNetCandidates(o.extra)) {
+    let proof = null;
+    try { proof = await verifyRelayIdentity(url); } catch { proof = null; }
+    const p = String((proof && proof.relayPub) || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(p)) { unproven.push(url); continue; }
+    proven.push({ url, pubkey: p });
+    const cur = entries.find(x => x.pubkey === p);
+    // THE URL IS A HINT AND IS REFRESHED; THE PUBKEY IS THE MEMBERSHIP AND IS NEVER MATCHED ON. A box behind
+    // a free tunnel arrives here on a new address every restart, and it is the SAME member — so its entry's
+    // `url` is updated in place rather than a second entry being created for the same key.
+    if (cur) { if (url && cur.url !== url) cur.url = url; }
+    else entries.push({ pubkey: p, alwaysOn: true, url });
+  }
+  const changed = JSON.stringify(entries) !== before;
+  // Nothing proved and nothing already signed in: publish NOTHING. An empty document is the church signing
+  // "my network is empty", which is a statement, not a silence.
+  if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
+  const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+  return { published: !!ev, entries, proven, unproven, seeded };
+}
+
+// The predicate. See src/relay-net.src.js for the three roots and why none of them is us.
+function isNetworkRelay(cp, url) {
+  return _isNetworkRelay(cp, url, {
+    verify: verifyRelayIdentity,
+    netEntries: relayNetEntries,
+    origin: _ownOrigin(),
+    pins: CANONICAL_RELAY_PUBS,
   });
 }
 
@@ -2208,6 +2764,32 @@ let _evtSeq = 0;
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
 
+  // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
+  // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
+  // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console
+  // reads for the redundancy count stays an unproven claim — it was never a gate and must not look like one.
+  verifyRelayIdentity,
+
+  // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
+  // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
+  // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
+  isNetworkRelay,
+  // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
+  // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
+  // deadlock rule above enrolRelayNet.
+  relayNet: relayNetEntries,
+  relayNetCandidates,
+  // Signs the boxes this console can prove into the church's own membership document. Additive: it never
+  // drops an entry that is merely unreachable.
+  //
+  // STILL NOT CALLED AUTOMATICALLY ANYWHERE, and with C4's gate live that is now a DEPLOYMENT BLOCKER rather
+  // than a loose end: a church whose relay is admitted by neither the canonical pin nor this console's own
+  // origin has no way to author the document that would admit it, so its members would find no relay they
+  // may publish to. Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own —
+  // and the Suite's common case (§6-quater) is covered meanwhile by the same-origin root, which needs no
+  // document at all.
+  enrolRelayNet,
+
   // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
   // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
   publishSigned: _publishSigned,
@@ -2465,8 +3047,15 @@ window.Steward = {
   // counterpart of encrypt-on-export; fmt is 'jsonl' (events) or 'zip' (events + media). (Restore UI = Stage 3.)
   async decryptBackup(envelope) { return _openBackup(envelope); },
   // resync: which of the church's relays are TrinityOne relays (expose a relayPub via /status) and thus can be
-  // kept in sync. Generic public relays (nos.lol etc.) have no relayPub — they're publish-only, never trusted
-  // with the gated corpus. Returns [{ url, base, pubkey, name, online }] for the UI + syncEnable().
+  // kept in sync. Returns [{ url, base, pubkey, name, online }] for the UI + syncEnable().
+  //
+  // WHAT THIS IS NOT. This comment used to say that a relay without a relayPub is "publish-only, never
+  // trusted with the gated corpus". That was false, and the console printed the same reassurance to
+  // stewards. The relayPub check is syncEnable()'s and syncEnable()'s only: it decides which boxes are
+  // told to exchange history with each other. It has never governed PUBLISH. Every console write goes out
+  // through publish() over relays() — the raw list — so a relay in that list receives the church's
+  // documents whether or not it advertises a relayPub, and a member client does the same over
+  // Fellowship.relays. Closing that is a gate, and a gate is not this function.
   async relayIdentities() {
     const out = [];
     for (const u of relays()) {
@@ -2560,10 +3149,65 @@ window.Steward = {
   async cloneFromRelay(sourceUrl, { targetUrl, onProgress } = {}) {
     if (!sk || !pub) throw new Error('No church key on this device');
     const httpBase = (u) => String(u || '').replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
-    const src = httpBase(sourceUrl);
+    // The GATE is asked about the RELAY address, because two of the three roots are address-bound: a
+    // canonical pin sits beside a wss:// URL and the same-origin root compares an origin. /export and
+    // /import are fetched over http(s). Same box, two spellings, and mixing them refuses a genuine relay.
+    const wsForm = (u) => {
+      const v = String(u || '').trim().replace(/\/+$/, '');
+      if (/^wss?:\/\//i.test(v)) return v;
+      if (/^https:\/\//i.test(v)) return 'wss://' + v.slice(8);
+      if (/^http:\/\//i.test(v)) return 'ws://' + v.slice(7);
+      return v ? normRelay(v) : '';
+    };
+    const srcRelay = wsForm(sourceUrl);
+    const src = httpBase(srcRelay);
     if (!src) throw new Error('Enter the relay to copy from.');
-    const dst = targetUrl ? httpBase(targetUrl) : _blobBase();
+    const dstRelay = targetUrl ? wsForm(targetUrl) : ownRelay();
+    const dst = httpBase(dstRelay);
     if (src === dst) throw new Error('The source and destination are the same relay.');
+
+    // ── C5: THE CLONE GATE, AND THE TWO ENDS ARE DELIBERATELY NOT THE SAME ─────────────────────────────
+    //
+    // THE SOURCE: THE POSSESSION PROOF ONLY. MEMBERSHIP IS NOT REQUIRED, AND MUST NOT BE.
+    //
+    // A clone source is by definition the box a church is LEAVING — very often one it never vouched for,
+    // because it was somebody else's hosting before the church had a box of its own. Requiring the full
+    // membership gate here inverts time: a church vouches for the machine it is ARRIVING at, not the one it
+    // is escaping, and demanding a signature over the old host would block exactly the migration this
+    // control exists for. That was caught as a blocking finding while this was being planned; it is written
+    // out here so it cannot be re-introduced as a tightening.
+    //
+    // What the proof still buys, and it is not nothing: only a TrinityOne relay can answer the nonce, so
+    // every other host on the internet is excluded — including the plain listener whose only interest is the
+    // church-signed Authorization header this function would otherwise hand it. And /export answers only the
+    // church's own key regardless of who asks.
+    //
+    // Three measured facts bound what a hostile SOURCE could do, and none of them needs membership to hold:
+    // the proof handed to it is host+path-bound and ±5 minutes fresh, so it cannot be replayed anywhere
+    // else; /import verifies every event's signature and attributes everything to the authed church, so the
+    // worst a hostile source can inject is the church's OWN genuinely-signed history (the same replay
+    // exposure a file restore has, no worse); and the corpus never flows TO the source.
+    //
+    // A source too old to answer C2 is not a dead end: /export is a downloadable archive and restore is the
+    // file path — one deliberate extra step.
+    if (!(await verifyRelayIdentity(srcRelay)))
+      throw new Error('That relay could not prove who it is, so your church’s history was not requested from it. Check the address, or restore from a backup file instead.');
+    //
+    // THE DESTINATION: THE FULL GATE. It RECEIVES the corpus — every document, every name, every sealed care
+    // request the church ever wrote — so it is admitted exactly as any other address this church publishes
+    // to. The default (this console's own relay) passes through the same-origin root and costs nothing; a
+    // caller-supplied targetUrl has to be a relay this church actually signed for.
+    //
+    // AND ITS SIBLING IS DELIBERATELY NOT GATED, which is worth stating because the two look identical.
+    // restoreChurchData() also POSTs a corpus to a caller-supplied address ("Restore to another relay",
+    // stew-dashboard). It stays open on purpose: that screen's whole job is SEEDING A BOX THE CHURCH IS
+    // MOVING TO, which by construction is not yet in the church's membership document, so gating it would be
+    // the same inversion of time the SOURCE rule above exists to avoid — and it is a steward typing an
+    // address, not a URL pushed at them, which is what this item is about. targetUrl here has no UI at all;
+    // it is an API parameter, and an API is where an unnoticed destination can be chosen for somebody.
+    if (!(await admitRemoteRelay(dstRelay)))
+      throw new Error('The destination relay isn’t in your church’s network, so nothing was copied to it. Add it to your relay list and enrol it first.');
+
     if (onProgress) onProgress('reading', 0, 1);
     const er = await fetch(src + '/export', { headers: { Authorization: _nip98(src + '/export') } });
     if (!er.ok) throw new Error('Couldn’t read your church’s data from that relay (' + er.status + (er.status === 401 ? ' — is it the right relay for this church?' : '') + ')');
@@ -3467,8 +4111,8 @@ window.Steward = {
         if (!d.startsWith(FUND_D)) return;
         const id = d.slice(FUND_D.length);
         const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
-        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -3497,8 +4141,8 @@ window.Steward = {
         if (!d.startsWith(CATEGORY_D)) return;
         const id = d.slice(CATEGORY_D.length);
         const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
-        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (deleted) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -4807,6 +5451,7 @@ window.Steward = {
         // moment this is knowable. AUDIT-8.
         _careRoster = new Set(cur.filter(Boolean));
         _careRosterKnown = true;
+        _careRosterSeen = true;   // a real roster DOCUMENT, as opposed to the oneose below — see _consoleDisplay
         onList(cur);
       },
       oneose() {
@@ -4834,7 +5479,12 @@ window.Steward = {
     // Silent re-escalation, from a button that says Remove.
     const next = {};
     const src = (caps && typeof caps === 'object') ? caps : _stewardCaps;
-    for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter(c => typeof c === 'string');
+    // WRITE WHAT THE RELAY WILL READ. `filter(c => typeof c === 'string')` kept the empty string, so this
+    // console could publish `caps: { <pk>: [''] }` — which reads as one capability here and as NOTHING at
+    // gateway.mjs:1611, where the entry is dropped and the steward is refused everything. Normalise to the
+    // relay's own rule (non-empty strings, lower-cased) so the document means one thing. An owner who really
+    // means "nothing" still writes an empty array, which both sides read as nothing. AUDIT-2026-08-30.
+    for (const p of list) if (src[p] && Array.isArray(src[p])) next[p] = src[p].filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());
     // The owner's labels ride along on the same terms: carried forward unless replaced, pruned with the
     // steward they belong to. Losing them on an unrelated edit would put the invented names back.
     const nextNames = {};
@@ -4890,8 +5540,10 @@ window.Steward = {
     if (!actingChurch) return null;                       // owner: no restriction
     // In delegated mode `pub` is the CHURCH's key and `churchPub` is this console's own — the naming is
     // historical (see setActiveIdentity). Our own key is what the roster grants capabilities to.
-    const c = _stewardCaps[churchPub];
-    return Array.isArray(c) ? c.slice() : null;           // null = unscoped = everything
+    // Read through _capsOf, so this console hides exactly what the relay will refuse and no more: the raw
+    // list can hold junk the relay drops ([''], [null]) and mixed case it lower-cases, and this value decides
+    // which tabs a delegated steward is shown. AUDIT-2026-08-30.
+    return _capsOf(churchPub);                            // null = unscoped = everything
   },
 
   // ---- encrypted church docs: NIP-44 self-encryption to the CHURCH key. Used by the optional Finance
@@ -5279,7 +5931,7 @@ window.Steward = {
     // steward-chosen order first (groups without an order fall to the end, by age)
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); };
     // paint cached groups instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onGroups(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onGroups(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -5290,8 +5942,8 @@ window.Steward = {
         // was honoured by id with no author check at all — weaker than the member app. So the phones could be
         // made to agree with each other while the two people HOLDING THE PENS each saw a different rota, and
         // every correction flipped the winner church-wide. Round 9's collision started here.
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
-        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5319,14 +5971,14 @@ window.Steward = {
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onPlans(arr); };
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onPlans(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onPlans(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(PLAN_D)) return;
         const id = d.slice(PLAN_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
-        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5359,14 +6011,14 @@ window.Steward = {
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
     const emit = () => { const arr = [...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onDevos(arr); };
     // paint the last-known devotionals instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onDevos(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onDevos(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5380,19 +6032,19 @@ window.Steward = {
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // paint the last-known docs instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached); if (cached.length) onItems(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onItems(cached); } } catch {}
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onItems(arr); };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
         // _openChurchDoc, not JSON.parse: the calendar documents are sealed under the church name key now
         // (cleartext ones written before that still open — it tries plain JSON first). A null means sealed
         // with a key this console does not hold, which must not silently become an empty calendar.
-        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }
-              _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); return; }
+              _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5636,11 +6288,18 @@ window.Steward = {
         if (!d.startsWith(EVENT_D)) return;
         if (e.pubkey !== pub && !e.tags.some(t => (t[0] === 'p' || t[0] === 'church') && t[1] === pub)) return;   // scope to this church (+ its stewards)
         const id = d.slice(EVENT_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, null, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
         // recur/day/groupId/image MUST be carried: the event dialog opens from this list too, and editing
         // there re-publishes what it was handed. Omitting recur/day collapsed a weekly meeting into a single
         // dated entry; omitting groupId unlinked the event from the very group you edited it in. AUDIT 2026-07-26.
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
+        // _openChurchDoc, NOT JSON.parse — the same swap the church calendar reader above already made.
+        // publishEvent SEALS an event under the church name key, and this reader parsed the envelope as if it
+        // were the event: every field came back undefined, so the group window that had just posted the event
+        // showed no title, no date and no place. Broken since c592abb, 15 Aug; confirmed on the live console
+        // 2026-08-28, where members could see the event perfectly and the steward who created it could not.
+        // An event we cannot open is marked _locked rather than dropped, so a key that has not arrived yet
+        // leaves a placeholder instead of silently shortening the list.
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -5932,7 +6591,13 @@ window.Steward = {
     // dismissing the ones it did. Cleared to UNKNOWN rather than empty, so the back-fill defaults to answering
     // a competing copy instead of silently skipping it until B's own roster arrives. AUDIT-8, same family as
     // the name-key note below.
-    _careRoster = new Set(); _careRosterKnown = false;
+    _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
+    // The capability map, the owner's labels and the join dates are the SAME DOCUMENT as that roster, and
+    // were the one part of it left behind. Carried across, church A's caps decide what church B's console
+    // will paint (an A-delegate scoped to nothing hides everything they authored in B, and the filtered list
+    // is written back to localStorage), and setStewards() would publish A's labels and dates into B's
+    // roster on the next edit. Same family as the roster note above. AUDIT-2026-08-30.
+    _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name
@@ -6210,7 +6875,14 @@ window.Steward = {
     try {
       const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || '' }, auth }) });
-      return { ok: r.ok, status: r.status };
+      // PASS THE RELAY'S OWN REASON BACK. A caller that knows only "not ok" can say nothing more useful than
+      // "it might not have worked", and the relay's refusals are well written and actionable — H4's is "set
+      // your church's name in the Steward console before connecting it to a relay", which is a NOT-YET the
+      // steward can act on in ten seconds, not a verdict. selfRegister already reads this reason (see
+      // `_regNeedsName`); this is the same fact, made available to the one other caller.
+      let why = '';
+      if (!r.ok) { try { why = ((await r.json()) || {}).error || ''; } catch (e) {} }
+      return { ok: r.ok, status: r.status, why };
     } catch (e) { return { ok: false, error: (e && e.message) || 'network' }; }
   },
   // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
@@ -6230,8 +6902,10 @@ window.Steward = {
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return true;
   },
-  // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not required)
-  resolveRelayName(name) { return resolveRelayName(name); },
+  // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not
+  // required). C5: the answer must be wss:// AND pass the network gate before it comes back. Pass
+  // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
+  resolveRelayName(name, opts) { return resolveRelayName(name, opts); },
   // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
   rememberRelayName(name, url) {
     const n = String(name || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -6253,13 +6927,19 @@ window.Steward = {
     if (picks.length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks;
   },
-  // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms }]
+  // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms, member }]
+  //
+  // EVERY CANDIDATE, NOT THE PUBLISH SET — and `member` says which is which. A relay this church's data no
+  // longer goes to must not simply VANISH from the panel: silently changing where a church's data goes is
+  // how the divergence in ROADMAP-NOTES §6 became invisible. Reachable and not-in-our-network are two
+  // different facts and the card shows both.
   relayStatus() {
-    return Promise.all(relays().map(url => new Promise(res => {
+    return Promise.all(relaysRaw().map(url => new Promise(res => {
       let done = false; const t0 = Date.now();
-      const finish = (status) => { if (done) return; done = true; try { ws.close(); } catch {} res({ url, status, ms: status === 'on' ? Date.now() - t0 : null }); };
+      const member = (() => { try { return _gate.admits(url, pub); } catch (e) { return false; } })();
+      const finish = (status) => { if (done) return; done = true; try { ws.close(); } catch {} res({ url, status, ms: status === 'on' ? Date.now() - t0 : null, member }); };
       let ws;
-      try { ws = new WebSocket(url); } catch { return res({ url, status: 'off', ms: null }); }
+      try { ws = new WebSocket(url); } catch { return res({ url, status: 'off', ms: null, member }); }
       const to = setTimeout(() => finish('off'), 2500);
       ws.onopen = () => { clearTimeout(to); finish('on'); };
       ws.onerror = () => { clearTimeout(to); finish('off'); };

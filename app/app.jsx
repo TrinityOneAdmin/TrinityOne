@@ -711,47 +711,20 @@ function App() {
       // gets every community node for redundancy — not just the single relay carried in their link.
       const pool = F.CANONICAL_RELAYS || (F.CANONICAL_RELAY ? [F.CANONICAL_RELAY] : []);
       pool.forEach(r => F.addRelay(r));
-      // plus any church-specific relay carried in the invite/QR (?relay=wss://…) — e.g. a self-hosted one
-      const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
-      // SECURITY-AUDIT-2026-07-06 L5: require wss:// (encrypted). A crafted invite carrying ?relay=ws://attacker
-      // would otherwise add a cleartext relay to the member's set → a network MITM reads/injects fellowship traffic.
-      if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss:\/\//i.test(relay)) F.addRelay(relay); } catch (e) {} }
-      // A self-hosted relay behind a free tunnel gets a NEW url each restart, so a printed invite's ?relay= can
-      // go dead. The invite also carries the relay's STABLE directory name — resolve it against the shared
-      // directory to the relay's CURRENT url so an old QR still works after a restart. Best-effort + additive;
-      // L5 still enforced (must resolve to wss://).
-      // AUDIT-2026-07-29 S3. This asked app.trinityone.church, hardcoded, and nothing else. For a SELF-HOSTED
-      // congregation that is the one request that undoes self-hosting: joining from a printed slip told the
-      // central host that this device exists, that it is joining now, and which relay it is looking for — at
-      // the single most sensitive moment there is. The whole point of a church running its own box is that no
-      // central party sees its people.
+      // C5: AN ADDRESS CARRIED IN AN INVITE IS A CANDIDATE FOR VERIFICATION, NEVER AN INSTRUCTION.
       //
-      // /relay-names/resolve/ is public on EVERY relay and the directory is gossiped between them, so the
-      // church's own relay can answer this perfectly well. Ask the relay the invite already names FIRST, and
-      // fall back to the shared directory only if that fails (an invite may carry a name and no URL, or the
-      // self-hosted box may be down at that moment).
+      // This used to add ?relay= on sight (wss:// checked, nothing else) and then resolve ?relayname=
+      // against a directory the invite itself could nominate. So a code taped up at a church door could
+      // start this phone publishing its owner's DMs — and their child's care request — to a machine of the
+      // code's author's choosing, with nothing on screen changing.
       //
-      // No new trust: the invite's ?relay= is added directly two lines above, so preferring it as a resolver
-      // grants it nothing it did not already have, and L5 (must resolve to wss://) still applies to whatever
-      // comes back.
-      const nmm = String(raw || '').match(/[?&]relayname=([^&\s]+)/);
-      if (nmm && F && F.addRelay) { try {
-        const name = decodeURIComponent(nmm[1]).toLowerCase().replace(/[^a-z0-9-]/g, '');
-        const hosts = [];
-        try { const v = rm && decodeURIComponent(rm[1]); if (v && /^wss:\/\//i.test(v)) hosts.push(v.replace(/^wss:\/\//i, 'https://').replace(/\/relay\/?$/i, '')); } catch (e) {}
-        hosts.push('https://app.trinityone.church');   // last resort, not first choice
-        if (name) (async () => {
-          for (const h of hosts) {
-            try {
-              const r = await fetch(h + '/relay-names/resolve/' + encodeURIComponent(name), { cache: 'no-store' });
-              if (!r.ok) continue;
-              const j = await r.json();
-              const u = j && j.url;
-              if (u && /^wss:\/\//i.test(u)) { F.addRelay(u); return; }   // resolved — ask nobody else
-            } catch (e) {}
-          }
-        })();
-      } catch (e) {} }
+      // The decision lives in the ENGINE, not here: the app's .jsx files ship unbundled, so a `false && ` in front of
+      // a condition leaves every word of it in place and any text-matching test still passes (CLAUDE.md
+      // rule 3). adoptInviteRelays() runs the C2 possession proof at the address and admits it only if the
+      // key it proves is one this church's own signature (or the canonical pin, or this origin) vouches for.
+      // It is deliberately not awaited — following a church must not wait on a network probe — and it fires
+      // `trinity-relay-refused` with anything it turned away so the refusal can be shown where the person is.
+      if (F.adoptInviteRelays) { try { F.adoptInviteRelays(npub, raw); } catch (e) {} }
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
@@ -1298,6 +1271,48 @@ function App() {
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
   const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
   const markNetSeen = () => { const top = notifications[0] && notifications[0].ts; if (top && top > netSeenTs) { setNetSeenTs(top); try { localStorage.setItem('trinityone.net-seen', String(top)); } catch {} } };
+
+  // ── "something new" on the Serving & events card ──────────────────────────────────────────────────────────
+  // ONE MARK PER CHURCH. A member can belong to more than one, so this is keyed by the church's npub — the
+  // same key the event cache above uses (`trinityone.serv.events.<npub>`) — and switching church swaps the
+  // mark rather than sharing it.
+  //
+  //   localStorage['trinityone.servingSeen.<npub>']
+  //     absent  -> first run: stamp NOW, show nothing
+  //     '<sec>' -> the newest publish time this member has been shown
+  //
+  // Readers: this block; servingNewCount() in app/screens-today.jsx, via `ctx.servingSeenTs`.
+  // Writers: this block only — the baseline effect below and markServingSeen(), which ctx.openServing() calls.
+  //
+  // WHAT IS COUNTED IS DECIDED ON THE SCREEN, from `ctx.churchEvents` — see the long note above
+  // servingNewCount in app/screens-today.jsx for why it must be what this member is SERVED and never what the
+  // church published.
+  //
+  // FIRST RUN STAMPS, IT DOES NOT COUNT. The baseline is NOW rather than the newest event in hand, because the
+  // subscriptions land after this effect runs: stamping the newest of a list that is still empty would stamp 0
+  // and then badge the church's whole back catalogue the moment it arrived. Someone joining a church with
+  // fifty events on its calendar must see nothing, and NOW is the only value that is true before the data has
+  // turned up.
+  const servSeenNpub = (churches.find(c => c.id === activeChurch) || {}).npub || '';
+  const servSeenKey = servSeenNpub ? 'trinityone.servingSeen.' + servSeenNpub : null;
+  const [servSeenTs, setServSeenTs] = useA(null);
+  useAE(() => {
+    if (!servSeenKey) { setServSeenTs(null); return; }
+    let v = null;
+    try { const raw = localStorage.getItem(servSeenKey); v = (raw == null) ? null : (Number(raw) || 0); } catch { v = null; }
+    if (v == null) { v = Math.floor(Date.now() / 1000); try { localStorage.setItem(servSeenKey, String(v)); } catch {} }
+    setServSeenTs(v);
+  }, [servSeenKey]);
+  // Stamp PAST everything currently visible, so opening the card really does clear it. The rule for WHAT to
+  // stamp lives next to the rule for what to count, in servingSeenStamp() in app/screens-today.jsx, so the two
+  // halves cannot drift apart; this passes it the three source lists unexpanded (expandEvents copies `ts`
+  // onto every occurrence, so the maximum is the same either way) and writes the answer.
+  const markServingSeen = () => {
+    if (!servSeenKey) return;
+    const top = servingSeenStamp([...churchEvents, ...groupEvents, ...netEvents], Math.floor(Date.now() / 1000));
+    try { localStorage.setItem(servSeenKey, String(top)); } catch {}
+    setServSeenTs(top);
+  };
   // derive serving items from requests + my replies (local date, not UTC)
   const _now = new Date();
   const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
@@ -1333,7 +1348,25 @@ function App() {
   const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
   const servNext = servConfirmed[0] || null;
   // schedule local reminders for confirmed slots (the day before) + register web-push (PWA)
-  useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servReqs, servReplies]);
+  // THE DEPS DID NOT INCLUDE WHAT servConfirmed IS MADE OF. It derives from churchRotas/Services/Rosters/
+  // Teams, none of which were listed, so publishing a rota — the thing the screen promises a reminder for —
+  // never re-ran the scheduler. And for a member with no serving request, servReqs never changes identity
+  // after mount (its subscription's oneose is deliberately sticky), so nothing re-ran it at all: the first
+  // pass saw an empty list, returned before ensurePerm(), and notification permission was never requested.
+  // Do NOT hoist ensurePerm above that guard — reminders.jsx documents why it sits where it does; fixing the
+  // deps is what makes the prompt happen. AUDIT-2026-08-29.
+  // …AND THEN THE FIX FOR THAT RAN IT ON EVERY RENDER. `servConfirmed` is rebuilt in the component body, so
+  // it is a new array identity each time and React compares deps with Object.is — the effect fired on every
+  // toast, every arriving message, every tab change. sync() re-asks for notification permission until it is
+  // GRANTED (reminders.jsx: `perm` is only ever set true on a grant), so a member who declined was asked
+  // again and again, and on the granted path it re-read and re-parsed localStorage on the app's root every
+  // render, on the low-end hardware this product targets. Measured: 26 renders, 26 permission prompts.
+  //
+  // Depend on a stable DESCRIPTION of the slots instead of the array holding them. It changes exactly when
+  // the scheduler's input changes — which is what publishing a rota does, through myRotaSlots — and not when
+  // React merely re-renders. AUDIT-2026-08-29.
+  const servKey = servConfirmed.map(s => s.serviceId + '|' + s.teamId + '|' + s.roleId + '|' + (s.date || '')).join(',');
+  useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   useAE(() => { const pk = window.Fellowship && window.Fellowship.myPubkey; if (pk && window.TrinityReminders && window.TrinityReminders.registerPush) window.TrinityReminders.registerPush(pk); }, [servReqs, activeChurch]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
@@ -1564,6 +1597,18 @@ function App() {
     toastTimer.current = setTimeout(() => setToastMsg(''), 1900);
   };
   window.trinityToast = toast;   // a few non-React globals (e.g. the audio engine) surface notices through this
+  // A REFUSED INVITE RELAY IS SAID OUT LOUD (closed-network plan C5). A printed slip naming a box the church
+  // has not enrolled otherwise produces an unexplained nothing — the member scans it, the church appears, and
+  // the address it carried is dropped in silence. Which is exactly how the ROADMAP-NOTES §6 divergence became
+  // invisible. adoptInviteRelays fires this with everything it turned away.
+  useAE(() => {
+    const onRefused = (e) => {
+      const n = ((e && e.detail && e.detail.urls) || []).length;
+      if (n) toast(n === 1 ? 'That church’s relay isn’t in the TrinityOne network yet' : 'Those relays aren’t in the TrinityOne network yet');
+    };
+    window.addEventListener('trinity-relay-refused', onRefused);
+    return () => window.removeEventListener('trinity-relay-refused', onRefused);
+  }, []);
 
   const ctx = {
     dark: t.dark,
@@ -1713,6 +1758,7 @@ function App() {
     churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); const all = [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
+    servingSeenTs: servSeenTs, markServingSeen,   // the Serving & events card's "something new" mark (see the block above)
     churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups, rotaVis,
     // Care / Meal trains: settings + open needs + everyone's fills/skips, plus this member's sign-up actions.
     // Only meaningful when care.settings.enabled; the Today card and Care screen render off this.
@@ -1809,7 +1855,7 @@ function App() {
     myLeaderGroups: churchGroups.filter(g => (g.leaders || []).includes((window.Fellowship && window.Fellowship.myPubkey) || '')),
     publishGroupEvent: (groupId, ev) => { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return window.Fellowship.publishGroupEvent(np, groupId, ev); },
     churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
-    openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); if (desktop) setTab('chat'); },
+    openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); markServingSeen(); if (desktop) setTab('chat'); },   // opening the overlay is what clears the card's "something new" mark — every route in, not only the Today card, and never on launch or a timer
     servingTab, careFocus,
     openEvent: (e) => setEventOv(e),
     respondServing: (item, verdict, swapTo) => {

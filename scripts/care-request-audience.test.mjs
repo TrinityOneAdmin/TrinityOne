@@ -35,7 +35,7 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
-import { fnBody, stripComments } from './test-slice.mjs';
+import { fnBody, stripComments, liftSgMine, liftFetchMyClearance } from './test-slice.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -48,9 +48,19 @@ const joyceSk = generateSecretKey(), joycePub = getPublicKey(joyceSk);
 // Lift the shipped method and give it the free variables it closes over. Everything here is a stub EXCEPT
 // the function under test and the real NIP-44 primitives — the seal has to be genuine or "can Anne open it?"
 // is not a real question.
-function loadPublish({ team, sgSelf, childAudience }) {
+function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed }) {
   const published = [];
   const body = fnBody(VENDOR, 'async publishCareRequest(fields) {', 'publishCareRequest');
+  // ONE PHONE IS NOT ONE PERSON. The child/adult branch is chosen from `_sgSelf`, and `_sgSelf` is a single
+  // module variable on a device that can hold two accounts in a session — so it is matched against the
+  // CURRENT signing key as well as the church, by `_sgMine`. Lifted, not stubbed: that rule is a safeguarding
+  // decision and stubbing it would leave the branch below testing a mock.
+  const sgMine = liftSgMine(VENDOR);
+  // …AND THE LOOKUP THAT ANSWERS "AM I A CHILD?" WHEN THE CACHE HAS NOT HEARD. Lifted for the same reason as
+  // _sgMine and with more at stake: it IS the minor/adult decision when `known` is false, so a stub of it
+  // would be a mock of the thing every test below is named after. It is fed real relay documents through
+  // `pool.querySync` (empty by default here, which is a church that has published no clearance at all).
+  const fetchClr = liftFetchMyClearance(VENDOR);
   // THE BUNDLER RENAMES WHAT IT LIFTS. In vendor/fellowship.js this function's crypto helpers are no longer
   // called nip44e/nip44ck/finalizeEvent — esbuild rewrote them to encrypt/getConversationKey/finalizeEvent2,
   // and a hard-coded parameter list therefore fed the function three undefined names. The function catches
@@ -64,7 +74,7 @@ function loadPublish({ team, sgSelf, childAudience }) {
     // A CHILD IS SEALED TO A DIFFERENT AUDIENCE, and asked a different question first. `_sgSelf` is what this
     // phone has been told about ITSELF by its own church — `known:false` means the answer has not arrived,
     // which is not the same as "not a child" and must never be treated as such.
-    _sgSelf: sgSelf || { cp: churchPub, isMinor: false, known: true },
+    _sgSelf: sgSelf || { cp: churchPub, me: askerPub, isMinor: false, known: true },
     _fetchChildCareAudience: async () => (childAudience === undefined ? [] : childAudience),
     crypto: webcrypto,
     encrypt: (plain, key) => nip44.encrypt(plain, key),
@@ -79,7 +89,15 @@ function loadPublish({ team, sgSelf, childAudience }) {
     // Present so that reverting to the OLD inline lookup RUNS rather than dying on a missing name: the
     // sabotage must fail on the assertion, not on the harness. querySync resolving empty is the exact
     // real-world case — an unreachable or unauthenticated relay.
-    pool: { querySync: async () => [] },
+    pool: { querySync: async () => (clearanceEvents || []) },
+    // _fetchMyClearance's own free variables. `_relayAuthedAt` is what tells an EMPTY answer from an
+    // unreachable one: querySync resolves empty on a relay that is unreachable, still connecting, or has not
+    // answered the auth challenge, so without this every case below would read as "could not ask".
+    _relayAuthedAt: relayAuthed === undefined ? Date.now() : relayAuthed,
+    _churchRoster: new Map([[churchPub, new Set()]]),
+    CLEARANCE_D: 'trinityone/clearance:',
+    decrypt: (ct, key) => nip44.decrypt(ct, key),
+    nip44d: (ct, key) => nip44.decrypt(ct, key),
     console,
   };
   const scope = new Proxy(stubs, {
@@ -94,7 +112,7 @@ function loadPublish({ team, sgSelf, childAudience }) {
       throw new ReferenceError('the lifted function needs `' + String(k) + '` — add a stub for it in loadPublish()');
     },
   });
-  const fn = new Function('scope', `with (scope) { return ({ ${body} }).publishCareRequest; }`)(scope);
+  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} return ({ ${body} }).publishCareRequest; }`)(scope);
   return { fn, published };
 }
 
@@ -197,7 +215,7 @@ const clearedSk = generateSecretKey(), clearedPub = getPublicKey(clearedSk);
 test('a child’s request is sealed to a CLEARED adult', async () => {
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],                          // the ordinary care rota
-    sgSelf: { cp: churchPub, isMinor: true, known: true },
+    sgSelf: { cp: churchPub, me: askerPub, isMinor: true, known: true },
     childAudience: [clearedPub],                        // …and the one adult this church has cleared
   });
   const res = await fn(FIELDS);
@@ -210,7 +228,7 @@ test('a child’s request is sealed to a CLEARED adult', async () => {
 test('…and NOT to an uncleared member of the care team', async () => {
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],
-    sgSelf: { cp: churchPub, isMinor: true, known: true },
+    sgSelf: { cp: churchPub, me: askerPub, isMinor: true, known: true },
     childAudience: [clearedPub],
   });
   await fn(FIELDS);
@@ -224,7 +242,7 @@ test('the church’s own console can always open it', async () => {
   // Deliberate, and the same reason the relay keeps the church key in safeguardAllows: the office must be a
   // child's route of last resort, and the console holder is the accountable adult.
   const { fn, published } = loadPublish({
-    team: [], sgSelf: { cp: churchPub, isMinor: true, known: true }, childAudience: [clearedPub],
+    team: [], sgSelf: { cp: churchPub, me: askerPub, isMinor: true, known: true }, childAudience: [clearedPub],
   });
   await fn(FIELDS);
   assert.ok(canOpen(published[0], churchSk, churchPub), 'the church itself cannot open a child’s request');
@@ -235,7 +253,7 @@ test('a church that has cleared NOBODY does not take the message', async () => {
   // For a child working up to telling someone something difficult, that is worse than no feature at all.
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],                          // a full care rota, and it makes no difference
-    sgSelf: { cp: churchPub, isMinor: true, known: true }, childAudience: [],
+    sgSelf: { cp: churchPub, me: askerPub, isMinor: true, known: true }, childAudience: [],
   });
   const res = await fn(FIELDS);
   assert.equal(published.length, 0, 'a child’s words were published where nobody cleared can read them');
@@ -248,7 +266,7 @@ test('“we could not find out” never falls back to the care team', async () =
   // child's words to people their church declined to clear.
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],
-    sgSelf: { cp: churchPub, isMinor: true, known: true }, childAudience: null,
+    sgSelf: { cp: churchPub, me: askerPub, isMinor: true, known: true }, childAudience: null,
   });
   const res = await fn(FIELDS);
   assert.equal(published.length, 0, 'an unreachable relay caused a child’s request to go to the care rota');
@@ -260,7 +278,7 @@ test('if we have not heard whether the sender is a child, we do not assume they 
   // retry; assuming adult publishes a child's disclosure to the whole rota.
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],
-    sgSelf: { cp: churchPub, isMinor: false, known: false },
+    sgSelf: { cp: churchPub, me: askerPub, isMinor: false, known: false },
     childAudience: [clearedPub],           // this church HAS cleared people, so it is using safeguarding
   });
   const res = await fn(FIELDS);
@@ -275,12 +293,29 @@ test('A CACHE FROM A DIFFERENT CHURCH IS NOT AN ANSWER ABOUT THIS ONE', async ()
   // GUESSES". It guessed, in the one place a guess costs the most.
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],
-    sgSelf: { cp: 'f'.repeat(64), isMinor: false, known: true },   // a confident answer, about somewhere else
+    sgSelf: { cp: 'f'.repeat(64), me: askerPub, isMinor: false, known: true },   // a confident answer, about somewhere else
     childAudience: [clearedPub],
   });
   const res = await fn(FIELDS);
   assert.equal(published.length, 0,
     'what another church said about this person was used to seal their request here — to the whole care rota');
+  assert.equal(res && res.error, 'unknown-clearance');
+});
+
+test('AND A CACHE ABOUT A DIFFERENT PERSON IS NOT AN ANSWER ABOUT THIS ONE', async () => {
+  // The same hole, one field along. `_sgSelf` is a single module variable and the remembered answer beside it
+  // was keyed by CHURCH only — so on a phone that has carried two accounts in a session it answered about
+  // whoever used it last. That is routine, not exotic: createChildAccount mints and reveals a child's twelve
+  // words on the PARENT's phone, and the family flow ends by handing that phone to the child.
+  const { fn, published } = loadPublish({
+    team: [annePub, joycePub],
+    sgSelf: { cp: churchPub, me: annePub, isMinor: false, known: true },   // Anne's answer, on Anne's old phone
+    childAudience: [clearedPub],
+  });
+  const res = await fn(FIELDS);
+  assert.equal(published.length, 0,
+    'a child was treated as an adult because a parent had signed in on this phone, and their disclosure was ' +
+    'sealed to the whole care rota');
   assert.equal(res && res.error, 'unknown-clearance');
 });
 
@@ -291,7 +326,7 @@ test('…but a church that uses no safeguarding at all does not lock its adults 
   // the one being prevented. Nobody cleared means no child audience to get wrong.
   const { fn, published } = loadPublish({
     team: [annePub, joycePub],
-    sgSelf: { cp: churchPub, isMinor: false, known: false },
+    sgSelf: { cp: churchPub, me: askerPub, isMinor: false, known: false },
     childAudience: [],                      // this church has cleared nobody
   });
   const res = await fn(FIELDS);
@@ -346,7 +381,11 @@ test('the FORM does not promise a child it reaches the care team', () => {
   const TODAY = stripComments(readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8'));
   assert.match(TODAY, /const _isMinor = !!\(ctx\.safeguard && ctx\.safeguard\.isMinor\)/,
     'the ask-for-help form does not know whether a child is asking, so it cannot describe who will receive it');
-  assert.match(TODAY, /_isMinor \? 'This goes privately to the people at your church who can help young people/,
+  // \s* only: the sheet now has THREE branches (a child, a member whose church lets them open a need, and
+  // everyone else), so the ternary wraps. What is asserted is unchanged — the _isMinor branch must still
+  // carry the child wording — and the sabotage that matters (giving a child the care-team sentence) still
+  // fails this line.
+  assert.match(TODAY, /_isMinor\s*\?\s*'This goes privately to the people at your church who can help young people/,
     'the form still tells a young person their request goes to the care team — it does not, and saying so ' +
     'names a group of people they did not choose to tell');
   // …and the ordinary path must be untouched.

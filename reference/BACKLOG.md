@@ -112,3 +112,28 @@
     the member app's "Retry button does nothing" bug (AUDIT 2026-07-25).
   - A REQ count taken from a console that never mounts its screens measures nothing: those subscriptions open
     when their screens do. My first measurement did exactly that and showed no difference for the wrong reason.
+
+## Relay-name directory accumulates permanent tombstones (found 2026-09-02)
+
+`GET /relay-names/sync?since=0` on both canonical relays returns two records, and **both advertise
+dead addresses**:
+
+| handle | key | address | state |
+|---|---|---|---|
+| `steady-harbor-18` | `16731f4c…` | `penn-angle-demonstrate-laws.trycloudflare.com` | **this dev box**; tunnel NXDOMAIN; still advertises `churches:3` |
+| `quitedoverelay` | `b90496e2…` | `task-blend-consistency-accomplish.trycloudflare.com` | unknown key, NXDOMAIN, claimed `churches:1` on 2026-08-23 |
+
+Neither is the a8 (`6a4267558c…`, confirmed at both canonical URLs). **Both are the two relays the
+owner had taken down earlier on 2026-09-02** — the dead addresses are the evidence that shutdown
+worked, not a mystery. `quitedoverelay` carries a different key from this dev box because it was a
+separate relay process, most likely a subagent's temporary one. **No live church is affected and there
+is nothing to chase.**
+
+**The actual defect, which outlives those two relays:** a claim can only be withdrawn by the key that
+made it, and there is no operator removal path. Our own entry is withdrawable (the dev box still holds `16731f4c…`); **`quitedoverelay`
+is permanent** because its key is gone. Anyone resolving that name gets a dead address for ever, and
+the directory will accumulate one of these per abandoned test relay.
+
+Wanted: an operator removal path, and/or expiry of a claim whose address has not answered for N days.
+Note the interaction with the T1-only plan — a name that resolves to a dead address now fails at the
+identity challenge rather than silently, which is better, but the tombstone remains.

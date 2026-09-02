@@ -3501,6 +3501,7 @@
   function _pickWinner(vers, trusted) {
     let best = null;
     for (const rec of vers.values()) {
+      if (rec && rec._tomb) continue;
       if (trusted && !trusted(rec)) continue;
       if (!best) {
         best = rec;
@@ -3518,7 +3519,7 @@
       return null;
     }
     const winKey = String(win._by || "");
-    const others = [...vers.keys()].filter((k) => k !== winKey);
+    const others = [...vers.keys()].filter((k) => k !== winKey && !(vers.get(k) || {})._tomb);
     byId.set(id, others.length ? { ...win, _alt: others.slice() } : win);
     return win;
   }
@@ -3546,28 +3547,46 @@
     }
     const by = String(rec._by || "");
     const had = vers.get(by);
+    if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
   }
-  function _forgetById(versions, byId, id, by, ts, trusted) {
+  function _tombstoneTargets(e) {
+    return (e && e.tags || []).filter((t) => t[0] === "for").map((t) => String(t[1] || "")).filter(Boolean);
+  }
+  function _forgetById(versions, byId, id, by, ts, trusted, opts) {
+    const k0 = String(by || "");
+    const cp = String(opts && opts.churchPub || "");
+    const named = opts && opts.targets || [];
+    const _authority = opts && typeof opts.mayName === "function" ? opts.mayName : trusted;
+    const mayName = typeof _authority === "function" ? !!_authority({ _by: by }) : false;
+    const keys = [k0];
+    if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
+    const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });
     const vers = versions.get(id);
     if (!vers) {
-      if (byId.has(id)) {
+      const had = byId.has(id);
+      const fresh = /* @__PURE__ */ new Map();
+      for (const k of keys) fresh.set(k, tomb(k));
+      versions.set(id, fresh);
+      if (had) {
         byId.delete(id);
         return true;
       }
       return false;
     }
-    const k = String(by || "");
-    const had = vers.get(k);
-    if (!had) return false;
-    if ((had.ts || 0) > (ts || 0)) return false;
-    vers.delete(k);
-    if (!vers.size) versions.delete(id);
+    let did = false;
+    for (const k of keys) {
+      const held = vers.get(k);
+      if (held && !held._tomb && (held.ts || 0) > (ts || 0)) continue;
+      if (held && held._tomb && (held.ts || 0) >= (ts || 0)) continue;
+      if (held && !held._tomb) did = true;
+      vers.set(k, tomb(k));
+    }
     _reduceVersions(vers, byId, id, trusted);
-    return true;
+    return did;
   }
   function _reduceAll(versions, byId, trusted) {
     for (const [id, vers] of versions) _reduceVersions(vers, byId, id, trusted);
@@ -3651,6 +3670,352 @@
   var getPublicKey2 = i2.getPublicKey;
   var finalizeEvent2 = i2.finalizeEvent;
   var verifyEvent2 = i2.verifyEvent;
+
+  // src/relay-identity.src.js
+  var RELAY_PROOF_WINDOW_SEC = 300;
+  function relayIdentityNonce() {
+    try {
+      const c = typeof globalThis !== "undefined" && globalThis.crypto || null;
+      if (!c || typeof c.getRandomValues !== "function") return "";
+      const b = new Uint8Array(16);
+      c.getRandomValues(b);
+      let out = "";
+      for (let i3 = 0; i3 < b.length; i3++) out += b[i3].toString(16).padStart(2, "0");
+      return out;
+    } catch {
+      return "";
+    }
+  }
+  function relayHttpBase(wssUrl) {
+    return String(wssUrl || "").replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+  }
+  function relayAddrKey(u) {
+    let str = String(u || "").trim();
+    if (!str) return "";
+    str = str.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
+    try {
+      const p = new URL(str);
+      const proto = p.protocol.toLowerCase();
+      const port = p.port === "80" && proto === "ws:" || p.port === "443" && proto === "wss:" ? "" : p.port;
+      const path = p.pathname.replace(/\/+$/, "");
+      return p.hostname.toLowerCase() + (port ? ":" + port : "") + path;
+    } catch {
+      return str.toLowerCase().replace(/^wss?:\/\//, "").replace(/\/+$/, "");
+    }
+  }
+  async function verifyRelayIdentity(wssUrl) {
+    try {
+      const base = relayHttpBase(wssUrl);
+      if (!base) return null;
+      const nonce = relayIdentityNonce();
+      if (!nonce) return null;
+      const ctrl = new AbortController();
+      const to = setTimeout(() => {
+        try {
+          ctrl.abort();
+        } catch (e) {
+        }
+      }, 6e3);
+      let body = null;
+      try {
+        body = await Promise.race([
+          (async () => {
+            const res = await fetch(
+              base + "/relay-identity?nonce=" + nonce + "&for=" + encodeURIComponent(String(wssUrl || "")),
+              { signal: ctrl.signal, cache: "no-store" }
+            );
+            return res.ok ? res.json() : null;
+          })(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("relay-identity timeout")), 6500))
+        ]);
+      } finally {
+        clearTimeout(to);
+      }
+      const ev = body && body.proof;
+      if (!ev || ev.kind !== 27235) return null;
+      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return null;
+      if (!verifyEvent2(ev)) return null;
+      const tag = (n) => {
+        const t = (ev.tags || []).find((x) => Array.isArray(x) && x[0] === n);
+        return t ? String(t[1] || "") : "";
+      };
+      if (tag("nonce").toLowerCase() !== nonce) return null;
+      if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
+      const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
+      if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
+      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
+    } catch {
+      return null;
+    }
+  }
+
+  // src/relay-net.src.js
+  var RELAY_NET_D = "trinityone/relay-net";
+  var SHARED_RELAY_KEYS = Object.freeze([
+    "6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"
+  ]);
+  var SHARED_RELAY_HINTS = Object.freeze([
+    "wss://app.trinityone.church/relay",
+    "wss://trinityone-master-01.tailbeaac0.ts.net/relay"
+  ]);
+  var CANONICAL_RELAY_PUBS = Object.freeze(
+    Object.fromEntries(SHARED_RELAY_HINTS.map((u) => [u, SHARED_RELAY_KEYS]))
+  );
+  function _relayKey(url) {
+    try {
+      return normalizeURL2(String(url || ""));
+    } catch {
+      return String(url || "");
+    }
+  }
+  var _isHex64 = (s) => /^[0-9a-f]{64}$/.test(String(s || "").toLowerCase());
+  function isSharedAddress(url, pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const want = _relayKey(url);
+    if (!want) return false;
+    for (const k of Object.keys(map)) if (_relayKey(k) === want) return true;
+    return false;
+  }
+  function sharedRelayKeys(pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const out = [];
+    for (const v of Object.values(map)) for (const p of v || []) {
+      const h = String(p).toLowerCase();
+      if (_isHex64(h) && !out.includes(h)) out.push(h);
+    }
+    return out;
+  }
+  function canonicalPinsFor(url, pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const want = _relayKey(url);
+    if (!want) return [];
+    for (const k of Object.keys(map)) {
+      if (_relayKey(k) === want) return (map[k] || []).map((p) => String(p).toLowerCase()).filter(_isHex64);
+    }
+    return [];
+  }
+  function parseRelayNet(content) {
+    let arr = content;
+    if (typeof arr === "string") {
+      try {
+        arr = JSON.parse(arr || "[]");
+      } catch {
+        return [];
+      }
+    }
+    if (!Array.isArray(arr)) return [];
+    const out = [], seen = /* @__PURE__ */ new Set();
+    for (const e of arr) {
+      if (!e || typeof e !== "object") continue;
+      const pubkey = String(e.pubkey || "").toLowerCase();
+      if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
+      seen.add(pubkey);
+      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+    }
+    return out;
+  }
+  function _originKey(httpUrl) {
+    let s = String(httpUrl || "").trim().toLowerCase().replace(/\/+$/, "");
+    if (!/^https?:\/\/[^/]+$/.test(s)) return "";
+    return s.replace(/^(https:\/\/[^/:]+):443$/, "$1").replace(/^(http:\/\/[^/:]+):80$/, "$1");
+  }
+  function sameOriginRelay(url, origin) {
+    const a = _originKey(relayHttpBase(url));
+    const b = _originKey(origin);
+    return !!a && !!b && a === b;
+  }
+  async function proveRelay(cp, url, deps) {
+    const d = deps || {};
+    const no = { root: "", pub: "" };
+    if (!url) return no;
+    let proof = null;
+    try {
+      proof = await (d.verify || verifyRelayIdentity)(url);
+    } catch {
+      proof = null;
+    }
+    const provenPub = String(proof && proof.relayPub || "").toLowerCase();
+    if (!_isHex64(provenPub)) return no;
+    if (isSharedAddress(url, d.pins) && !sharedRelayKeys(d.pins).includes(provenPub)) return { root: "", pub: provenPub };
+    if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: "canonical", pub: provenPub };
+    if (sameOriginRelay(url, d.origin)) return { root: "origin", pub: provenPub };
+    let entries = null;
+    try {
+      entries = d.netEntries ? await d.netEntries(cp) : null;
+    } catch {
+      entries = null;
+    }
+    if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return { root: "church", pub: provenPub };
+    return { root: "software", pub: provenPub };
+  }
+  async function isNetworkRelay(cp, url, deps) {
+    return !!(await proveRelay(cp, url, deps)).root;
+  }
+  var VERIFIED_KEY = "trinityone.relays.verified";
+  var VERIFIED_TTL_SEC = 30 * 24 * 3600;
+  var VERIFIED_REFRESH_SEC = 6 * 3600;
+  var VERIFY_RETRY_SEC = 60;
+  function readVerified(store) {
+    const out = /* @__PURE__ */ new Map();
+    let raw = null;
+    try {
+      raw = store && store.getItem ? store.getItem(VERIFIED_KEY) : null;
+    } catch {
+      raw = null;
+    }
+    let obj = null;
+    try {
+      obj = JSON.parse(raw || "{}");
+    } catch {
+      return out;
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+    for (const [k, v] of Object.entries(obj)) {
+      if (!v || typeof v !== "object") continue;
+      const pub2 = String(v.pub || "").toLowerCase();
+      if (!_isHex64(pub2)) continue;
+      const until = Number(v.until) || 0, at = Number(v.at) || 0;
+      const cp = _isHex64(v.cp) ? String(v.cp).toLowerCase() : "";
+      out.set(_relayKey(k), { pub: pub2, cp, at, until });
+    }
+    return out;
+  }
+  function writeVerified(store, map) {
+    try {
+      if (!store || !store.setItem) return;
+      const obj = {};
+      for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until };
+      store.setItem(VERIFIED_KEY, JSON.stringify(obj));
+    } catch {
+    }
+  }
+  function admitCached(map, url, cp, nowSec) {
+    const e = map.get(_relayKey(url));
+    if (!e || !(e.until > nowSec)) return false;
+    if (!e.cp) return true;
+    return !cp || e.cp === String(cp).toLowerCase();
+  }
+  function rememberVerified(map, url, pub2, cp, nowSec) {
+    const k = _relayKey(url);
+    if (!k || !_isHex64(pub2)) return;
+    map.set(k, { pub: String(pub2).toLowerCase(), cp: _isHex64(cp) ? String(cp).toLowerCase() : "", at: nowSec, until: nowSec + VERIFIED_TTL_SEC });
+  }
+  function createRelayGate(deps) {
+    const d = deps || {};
+    const nowSec = () => d.now ? d.now() : Math.floor(Date.now() / 1e3);
+    const map = readVerified(d.store);
+    const inflight = /* @__PURE__ */ new Map();
+    const attempted = /* @__PURE__ */ new Map();
+    const changed = () => {
+      try {
+        if (d.onChange) d.onChange();
+      } catch {
+      }
+    };
+    function origin() {
+      try {
+        return typeof d.origin === "function" ? d.origin() : d.origin || "";
+      } catch {
+        return "";
+      }
+    }
+    async function prove(url, cp) {
+      const k = _relayKey(url);
+      let res = { root: "", pub: "" };
+      try {
+        res = await proveRelay(cp, url, { verify: d.verify, netEntries: d.netEntries, origin: origin(), pins: d.pins });
+      } catch {
+      }
+      const had = map.get(k);
+      if (res.root) {
+        const scope = res.root === "church" ? String(cp || "").toLowerCase() : "";
+        if (res.root === "church" && !_isHex64(scope)) {
+          attempted.set(k, nowSec());
+          return false;
+        }
+        rememberVerified(map, url, res.pub, scope, nowSec());
+        writeVerified(d.store, map);
+        if (!had || had.pub !== res.pub || had.cp !== scope) changed();
+        return true;
+      }
+      attempted.set(k, nowSec());
+      if (had && res.pub && res.pub !== had.pub) {
+        map.delete(k);
+        writeVerified(d.store, map);
+        changed();
+      }
+      return false;
+    }
+    function start(url, cp) {
+      const k = _relayKey(url);
+      const running = inflight.get(k);
+      if (running) return running;
+      const p = Promise.resolve().then(() => prove(url, cp)).catch(() => false).then((v) => {
+        inflight.delete(k);
+        return v;
+      });
+      inflight.set(k, p);
+      return p;
+    }
+    function schedule(url, cp) {
+      const k = _relayKey(url);
+      if (!k || inflight.has(k)) return;
+      const last = attempted.get(k) || 0;
+      if (last && nowSec() - last < VERIFY_RETRY_SEC) return;
+      attempted.set(k, nowSec());
+      start(url, cp);
+    }
+    return {
+      // THE SYNCHRONOUS FILTER. Cache only. Anything it cannot admit is scheduled, never awaited.
+      admit(list, cp) {
+        const t = nowSec(), out = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          if (!u) continue;
+          const e = map.get(_relayKey(u));
+          if (admitCached(map, u, cp, t)) {
+            out.push(u);
+            if (!e.at || t - e.at > VERIFIED_REFRESH_SEC) schedule(u, cp);
+          } else schedule(u, cp);
+        }
+        return out;
+      },
+      // Ask about ONE address without opening anything — what a relay panel needs to say "connected" or
+      // "not yet proved" honestly.
+      admits(url, cp) {
+        return admitCached(map, url, cp, nowSec());
+      },
+      // Prove a whole list NOW, awaited. For the moments where waiting is right: the list just changed, or the
+      // app has just booted and would rather spend a second than start with an empty publish set.
+      async refresh(list, cp) {
+        const seen = /* @__PURE__ */ new Set(), waiting = [];
+        for (const u of Array.isArray(list) ? list : []) {
+          const k = _relayKey(u);
+          if (!u || seen.has(k)) continue;
+          seen.add(k);
+          attempted.set(k, nowSec());
+          waiting.push(start(u, cp));
+        }
+        try {
+          await Promise.all(waiting);
+        } catch {
+        }
+        return this.admit(list, cp);
+      },
+      // What the gate would drop, so a screen can name the address and say why rather than losing it silently.
+      dropped(list, cp) {
+        const t = nowSec();
+        return (Array.isArray(list) ? list : []).filter((u) => u && !admitCached(map, u, cp, t));
+      },
+      forget(url) {
+        const k = _relayKey(url);
+        if (map.delete(k)) {
+          writeVerified(d.store, map);
+          changed();
+        }
+      },
+      _map: map
+    };
+  }
 
   // node_modules/@noble/ciphers/utils.js
   function isBytes2(a) {
@@ -6241,6 +6606,70 @@
     if (approved === null && roster === null && !_relayAuthedAt) return null;
     return [...new Set([...approved || [], ...roster || []].filter(Boolean))];
   }
+  async function _fetchMyClearance(cp) {
+    const me = _mePub();
+    if (!cp || !me || !sk) return null;
+    const dtag = CLEARANCE_D + me;
+    const stag = "trinityone/stewards:" + cp;
+    let evs = null;
+    try {
+      evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [dtag, stag] }]);
+    } catch (e) {
+      return null;
+    }
+    let bestS = null;
+    const mine = [];
+    for (const e of evs || []) {
+      const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+      if (d === stag) {
+        if (e.pubkey === cp && (!bestS || (e.created_at || 0) > (bestS.created_at || 0))) bestS = e;
+      } else if (d === dtag) mine.push(e);
+    }
+    let writers = null;
+    if (bestS) {
+      try {
+        const o = JSON.parse(bestS.content);
+        const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+        const caps = o.caps && typeof o.caps === "object" ? o.caps : null;
+        writers = new Set(pks.filter((pk) => {
+          if (!caps) return true;
+          const c = caps[pk];
+          if (!Array.isArray(c)) return true;
+          return c.some((x) => String(x || "").toLowerCase() === "safeguarding");
+        }));
+      } catch (e) {
+        writers = null;
+      }
+    }
+    let best = null, unverified = false;
+    for (const e of mine) {
+      if (e.pubkey !== cp && !(writers && writers.has(e.pubkey))) {
+        unverified = true;
+        continue;
+      }
+      const ts = e.created_at || 0;
+      if (ts > Math.floor(Date.now() / 1e3) + 600) continue;
+      if (!best) {
+        best = e;
+        continue;
+      }
+      const bts = best.created_at || 0;
+      if (ts < bts) continue;
+      if (ts === bts && !(String(e.id || "") > String(best.id || ""))) continue;
+      best = e;
+    }
+    if (best) {
+      try {
+        const o = JSON.parse(decrypt(best.content, getConversationKey(sk, best.pubkey)));
+        return { found: true, minor: !!(o && o.minor) };
+      } catch (x) {
+        return null;
+      }
+    }
+    if (unverified) return null;
+    if (!_relayAuthedAt) return null;
+    return { found: false };
+  }
   async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
     if (!cp || !reqId || !requesterPub) return null;
     try {
@@ -6307,9 +6736,82 @@
     // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
   ];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
-  function churchRelays() {
+  function churchRelaysRaw() {
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
   }
+  function churchRelays() {
+    return _netRelays(churchRelaysRaw());
+  }
+  function _adoptionOrigin() {
+    if (_native || _staticHost || !_loc || !_loc.host) return "";
+    return _loc.protocol + "//" + _loc.host;
+  }
+  var _relayNetCache = /* @__PURE__ */ new Map();
+  var RELAY_NET_TTL_MS = 6e4;
+  async function churchRelayNet(cp, opts) {
+    if (!cp) return [];
+    const c = _relayNetCache.get(cp);
+    if (c && !(opts && opts.fresh) && Date.now() - c.at < RELAY_NET_TTL_MS) return c.entries;
+    let entries = [];
+    try {
+      const evs = await pool.querySync(churchRelaysRaw(), [{ kinds: [30078], authors: [cp], "#d": [RELAY_NET_D] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (!e || e.pubkey !== cp) continue;
+        if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+      }
+      entries = best ? parseRelayNet(best.content) : [];
+      _relayNetCache.set(cp, { at: Date.now(), entries });
+    } catch {
+      return c ? c.entries : [];
+    }
+    return entries;
+  }
+  function isNetworkRelay2(cp, url) {
+    return isNetworkRelay(cp, url, {
+      verify: verifyRelayIdentity,
+      netEntries: churchRelayNet,
+      origin: _adoptionOrigin(),
+      pins: CANONICAL_RELAY_PUBS
+    });
+  }
+  var _gate = createRelayGate({
+    store: typeof localStorage !== "undefined" ? localStorage : null,
+    verify: verifyRelayIdentity,
+    netEntries: churchRelayNet,
+    origin: _adoptionOrigin(),
+    pins: CANONICAL_RELAY_PUBS,
+    // TWO EVENTS, AND EACH HAS A JOB.
+    //
+    // `trinity-relays-verified` repaints the Relays sheet: it reads the gate to say which addresses are
+    // carrying this church's traffic and which are not, and a relay that quietly stops being used is exactly
+    // the invisible divergence this work exists to end.
+    //
+    // `trinity-relay-returned` is the app's existing ADVISORY re-subscribe signal — coalesced through the
+    // scheduler, deliberately not the mandatory `trinity-reconnect` teardown. Without it a cold boot would
+    // subscribe over an empty publish set, paint nothing, and stay that way until the 90-second beat came
+    // round, even though the gate had admitted the church's relays a second later. A relay becoming usable is
+    // precisely what that event means.
+    onChange: () => {
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-relays-verified"));
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url: "" } }));
+      } catch (e) {
+      }
+    }
+  });
+  function _netRelays(list, cp) {
+    try {
+      return _gate.admit(list, cp === void 0 ? window.Fellowship.churchPub : cp);
+    } catch (e) {
+      return [];
+    }
+  }
+  var NO_NETWORK_RELAY = "no-network-relay";
+  var isNoNetworkRelay = (e) => String(e && e.message || e || "").startsWith(NO_NETWORK_RELAY);
   function _restoreFold() {
     const seen = /* @__PURE__ */ new Map();
     let name = "", nameAt = 0;
@@ -6433,8 +6935,8 @@
     const global = window.Fellowship.relays || [];
     const ownUrls = own ? [...own.keys()] : [];
     const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-    if (boxes >= 2) return [.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
-    return [.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])];
+    if (boxes >= 2) return _netRelays([.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])], cp);
+    return _netRelays([.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
   }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
@@ -6457,6 +6959,27 @@
     return { pubkey: pub2, handle: "", color: COLORS[(h >>> 8) % COLORS.length] };
   }
   var pool = new SimplePool();
+  var _poolSubMany = pool.subscribeMany.bind(pool);
+  pool.subscribeMany = (urls, filters, handlers) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    if (u.length) return _poolSubMany(u, filters, handlers);
+    try {
+      setTimeout(() => {
+        try {
+          if (handlers && handlers.oneose) handlers.oneose();
+        } catch (e) {
+        }
+      }, 0);
+    } catch (e) {
+    }
+    return { close() {
+    } };
+  };
+  var _poolQuerySync = pool.querySync.bind(pool);
+  pool.querySync = (urls, filter, opts) => {
+    const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+  };
   try {
     const _ensure = pool.ensureRelay.bind(pool);
     pool.ensureRelay = function(url, params) {
@@ -6486,7 +7009,55 @@
   var pub = null;
   var _needAuth = true;
   var _relayAuthedAt = 0;
-  var _sgSelf = { cp: "", isMinor: false, known: false };
+  var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
+  var SG_ASSUME_KEY = "trinityone.sgassume.";
+  var _mePub = () => window.Fellowship && window.Fellowship.myPubkey || pub || "";
+  function _sgMine(cp) {
+    const me = _mePub();
+    return cp && me && _sgSelf.cp === cp && _sgSelf.me === me ? _sgSelf : null;
+  }
+  async function _assumeMinor(cp) {
+    if (!cp) return false;
+    const me = _mePub();
+    const slot = me ? SG_ASSUME_KEY + cp + "|" + me : "";
+    const mine = _sgMine(cp);
+    if (mine && mine.known) {
+      const v = mine.isMinor ? "1" : "0";
+      if (slot && _mayCache()) {
+        try {
+          if (localStorage.getItem(slot) !== v) localStorage.setItem(slot, v);
+        } catch (e) {
+        }
+        try {
+          localStorage.removeItem(SG_ASSUME_KEY + cp);
+        } catch (e) {
+        }
+      }
+      return !!mine.isMinor;
+    }
+    if (slot) {
+      try {
+        const v = localStorage.getItem(slot);
+        if (v === "0") return false;
+        if (v === "1") return true;
+      } catch (e) {
+      }
+    }
+    const audience = await _fetchChildCareAudience(cp);
+    if (audience === null) return true;
+    return audience.length > 0;
+  }
+  async function _careNeedRefusal(cp) {
+    const mine = _sgMine(cp);
+    if (mine && mine.isMinor) return "minor-cannot-open";
+    const sure = !!(mine && (mine.isMinor || mine.known));
+    if (!sure) {
+      const audience = await _fetchChildCareAudience(cp);
+      if (audience === null) return "unknown-clearance";
+      if (audience.length) return "unknown-clearance";
+    }
+    return "";
+  }
   pool.automaticallyAuth = () => async (authEvent) => {
     if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
     if (!sk) {
@@ -6564,7 +7135,7 @@
     const authors = [..._profQueue];
     _profQueue.clear();
     if (!authors.length) return;
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors }], {
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
@@ -6709,6 +7280,7 @@
     }
   };
   var APPROVED_D = "trinityone/approved:";
+  var CLEARANCE_D = "trinityone/clearance:";
   var VOICE_D = "trinityone/voice:";
   var _churchVoices = /* @__PURE__ */ new Map();
   function _absorbRoster(cp, d, e) {
@@ -7535,7 +8107,32 @@
   }
   var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
   var _noPhoto = /* @__PURE__ */ new Set();
+  var _photosOffChurches = /* @__PURE__ */ new Set();
+  function _notePhotoPolicy(churchPub, content) {
+    const f = content && content.features;
+    const off = !!(f && f.memberPhotos === false);
+    const had = _photosOffChurches.has(churchPub);
+    if (off) _photosOffChurches.add(churchPub);
+    else _photosOffChurches.delete(churchPub);
+    if (had !== off) {
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: {} }));
+      } catch (e) {
+      }
+    }
+  }
+  function _churchPhotosOff() {
+    return _photosOffChurches.size > 0;
+  }
+  function _myPhotoReset() {
+    return !!pub && isPhotoSuppressed(pub, _noPhoto);
+  }
+  function _stripPhoto(pubkey, av) {
+    if (!av || av.kind !== "photo") return av;
+    return { kind: "symbol", color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
+  }
   function _avSuppressPhoto(pubkey, av) {
+    if (_churchPhotosOff()) av = _stripPhoto(pubkey, av);
     return suppressPhotoAv(pubkey, av, _noPhoto, (pk) => AV_SYMBOLS[hashStr(pk || "") % AV_SYMBOLS.length]);
   }
   function displayFor(pubkey) {
@@ -7564,9 +8161,11 @@
     const wasKeyless = !sk;
     const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
     if (!mnemonic) throw new Error("no identity available to sign with");
+    const prevPub = pub;
     sk = privateKeyFromSeedWords(mnemonic);
     pub = getPublicKey2(sk);
     window.Fellowship.myPubkey = pub;
+    if (prevPub && prevPub !== pub) _sgSelf = { cp: "", me: "", isMinor: false, known: false };
     if (_loadChildren().length) _needAuth = true;
     try {
       const mine = window.Fellowship.myProfile || {};
@@ -7789,7 +8388,11 @@
     return out;
   }
   function _publishAny(relays, evt) {
-    const targets = _dedupeRelays(relays);
+    const candidates = _dedupeRelays(relays);
+    const targets = _netRelays(candidates);
+    if (!targets.length && (candidates.length || churchRelaysRaw().length)) {
+      return Promise.reject(new Error(NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours"));
+    }
     try {
       for (const u of targets) {
         const r = pool.relays && pool.relays.get(_wedgeKey(u));
@@ -7841,7 +8444,7 @@
         } catch (e) {
           const errs = e && e.errors ? e.errors : [e];
           const permanent = errs.length && errs.every(isPermanentRefusal);
-          const outage = errs.length && errs.every(isConnectionFailure);
+          const outage = errs.length && errs.every((e2) => isConnectionFailure(e2) || isNoNetworkRelay(e2));
           const rateLimited = errs.some(isRateLimited);
           if (!outage) item.tries = (item.tries || 0) + 1;
           item.lastTry = Math.floor(Date.now() / 1e3);
@@ -7891,6 +8494,19 @@
   }
   window.Fellowship = {
     relays: loadRelays(),
+    // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
+    // CONSUMED BY THE C4 GATE, which is what makes it more than a diagnostic: the gate proves every candidate
+    // address through this before that address can receive anything. Still exposed so a device session can ask
+    // a real relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is
+    // the provable form.
+    verifyRelayIdentity,
+    // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
+    // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document. C4
+    // consumes it: the answer, cached, IS the publish set — see _netRelays and the gate above.
+    isNetworkRelay: isNetworkRelay2,
+    // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
+    // session can read what the church actually signed, rather than inferring it from behaviour.
+    churchRelayNet,
     // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
     // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
     // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
@@ -7914,7 +8530,7 @@
       try {
         const st = pool.listConnectionStatus();
         const want = churchRelays();
-        if (!want.length) return true;
+        if (!want.length) return !churchRelaysRaw().length;
         for (const url of want) {
           if (st.get(url) === true) return true;
           try {
@@ -8226,9 +8842,26 @@
     },
     // scope outgoing messages to a church (so its steward can see who's participating). The member
     // app calls this with the active church's npub whenever it changes; null clears the scope.
+    // Switching church re-asks the gate, because membership is per church: a relay admitted by the signature of
+    // the congregation we just left is not admitted for this one, and the answer for the new church is not in
+    // the cache yet.
     setChurch(npubOrHex) {
       window.Fellowship.churchPub = toPub(npubOrHex);
+      try {
+        _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub);
+      } catch (e) {
+      }
       return window.Fellowship.churchPub;
+    },
+    // C4, for the Relays sheet: is this address carrying this church's traffic? A relay the gate has not
+    // proved is still IN the list and still retried — it is simply not published to, and the sheet says so
+    // rather than the address quietly ceasing to matter.
+    relayVerified(url) {
+      try {
+        return _gate.admits(url, window.Fellowship.churchPub);
+      } catch (e) {
+        return false;
+      }
     },
     // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
     // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
@@ -8493,10 +9126,86 @@
       } catch {
       }
       window.dispatchEvent(new CustomEvent("trinity-relays", { detail: window.Fellowship.relays }));
+      try {
+        _gate.refresh(window.Fellowship.relays, window.Fellowship.churchPub);
+      } catch (e) {
+      }
       return window.Fellowship.relays;
     },
     addRelay(url) {
       return window.Fellowship.setRelays([...window.Fellowship.relays, url]);
+    },
+    // ── C5: AN ADDRESS THAT ARRIVES IN AN INVITE IS A CANDIDATE, NEVER AN INSTRUCTION ──────────────────────
+    //
+    // WHAT THIS STOPS. Somebody scans a code at the church door and their phone starts publishing their DMs
+    // and their child's care request to a machine of the code's choosing — and nothing on screen changes.
+    // Until this, `?relay=` was adopted on sight: a wss:// scheme check (L5) and nothing else, so any QR could
+    // put a relay into a member's set before they had followed anything at all.
+    //
+    // WHAT "VERIFY" MEANS HERE is the C3 predicate and nothing new: the C2 possession proof at the address we
+    // dialled, and the PUBKEY it proved vouched by one of the three roots — the canonical pin, the page's own
+    // serving origin, or this church's own signed relay-net document. The invite says WHERE TO ASK. The
+    // church's signature says WHO COUNTS. A hint costs nothing; an instruction is what this removes.
+    //
+    // WHY IT LIVES HERE AND NOT IN app/app.jsx. Those files ship unbundled, so a `false && ` in front of a
+    // condition leaves every word of it in place and any text-matching test still passes (CLAUDE.md rule 3).
+    // The decision belongs where a test can lift it and run it against a real relay; the screen keeps only the
+    // call.
+    //
+    // AND THE REFUSAL IS LEGIBLE. `trinity-relay-refused` carries the addresses that were turned away, so a
+    // printed slip naming a box the church has not enrolled reads as "that relay isn't in this church's
+    // network yet" at the moment it is scanned, rather than as a member discovering weeks later that their
+    // messages went nowhere. Backwards compatibility (plan C5): enrol the pilot churches' relays BEFORE this
+    // ships, or every printed invite naming one stops working.
+    //
+    // → { added: [url], refused: [url] }
+    async adoptInviteRelays(npubOrHex, raw) {
+      const out = { added: [], refused: [] };
+      const cp = toPub(npubOrHex);
+      if (!cp) return out;
+      const s = String(raw || "");
+      let inviteUrl = "";
+      const rm = s.match(/[?&]relay=([^&\s]+)/);
+      if (rm) {
+        try {
+          const u = decodeURIComponent(rm[1]);
+          if (/^wss:\/\//i.test(u)) inviteUrl = u;
+        } catch (e) {
+        }
+      }
+      const take = async (url) => {
+        if (!url) return false;
+        let ok = false;
+        try {
+          ok = await isNetworkRelay2(cp, url);
+        } catch (e) {
+          ok = false;
+        }
+        if (ok) {
+          if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], url]);
+          out.added.push(url);
+        } else out.refused.push(url);
+        return ok;
+      };
+      const got = await take(inviteUrl);
+      if (got) return out;
+      const nm = s.match(/[?&]relayname=([^&\s]+)/);
+      if (nm) {
+        let hit = null;
+        try {
+          hit = await window.Fellowship.resolveRelayName(decodeURIComponent(nm[1]));
+        } catch (e) {
+          hit = null;
+        }
+        if (hit && hit.url) await take(hit.url);
+      }
+      if (out.refused.length) {
+        try {
+          window.dispatchEvent(new CustomEvent("trinity-relay-refused", { detail: { cp, urls: out.refused.slice() } }));
+        } catch (e) {
+        }
+      }
+      return out;
     },
     removeRelay(url) {
       return window.Fellowship.setRelays(window.Fellowship.relays.filter((r) => r !== url));
@@ -8509,6 +9218,18 @@
     //
     // L5: only ever adopt a wss:// url. A cleartext ws:// would put the whole church's fellowship traffic in the
     // open, and this input comes from a stranger's directory entry.
+    //
+    // C5 — WHO GATES THE ANSWER, AND WHY THE TWO CALLERS DIFFER. This returns a candidate; it does not admit
+    // one. Its callers:
+    //   • adoptInviteRelays() above, which verifies before adopting. That is the invite path C5 closes.
+    //   • app/identity.jsx's "my church runs its own relay" box — the ONLY route back for a member with no old
+    //     phone and nobody nearby to show them a QR. It is NOT verified, deliberately, and the reason is
+    //     structural rather than an omission: at that moment this device follows no church, so there is no
+    //     church signature to check against and the gate could only ever refuse. Gating it would delete the
+    //     recovery route rather than harden it. What bounds the risk is C4: the address lands in the CANDIDATE
+    //     list, and the publish set still admits nothing that has not proved itself, so a wrong answer here
+    //     costs a wasted socket and no church data at all. The console's equivalent (connect-by-name) IS
+    //     gated, because a console always knows which church it is.
     async resolveRelayName(name) {
       const h = String(name || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
       if (!h) return null;
@@ -8710,6 +9431,10 @@
         picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
       };
       if (meta.av || prev.av) p.av = meta.av || prev.av;
+      if (_churchPhotosOff() || _myPhotoReset()) {
+        p.picture = "";
+        if (p.av) p.av = _stripPhoto(pub, p.av);
+      }
       const hidden = meta.hidden != null ? meta.hidden : prev.hidden;
       if (hidden) p.hidden = true;
       const wire = { about: p.about, picture: p.picture };
@@ -8726,6 +9451,15 @@
         } catch (e) {
           sent = false;
           console.warn("[fellowship] profile publish failed", e);
+          if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+            let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
+            if (meta && meta.hidden === true) why = "Couldn\u2019t reach your church\u2019s relay \u2014 you are still listed in the directory for now. It will save when you\u2019re back online.";
+            else if (meta && meta.hidden === false) why = "Couldn\u2019t reach your church\u2019s relay \u2014 you are still hidden from the directory for now. It will save when you\u2019re back online.";
+            try {
+              if (window.trinityToast) window.trinityToast(why);
+            } catch (x) {
+            }
+          }
         }
       } else {
         console.warn("[fellowship] profile publish withheld \u2014 our own kind-0 has not arrived, publishing now would blank it");
@@ -8983,7 +9717,7 @@
         const msg = msgs.get(tid);
         if (msg) push(msg);
       };
-      const sub = pool.subscribeMany(window.Fellowship.relays, [
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
         { kinds: [4], authors: [pub], "#p": [peerPub] },
         // sent by me to peer
         { kinds: [4], authors: [peerPub], "#p": [pub] },
@@ -9291,6 +10025,17 @@
     },
     // ── moderation actions a GROUP LEADER may take (signed by me, scoped to the group, p-tagged to the
     // church). The relay only accepts these from the group's leaders (or the church), like group events. ──
+    //
+    // _publishBounded, NOT _publishAny — every one of these four is a UI path with a leader waiting on it.
+    // _publishAny raises each relay's give-up to WEDGE_ACK_MS (11s) and then waits on all of them, so a silent
+    // relay left the room's "Removing…" line spinning for eleven seconds with the abusive post still on screen.
+    // Bounded settles at PUBLISH_TIMEOUT_MS (12s) at worst and, far more importantly, CANNOT sit longer than
+    // that if a socket never settles at all. The outcome the caller sees is unchanged: the event on success,
+    // null on any failure — including the timeout, which is a failure and must read as one.
+    // Callers (CLAUDE.md rule 2 — complete list): app/screens-chat.jsx doPin / doUnpin / doRemove. The console's
+    // pin/unpin/hide are window.Steward's own implementations in src/steward.src.js and do not come through
+    // here. unhideMessage has no caller in app/ at all; it is changed with its three siblings so the next one
+    // written does not inherit the unbounded wait.
     async pinPost(churchNpub, groupId, msg) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
@@ -9298,7 +10043,7 @@
       const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] pinPost failed", e);
         return null;
@@ -9311,7 +10056,7 @@
       if (!cp || !groupId) return null;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] unpin failed", e);
         return null;
@@ -9326,7 +10071,7 @@
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] hideMessage failed", e);
         return null;
@@ -9341,7 +10086,7 @@
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] unhideMessage failed", e);
         return null;
@@ -9379,7 +10124,7 @@
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) });
               emit();
             }
             return;
@@ -9436,7 +10181,7 @@
           const id = d.slice(CATEGORY_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) });
               emit();
             }
             return;
@@ -9482,7 +10227,7 @@
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
-        _sgSelf = { cp: pubk, isMinor, known: !!clr };
+        _sgSelf = { cp: pubk, me: me || "", isMinor, known: !!clr };
         onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
@@ -9591,18 +10336,20 @@
         }
       };
     },
-    // ── safeguarding v2: a parent creates a child account they own (mints a fresh key, sets the child up
-    // in the church, and asks the steward to confirm the link). Returns { childPub, mnemonic, npub, name }
-    // so the UI can show the child's recovery words + a one-scan login QR (handoff to the child's device).
-    // The mnemonic is NOT persisted (paper stays foundational) — the parent saves it at creation. ──
-    async createChildAccount(churchNpub, childName) {
+    // ── safeguarding v2: a parent creates a child account they own (sets the child up in the church and asks
+    // the steward to confirm the link). Returns { childPub, mnemonic, npub, name, published, ok } so the UI can
+    // show the child's recovery words + a one-scan login QR (handoff to the child's device).
+    // The mnemonic is NOT persisted (paper stays foundational) — the parent saves it at creation.
+    // `opts.mnemonic` — the child's key, OWNED BY THE CALLER so that a retry finishes the same child's account
+    // instead of minting a second one. Omit it and a fresh key is minted here, as it always was. ──
+    async createChildAccount(churchNpub, childName, opts) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !sk) throw new Error("Join a church first.");
       const name = String(childName || "").trim();
       if (!name) throw new Error("Enter the child\u2019s name.");
-      const inv = window.TrinityIdentity.makeInvite();
-      const childSk = privateKeyFromSeedWords(inv.mnemonic);
+      const mnemonic = opts && opts.mnemonic || window.TrinityIdentity.makeInvite().mnemonic;
+      const childSk = privateKeyFromSeedWords(mnemonic);
       const childPub = getPublicKey2(childSk);
       const ts = Math.floor(Date.now() / 1e3);
       const childProfile = {};
@@ -9617,17 +10364,28 @@
       }
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
       const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
-      for (const e of [k0, join2, childNameDoc, req]) {
-        if (!e) continue;
+      const sent = async (e) => {
+        if (!e) return false;
         try {
           await _publishAny(window.Fellowship.relays, e);
+          return true;
         } catch (err) {
-          console.warn("[fellowship] child setup publish failed", err);
+          console.warn("[fellowship] child publish failed", err);
+          return false;
         }
+      };
+      const published = { join: false, k0: false, name: false, req: false };
+      published.join = await sent(join2);
+      if (published.join) {
+        const both = await Promise.all([sent(k0), sent(childNameDoc)]);
+        published.k0 = both[0];
+        published.name = both[1];
+        if (published.name) published.req = await sent(req);
       }
-      _saveChildLink({ child: childPub, name, churchPub: cp, ts });
+      const ok = !!(published.join && published.name && published.req);
+      if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
       _needAuth = true;
-      return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name };
+      return { childPub, mnemonic, npub: npubEncode(childPub), name, published, ok };
     },
     // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
     myChildren(churchNpub) {
@@ -9713,7 +10471,7 @@
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) });
               emit();
             }
             return;
@@ -9772,7 +10530,7 @@
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) });
               emit();
             }
             return;
@@ -9826,7 +10584,7 @@
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: pubk, targets: _tombstoneTargets(e) });
               emit();
             }
             return;
@@ -10049,7 +10807,7 @@
               sealed = !s2;
             }
             const f = s2 ? { ...c, ...s2 } : c;
-            _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at }, _trust);
+            _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || "meals"], startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at }, _trust);
             emit();
           } catch {
           }
@@ -10142,13 +10900,20 @@
         }
       }
       if (!sk || !cp) return null;
-      let childish = _sgSelf.cp === cp && _sgSelf.isMinor;
-      const sure = _sgSelf.cp === cp && (_sgSelf.isMinor || _sgSelf.known);
+      const mine = _sgMine(cp);
+      let childish = !!(mine && mine.isMinor);
+      const sure = !!(mine && (mine.isMinor || mine.known));
       let audience = null;
       if (!sure) {
-        audience = await _fetchChildCareAudience(cp);
-        if (audience === null) return { error: "unknown-clearance" };
-        if (audience.length) return { error: "unknown-clearance" };
+        const clr = await _fetchMyClearance(cp);
+        if (clr === null) return { error: "unknown-clearance" };
+        if (clr.found) {
+          childish = !!clr.minor;
+        } else {
+          audience = await _fetchChildCareAudience(cp);
+          if (audience === null) return { error: "unknown-clearance" };
+          if (audience.length) return { error: "unknown-clearance" };
+        }
       }
       const team = childish ? audience !== null ? audience : await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
       if (childish && team === null) return { error: "unknown-audience" };
@@ -10191,6 +10956,7 @@
       } catch (e) {
         console.warn("[fellowship] care request publish failed", e);
         if (/update the app/i.test(String(e && e.message || ""))) return { error: "stale-app" };
+        if (isNoNetworkRelay(e)) return { error: "no-network-relay" };
         return null;
       }
       return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };
@@ -10344,6 +11110,96 @@
       }
       await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
       return { id };
+    },
+    // MAY THIS PERSON OPEN A PUBLIC NEED? One rule, asked at two doors — the engine below, and the sheet that
+    // fronts it. The sheet used to restate it as `!ctx.safeguard.isMinor`, and that is not the same question:
+    // `isMinor` has no cache, defaults to false, and its subscription waits on a 1.2s timer plus a relay
+    // round-trip, while the `openedBy` setting beside it is restored from localStorage instantly. So on every
+    // cold start there was a window in which a CHILD was shown "Everyone at your church will see this" over a
+    // button reading "Open this need". Nothing leaked — this engine and the relay both refuse — but a child
+    // working up to a disclosure was told, on the one screen where it matters, that the congregation would
+    // read it. Asking here instead means the screen cannot drift from the rule again.
+    //
+    // Returns '' when a need may be opened, or the reason it may not — see _careNeedRefusal at module scope.
+    // What the sheet asks before it promises anything. Starts from the same guard, so there is no second copy.
+    // What a screen asks before it shows a child a room the church marked adults-only. The relay withholds a
+    // group's MESSAGES from a minor, but not the group DEFINITION — so the names are the client's to hide.
+    async assumeMinor(churchNpub) {
+      const cp = toPub(churchNpub) || window.Fellowship.churchPub;
+      try {
+        return await _assumeMinor(cp);
+      } catch (e) {
+        return true;
+      }
+    },
+    async canOpenCareNeed() {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch (e) {
+        }
+      }
+      if (!sk || !cp) return false;
+      try {
+        return await _careNeedRefusal(cp) === "";
+      } catch (e) {
+        return false;
+      }
+    },
+    // ── a member opens a need themselves, when the church has said they may ──────────────────────────────
+    // The church setting is `openedBy: 'member'`. Everything behind this was already built — the relay accepts
+    // a non-minor member's care: write when the church allows it, and the care key reaches every member for
+    // exactly this purpose ("so every member can open a need and volunteer", stew-dashboard) — but no control
+    // ever called it, so choosing "member" changed nothing anybody could see. SWEEP DEFECT 1.
+    //
+    // A NEED IS PUBLIC AND A REQUEST IS NOT. That is the whole difference from publishCareRequest above, and
+    // it is why the safeguarding test here is the same one, read the same way, and NEVER the screen's opinion:
+    // a screen is not a boundary. A child must never open a need — the relay says so too ("children never open
+    // needs") — and "we have not heard whether they are a child" is not "adult". Both refuse, and the caller
+    // falls back to sending a private request, which is the behaviour that already existed.
+    //
+    // The id carries no owner prefix on purpose. `idOwnerOk` reads `<hex>-` as "this church owns it", so an
+    // asker-prefixed id — the shape carereq: uses — would be refused here, where the author is a member and
+    // the named church is the church. Same mint as the care team's, so both routes produce one kind of need.
+    async publishCareNeed(fields) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch (e) {
+        }
+      }
+      if (!sk || !cp || !fields) return null;
+      const refusal = await _careNeedRefusal(cp);
+      if (refusal) return { error: refusal };
+      if (!_carekeys[cp]) return { error: "no-care-key" };
+      const types = (Array.isArray(fields.types) ? fields.types : [fields.type]).map((t) => String(t || "").trim()).filter(Boolean);
+      const uniq = [...new Set(types)];
+      const type = uniq[0] || "other";
+      const forSelf = fields.forSelf !== false;
+      const who = forSelf ? (profiles[pub] || {}).name || "A member" : String(fields.forName || "").trim() || "A member";
+      const dates = [...new Set((Array.isArray(fields.dates) ? fields.dates : []).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
+      if (!dates.length) return { error: "no-dates" };
+      const wantsMeals = uniq.includes("meals");
+      const meals = wantsMeals ? Array.isArray(fields.meals) && fields.meals.length ? fields.meals.filter(Boolean) : ["dinner"] : [];
+      const enc = _careSeal(cp, {
+        displayLabel: who,
+        recipient: forSelf ? pub : "",
+        notes: String(fields.note != null ? fields.note : "").trim(),
+        dietary: wantsMeals && Array.isArray(fields.dietary) ? fields.dietary.filter(Boolean) : []
+      });
+      if (!enc) return { error: "no-care-key" };
+      const id = "care" + _hex(crypto.getRandomValues(new Uint8Array(6)));
+      const body = { id, type, types: uniq.length ? uniq : [type], dates, startDate: dates[0] || "", endDate: dates[dates.length - 1] || "", meals, dayMeals: {}, enc, by: pub, openedByMember: true };
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + id], ["t", NET], ["church", cp], ["enc", "care1"]], content: JSON.stringify(body) }, sk);
+      try {
+        await _publishAny(churchRelays(), evt);
+      } catch (e) {
+        console.warn("[fellowship] member need publish failed", e);
+        return null;
+      }
+      return { id, need: true };
     },
     // The person a need is FOR closes it themselves ("I'm sorted, thanks"). Dignity: someone who asked for help
     // shouldn't have to wait for a steward to stop the church organising around them. The relay's care: gate
@@ -10717,7 +11573,7 @@
           const id = d.slice("trinityone/event:".length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) {
-              _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust);
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust, { churchPub: cp, targets: _tombstoneTargets(e) });
               emit();
             }
             return;
@@ -11029,6 +11885,12 @@
     // return only those advertising trinityone.enforces && open && !full. Reachability + the enforces/open
     // flags are all verified here, so a caller only ever sees live, enforcing, accepting relays. Ranked:
     // region match first (nearest), then lightest load. A church with no discovery seed just gets [] (safe).
+    // C5 NOTE, so the next reader does not think this path was missed. The console's discoverRelayOffers is
+    // gated on membership because its offers feed Auto-find, which ADOPTS what it picks. This one is adopted by
+    // nothing: re-grepped at this commit, no screen in app/ and no other engine function calls it or
+    // pickRelays() below — they are API surface with no consumer, so an offer here reaches no relay list. If
+    // anything ever adopts from it, it needs the same gate the console's has, and a test that counts events on
+    // the box rather than picks in the client.
     async discoverRelayOffers(opts) {
       const region = opts && opts.region;
       const seed = [.../* @__PURE__ */ new Set([...window.Fellowship.discoverySeed || [], ...window.Fellowship.CANONICAL_RELAYS || [], ...window.Fellowship.relays || []])];
@@ -11075,11 +11937,15 @@
       }
       let latest = 0;
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pubk] }], {
+        // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
+        // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
         onevent(e) {
           if (e.created_at < latest) return;
           latest = e.created_at;
           try {
-            onProfile(JSON.parse(e.content));
+            const c = JSON.parse(e.content);
+            _notePhotoPolicy(pubk, c);
+            onProfile(c);
           } catch {
           }
         },
@@ -11157,4 +12023,13 @@
     }
   };
   window.Fellowship.ready = init().catch((e) => console.error("[fellowship] init failed", e));
+  try {
+    setTimeout(() => {
+      try {
+        _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub);
+      } catch (e) {
+      }
+    }, 0);
+  } catch (e) {
+  }
 })();

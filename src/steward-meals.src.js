@@ -130,6 +130,9 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     return {
       displayLabel: String(n.displayLabel || '').trim(),
       type,
+      // One situation is one need, and a member may name several kinds of help for it. `type` stays FIRST
+      // and stays the key every existing reader uses; `types` is added beside it, never in place of it.
+      types: (Array.isArray(n.types) && n.types.length ? n.types : [type]).map(t => String(t || '').trim()).filter(Boolean).slice(0, 8),
       dates: days,
       meals,
       dayMeals,

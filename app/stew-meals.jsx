@@ -1,7 +1,8 @@
 // stew-meals.jsx — Steward console surface for the Meal trains / practical-care module.
 // Two top-level components (mirrors Finance):
 //   • DashMeals       — the console tab (need list, slot grid, signups)
-//   • DashMealsPanel  — the enable card in Settings → Care
+//   • DashMealsPanel  — the enable ROW in Settings → Features → Congregation features → Extras (it was a
+//                        card of its own until it was folded in there; it renders no Panel of its own now)
 // Copy is care-framed deliberately (warm, calls into pastoral care, NOT slot-management).
 // Read-only here on the steward side for slot fills + skips — members fill from their app.
 
@@ -58,7 +59,7 @@ function RecipientPicker({ members, value, onChange }) {
       </div>
       <div className="no-scrollbar" style={{ maxHeight: 220, overflowY: 'auto' }}>
         <button onClick={() => { onChange(''); setOpen(false); }} style={recipRow}>Not linked — just a label above</button>
-        {shown.map(m => <button key={m.pubkey} onClick={() => { onChange(m.pubkey); setOpen(false); }} style={{ ...recipRow, fontWeight: m.pubkey === value ? 700 : 600, color: m.pubkey === value ? 'var(--clay)' : 'var(--ink)' }}>{m.name || (m.pubkey.slice(0, 12) + '…')}</button>)}
+        {shown.map(m => <button key={m.pubkey} onClick={() => { onChange(m.pubkey); setOpen(false); }} style={{ ...recipRow, fontWeight: m.pubkey === value ? 700 : 600, color: m.pubkey === value ? 'var(--clay-ink)' : 'var(--ink)' }}>{m.name || (m.pubkey.slice(0, 12) + '…')}</button>)}
         {!shown.length ? <div style={{ padding: '12px 14px', fontSize: 13, color: 'var(--ink-3)' }}>No one matches “{q}”.</div> : null}
       </div>
     </div>
@@ -119,7 +120,7 @@ function AnnounceCareModal({ onClose }) {
     <div onClick={() => { if (!busy) onClose(); }} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Tell your church about practical care" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '94%', maxHeight: '86vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="heart" size={20} color="currentColor" /></div>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="heart" size={20} color="currentColor" /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Tell your church?</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Practical care is on. <b>Members already using the app are told nothing</b> — it simply appears — so the people who most need it are the least likely to find it. Post this, edit it, or say not now.</p>
@@ -204,10 +205,13 @@ function DashMealsPanel({ church }) {
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
     </button>
   );
+  // A ROW IN "Congregation features → Extras", not a card of its own. It was a Panel holding one switch and a
+  // note saying what practical care is; the note said it above the row, and the row's own second line — the
+  // line a steward reads while deciding — said only "turn on to start opening needs". They are one sentence
+  // now, on the row, and the card chrome is gone.
   return (
-    <Panel title="Practical care">
+    <React.Fragment>
       {announceOn ? <AnnounceCareModal onClose={() => setAnnounceOn(false)} /> : null}
-      <DismissibleNote id="care-intro" icon="heart" tone="sage" style={{ marginBottom: 12 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</DismissibleNote>
             {/* THE ROW IS THE TARGET. This toggle is a 48x28 button at the far right and the words naming it had
           no handler, so the obvious press did nothing. Rev. Miriam, session 3: "clicking the words
           'Practical care (Meal trains)' and clicking the 'Off — turn on to…' line under them does nothing
@@ -215,10 +219,10 @@ function DashMealsPanel({ church }) {
           which was the thing she most wanted for her congregation that week.
           I had already fixed this pattern in three other files and missed this one, because I audited by
           role="switch" and this file uses a plain <button> as its toggle. */}
-<div onClick={() => setAll({ enabled: !on })} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+<div onClick={() => setAll({ enabled: !on })} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Practical care (Meal trains)</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Care” tab is in your sidebar, and members see open needs in their app.' : 'Off — turn on to start opening needs and let the church sign up to help.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Care” tab is in your sidebar, and members see open needs in their app.' : 'Off — meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. Turn on to start opening needs; members fill the dates.'}</div>
         </div>
         {toggleBtn(on, () => setAll({ enabled: !on }), 'Toggle practical care')}
       </div>
@@ -262,7 +266,7 @@ function DashMealsPanel({ church }) {
         </div>
         {editTeam ? <RosterModal team={editTeam} roster={rosters.find(r => r.team === editTeam.id)} members={members} onCreate={publishCareTeam} onClose={() => setEditTeam(null)} /> : null}
       </React.Fragment> : null}
-    </Panel>
+    </React.Fragment>
   );
 }
 window.DashMealsPanel = DashMealsPanel;
@@ -328,7 +332,7 @@ function SafetyCheckPanel() {
         <div style={{ fontWeight: 800, fontSize: 14.5, fontFamily: 'var(--font-display)' }}>Start a safety check</div>
         <div style={{ fontSize: 12, color: 'var(--ink-2)', margin: '3px 0 0', lineHeight: 1.45 }}>Ask everyone to mark themselves safe after a raid/disaster. Replies are encrypted to you.</div>
         <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={2} maxLength={280} style={{ width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical', lineHeight: 1.4, marginTop: 10 }} />
-        {sendErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 700, margin: '8px 0 0', lineHeight: 1.45 }}>{sendErr}</div> : null}
+        {sendErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 700, margin: '8px 0 0', lineHeight: 1.45 }}>{sendErr}</div> : null}
         {/* Who may read the replies. Stated as a consequence, not a label — "I need help" is the most sensitive
             thing this product carries, and the steward is choosing who sees it. */}
         <div style={{ marginTop: 12 }}>
@@ -421,7 +425,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="heart" size={17} color="var(--clay)" /><div style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{title || 'Care conversation'}</div><button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} color="currentColor" /></button></div>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="heart" size={17} color="var(--clay)" /><div style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{title || 'Care conversation'}</div><button onClick={onClose} aria-label="Close this conversation" title="Close this conversation" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} color="currentColor" /></button></div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 7 }}>
           {msgs.length === 0 ? <div style={{ margin: 'auto', color: 'var(--ink-3)', fontSize: 13 }}>No messages yet.</div> : null}
           {msgs.map(m => <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>)}
@@ -430,7 +434,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '10px 14px', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--ink)' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)' }}>
           <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
-          <button onClick={send} className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
+          <button onClick={send} aria-label="Send this reply" title="Send this reply" className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
         </div>
       </div>
     </div>
@@ -479,8 +483,8 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
         <p style={{ fontSize: 13, color: 'var(--ink-2)', margin: '6px 0 14px', lineHeight: 1.5 }}>Opens a need the church can sign up for. Pick the dates.</p>
         {!dates.length ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', margin: '0 0 10px', lineHeight: 1.45 }}>Pick the days first — a need with no days is one nobody can sign up to.</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
-          <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
-          <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input aria-label="From" type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input aria-label="To" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
         </div>
         <div style={{ ...mealsLbl, marginTop: 12 }}>NOTES</div>
         <textarea value={notes} onChange={e => setNotes(e.target.value)} style={{ ...fld, minHeight: 64, resize: 'vertical' }} />
@@ -516,7 +520,7 @@ function StewCareRequests() {
   const renderRow = (r, child) => (
         <div key={r.id} style={{ padding: 14, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 32%, var(--line))', marginBottom: 9 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
+            <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{mealsTypeLabel(r)}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
           </div>
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
@@ -613,7 +617,7 @@ window.DashMeals = DashMeals;
 function MealsEmpty() {
   return (
     <div style={{ marginTop: 30, padding: 28, borderRadius: 18, border: '1px dashed var(--line)', background: 'var(--surface-2)', textAlign: 'center' }}>
-      <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+      <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage-ink)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
         <Icon name="heart" size={26} color="var(--sage)" />
       </div>
       <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Nobody on the care list yet.</div>
@@ -643,12 +647,12 @@ function MealsNeedCard({ need, slots, skips, onOpen }) {
   const coverTone = { done: 'var(--sage)', open: 'var(--ink)', empty: 'var(--clay-deep, #b4462f)' };
   return (
     <button onClick={onOpen} className="sk-card" style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', textAlign: 'left', cursor: 'pointer', width: '100%', border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface)', fontFamily: 'var(--font-ui)' }}>
-      <div style={{ width: 44, height: 44, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <div style={{ width: 44, height: 44, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <Icon name={MEALS_TYPE_ICON[need.type] || 'heart'} size={20} color="var(--sage)" />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 15, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)', fontStyle: need._sealed ? 'italic' : 'normal' }}>{needTitle(need)}</div>
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{mealsTypeLabel(need)} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
       </div>
       <div style={{ textAlign: 'right' }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: coverTone[cover.tone] }}>{filledCount}/{dates.length}</div>
@@ -678,12 +682,12 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
       <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="chevL" size={14} color="currentColor" /> All needs</button>
       <div style={{ marginTop: 12, padding: '18px 18px 14px', borderRadius: 18, border: '1px solid var(--line)', background: 'var(--surface)' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-          <div style={{ width: 54, height: 54, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <div style={{ width: 54, height: 54, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <Icon name={MEALS_TYPE_ICON[need.type] || 'heart'} size={24} color="var(--sage)" />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)', fontStyle: need._sealed ? 'italic' : 'normal' }}>{needTitle(need)}</div>
-            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{mealsTypeLabel(need)} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
           </div>
           {/* Sealed = we couldn't decrypt this need's name/notes. Two VERY different causes, and telling them
               apart matters: no key on this device is a sync problem that fixes itself, whereas holding the key
@@ -790,13 +794,13 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
     <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(20,15,8,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', zIndex: 70 }}>
       <div style={{ width: 'min(540px, 100%)', maxHeight: '90vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 18, boxShadow: 'var(--shadow-lg)', padding: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={18} color="var(--sage)" /></div>
+          <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={18} color="var(--sage)" /></div>
           <div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{isEdit ? 'Edit care need' : 'Start care'}</div>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }} aria-label="Close"><Icon name="x" size={14} color="currentColor" /></button>
         </div>
 
         <div style={mealsLbl}>WHO IS THIS FOR?</div>
-        <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Sarah Jones, or “a family in our church”" autoFocus style={{ ...mealsFld, marginBottom: 6 }} />
+        <input aria-label="Who is this for?" type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Sarah Jones, or “a family in our church”" autoFocus style={{ ...mealsFld, marginBottom: 6 }} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>You decide what reads right. A real name brings the church closer; a discreet label protects dignity. Up to you.</div>
 
         <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
@@ -824,7 +828,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
             <div style={mealsLbl}>DIETARY NEEDS (OPTIONAL)</div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
               {MEALS_DIET.map(d => { const onD = diet.includes(d); return (
-                <button key={d} onClick={() => toggleDiet(d)} style={{ padding: '7px 11px', borderRadius: 999, border: '1px solid ' + (onD ? 'var(--sage)' : 'var(--line)'), background: onD ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: onD ? 'var(--sage)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{onD ? '✓ ' : ''}{d}</button>
+                <button key={d} onClick={() => toggleDiet(d)} style={{ padding: '7px 11px', borderRadius: 999, border: '1px solid ' + (onD ? 'var(--sage)' : 'var(--line)'), background: onD ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: onD ? 'var(--sage-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{onD ? '✓ ' : ''}{d}</button>
               ); })}
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>Helpers see these so they cook right. Add anything else (allergies, etc.) in the notes below.</div>
@@ -843,7 +847,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
                 <span style={{ fontWeight: 700, fontSize: 12.5, width: 86, flexShrink: 0 }}>{mealsFmtDate(d)}</span>
                 <div style={{ display: 'flex', gap: 4, flex: 1 }}>
                   {MEAL_KINDS.map(([mk, mlbl]) => { const on = effMeals(d).includes(mk); return (
-                    <button key={mk} onClick={() => toggleDayMeal(d, mk)} title={mlbl} style={{ flex: 1, padding: '6px 2px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage)' : 'var(--ink-3)', fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mlbl[0]}</button>
+                    <button key={mk} onClick={() => toggleDayMeal(d, mk)} title={mlbl} style={{ flex: 1, padding: '6px 2px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mlbl[0]}</button>
                   ); })}
                 </div>
                 <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
@@ -857,10 +861,10 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
             ))}
           </div>
         )) : null}
-        <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
+        <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
 
         <div style={mealsLbl}>NOTES (OPTIONAL)</div>
-        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />
+        <textarea aria-label="Notes (optional)" value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />
 
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
 
@@ -872,7 +876,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         ) : null}
 
         <div style={{ display: 'flex', gap: 9, marginTop: 18, justifyContent: 'flex-end' }}>
-          {isEdit ? <button onClick={remove} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13.5, color: 'var(--clay)' }}><Icon name="trash" size={14} color="var(--clay)" /> Close need</button> : null}
+          {isEdit ? <button onClick={remove} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13.5, color: 'var(--clay-ink)' }}><Icon name="trash" size={14} color="var(--clay)" /> Close need</button> : null}
           <div style={{ flex: 1 }} />
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13.5 }}>Cancel</button>
           <button onClick={save} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: canSave ? 1 : 0.5 }}><Icon name="check" size={14} color="var(--on-clay)" /> {isEdit ? 'Save changes' : 'Open this need'}</button>

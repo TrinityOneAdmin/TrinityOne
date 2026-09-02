@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { npubEncode } from 'nostr-tools/nip19';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { requireFreePort } from './test-ports.mjs';
@@ -65,7 +66,13 @@ before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'trin-relay-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_MAX_EVENTS: '5000' },
+    // CONFIGURED WITH THE CHURCH IT SEEDS, since 2026-09-02. This relay used to run with NO church, which
+    // only worked because an unconfigured box accepted every write from anyone — a gap now closed, because
+    // once any box proving it runs our software is admitted, a freshly installed relay is exactly such a box.
+    // Configuring it changes nothing this file asserts: every case here is about what an ANONYMOUS reader may
+    // see, and the read gates are identical either way. It is also the honest staging — no church has ever
+    // run a relay that holds no church.
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_MAX_EVENTS: '5000', CHURCH_NPUB: npubEncode(churchPub) },
     stdio: 'ignore',
   });
   await waitReady();
@@ -81,7 +88,16 @@ before(async () => {
   // AUDIT-2026-07-30 S5: the join policy is the genuinely-public seed. `publicNote` above is an UNGROUPED kind-1,
   // which used to be world-readable and is now author-only, so it can no longer stand in for "public content".
   const joinPolicy = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + churchPub]], content: JSON.stringify({ approval: false }) }, churchSk);
-  for (const e of [publicNote, dm, roster, careSlotTagged, careSlotUntagged, joinPolicy]) { const r = await publish(pub, e); assert.equal(r, true, 'seed event stored: kind ' + e.kind); }
+  // MEMBERSHIP COMES FROM THE DOC'S AUTHOR, not from a list inside it. gateway.mjs adds `e.pubkey` to the
+  // church's member set when it sees `member:<church>` — so a roster signed by the CHURCH makes nobody a
+  // member, and A and B have to announce their own joins exactly as they would in the app. Without this the
+  // write gate refuses their note and DM, and every read assertion below fails at the seed.
+  const joinA = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MEMBER_D + churchPub]], content: JSON.stringify({ joined: now() }) }, aSk);
+  const joinB = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MEMBER_D + churchPub]], content: JSON.stringify({ joined: now() }) }, bSk);
+  // ORDER IS THE ORDER A CHURCH REALLY COMES INTO BEING: its own documents, then its members' joins, then
+  // what those members say. The old list led with `publicNote` and only worked because the write gate was
+  // absent on an unconfigured box.
+  for (const e of [joinPolicy, roster, joinA, joinB, publicNote, dm, careSlotTagged, careSlotUntagged]) { const r = await publish(pub, e); assert.equal(r, true, 'seed event stored: kind ' + e.kind); }
   pub.close();
 });
 
