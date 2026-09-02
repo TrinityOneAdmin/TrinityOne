@@ -105,6 +105,24 @@ and which of your instincts about it are wrong.
   Consequence for planning: make the Suite the advertised route, and the awkward case shrinks to churches who
   deliberately run a bare relay — a smaller, more technical group who can reasonably take one extra step.
 
+- **What a seized relay actually yields — MEASURED 2026-09-02, do not re-derive by guessing.**
+  Read off a live relay's sqlite, not reasoned from the code. **Encrypted at rest:** group messages (kind 1),
+  DMs (kind 4), journal, notes, prayer, bookmarks, highlights, `clearance:`, `guardnotice:`. **Names are
+  SEALED** — `trinityone/name:` holds ciphertext in both `c` and `m`, so the relay never holds a plaintext
+  name; of 24 kind-0 profiles, 23 were church profiles (public by design) and the one member profile carried
+  no name.
+  **Cleartext on disk:** `member:<key>` (this key belongs to this church, and when it joined), **`minors:`
+  (which keys are children)**, `roster:` (care structure), `group:`, `rsvp:`, `careavail:`/`unavail:`,
+  `joinpolicy:`, `event:`, `financekey:`.
+  So a seizure yields **the social graph in public keys, never in names** — the shape of a congregation, its
+  groups, its rota, and which members are children, but not who they are absent a separate link (a seized
+  phone, network correlation — see the deanon red-team note that pubkey↔IP is open and inherent).
+  Two things follow. **Do not overclaim this as a weakness OR a protection** — a session flagged mutual
+  hosting as exposing members' data and had to correct itself after measuring. And **`minors:` is the single
+  most sensitive document the relay stores in the clear**; its pseudonymity is doing all the work. This is
+  unchanged by relay-sharing: it is equally true of the shared relays we run, which only widens who holds the
+  disk.
+
 - **Churches SHARE each other's relays. That is the point of decentralisation, and it was the original
   request.** `ESTABLISHED 2026-09-02.` Owner, correcting a session that had treated relay-sharing as an edge
   case: *"The three pilots will self host, but the entire point is that they share each others relays.
