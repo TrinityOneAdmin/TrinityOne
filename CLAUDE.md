@@ -73,6 +73,28 @@ This is the cheapest guard in this file. Use it.
 Basic syntax errors in new files, and claims made without checking, cluster in the back half of a long
 session. Stopping is a control, not a failure of one.
 
+## 10. Never widen which relays a church talks to
+
+Read `reference/RELAY-ADMISSION.md` before touching `relay-net.src.js`, `_netRelays`, `churchRelays()`,
+`relaysForChurch()`, or any relay list. Two gates, three roots, and four traps are written up there.
+
+The short version: **a relay needs cryptographic proof AND one of three roots — both, every time.**
+`relayPub` from `/status` or NIP-11 is an unauthenticated string and is never proof.
+
+*Why:* the product actively suggested non-TrinityOne relays. Every protection this app has lives in
+the relay, so "which machines get the data" IS the security boundary, not a networking detail.
+
+Two things in there look like bugs and are load-bearing. **The relay-net read at
+`fellowship.src.js:650` is unfiltered on purpose** — the proof that a relay is ours is a document you
+must read from a relay you have not yet proved; gate it and no phone can ever bootstrap. **Root 3
+matches the pubkey, never the URL** — tunnel addresses churn, so URL-matching drops every
+self-hosting church off every phone on each reboot.
+
+And before diagnosing any relay behaviour: check the relay process is NEWER than `scripts/gateway.mjs`.
+A stale relay enforces old gates against new bundles and looks exactly like a broken gate. It has
+produced a false finding on three separate occasions.
+
+
 ---
 
 ## Audit briefs: two things that have cost three auditors real time

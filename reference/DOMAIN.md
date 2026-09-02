@@ -130,6 +130,14 @@ and which of your instincts about it are wrong.
   relays should be a network in and of themselves, so a church doesn't have to 'trust' or select relays, but
   their church console should never reach non t1 relays."*
 
+**How admission actually works is written up in `reference/RELAY-ADMISSION.md`** (2026-09-02). Two
+gates — proof of identity, then one of three roots of trust — and four traps that each cost real work
+to find. The one worth knowing without opening it: **same-origin adoption is console-only** (a phone's
+origin is `https://localhost`, so it can never match a church's relay), which means a self-hosting
+church's members reach their relay by exactly one route — the church's own signed list. Nothing
+publishes that list automatically yet.
+
+
   **Why it matters more than reach:** every protection in this product lives in the relay — the read gate,
   the safeguarding gates, default-deny. A generic Nostr relay has none of them. Publishing a church's
   documents there does not merely fail to protect them; it hands a sealed care request to a machine that
