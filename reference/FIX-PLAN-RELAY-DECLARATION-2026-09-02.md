@@ -20,7 +20,8 @@ The auditor could not see that box. The owner ran the checks. Results:
 | Service | `trinityone-relay.service` (system-wide), `WorkingDirectory=/opt/trinityone` |
 | `Environment=` | **empty** — `RELAY_PUBLIC_URL` is NOT set |
 | Tunnel | `trinityone-relay-tunnel.service` — *"cloudflared **named tunnel** → trinityone.church"* |
-| `relay-addresses.json` | not found (path checked was wrong; near-certain absent, being new today) |
+| `relay-addresses.json` | **absent** — confirmed at `/opt/trinityone/relay/` |
+| `relay/origin` | **`https://trinityone.tailbeaac0.ts.net`** — see below |
 
 **The named tunnel is the finding, and it is worse than a missing variable.** `cfPublicWss()` derives
 its URL by matching `/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i` against cloudflared's output
@@ -28,6 +29,14 @@ its URL by matching `/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i` against cloudf
 auto-declaration this branch shipped is **structurally incapable of working on a8**, whatever is
 configured — and `405d8fc`'s commit message says "Nothing to configure on the Suite, on a8, or in a
 test." That line is false for the one box that matters.
+
+**And `relay/origin` confirms the first "do not do this", against a real box.** a8's copy holds
+`https://trinityone.tailbeaac0.ts.net` — that is the DEV BOX's Tailscale funnel, the machine a8 pulls its
+updates from. a8's own canonical name is `trinityone-master-01.tailbeaac0.ts.net`, a different host. So the
+file means exactly what the plan assumed: *where this box gets its code*, never *where this box is reached*.
+Seed the address declaration from it and **a8 would declare and sign the dev box's address**, telling every
+phone that dialled a8 it was talking to another machine. This is no longer reasoning from a variable name;
+it is measured.
 
 There is also a live `trinityone-update.service`, so the inert guard is wired to a real timer.
 
@@ -270,8 +279,6 @@ find the difference and name it.
 
 # Still unverified
 
-- **`relay-addresses.json` on a8** — the path checked was wrong. Near-certain absent (the file is new
-  on this branch and nothing creates it), but confirm at `/opt/trinityone/relay/`.
 - **The live fleet inventory.** `quitedoverelay` in the directory is an unresolved key claiming
   churches; if it is a real church's box its operator must declare before the app release. Both its
   advertised address and ours are dead tunnels — see `BACKLOG.md`.
