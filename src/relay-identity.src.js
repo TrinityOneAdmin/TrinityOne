@@ -38,8 +38,10 @@ import { verifyEvent } from 'nostr-tools/pure';
 
 // NOT CONSULTED BY verifyRelayIdentity — see the note at the end of it. The nonce is this exchange's
 // freshness, and requiring a clock as well denied every relay to anyone whose phone was five minutes out.
-// Still exported because four tests lift it by name to build fixtures, and because gateway.mjs applies the
-// same house number to the kind-27235 proofs that have no nonce and therefore do need a clock.
+// Still exported for the relay-side callers that DO need a clock. Note the coupling is by value, not by
+// import: gateway.mjs does not import this constant — its kind-27235 age checks (_exportAuth, _syncAuth,
+// the relay-name claims) hardcode their own window, and nothing asserts the two agree. Do not describe them
+// as sharing a constant; they share a number.
 export const RELAY_PROOF_WINDOW_SEC = 300;
 
 // 32 hex characters = 128 bits from the platform CSPRNG. Returns '' if there is no CSPRNG at all, which

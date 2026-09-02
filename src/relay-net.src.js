@@ -6,7 +6,11 @@
 //
 // WHAT THE ANSWER RESTS ON, and it is deliberately not us. There is no TrinityOne network key, no credential
 // anyone is issued, and nobody who can approve or revoke a church's relay. A relay is one of ours when the
-// C2 possession proof succeeds for the URL we dialled AND one of three roots vouches for the key it proved:
+// C2 possession proof succeeds for the URL we dialled — that alone admits it, because holding a relay
+// identity key IS running our software (owner's decision 2026-09-02; see the `software` return at the foot
+// of proveRelay). The three roots below still fire and are still reported, but as DIAGNOSTICS — they say
+// WHY a relay was admitted, not WHETHER. The one thing here that is still a gate is the shipped-address
+// refusal above them. The roots:
 //
 //   1. THE CANONICAL POOL — the relays we run and every church gets out of the box. There is no church
 //      signature over these (they are the shared default), so they are admitted against a pubkey list baked

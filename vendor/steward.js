@@ -16781,8 +16781,9 @@ zoo`.split("\n");
     // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console
     // reads for the redundancy count stays an unproven claim — it was never a gate and must not look like one.
     verifyRelayIdentity,
-    // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-    // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
+    // C3. "Is this relay one of ours?" — the C2 proof, which is what admits it. The canonical pin, this
+    // console's own serving origin and this church's signed trinityone/relay-net document are still computed
+    // and still reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md).
     // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
     isNetworkRelay: isNetworkRelay2,
     // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.

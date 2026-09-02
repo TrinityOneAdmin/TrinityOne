@@ -186,8 +186,9 @@ and which of your instincts about it are wrong.
   their church console should never reach non t1 relays."*
 
 **How admission actually works is written up in `reference/RELAY-ADMISSION.md`** (2026-09-02). Two
-gates — proof of identity, then one of three roots of trust — and four traps that each cost real work
-to find. The one worth knowing without opening it: **same-origin adoption is console-only** (a phone's
+one gate — proof, at the address dialled, that the box holds a relay identity key, i.e. that it runs our
+software — and four traps that each cost real work to find. (The canonical pin, the serving origin and the
+church's signed relay-net doc are computed and reported, but they no longer decide admission.) The one worth knowing without opening it: **same-origin adoption is console-only** (a phone's
 origin is `https://localhost`, so it can never match a church's relay), which means a self-hosting
 church's members reach their relay by exactly one route — the church's own signed list. Nothing
 publishes that list automatically yet.

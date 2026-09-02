@@ -65,16 +65,31 @@ test('the app does not claim to hold anyone’s money', () => {
     'switched off for the pilot, so this is untrue twice over');
 });
 
-test('the rule documents describe the admission rule the code actually has', () => {
-  // Prove-it-fails note: at 50e196c both files contained this string —
-  //   git show 50e196c:CLAUDE.md | grep -c 'one of three roots'                  -> 1
-  //   git show 50e196c:reference/RELAY-ADMISSION.md | grep -c 'one of three roots' -> 2
-  // so this assertion fails against the unfixed tree, which is the only reason it is worth having.
-  assert.equal(/one of three roots/i.test(rules), false,
-    'CLAUDE.md rule 10 still requires "one of three roots". proveRelay() admits on the software proof ' +
-    'alone — a session following that rule looks for a root match the code no longer requires');
-  assert.equal(/one of three roots/i.test(admission), false,
-    'RELAY-ADMISSION.md still states the three-root invariant that the code no longer implements');
+test('the admission rule is stated the same way everywhere it is stated at all', () => {
+  // WIDENED after the batch-1 audit, which is the whole reason this assertion is worth anything.
+  // The first version checked CLAUDE.md and RELAY-ADMISSION.md only, and the stale sentence survived in
+  // four more places the fix had not looked at — including the header comment of proveRelay() ITSELF, the
+  // two call-site comments in fellowship.src.js and steward.src.js, and DOMAIN.md, which CLAUDE.md rule 7
+  // tells every session to read first. Two of those SHIP: esbuild keeps the comments of the ENTRY module
+  // (fellowship.src.js, steward.src.js) even though it drops those of bundled dependencies like
+  // relay-net.src.js, so the overclaim was reaching production while the corrected copy was not.
+  //
+  // So check the shipped surface, not the two files someone happened to remember.
+  const surface = [
+    'CLAUDE.md', 'reference/RELAY-ADMISSION.md', 'reference/DOMAIN.md',
+    'src/relay-net.src.js', 'src/relay-identity.src.js', 'src/fellowship.src.js', 'src/steward.src.js',
+    'vendor/fellowship.js', 'vendor/steward.js',
+  ];
+  const stale = [];
+  for (const f of surface) {
+    const body = readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+    if (/one of three roots/i.test(body)) stale.push(f);
+  }
+  assert.deepEqual(stale, [],
+    'these still say a relay needs "one of three roots". proveRelay() admits on the software proof alone ' +
+    '(src/relay-net.src.js, the `software` return) — a session reading any of these looks for a root match ' +
+    'the code no longer requires, and the vendor/ entries ship that claim to every church:\n  ' +
+    stale.join('\n  '));
   // and the boundary must not be described as wider than it is
   assert.match(admission, /same address|proxy at the/i,
     'RELAY-ADMISSION.md must say plainly that a proxy at the SAME address is not refused — the previous ' +

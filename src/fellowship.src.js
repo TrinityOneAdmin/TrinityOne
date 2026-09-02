@@ -2483,8 +2483,9 @@ window.Fellowship = {
   // a real relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is
   // the provable form.
   verifyRelayIdentity,
-  // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-  // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document. C4
+  // C3. "Is this relay one of ours?" — the C2 proof, which is what admits it. The canonical pin, the app's
+  // own serving origin and this church's signed trinityone/relay-net document are still computed and still
+  // reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md, 2026-09-02). C4
   // consumes it: the answer, cached, IS the publish set — see _netRelays and the gate above.
   isNetworkRelay,
   // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
