@@ -105,7 +105,30 @@ and which of your instincts about it are wrong.
   Consequence for planning: make the Suite the advertised route, and the awkward case shrinks to churches who
   deliberately run a bare relay — a smaller, more technical group who can reasonably take one extra step.
 
+- **Churches SHARE each other's relays. That is the point of decentralisation, and it was the original
+  request.** `ESTABLISHED 2026-09-02.` Owner, correcting a session that had treated relay-sharing as an edge
+  case: *"The three pilots will self host, but the entire point is that they share each others relays.
+  Literally the entire point of decentralisation."* The three pilot churches each run a box and host one
+  another. **Consequences that must not be forgotten:** the church-signed `trinityone/relay-net` document is
+  therefore the PRIMARY mechanism, not a fallback for the unusual — it is how church A vouches for church B's
+  box. Root 2 (same-origin) covers only your OWN box, so it can never carry this model. And any rule of the
+  form "only sign in the box that served this console" BREAKS mutual hosting outright: a partner church's box
+  is never your origin. Scope by network membership (`joinNetwork` / `NETWORKS` / `networkOf`), never by
+  origin.
+
+- **The gate belongs in the relay and out of sight.** `ESTABLISHED 2026-09-02.` Owner: *"I don't really want
+  a panel to say anything, it should be all under the hood, the t1 relay software should simply not allow
+  connections from other non t1 relays and churches"* — and, clarifying: *"not allow, and not look for."* So
+  no confirmation UI, no steward ceremony. **This forecloses using a human as the safety net** for a
+  mechanism that is not yet reliable: an automatic path means defects like `_oneComplete`'s dishonest
+  `complete` flag must be FIXED, not covered by asking a steward to check. The client-side gate still cannot
+  be removed — a hostile relay will not refuse itself, so a client must decide what it writes to — but it
+  must be silent, and the relay must carry every part of the rule it can.
+
 - **A church's relay must hold the church's data and nothing else — because it may be seized.**
+  `SUPERSEDED IN PART 2026-09-02 — see the relay-sharing entry above.` The headline over-generalised the
+  quote beneath it, which is about BLOAT, not exclusivity. Churches deliberately host one another; what
+  survives is that a relay should not accumulate data for churches it does not serve.
   `ESTABLISHED 2026-09-01.` Owner, clarifying why the closed-network decision matters in both directions:
   *"the concern is both really, but we don't want bloat on a persecuted church relay."* And on what
   "non-TrinityOne" means: *"people that run our specific relay software"* — so **self-hosting stays**, and we
