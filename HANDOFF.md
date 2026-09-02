@@ -7,7 +7,13 @@ current state is here at the top.
 
 ---
 
-## AN ADULT'S REQUEST IS FILED UNDER "FROM A YOUNG PERSON" (found 2026-08-27, NOT FIXED)
+## AN ADULT'S REQUEST IS FILED UNDER "FROM A YOUNG PERSON" (found 2026-08-27, PARTLY FIXED 2026-08-29)
+
+**Status, corrected 2026-09-03.** The self-raised case IS fixed, at `app/screens-today.jsx:503-506`: a request
+whose `from` is you is never classed as a child's. What is NOT fixed is the branch below it — for a viewer who
+is not a care admin `fromChild` still answers "yes" for everyone else's request, which is fail-closed on that
+screen but is the same shape as the console twin the 2026-09-02 audit found (`app/stew-meals.jsx:515-530`,
+which fails OPEN while the minors list is still loading). Read the rest of this section as history.
 
 Surfaced by the regression run after the care-chat fix; it is NOT caused by that fix and predates it.
 

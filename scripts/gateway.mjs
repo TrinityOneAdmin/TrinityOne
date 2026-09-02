@@ -2225,9 +2225,11 @@ function accept(e) {
         return true;
       }
     }
-    // a church->parent guardian-link NOTICE (d=guardnotice:<parentpub>). OWNER-signed only. NOT read-gated
-    // (its content is encrypted to the parent) so the parent receives it WITHOUT auth — it's what prompts
-    // them to authenticate for the gated guardians: map. Explicit rule = exempt from the per-member doc cap.
+    // a church->parent guardian-link NOTICE (d=guardnotice:<parentpub>). OWNER-signed only, and this is the
+    // WRITE rule. It IS read-gated: kind-30078 canRead is default-DENY with a public allowlist and this d-tag
+    // is not on it, so the parent reads it by authenticating as any member does (see the note at ~:5203, which
+    // records that canRead has gated GUARDNOTICE_D all along). Its content is also encrypted to the parent, so
+    // the gate is not the only thing protecting it. Explicit rule = exempt from the per-member doc cap.
     if (d.startsWith(GUARDNOTICE_D)) return CHURCH_PUBS.has(e.pubkey);
     // SECURITY-AUDIT-2026-07-20 C1 (safeguarding, CRITICAL): a guardian-link REQUEST is d=guardreq:<childpub>,
     // and the steward console renders it as "<parentName> set up a child account for <childName> — Confirm to

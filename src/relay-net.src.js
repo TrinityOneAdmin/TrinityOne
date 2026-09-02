@@ -86,6 +86,11 @@ export const RELAY_NET_D = 'trinityone/relay-net';
 // there and be admitted by the entire fleet at once, with no invite, no directory entry and no adversary
 // effort at all. So a machine answering at an address we SHIP must prove one of the keys we ship.
 //
+// WHAT IT REFUSES, EXACTLY: a REPLACEMENT MACHINE at one of our addresses. It does NOT refuse a proxy that
+// stands at the same address and forwards the identity request to the genuine box — that box declares the
+// address and signs it quite correctly. Whoever controls DNS/TLS for the name is in that position already.
+// See reference/RELAY-ADMISSION.md; never describe this check as closing that case.
+//
 // THIS IS NOT AN ALLOWLIST AND MUST NOT BECOME ONE. It binds our OWN defaults and nothing else: a church's
 // self-hosted box, or a partner church's box, is at an address we do not ship and is admitted on its proof
 // alone. We are not deciding who may run a relay; we are declining to be fooled about our own front door.

@@ -23,8 +23,9 @@
 //
 // IT DOES REFUSE A RELAY WHOSE SIGNED ADDRESS IS NOT THE ONE WE DIALLED, and that is the whole point of the
 // binding. Without it a host running NONE of our software forwards this request to a real relay, passes the
-// genuine proof back, and terminates the socket itself — the corpus and every member's IP land on a reverse
-// proxy while every check says "TrinityOne". The relay half (gateway.mjs `relayIdentityUrl`) is what makes
+// genuine proof back, and terminates the socket itself, at ANOTHER address, while every check says
+// "TrinityOne". A forwarder at the SAME address is out of this check's reach and always was: the genuine box
+// declares that address and signs it, exactly as it should. Do not read this binding as wider than it is. The relay half (gateway.mjs `relayIdentityUrl`) is what makes
 // the comparison mean anything: a box declares the addresses it answers at and signs the dialled one only
 // when it is one of them, because a `Host` header is chosen by whoever stands in front of it.
 //

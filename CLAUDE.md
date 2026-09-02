@@ -76,10 +76,16 @@ session. Stopping is a control, not a failure of one.
 ## 10. Never widen which relays a church talks to
 
 Read `reference/RELAY-ADMISSION.md` before touching `relay-net.src.js`, `_netRelays`, `churchRelays()`,
-`relaysForChurch()`, or any relay list. Two gates, three roots, and four traps are written up there.
+`relaysForChurch()`, or any relay list. The rule, the roots and four traps are written up there.
 
-The short version: **a relay needs cryptographic proof AND one of three roots — both, every time.**
+The short version: **a relay is admitted iff it proves, at the address dialled, that it holds a relay
+identity key — "it runs our software".** The pin / origin / church roots no longer decide admission: they
+are diagnostics, plus **one refusal** — a box answering at an address we ship must prove a key we ship.
 `relayPub` from `/status` or NIP-11 is an unauthenticated string and is never proof.
+
+And do not overclaim what the proof buys: it refuses a replacement box at a shipped address and a forwarder
+at a DIFFERENT address. A proxy at the SAME address, run by whoever controls that name's DNS/TLS, is not
+refused and never was.
 
 *Why:* the product actively suggested non-TrinityOne relays. Every protection this app has lives in
 the relay, so "which machines get the data" IS the security boundary, not a networking detail.
