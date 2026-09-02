@@ -1,6 +1,8 @@
 # Plan: nothing signs a church's own relay in
 
-Branch `relay/closed-network`, tip `59b2c0a`. **This gates the merge of the closed-network work.**
+Branch `relay/closed-network`. **REVISED 2026-09-02** after an independent audit found the first
+version unsafe to implement. The problem statement survived; the fix did not. What changed and why is
+recorded at the bottom — read it before re-proposing anything simpler.
 
 ## The problem, as measured
 
@@ -8,117 +10,170 @@ Branch `relay/closed-network`, tip `59b2c0a`. **This gates the merge of the clos
 file**. Only tests call it. It works — driven by hand on 2026-09-02, a real phone then admitted the
 relay it signed.
 
-Why that is a blocker rather than a nicety, in three measured steps:
+1. `proveRelay()` (`src/relay-net.src.js`) admits by three roots: `canonical`, `origin`, `church`.
+2. **Root `origin` cannot fire on any native device.** `_ownOrigin()` (steward.src.js:2211) and
+   `_adoptionOrigin()` (fellowship.src.js:632) both return `''` for
+   `Capacitor.isNativePlatform()` **before comparing anything**. Native fails closed by construction —
+   this is stronger than the `https://localhost` measurement the first draft leaned on, and does not
+   depend on it.
+3. So a self-hosting, non-canonical church's members reach their relay by **one** route: root
+   `church`. Nothing creates that document.
 
-1. `proveRelay()` (`src/relay-net.src.js`) admits a relay by one of three roots: `canonical` (pinned in
-   the app), `origin` (the relay URL **is** the page's serving origin), or `church` (the proved pubkey
-   appears in the church's signed `trinityone/relay-net` doc).
-2. **The APK's origin is `https://localhost`** — measured on the Oppo, 2026-09-02. A church's relay is
-   never there, so root `origin` **can never fire on a phone**. It is a console-only convenience.
-3. Therefore a self-hosting church that is not on the canonical pins reaches its relay from a phone by
-   **exactly one** route: root `church`. Nothing creates that document.
+**On merge day:** members lose the church's own relay while the steward's console keeps working
+through root `origin`. Reproduced on hardware: 3 candidates, none verified, publish set empty, health
+false.
 
-**Consequence on merge day:** every member's phone in such a church loses its relay, while the
-steward's console keeps working perfectly through root `origin`. The steward has no symptom on the
-screen they are looking at. This is the marketed path — the Suite — so it is the common case, not
-the edge case.
+**The symptom is partial, not clean.** The 12 ungated reads (fellowship.src.js:3596 etc.) keep DMs,
+chat and reactions painting while every gated read and every publish fails. Partial is this
+codebase's worst failure class — see `silent-blank-app-bugs`. Do not describe this as an outage.
 
-Reproduced on hardware before any fix: 3 candidates, none verified, publish set empty, nothing
-reached the relay, health false.
+## BLOCKERS — fix these before anything calls `enrolRelayNet` on a schedule
 
-## What the function already gets right — do not re-litigate
+Today's exposure is ~zero *because nothing calls the function*. Every item below is armed by the act
+of calling it.
 
-Read the comment block above `enrolRelayNet` before touching it. It is **additive, never
-subtractive**; a new entry gets `alwaysOn: true` while an existing entry keeps whatever the church
-set; an incomplete read returns `{ unknown: true }` and writes **nothing**, because treating a
-timed-out read as an empty church would un-admit every box the church had signed; and it refreshes an
-entry's `url` in place while matching on `pubkey` only, which is what survives tunnel churn.
+### B0. `_oneComplete`'s `complete` flag is dishonest — this is a latent doc-wipe
 
-It is also **idempotent**: `if (!entries.length || !changed) return { published: false, … }`. Calling
-it repeatedly is cheap and publishes nothing when nothing changed. That is what makes a call-on-boot
-safe, and it is the property the whole fix leans on.
+`_oneComplete` (steward.src.js:2247) passes **no `maxWait`** to `pool.subscribeMany`. Its sibling
+`_newestByD` (steward.src.js:2405) passes `maxWait: ms + 5000` and carries a comment recording why.
+Measured against the real bundled nostr-tools: a **dead port returns `{ev: null, complete: true}` in
+7ms**; a **silent socket returns `{ev: null, complete: true}` at 3001ms**.
 
-## The fix — three parts, and all three are needed
+So a failed read reports a *completed* read of an *empty* church. Chain, once enrolment runs on boot:
+church's doc names boxes A+B → console boots while doc-holding relays are down (the documented a8
+update blip is exactly this) → `relayNetDoc()` returns `{ev:null, complete:true}` → `mine` is null and
+the `!complete` guard does not fire → seed read fails the same way → entries built **from scratch** →
+published with `created_at: now()` → newest-wins **un-admits every box the church had signed**, on
+every member's phone.
 
-### Part 1 — call it automatically on console boot
+This is precisely the failure the function's own comment block promises cannot happen.
 
-`app/steward-root.jsx`, in `initChurch()` (line ~309), alongside the two calls already there:
+**Why 22 green tests do not see it:** `consoleWith` (is-this-relay-one-of-ours.test.mjs:109-118)
+injects `_oneComplete` as `deps.one`, and the "unfinished read publishes nothing" test hands the
+function `complete: false` directly. The suite proves `enrolRelayNet` honours the flag it is *given*,
+never that the reader computes it honestly — the `stub-answers-the-question` shape.
 
-```js
-window.Steward.init();
-if (window.Steward.hasKey && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
-if (window.Steward.hasKey && window.Steward.autoSyncIfRedundant) setTimeout(…, 5000);
-```
+**Fix, in order:**
+1. Give `_oneComplete` a `maxWait`, as `_newestByD` already has.
+2. `maxWait` alone is **not sufficient** — an unreachable relay still counts as finished
+   (`_newestByD`'s own "RESIDUAL, deliberately left" comment concedes this). `complete` means "every
+   relay I could reach finished", which is not the question enrolment asks.
+3. So `_oneComplete` must also report **how many relays actually answered**, and the from-scratch
+   path (`!mine`) must require at least one genuine answer. Building a membership document from
+   scratch is only safe when a relay has affirmatively said "there is no document" — never when
+   nobody spoke.
+4. **The test must produce a REAL unfinished read** — a real `ws` server on its own port that accepts
+   and never sends EOSE, plus a dead port. An injected flag cannot catch this class; that is how it
+   got here. See `injected-outcomes-cannot-catch-a-dead-classifier`.
 
-Add a third in the same idiom — feature-detected, deferred so it never competes with boot, errors
-swallowed. **Two ordering constraints the implementer must honour:**
+### B1. No delegated-steward guard — cross-tenant publish
 
-- It must run **after `autoSyncIfRedundant` has settled**, not before. Enrolment's one-time seed reads
-  `trinityone/relays`, which is the document `autoSyncIfRedundant` writes. The seed is one-time
-  (`if (!mine)`), so if enrolment publishes first, the seed never happens at all.
-- **Verify `hasKey` is sufficient.** `enrolRelayNet` throws `'No church key on this device'` when `sk`
-  is falsy, and a PIN-locked console may have `hasKey` true with `sk` null. `selfRegister` uses the
-  same guard, so it may already be fine — but this is an assumption, not a finding, and it must be
-  checked rather than copied. If it is not sufficient, enrolment must also run on unlock.
+`selfRegister`, the call this plan proposes to imitate, carries
+`if (actingChurch) return { …skipped: 'acting as a delegated steward' }` (steward.src.js:6745), added
+after a measured incident. **`enrolRelayNet` has no equivalent** (steward.src.js:2292).
 
-### Part 2 — make it visible in the relay panel
+In acting mode `sk` is the delegate's own key while `pub` is the acted-for church
+(steward.src.js:6508), and the acting identity is restored early in boot — before a deferred call
+would fire. Result: reads the other church's doc, signs with the delegate's key, and if that key is
+registered the relay **accepts** it — replacing the delegate's own church's relay-net doc with
+entries derived from another church's, un-admitting their own boxes. If unregistered, the refusal maps
+to the sticky "set up for a different church — Restore this church's key" banner, whose remedy this
+codebase documents as key-destroying. Every boot.
 
-Part 1 alone is silent automation that can silently do nothing: on a slow link the read does not
-complete, `{ unknown: true }` comes back, and **nothing is published and nobody is told**. A silent
-mechanism failing silently is how this gap arrived.
+**Fix:** an explicit own-church guard — not acting, not a network view — before anything else.
 
-The relay panel must show whether the church has signed this box in — signed / not signed yet — so a
-steward can see the true state. Describe the consequence, do not nag: this is a mechanism, not a
-policy (CLAUDE.md §7, `safeguarding-mechanism-not-policy`).
+### B2. The boot site chosen in the first draft barely runs
 
-### Part 3 — a manual "sign this relay in" action
+`hasKey` is a *sufficient* guard — it can never be true with `sk` null (`setKey` sets both at
+steward.src.js:1319, `lock()` clears both at 2877). The first draft worried about the wrong thing.
 
-Because the automatic path can legitimately no-op (`unknown`), there must be a way to ask again
-without restarting the console. Same function, same idempotency, no new logic.
+The real problem is the inverse: the forced-PIN flow means an established console boots **locked**
+(`_bootKeyState` → 'locked', steward.src.js:1449), so `hasKey` is false at `initChurch` time and the
+whole trio is skipped. Nothing re-runs `initChurch` after `unlock()`.
+
+**Run-on-unlock is the main path, not a fallback.** There is an existing idiom for exactly this —
+`unlockTick` in `app/stew-dashboard.jsx:535` re-runs enrolment work when the key comes back.
+
+### B3. The doc never reaches the box it admits
+
+`enrolRelayNet` publishes via `publish()` → `relays()` — the **gated** set (steward.src.js:1906+). At
+first enrolment the church's own box is not yet admitted, so the doc lands only on canonical relays.
+Next boot, `!changed` suppresses the republish. **The church's own relay never stores the document
+that admits it.**
+
+Members bootstrap fine while a8 is reachable (`churchRelaysRaw()` always unions canonical). But the
+UK pilot threat model is seizure or blocking of exactly that central host, and "does this work over a
+thin pipe in Tehran" is the standard this product is positioned against. With a8 unreachable and no
+origin root, `publish()` has zero admitted targets and enrolment can never publish at all.
+
+**Fix:** the enrolment **write** must go off the gated list, exactly as the enrolment **read** already
+does (`fellowship.src.js:650`). A box that just answered the C2 proof is admissible by definition —
+that is what the proof is for. Symmetry with the read side is the rule here, not an exception to it.
+
+## The fix, once the blockers are closed
+
+1. **Call it on unlock and on boot-with-key**, guarded to own-church-only, deferred, errors swallowed.
+2. **Show the state in the relay panel.** The Relays card already shows per-relay *admission*
+   (`relayStatus`'s `member`, steward.src.js:6868) and a "Not in your network" explainer. **"Signed
+   into the church's doc" is a different fact from "admitted"** — a canonical box is admitted while
+   unsigned. Say which one is being shown or an implementer will duplicate the UI.
+3. **A manual retry**, because the automatic path can legitimately no-op and must not do so silently.
 
 ## Test obligations
 
-**CLAUDE.md §3 forbids asserting this by matching text in `app/*.jsx`.** Those files ship unbundled,
-so `false && ` in front of the call leaves every word in place and a text-matching assertion still
-passes. The call site MUST be proved by execution.
+CLAUDE.md §3 forbids proving the call site by matching text in `app/*.jsx` — the file ships unbundled,
+so `false && ` leaves every word in place. It must be proved by **execution**. The technique exists:
+`scripts/console-relay-health.test.mjs:301` reads `app/steward-root.jsx`, slices by anchors, builds
+with `new Function(…)` and runs it. Note the lift must inject `location`, `history`, `localStorage`
+and `setTimeout` as well as `window`.
 
-The technique already exists in this repo — `scripts/console-relay-health.test.mjs` reads
-`app/steward-root.jsx`, slices the function by anchors, builds it with `new Function(…)` injecting a
-fake `window`, and runs it. Follow that:
+Required: point-of-use (fails if the call is deleted); B0's real-socket test; a delegated-console test
+that asserts **nothing is published**; a test that the doc reaches the newly-proven box. Sabotage each,
+scoped to the function under test. Account for the count — 2445 / 0 on this branch, unverified by the
+audit and to be re-measured.
 
-1. **Point-of-use (§1):** run `initChurch()` with a stubbed `window.Steward` and assert
-   `enrolRelayNet` was invoked. **This test must fail if the call is deleted from the screen** — that
-   is the whole point, and it is the test the engine's 22 existing tests do not provide.
-2. **Ordering:** assert enrolment is not invoked before `autoSyncIfRedundant`, so the seed survives.
-3. **Sabotage-verify each one**, scoped to the function under test — near-identical siblings are this
-   codebase's house style and a plain string-replace hits the first match, usually somebody else's.
-4. **Account for the test count (§8).** Current: 2445 / 0 fail on this branch.
+## Known-accepted, not blockers
+
+- **Two consoles of one church** dialling the same box at different addresses flip the entry's
+  advisory `url`, publishing on alternating boots. Harmless volume. Concurrent first boots are a
+  lost-update that self-heals next boot.
+- **A slow first boot** may fire `steward-publish-error` → the generic "check the connection" banner
+  on a healthy church, because a call-site `.catch()` cannot swallow an event. Tolerate knowingly or
+  await the gate's first refresh.
+- **The 30-day verified cache** (`VERIFIED_KEY`/`VERIFIED_TTL_SEC`) is a fourth *practical* admission
+  path — admission from cache alone. Cold on merge day, so it does not affect this plan, but
+  `RELAY-ADMISSION.md` should name it.
+- **Stale comment:** `_oneComplete`'s parenthetical says it reads over `relays()`; it reads
+  `relaysRaw()` (steward.src.js:2255). This is the file where comments have satisfied assertions
+  before.
 
 ## What must not change
 
-- Root 3 matches **pubkey, never URL**. URL matching drops every self-hosting church off every phone
-  on each tunnel restart.
-- The relay-net read at `fellowship.src.js:650` stays **unfiltered**. Gate it and the bootstrap
-  deadlocks.
-- Additive-never-subtractive in `enrolRelayNet`. A failed probe must never remove a signed entry.
-- Nothing here writes to `trinityone/relays` — it keeps its own meaning.
-- Backwards compatible by construction: this adds a call and a panel, repurposes nothing.
+Root 3 matches **pubkey, never URL**. `fellowship.src.js:650` stays unfiltered. Additive-never-
+subtractive in `enrolRelayNet`. Nothing writes to `trinityone/relays`.
 
 ## Verification before merge
 
-The suite passing is not the gate (CLAUDE.md §6).
+The suite passing is not the gate. Relay process must be **newer than `scripts/gateway.mjs`** first —
+a stale relay has produced a false finding three times, including on 2026-09-02.
 
-1. Relay process must be **newer than `scripts/gateway.mjs`** — a stale relay enforces old gates and
-   has produced a false finding three times, including on 2026-09-02.
-2. Console boot on a church whose relay is neither canonical nor previously signed → the doc appears
-   on the relay, signed by the church.
-3. **A phone that has never seen that relay** then admits it, cold cache. This is the test that
-   matters and neither device can prove alone.
-4. Confirm a second console boot publishes **nothing** (idempotency), by reading the relay.
+Then: console boot → doc appears, signed by the church, **on the church's own box**; a phone that has
+never seen that relay admits it cold; a second boot publishes nothing; **a delegated steward's console
+publishes nothing**; and a boot with the doc-holding relays down publishes nothing.
 
-## Ordering against the rest of the merge
+## What the audit changed
 
-Unchanged: **relays before apps.** a8 currently 404s on `/relay-identity`. This plan adds a second
-precondition ahead of the gate — enrolment must ship *with or before* the gate, never after.
+The first draft proposed a one-line call in `initChurch()` "in the same idiom" as its neighbours. That
+was wrong in four ways, all found by reading code the plan had cited but not opened: the safety
+property it leaned on is broken (B0, measured), the idiom it copied has a guard it did not copy (B1),
+the site it chose does not run on a locked console (B2), and the write lands everywhere except the box
+it admits (B3).
 
-See `reference/RELAY-ADMISSION.md` for the architecture this protects.
+Its B2-ordering claim — enrolment after `autoSyncIfRedundant` so the seed sees `trinityone/relays` —
+survives as **nearly vacuous**: post-merge `syncEnable` is fed by the gated `relays()`, so anything a
+same-boot sync doc could list is already admitted and already probed. The seed's real value is
+historical docs, which do not depend on boot ordering. It is also unhonourable in the current idiom,
+which is a fire-and-forget `setTimeout`. Dropped as a constraint; kept as a note.
+
+One audit finding was **not confirmed and is excluded**: that shipped copy already tells stewards to
+"enrol it". No such string exists; every `enrol` in the UI refers to member enrolment.

@@ -87,6 +87,13 @@ stat -c '%y' scripts/gateway.mjs
 
 ---
 
+### 5. A fourth practical admission path: the 30-day verified cache
+
+`VERIFIED_KEY` / `VERIFIED_TTL_SEC` in the gate let a relay stay admitted from cache alone — up to
+~6h before a refresh and 30 days offline. `proveRelay()` has exactly three roots, but the cache means
+a box removed by the church can keep being talked to for a window. Cold on merge day, so it does not
+affect the enrolment plan, but it is a real fourth path and belongs on this list.
+
 ## When nothing can be proved
 
 A publish with candidates but no proved relay **rejects** with `NO_NETWORK_RELAY` — it does not
@@ -103,7 +110,11 @@ and a warning would be a lie.
 
 ## Open, as of 2026-09-02
 
-1. **Nothing calls `enrolRelayNet()`.** Defined and exported in `src/steward.src.js`; zero call sites
+1. **Nothing calls `enrolRelayNet()`.** See `reference/PLAN-ENROLMENT-GAP-2026-09-02.md` — an audit
+   found four blockers that are armed *by the act of calling it*, chief among them that
+   `_oneComplete`'s `complete` flag reports a dead relay as a completed read of an empty church
+   (measured), which turns a boot-time call into a latent wipe of the church's signed membership.
+   **Do not wire up a call before reading that plan.** Defined and exported in `src/steward.src.js`; zero call sites
    in any UI file (measured). It works when driven by hand — done on-device 2026-09-02. Until a screen
    calls it, trap 1 above bites every self-hosting church. **This gates the merge.**
 2. **12 ungated read subscriptions** — `subscribeMany(window.Fellowship.relays, …)` in
