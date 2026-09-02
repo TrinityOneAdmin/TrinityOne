@@ -101,6 +101,8 @@ function consoleWriters({ church, origin, canonical = [], pins = {}, extra = [],
     fnBody(src, 'function _relayKey', '_relayKey'),
     stmt(src, 'var _isHex64 = ', '_isHex64'),
     fnBody(src, 'function canonicalPinsFor', 'canonicalPinsFor'),
+    fnBody(src, 'function isSharedAddress', 'isSharedAddress'),
+    fnBody(src, 'function sharedRelayKeys', 'sharedRelayKeys'),
     fnBody(src, 'function parseRelayNet', 'parseRelayNet'),
     fnBody(src, 'function _originKey', '_originKey'),
     fnBody(src, 'function sameOriginRelay', 'sameOriginRelay'),
@@ -196,10 +198,13 @@ const signIn = (church, relays) => churchDocFor(church, RELAY_NET_D, relays.map(
 let church, IN, OUT;
 before(async () => {
   church = H.key();
-  [IN, OUT] = await Promise.all([
+  [IN] = await Promise.all([
     H.startRelay({ name: 'IN', churches: [church.pub] }),
-    H.startRelay({ name: 'OUT', churches: [church.pub] }),
   ]);
+  // OUT CANNOT BE ADMITTED, which is what these two cases need: they exercise the EMPTY-publish-set
+  // error path, and under the 2026-09-02 rule a real gateway is admitted on its proof, so the set was
+  // never empty and the line under test was never reached. A box that is not TrinityOne software is.
+  OUT = await H.startFakeRelay({ name: 'OUT' });
   assert.notEqual(IN.relayPub, OUT.relayPub, 'the two relays must be two separate boxes or nothing below means anything');
 });
 after(() => H.stopAll());

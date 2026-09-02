@@ -74,10 +74,35 @@ export const RELAY_NET_D = 'trinityone/relay-net';
 // build time by a human who could reach the box, not something the pin itself proves. What the pin DOES buy,
 // from the moment the fleet answers `/relay-identity`, is that a host copying that `/status` cannot pass:
 // admission requires the proof, and the proof requires the secret key.
-export const CANONICAL_RELAY_PUBS = Object.freeze({
-  'wss://app.trinityone.church/relay': Object.freeze(['6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2']),
-  'wss://trinityone-master-01.tailbeaac0.ts.net/relay': Object.freeze(['6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2']),
-});
+// OUR SHARED RELAY IS A KEY. THE ADDRESSES ARE WHERE YOU WILL PROBABLY FIND IT.
+//
+// The two addresses below already mapped to the SAME single key, because they are one box reached two ways
+// (Cloudflare and Tailscale). That is the data saying what the identity actually is, and this is the same
+// lesson tunnel churn taught: a key is who a machine IS, an address is a claim about where it is.
+//
+// WHY IT MATTERS HERE. `wss://app.trinityone.church/relay` ships inside every app. Under a rule that admits
+// any box which proves it runs our software, seizing or compelling that ADDRESS — the recorded threat model
+// is lawful compulsion, and it sits behind a tunnel we do not own — would let a different machine answer
+// there and be admitted by the entire fleet at once, with no invite, no directory entry and no adversary
+// effort at all. So a machine answering at an address we SHIP must prove one of the keys we ship.
+//
+// THIS IS NOT AN ALLOWLIST AND MUST NOT BECOME ONE. It binds our OWN defaults and nothing else: a church's
+// self-hosted box, or a partner church's box, is at an address we do not ship and is admitted on its proof
+// alone. We are not deciding who may run a relay; we are declining to be fooled about our own front door.
+//
+// Moving the box, adding a third route, or a tunnel rotating costs nothing and ships no release, because the
+// KEY has not changed — which is precisely what pinning the address would have cost.
+export const SHARED_RELAY_KEYS = Object.freeze([
+  '6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2',
+]);
+export const SHARED_RELAY_HINTS = Object.freeze([
+  'wss://app.trinityone.church/relay',
+  'wss://trinityone-master-01.tailbeaac0.ts.net/relay',
+]);
+// Derived, and kept because `proveRelay`'s diagnostics and every existing caller and test read this shape.
+// It is a VIEW of the two declarations above, never a second source of truth.
+export const CANONICAL_RELAY_PUBS = Object.freeze(
+  Object.fromEntries(SHARED_RELAY_HINTS.map(u => [u, SHARED_RELAY_KEYS])));
 
 // Key a relay URL the way the connection pool does. The pool keys its map by normalizeURL(), and a raw
 // string compare against a URL that differs only by a trailing slash misses SILENTLY — three occurrences of
@@ -86,6 +111,28 @@ export const CANONICAL_RELAY_PUBS = Object.freeze({
 function _relayKey(url) { try { return normalizeURL(String(url || '')); } catch { return String(url || ''); } }
 
 const _isHex64 = (s) => /^[0-9a-f]{64}$/.test(String(s || '').toLowerCase());
+
+// Is `url` one of the addresses we SHIP? Derived from whichever pin map is in force so an injected map
+// (tests, and only tests) stages a shared address the same way production does.
+export function isSharedAddress(url, pins) {
+  const map = pins || CANONICAL_RELAY_PUBS;
+  const want = _relayKey(url);
+  if (!want) return false;
+  for (const k of Object.keys(map)) if (_relayKey(k) === want) return true;
+  return false;
+}
+// Every key we ship, across all hint addresses. A key is acceptable at a shipped address regardless of
+// WHICH shipped address it was listed beside — one box reached two ways is one member, and pinning a key to
+// a particular road would reintroduce exactly the address-shaped membership this design refuses.
+export function sharedRelayKeys(pins) {
+  const map = pins || CANONICAL_RELAY_PUBS;
+  const out = [];
+  for (const v of Object.values(map)) for (const p of (v || [])) {
+    const h = String(p).toLowerCase();
+    if (_isHex64(h) && !out.includes(h)) out.push(h);
+  }
+  return out;
+}
 
 // The accepted identity keys for a canonical URL, or [] if this URL is not in the pool.
 export function canonicalPinsFor(url, pins) {
@@ -168,6 +215,15 @@ export async function proveRelay(cp, url, deps) {
   const provenPub = String((proof && proof.relayPub) || '').toLowerCase();
   if (!_isHex64(provenPub)) return no;
 
+  // OUR OWN FRONT DOOR — a REFUSAL, and it comes before every root.
+  //
+  // A machine answering at an address we SHIP must prove one of the keys we ship. Seizing or compelling
+  // `app.trinityone.church` is the cheapest attack there is against a rule that otherwise admits anything
+  // running our software: that address is already in every app, so it needs no invite and no list poisoning.
+  // Refusing here costs a self-hosting or partner church nothing, because their box is not at one of our
+  // addresses and never reaches this line.
+  if (isSharedAddress(url, d.pins) && !sharedRelayKeys(d.pins).includes(provenPub)) return { root: '', pub: provenPub };
+
   // ROOT 1 — the canonical pool, against the pin baked in beside the URL.
   //
   // AND IT IS URL-BOUND, WHICH IS NOT AN ACCIDENT (see THE FORWARDING PROXY below). `canonicalPinsFor`
@@ -186,11 +242,22 @@ export async function proveRelay(cp, url, deps) {
   try { entries = d.netEntries ? await d.netEntries(cp) : null; } catch { entries = null; }
   if (Array.isArray(entries) && entries.some(e => e && String(e.pubkey || '').toLowerCase() === provenPub)) return { root: 'church', pub: provenPub };
 
-  // NO ROOT — but the key it proved still comes back, and that is not a detail. The gate needs to tell
-  // "this address did not answer" from "this address is answering with somebody ELSE's key now", because the
-  // second means the machine it once admitted is no longer the machine that is there. Returning the bare
-  // `no` here made those two indistinguishable and a cached admission survived a takeover of the address.
-  return { root: '', pub: provenPub };
+  // IT RUNS OUR SOFTWARE, AND THAT IS THE RULE.
+  //
+  // Owner's decision, 2026-09-02: *"runs our software"* — their own recorded definition of a non-TrinityOne
+  // relay is "people that run our specific relay software", and this is that sentence implemented literally.
+  // The proof above is what demonstrates it: a generic relay answers `/relay-identity` with its own default
+  // web page (measured 2026-09-02 against two of the largest public Nostr relays; naming them here would
+  // trip C1's own guard, which scans shipped files — comments included — for hosts we do not run), and a forwarder gets no proof at all now that a
+  // box signs only an address it declares. The roots above no longer decide ADMISSION — they are computed
+  // for diagnostics, and because re-tightening to "a box my church chose" is then one line here rather than
+  // an excavation.
+  //
+  // WHAT THIS KNOWINGLY GIVES UP: someone who genuinely runs our relay software, at an address they control,
+  // can be admitted if that address reaches a church's relay list. They would see the pubkey-level social
+  // graph — never names (sealed) and never message contents (encrypted). The gates that narrow how an
+  // address reaches a list at all are C1 and C5, both merged.
+  return { root: 'software', pub: provenPub };
 }
 
 // → true when `url` is a relay this church may talk to. The one-line reading of proveRelay(), kept because

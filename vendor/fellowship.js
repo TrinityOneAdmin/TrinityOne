@@ -3751,10 +3751,16 @@
 
   // src/relay-net.src.js
   var RELAY_NET_D = "trinityone/relay-net";
-  var CANONICAL_RELAY_PUBS = Object.freeze({
-    "wss://app.trinityone.church/relay": Object.freeze(["6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"]),
-    "wss://trinityone-master-01.tailbeaac0.ts.net/relay": Object.freeze(["6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"])
-  });
+  var SHARED_RELAY_KEYS = Object.freeze([
+    "6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"
+  ]);
+  var SHARED_RELAY_HINTS = Object.freeze([
+    "wss://app.trinityone.church/relay",
+    "wss://trinityone-master-01.tailbeaac0.ts.net/relay"
+  ]);
+  var CANONICAL_RELAY_PUBS = Object.freeze(
+    Object.fromEntries(SHARED_RELAY_HINTS.map((u) => [u, SHARED_RELAY_KEYS]))
+  );
   function _relayKey(url) {
     try {
       return normalizeURL2(String(url || ""));
@@ -3763,6 +3769,22 @@
     }
   }
   var _isHex64 = (s) => /^[0-9a-f]{64}$/.test(String(s || "").toLowerCase());
+  function isSharedAddress(url, pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const want = _relayKey(url);
+    if (!want) return false;
+    for (const k of Object.keys(map)) if (_relayKey(k) === want) return true;
+    return false;
+  }
+  function sharedRelayKeys(pins) {
+    const map = pins || CANONICAL_RELAY_PUBS;
+    const out = [];
+    for (const v of Object.values(map)) for (const p of v || []) {
+      const h = String(p).toLowerCase();
+      if (_isHex64(h) && !out.includes(h)) out.push(h);
+    }
+    return out;
+  }
   function canonicalPinsFor(url, pins) {
     const map = pins || CANONICAL_RELAY_PUBS;
     const want = _relayKey(url);
@@ -3814,6 +3836,7 @@
     }
     const provenPub = String(proof && proof.relayPub || "").toLowerCase();
     if (!_isHex64(provenPub)) return no;
+    if (isSharedAddress(url, d.pins) && !sharedRelayKeys(d.pins).includes(provenPub)) return { root: "", pub: provenPub };
     if (canonicalPinsFor(url, d.pins).includes(provenPub)) return { root: "canonical", pub: provenPub };
     if (sameOriginRelay(url, d.origin)) return { root: "origin", pub: provenPub };
     let entries = null;
@@ -3823,7 +3846,7 @@
       entries = null;
     }
     if (Array.isArray(entries) && entries.some((e) => e && String(e.pubkey || "").toLowerCase() === provenPub)) return { root: "church", pub: provenPub };
-    return { root: "", pub: provenPub };
+    return { root: "software", pub: provenPub };
   }
   async function isNetworkRelay(cp, url, deps) {
     return !!(await proveRelay(cp, url, deps)).root;

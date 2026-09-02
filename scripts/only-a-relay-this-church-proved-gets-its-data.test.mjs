@@ -95,6 +95,8 @@ function gateSource(src) {
     fnBody(src, 'function _relayKey', '_relayKey'),
     stmt(src, 'var _isHex64 = ', '_isHex64'),
     fnBody(src, 'function canonicalPinsFor', 'canonicalPinsFor'),
+    fnBody(src, 'function isSharedAddress', 'isSharedAddress'),
+    fnBody(src, 'function sharedRelayKeys', 'sharedRelayKeys'),
     fnBody(src, 'function parseRelayNet', 'parseRelayNet'),
     fnBody(src, 'function _originKey', '_originKey'),
     fnBody(src, 'function sameOriginRelay', 'sameOriginRelay'),
@@ -230,14 +232,22 @@ const joinDoc = (who, cp) => finalizeEvent(
 let church, IN, OUT, SELF, POOLBOX;
 before(async () => {
   church = H.key();
-  [IN, OUT, SELF, POOLBOX] = await Promise.all([
+  // OUT IS NO LONGER A TRINITYONE RELAY, and that is what keeps these cases meaningful.
+  //
+  // Until 2026-09-02 it was a real gateway the church had not signed for, and "the corpus never reached it"
+  // was the assertion. Under the owner's decision — a relay is admitted when it proves it runs OUR SOFTWARE
+  // — a real gateway is admitted whether a church signed for it or not, so that staging would assert
+  // nothing. OUT is now a box that behaves like a relay in every way a client can see, and CANNOT answer the
+  // possession proof because it holds no TrinityOne relay key. The question each case asks is unchanged.
+  [IN, SELF, POOLBOX] = await Promise.all([
     H.startRelay({ name: 'IN', churches: [church.pub] }),
-    H.startRelay({ name: 'OUT', churches: [church.pub] }),
     H.startRelay({ name: 'SELF', churches: [church.pub] }),
     H.startRelay({ name: 'POOL', churches: [church.pub] }),
   ]);
-  assert.equal(new Set([IN, OUT, SELF, POOLBOX].map(r => r.relayPub)).size, 4,
-    'the four relays must be four separate boxes or nothing below means anything');
+  OUT = await H.startFakeRelay({ name: 'OUT' });
+  assert.equal(new Set([IN, SELF, POOLBOX].map(r => r.relayPub)).size, 3,
+    'the three real relays must be separate boxes or nothing below means anything');
+  assert.equal(OUT.relayPub, undefined, 'OUT must hold no TrinityOne relay key at all');
 });
 after(() => H.stopAll());
 
@@ -477,9 +487,19 @@ test('a relay that moved re-proves at its new address; an address answering with
     assert.equal((await c2b.proveRelay(flock.pub, takenOver)).pub, usurperKey.pub,
       'precondition: the address really is answering now with a key nothing vouches for');
     await c2b.gate.refresh([takenOver], flock.pub);
-    assert.deepEqual(c2b.relays(), [],
-      'an address that started answering with a DIFFERENT key kept its old admission. The cache remembers a ' +
-      'proof about a machine, not a grant to an address.');
+    // RE-AIMED 2026-09-02. The claim used to be that the address LOSES its admission when a different key
+    // answers there. Under the owner's decision the usurper is a box proving it runs our software, so it is
+    // admitted — the address keeps its place, correctly.
+    //
+    // What this case exists to prove survives exactly, and is the more important half: the cache remembers a
+    // proof about a MACHINE, not a grant to an ADDRESS. So the stored entry must now name the usurper's key,
+    // not the key that was cached before. If the cache kept the old key it would be vouching for a machine it
+    // never checked, which is the defect this test was written for and is still reachable.
+    const entry = JSON.parse(s2.getItem('trinityone.relays.verified') || '{}')[normalizeURL(takenOver)];
+    assert.equal(entry && entry.pub, usurperKey.pub,
+      'the cache kept its old entry for an address that is now answering with a DIFFERENT key. It is ' +
+      'vouching for a machine it never checked.');
+    assert.notEqual(entry && entry.pub, BOX.relayPub, 'the cached key did not change at all');
     c2.close(); c2b.close(); usurper.stop();
   } finally { con.close(); BOX.stop(); }
 });
@@ -644,11 +664,14 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
 // ── 9. the member's own point of use: a care request, and where it did NOT go ──────────────────────────
 test('a care request reaches the relay the church signed for and no other, and a failed one reads as NOT sent', async () => {
   const flock = H.key();
-  const [SIGNED, UNSIGNED] = await Promise.all([
-    H.startRelay({ name: 'SIGNED', churches: [flock.pub] }),
-    H.startRelay({ name: 'UNSIGNED', churches: [flock.pub] }),
-  ]);
+  // UNSIGNED IS NOT TRINITYONE SOFTWARE — see the note in before(). A real gateway is admitted on its proof
+  // now, so staging "the second address is a real relay the church never signed for" would assert nothing.
+  // What this case is FOR is untouched: a care request must reach the box that can be admitted and no other,
+  // and a request that reached nothing must read as NOT sent rather than quietly queued.
+  const SIGNED = await H.startRelay({ name: 'SIGNED', churches: [flock.pub] });
+  const UNSIGNED = await H.startFakeRelay({ name: 'UNSIGNED' });
   await H.publishAll(SIGNED, [signIn(flock, [SIGNED])]);
+  { const w = await H.connect(UNSIGNED); await H.publish(w, signIn(flock, [SIGNED])); w.close(); }
   // The phone has BOTH addresses in its list — the second is exactly the shape a restored backup or an old
   // invite leaves behind — and both boxes are up and holding this church.
   const app = memberOn({ church: flock, relays: [SIGNED.wsUrl, UNSIGNED.wsUrl] });

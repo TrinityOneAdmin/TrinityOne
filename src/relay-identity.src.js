@@ -82,6 +82,15 @@ export function relayHttpBase(wssUrl) {
 //
 // Refusing cleartext `ws://` is a SEPARATE rule and belongs on the dialled URL before we ever get here, not
 // smuggled into an equality test that would then be silently doing two jobs.
+//
+// ONE CONFIGURATION FOOTGUN, NAMED SO IT IS NOT REDISCOVERED. Default-port stripping stays scheme-AWARE even
+// though the scheme itself is dropped, so `ws://h:443/relay` keys as `h:443/relay` while `wss://h:443/relay`
+// keys as `h/relay`. A relay whose operator DECLARES the `ws://…:443` form while clients dial `wss://…` is
+// therefore refused, silently. The alternative — stripping :80 and :443 unconditionally — would let whoever
+// controls one of those ports on a host inherit a relay listening on the other, which is the same class of
+// problem as the path binding this file exists to close. So: declare the address clients actually dial.
+// (Verified no divergence between this and gateway.mjs's `_addrKey` over 70 crafted + 20000 fuzz cases,
+// 2026-09-02, against src and both built bundles.)
 export function relayAddrKey(u) {
   let str = String(u || '').trim();
   if (!str) return '';

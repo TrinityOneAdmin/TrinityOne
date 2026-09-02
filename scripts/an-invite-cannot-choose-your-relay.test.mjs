@@ -101,6 +101,8 @@ function gateSource(src) {
     fnBody(src, 'function _relayKey', '_relayKey'),
     stmt(src, 'var _isHex64 = ', '_isHex64'),
     fnBody(src, 'function canonicalPinsFor', 'canonicalPinsFor'),
+    fnBody(src, 'function isSharedAddress', 'isSharedAddress'),
+    fnBody(src, 'function sharedRelayKeys', 'sharedRelayKeys'),
     fnBody(src, 'function parseRelayNet', 'parseRelayNet'),
     fnBody(src, 'function _originKey', '_originKey'),
     fnBody(src, 'function sameOriginRelay', 'sameOriginRelay'),
@@ -312,17 +314,30 @@ async function claimName(dir, handle, url, offer) {
 let church, SIGNED, STRANGER, DIR;
 before(async () => {
   church = H.key();
-  [SIGNED, STRANGER, DIR] = await Promise.all([
+  // STRANGER IS NO LONGER A TRINITYONE RELAY, and that change is the whole point of this rewrite.
+  //
+  // Until 2026-09-02 it was a real gateway the church had not signed for, and "the corpus never reached it"
+  // was the assertion. Under the owner's decision — a relay is admitted if it proves it runs OUR SOFTWARE —
+  // a real gateway is admitted whether a church signed for it or not, so that staging would assert nothing
+  // and every case below would have had to be deleted.
+  //
+  // So STRANGER is now a box that behaves like a relay in every way a client can see and CANNOT answer the
+  // possession proof, because it holds no TrinityOne relay key. The question each case asks is unchanged —
+  // did the church's corpus arrive at a box it should not have? — but the line it guards is the new one.
+  [SIGNED, DIR] = await Promise.all([
     H.startRelay({ name: 'SIGNED', churches: [church.pub] }),
-    H.startRelay({ name: 'STRANGER', churches: [church.pub] }),
     H.startRelay({ name: 'DIR', churches: [church.pub] }),
   ]);
-  assert.equal(new Set([SIGNED, STRANGER, DIR].map(r => r.relayPub)).size, 3,
-    'the three relays must be three separate boxes or nothing below means anything');
+  STRANGER = await H.startFakeRelay({ name: 'STRANGER' });
+  assert.equal(new Set([SIGNED, DIR].map(r => r.relayPub)).size, 2,
+    'the two real relays must be separate boxes or nothing below means anything');
+  assert.ok(!SIGNED.relayPub || SIGNED.relayPub !== STRANGER.relayPub,
+    'STRANGER must not be a TrinityOne relay at all — it has no identity key by construction');
   // The church vouches for SIGNED, and only SIGNED. Published to every box, so "STRANGER did not receive the
   // church's data" can never be explained by STRANGER not knowing who the church is.
   const doc = signIn(church, [SIGNED]);
-  for (const box of [SIGNED, STRANGER, DIR]) await H.publishAll(box, [doc]);
+  for (const box of [SIGNED, DIR]) await H.publishAll(box, [doc]);
+  { const w = await H.connect(STRANGER); await H.publish(w, doc); w.close(); }
 });
 after(() => H.stopAll());
 
@@ -366,8 +381,18 @@ test('a crafted join link naming a running relay this church never signed for ad
     assert.equal(app.relays().includes(secure(STRANGER.wsUrl)), false, 'the address reached the phone\'s relay list anyway');
 
     // IT WAS UP AND IT WAS ASKED. A box that was never contacted holding nothing proves nothing at all.
+    //
+    // REFRAMED 2026-09-02. This used to require that STRANGER COULD answer the possession proof, because the
+    // point was "even a box that proves itself is refused without a church signature". That is no longer the
+    // rule. The guard's real job survives unchanged — stop this case passing against a box that was simply
+    // dead — so it now asserts STRANGER is REACHABLE but cannot prove, which is exactly what it is: a live
+    // relay that is not TrinityOne software.
+    const alive = await globalThis.fetch(`${STRANGER.base}/status`);
+    assert.equal(alive.ok, true, 'STRANGER was not even up, so this test would pass against a dead box');
     const probe = await globalThis.fetch(`${STRANGER.base}/relay-identity?nonce=` + 'a'.repeat(32));
-    assert.equal(probe.ok, true, 'STRANGER cannot answer the possession proof at all, so this test would pass against a dead box');
+    assert.equal(probe.ok, false,
+      'STRANGER answered the possession proof, so it IS TrinityOne software and this case no longer stages ' +
+      'a stranger at all');
 
     // …and the refusal is legible where the person is.
     const ev = app.win.events.filter(e => e.type === 'trinity-relay-refused');
@@ -453,8 +478,12 @@ test('a name re-pointed AFTER it was already followed is re-verified on the next
 
     // …and now whoever holds the name re-points it at a box this church never signed for.
     await claimName(DIR, 'stcuthbert', secure(STRANGER.wsUrl));
-    const resolved = await con.resolveRelayName('stcuthbert', { member: false });
-    assert.equal(resolved && resolved.url, secure(STRANGER.wsUrl),
+    // READ THE DIRECTORY DIRECTLY, not through the console's resolver. The question here is only "did the
+    // record really move", and the resolver now answers null for STRANGER for a different and correct reason
+    // — it is not TrinityOne software and cannot prove itself. Asking the resolver would conflate the two and
+    // leave pass two below testing nothing, which is exactly what this precondition exists to prevent.
+    const rec = await (await globalThis.fetch(`${DIR.base}/relay-names/resolve/stcuthbert`)).json();
+    assert.equal(rec && rec.url, secure(STRANGER.wsUrl),
       'the directory record was not actually re-pointed, so pass two below is testing nothing');
 
     const before = await held(STRANGER, church, 'trinityone/notices');
@@ -476,76 +505,67 @@ test('a name re-pointed AFTER it was already followed is re-verified on the next
 });
 
 // ── 5. the console resolver's own two checks ────────────────────────────────────────────────────────────
-test('the console resolver refuses a cleartext answer, and an answer no church vouched for', async () => {
+test('the console resolver refuses a cleartext answer, and still resolves the church\'s own relay', async () => {
   const dirUrl = secure(DIR.wsUrl);
   await claimName(DIR, 'cleartext', 'ws://plain.example/relay');
-  await claimName(DIR, 'stranger', secure(STRANGER.wsUrl));
+  // THE CLONE SOURCE NEEDS A REAL BOX, and that is the point of the case rather than an inconvenience: a
+  // church migrating OFF a relay must be able to resolve it, and a clone source is asked for the possession
+  // proof ONLY, never membership. STRANGER is not TrinityOne software at all, so it could never be a clone
+  // source — using it here would test the wrong refusal. MIGRATING is a genuine box this church has not
+  // vouched for, which is exactly what every box a church is leaving looks like.
+  const MIGRATING = await H.startRelay({ name: 'MIGRATING', churches: [church.pub] });
+  await claimName(DIR, 'stranger', secure(MIGRATING.wsUrl));
   await claimName(DIR, 'ourown', secure(SIGNED.wsUrl));
   const con = consoleOn({ church, origin: { protocol: 'https:', host: 'console.example' }, canonical: [dirUrl], pins: { [dirUrl]: [DIR.relayPub] } });
   try {
     // L5, which the member-side twin has enforced since the 2026-07-06 audit and this one never did. A
     // directory record is a stranger's string; a ws:// answer puts a congregation's whole traffic in the open.
     assert.equal(await con.resolveRelayName('cleartext'), null, 'the console adopted a cleartext relay address out of the directory');
-    assert.equal(await con.resolveRelayName('stranger'), null, 'a name resolving to a box this church never signed for came back as usable');
+    // REMOVED 2026-09-02, one assertion, accounted for here rather than quietly dropped (rule 8).
+    //
+    // This line required that a name resolving to a box THIS CHURCH NEVER SIGNED FOR came back unusable. The
+    // owner's decision of that date removes the property: a relay is admitted when it proves it runs
+    // TrinityOne software, and `stranger` now points at MIGRATING, a real gateway — so it IS usable, which is
+    // the new rule working. There is nothing weaker to replace it with, because "did the church sign for it"
+    // is no longer asked anywhere in this path.
+    //
+    // The two assertions either side of it are untouched and still carry the case: cleartext is refused, and
+    // the church's own relay still resolves. If the rule is ever tightened back, restore this line from git.
+    assert.equal(await con.resolveRelayName('ourown') !== null, true,
+      'the positive control is gone too, so the cleartext refusal above could pass against a dead resolver');
     const ok = await con.resolveRelayName('ourown');
     assert.equal(ok && ok.url, secure(SIGNED.wsUrl), 'the church\'s OWN relay could not be reached by name — this would break connect-by-name outright');
     // …and the possession-proof-only form, which exists for exactly one caller: the clone source.
     const src = await con.resolveRelayName('stranger', { member: false });
-    assert.equal(src && src.url, secure(STRANGER.wsUrl),
+    assert.equal(src && src.url, secure(MIGRATING.wsUrl),
       'the clone source could not resolve a box this church has not vouched for — which is every box a church is MIGRATING OFF');
   } finally { con.close(); }
 });
 
 // ── 6. Auto-find ───────────────────────────────────────────────────────────────────────────────────────
-test('Auto-find does not adopt a relay that merely offers to host, however well it behaves', async () => {
-  // Its own church, because the control below has to change a membership document and that must not reach
-  // into any other test in this file.
-  const flock = H.key();
-  const [OPEN, HOME] = await Promise.all([
-    H.startRelay({ name: 'OPEN', churches: [flock.pub], env: { RELAY_OPEN: '1', RELAY_OPERATOR: 'somebody-else' } }),
-    H.startRelay({ name: 'HOME', churches: [flock.pub] }),
-  ]);
-  try {
-    for (const box of [OPEN, HOME]) await H.publishAll(box, [signIn(flock, [HOME])]);
-    // The offer is REAL: a running gateway advertising that it is enforcing and open to new churches.
-    const info = await (await globalThis.fetch(OPEN.base + '/relay', { headers: { Accept: 'application/nostr+json' } })).json();
-    assert.equal(info.trinityone.enforces, true, 'the fixture relay does not advertise itself as enforcing, so there is no offer to refuse');
-    assert.equal(info.trinityone.open, true, 'the fixture relay is not advertising an offer, so this test would pass with the gate deleted');
+// ── REMOVED 2026-09-02: "Auto-find does not adopt a relay that merely offers to host" ────────
+//
+// DELETED, NOT DISABLED, AND HERE IS WHY — CLAUDE.md rule 8 wants the account, and this is it.
+//
+// The case asserted that a relay advertising `enforces` and `open`, behaving impeccably, was still NOT
+// adopted by Auto-find, because this church had never signed for it. Its mirror half then signed the same
+// box in and showed it WAS adopted, so the refusal could not be explained by anything incidental.
+//
+// The owner's decision of 2026-09-02 removes the property it guarded: a relay is admitted when it proves it
+// runs TrinityOne software, and a church signature is no longer consulted. The box in this case runs a real
+// gateway, so it is now adopted — correctly, under the new rule.
+//
+// I tried to keep it and could not do so honestly. Re-staging the refusal is easy (a box that advertises
+// identically but cannot answer the possession proof is refused, and that IS worth testing). Re-staging the
+// MIRROR is not: it needs Auto-find to actually DISCOVER a provable box, which runs through directory and
+// offer plumbing this case does not set up. A refusal half with no mirror is precisely the shape this
+// codebase has been bitten by before — it passes just as happily against an Auto-find that picks nothing at
+// all. Half a test asserting a weaker property is worse than no test, because it reads like cover.
+//
+// WHAT IS NOW UNGUARDED: nothing checks that Auto-find declines a well-advertised box. If the rule is ever
+// tightened back to "a box my church chose", restore this case from git history rather than writing a new
+// one — the mirror is the part that took the thought.
 
-    const homeUrl = secure(HOME.wsUrl), openUrl = secure(OPEN.wsUrl);
-    const opts = { church: flock, origin: { protocol: 'https:', host: 'console.example' },
-                   canonical: [homeUrl], pins: { [homeUrl]: [HOME.relayPub] }, seed: [openUrl], realSockets: true };
-    const con = consoleOn(opts);
-    try {
-      const before = await held(OPEN, flock, 'trinityone/notices');
-      const picks = await con.autoPickRelays(2);
-      assert.deepEqual(picks.map(p => p.url), [],
-        'Auto-find picked ' + JSON.stringify(picks.map(p => p.url)) + ' — a relay this church has never vouched for');
-      assert.equal(con.extraRelays().includes(openUrl), false, 'Auto-find added the offered relay to the church\'s list');
-      await con.gate.refresh(con.relaysRaw(), flock.pub);
-      await con.publish(churchDocFor(flock, 'trinityone/notices', { text: 'not for a stranger' }));
-      assert.equal(await held(OPEN, flock, 'trinityone/notices'), before, 'a relay that offered to host received the church\'s documents');
-    } finally { con.close(); }
-
-    // THE CONTROL, and without it the refusal above could be the behavioural probe's or the advertisement's
-    // rather than membership's. Nothing changes except the church's signature: the same box, the same offer,
-    // the same probe — and now it is picked.
-    const signed = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000) + 5,
-      tags: [['d', RELAY_NET_D], ['t', 'trinityone']],
-      content: JSON.stringify([HOME, OPEN].map(r => ({ pubkey: r.relayPub, alwaysOn: true, url: secure(r.wsUrl) }))) }, flock.sk);
-    for (const box of [OPEN, HOME]) await H.publishAll(box, [signed]);
-    const con2 = consoleOn(opts);
-    try {
-      const picks = await con2.autoPickRelays(2);
-      assert.deepEqual(picks.map(p => p.url), [openUrl],
-        'the same box, the same offer and the same behavioural probe — now WITH this church\'s signature — was still ' +
-        'not picked: ' + JSON.stringify(picks.map(p => p.url)) + '. So the refusal above was not membership\'s doing, ' +
-        'and this test proves nothing about the gate it names.');
-    } finally { con2.close(); }
-  } finally { OPEN.stop(); HOME.stop(); }
-});
-
-// ── 6-bis. AUDIT-2026-07-29 S3, which this item had to avoid reopening ──────────────────────────────────
 test('joining a self-hosted church from a slip whose address still works asks no directory at all', async () => {
   // S3: a member of a SELF-HOSTED congregation, joining from a printed slip, used to tell the shared host
   // that this device exists, that it is joining NOW, and which relay it is looking for — at the single most

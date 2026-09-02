@@ -55,7 +55,11 @@ function liftCore(file) {
     fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
     fnBody(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
     stmt(src, 'var RELAY_NET_D = ', 'RELAY_NET_D'),
+    stmt(src, 'var SHARED_RELAY_KEYS = ', 'SHARED_RELAY_KEYS'),
+    stmt(src, 'var SHARED_RELAY_HINTS = ', 'SHARED_RELAY_HINTS'),
     stmt(src, 'var CANONICAL_RELAY_PUBS = ', 'CANONICAL_RELAY_PUBS'),
+    fnBody(src, 'function isSharedAddress', 'isSharedAddress'),
+    fnBody(src, 'function sharedRelayKeys', 'sharedRelayKeys'),
     fnBody(src, 'function _relayKey', '_relayKey'),
     stmt(src, 'var _isHex64 = ', '_isHex64'),
     fnBody(src, 'function canonicalPinsFor', 'canonicalPinsFor'),
@@ -171,7 +175,7 @@ before(async () => {
 after(() => H.stopAll());
 
 // ── 1. the church's signature is the whole difference ───────────────────────────────────────────────────
-test('a church admits the relay it signed for, and refuses the identical relay it did not', async () => {
+test('a church signs a relay in, and the console reads that document back off a real relay', async () => {
   // The console signs IN in, driving the SHIPPED enrolment code, and publishes to BOTH boxes — so OUT ends
   // up holding every byte of evidence there is and is still refused. That is the point: the refusal comes
   // from what the church signed, not from what a box happens to have seen.
@@ -195,17 +199,30 @@ test('a church admits the relay it signed for, and refuses the identical relay i
   // through its own reader before deciding. Nothing about the answer is handed to it here.
   assert.equal(await con.isNetworkRelay(church.pub, IN.wsUrl), true,
     'the console refused the relay its own church had just signed for');
-  assert.equal(await con.isNetworkRelay(church.pub, OUT.wsUrl), false,
-    'the console admitted a relay its church never signed for');
+  // REMOVED 2026-09-02, one assertion, accounted for here (rule 8). It required the console to REFUSE a
+  // relay its church had never signed for. That is the property the owner's decision of that date removes:
+  // admission is now "does it prove it runs TrinityOne software", and OUT is a real gateway, so it is
+  // admitted. Nothing weaker replaces it, because the church signature is no longer consulted on this path.
+  //
+  // What the case still proves, and why it is kept rather than deleted: the console's own two-argument
+  // predicate reads the document back off a real relay through its own reader and admits IN — so the
+  // enrolment write, the read, and the predicate are all still exercised end to end. The line below is the
+  // positive control that stops the assertion above passing against a predicate that admits nothing.
+  assert.equal(await con.isNetworkRelay(church.pub, OUT.wsUrl), true,
+    'a real relay that proves it runs our software was refused, so this predicate now admits nothing at all');
 
   // …and OUT, holding that document, is still not a member of this church's network.
   for (const [file, api] of cores) {
     const deps = { netEntries: netFrom(OUT, church, api), origin: 'https://app.example.church', pins: {} };
     assert.equal(await api.isNetworkRelay(church.pub, IN.wsUrl, deps), true,
       `${file}: the relay this church signed for was refused`);
-    assert.equal(await api.isNetworkRelay(church.pub, OUT.wsUrl, deps), false,
-      `${file}: a healthy relay holding the church's own membership document, whose key the church never ` +
-      'signed, was admitted anyway');
+    // INVERTED 2026-09-02, same reason as above and recorded here too because it is a second assertion, not
+    // a repeat: it required that a healthy relay HOLDING the church's own membership document, but whose key
+    // the church never signed, was still refused. That was the sharpest statement in this file that
+    // membership came from the signature rather than from what a box happened to have seen. The signature is
+    // no longer consulted, so it is admitted on its proof.
+    assert.equal(await api.isNetworkRelay(church.pub, OUT.wsUrl, deps), true,
+      `${file}: a real relay was refused even though it proves it runs our software`);
   }
 });
 
@@ -241,9 +258,13 @@ test('a console served by a box admits that box with no document at all, and sti
     assert.equal(await api.isNetworkRelay(church.pub, SELF.wsUrl, { netEntries: async () => [], origin, pins: {} }), true,
       `${file}: the relay serving this very page was refused, with no church document anywhere. That is the ` +
       'Suite bricked on first run, which is the most likely way this work breaks something real');
-    // A DIFFERENT box, at that same moment, is not admitted by somebody else's origin.
-    assert.equal(await api.isNetworkRelay(church.pub, OUT.wsUrl, { netEntries: async () => [], origin, pins: {} }), false,
-      `${file}: same-origin admitted a relay that is not the origin`);
+    // INVERTED 2026-09-02. This used to require that a DIFFERENT box was not admitted by somebody else's
+    // origin — true while admission needed a root. Under the owner's decision a box is admitted when it
+    // proves it runs TrinityOne software, and OUT is a real gateway, so it is admitted and the origin root is
+    // simply not what decided it. The assertion is kept, pointing the other way, so that if admission ever
+    // starts refusing a provable box this case says so rather than going quiet.
+    assert.equal(await api.isNetworkRelay(church.pub, OUT.wsUrl, { netEntries: async () => [], origin, pins: {} }), true,
+      `${file}: a box that proves it runs our software was refused`);
     // And the origin is not a shortcut past the proof: a host on the console's own origin that cannot prove
     // a key is refused. Staged with a real HTTP host that serves the relay's /status verbatim — a complete
     // impersonation at the level of evidence that existed before C2 — and no /relay-identity.
@@ -263,7 +284,11 @@ test('a canonical relay is admitted against the pubkey list baked beside its URL
   const other = OUT.relayPub;
   for (const [file, api] of cores) {
     const none = { netEntries: async () => [], origin: '', pins: {} };
-    assert.equal(await api.isNetworkRelay(church.pub, SELF.wsUrl, none), false, `${file}: precondition — unpinned, unsigned, not the origin`);
+    // INVERTED 2026-09-02: unpinned, unsigned and not the origin is now ADMITTED, because SELF is a real
+    // gateway and proving that is the whole rule. The precondition still earns its place — it fixes the
+    // starting state so the two assertions below isolate the PIN and nothing else.
+    assert.equal(await api.isNetworkRelay(church.pub, SELF.wsUrl, none), true,
+      `${file}: precondition — a real relay, unpinned and unsigned, should be admitted on its proof alone`);
 
     assert.equal(await api.isNetworkRelay(church.pub, SELF.wsUrl,
       { ...none, pins: { [SELF.wsUrl]: [SELF.relayPub] } }), true, `${file}: the pinned key was refused`);

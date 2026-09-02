@@ -399,6 +399,71 @@ export async function startImpostor({ name = 'impostor', handler } = {}) {
   return host;
 }
 
+// ── A BOX THAT IS NOT TRINITYONE SOFTWARE, BUT IS STILL A RELAY ─────────────────
+//
+// ADDED 2026-09-02, when admission became "does it run our software". Before that, a test could stage "a
+// box this church did not choose" with a REAL gateway and assert the corpus never reached it. Under the new
+// rule a real gateway is admitted by definition, so that staging tests nothing — and the nine tests that
+// used it would have had to be deleted, taking the executable form of "a church document does not reach a
+// box it should not" with them.
+//
+// This is the participant that keeps them alive. It behaves like a relay in every way a client can see —
+// accepts a websocket, takes EVENTs, answers OK, and serves them back over /sync so `held()` and `corpus()`
+// work against it unchanged — EXCEPT that it cannot answer `/relay-identity`, because it does not hold a
+// TrinityOne relay key. Which is precisely the thing the new rule tests for.
+//
+// It is deliberately NOT a mock of the gate: nothing here decides admission. It is a plausible stranger's
+// box, and the assertion stays what it always was — did the church's corpus arrive here or not.
+export async function startFakeRelay({ name = 'not-ours' } = {}) {
+  const { WebSocketServer } = await import('ws');
+  const port = await freePort(name);
+  const received = [];
+  const server = createHttpServer((req, res) => {
+    let u; try { u = new URL(req.url, 'http://127.0.0.1:' + port); } catch { u = new URL('http://127.0.0.1/'); }
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    // THE ONE THING IT CANNOT DO. A generic relay answers this with its own web page or a 404; either way it
+    // cannot produce a signed proof, because it holds no TrinityOne relay key.
+    if (u.pathname.startsWith('/relay-identity')) { res.writeHead(404, H); res.end('{"error":"not a trinityone relay"}'); return; }
+    if (u.pathname === '/status') { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, note: 'a relay, but not one of ours' })); return; }
+    // NIP-11, ADVERTISING ITSELF AS WELL AS ANY REAL BOX. This is the "behaving correctly for a throwaway key
+    // is not a signature" case in one object: it claims to enforce and to be open, and it still cannot answer
+    // the possession proof. A membership test that believed this document would admit it.
+    if (u.pathname === '/' || u.pathname === '/relay') {
+      res.writeHead(200, { ...H, 'Content-Type': 'application/nostr+json' });
+      res.end(JSON.stringify({ name, software: 'not-trinityone', supported_nips: [1, 42],
+        trinityone: { enforces: true, open: true, churches: 0 } }));
+      return;
+    }
+    // /sync in the shape corpus() reads: newline-delimited JSON. No auth check — this is a stranger's box and
+    // the test's question is what it HOLDS, not what it would serve to whom.
+    if (u.pathname === '/sync') {
+      const cp = u.searchParams.get('church') || '';
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Access-Control-Allow-Origin': '*' });
+      res.end(received.filter(e => !cp || e.pubkey === cp || (e.tags || []).some(t => t[0] === 'church' && t[1] === cp))
+        .map(e => JSON.stringify(e)).join('\n'));
+      return;
+    }
+    res.writeHead(404, H); res.end('{"error":"no"}');
+  });
+  const wss = new WebSocketServer({ server, path: '/relay' });
+  wss.on('connection', (w) => {
+    w.on('message', (data) => {
+      let m; try { m = JSON.parse(data); } catch { return; }
+      if (m[0] === 'EVENT' && m[1]) { received.push(m[1]); try { w.send(JSON.stringify(['OK', m[1].id, true, ''])); } catch {} }
+      else if (m[0] === 'REQ') { try { w.send(JSON.stringify(['EOSE', m[1]])); } catch {} }
+    });
+  });
+  await new Promise((ok, bad) => { server.once('error', bad); server.listen(port, '127.0.0.1', ok); });
+  const host = {
+    name, port, server, received,
+    base: `http://127.0.0.1:${port}`,
+    wsUrl: `ws://127.0.0.1:${port}/relay`,
+    stop() { try { wss.close(); } catch {} try { server.close(); } catch {} try { server.closeAllConnections(); } catch {} impostors.delete(host); },
+  };
+  impostors.add(host);
+  return host;
+}
+
 // Reply with JSON, the shape every impostor in these tests uses.
 export const sendJson = (res, body, status = 200) => {
   const s = typeof body === 'string' ? body : JSON.stringify(body);
