@@ -110,6 +110,60 @@ origin root, `publish()` has zero admitted targets and enrolment can never publi
 does (`fellowship.src.js:650`). A box that just answered the C2 proof is admissible by definition —
 that is what the proof is for. Symmetry with the read side is the rule here, not an exception to it.
 
+## REVISED APPROACH (architecture review, 2026-09-02): manual first, not automatic
+
+An architecture review at `e1e7d83` judged the design correct and the complexity forced, but found a
+better first increment than "call it on boot".
+
+**Ship enrolment as a MANUAL, CONFIRMED console action**, not an automatic boot job. A control in the
+Relays panel that runs `enrolRelayNet`, **shows what it found before publishing** ("found 2 existing
+entries; proved 1 box; publish?"), and requires a tap.
+
+What that changes about the blockers:
+
+- **B2 disappears.** No boot site, so the locked-console problem cannot arise — a human is present, so
+  the console is unlocked by construction.
+- **B0's blast radius collapses.** The wipe chain requires a *silent* from-scratch rebuild. A shown
+  diff makes "0 existing entries found" visible to a human before anything is signed. **Still fix B0**
+  — it is a lie in shared infrastructure — but the merge no longer bets a church's membership on it.
+- **B1 shrinks to its one-line guard**, still required.
+- **B3 is still required.** It is inherent to the design class, not to this codebase: any gate whose
+  admitting statement is itself a write needs an ungated escape hatch for that write, symmetric with
+  the already-ungated bootstrap read.
+
+With three pilot churches, one deliberate click each is free. It is also **more consistent with the
+product's own ethos than the automatic path**: `human-admission-only` says only a steward at an
+unlocked console admits, never the relay. Relay admission is a larger trust decision than member
+admission. Automatic-on-unlock becomes a post-pilot convenience, built once the manual path has been
+exercised on real churches.
+
+Rejected staging alternative: a temporary "admit any box that answers the C2 proof" predicate. It
+literally satisfies "only T1 software talks to T1 software" with no enrolment at all, but anyone can
+run the software, so it is near-vacuous against a deliberate adversary — and its admissions would sit
+in the 30-day verified cache into the tightened era.
+
+### B4. `enrolRelayNet` auto-signs anything a steward merely typed
+
+**Found by the architecture review; a real factoring error inside the right design.**
+`relayNetCandidates()` (steward.src.js:2223) enumerates `extraRelays()` — "the relay panel's own
+configured entries, as typed" — and `enrolRelayNet` signs **every** candidate that answers the C2
+challenge into the church's document.
+
+So the distance between *"a steward pasted a URL to see if it works"* and *"the church has
+cryptographically vouched for that box to every member's phone"* is **zero keystrokes**. Two different
+decisions — "I will talk to this box" and "my whole church trusts this box" — collapsed into one. It
+means the ceiling of the entire architecture is a single unconfirmed paste.
+
+**Fix:** auto-sign the origin box only. Typed extras require the explicit, confirmed tap — which the
+manual increment above provides for free.
+
+### The question that could remove all of this from the pilot
+
+**Will the three pilot churches self-host during the pilot month, or sit on canonical shared relays?**
+If all three are on shared relays, root 3 and enrolment leave the critical path entirely: pins plus
+origin suffice and the merge needs none of this. `DOMAIN.md`'s Suite-first decision suggests
+otherwise, but it is a one-sentence answer from the owner and it should be asked before more is built.
+
 ## The fix, once the blockers are closed
 
 1. **Call it on unlock and on boot-with-key**, guarded to own-church-only, deferred, errors swallowed.
