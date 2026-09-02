@@ -70,17 +70,64 @@ test('loopback health cannot see a box that will refuse its public address', asy
     'a box with no public address declared still signed one — the staging below is meaningless');
 });
 
-test('the update script asks the public question, not the loopback one', async () => {
-  // Read the shipped script rather than trusting it: this is the guard that would have caught the defect.
+test('the update script asks the public question AFTER the restart, not before', async () => {
+  // WHAT THIS CASE USED TO CLAIM, AND WHY THE CLAIM IS GONE. It asserted that `relay-identity` and
+  // `relay-names/mine` appeared in relay-update.sh's TEXT. Both strings were present. Both assertions
+  // passed. And the guard they were standing over could never run once: it read the public address from an
+  // adminOK-gated route while sending no credential, so the value was always empty, the "no public address"
+  // branch always ran, and every update passed. A string in a file is not a guard that runs.
+  //
+  // The behaviour is now proved by running it — scripts/relay-declared-address-probe.test.mjs lifts the
+  // shipped block, runs it in bash against real relays, and asserts on the verdict it reaches. What is left
+  // here is ORDERING, which is a claim about where the block sits rather than what it does, and which no
+  // behavioural test can express: a probe that ran before `systemctl restart` would be asking the OLD build
+  // whether the NEW one works. A positional check is the weaker instrument, and it is not a dishonest one.
   const sh = readFileSync(new URL('../scripts/relay-update.sh', import.meta.url), 'utf8');
-  assert.match(sh, /relay-identity/,
-    'relay-update.sh never asks the relay to prove its identity, so a box that refuses every member still ' +
-    'reports "healthy" and the rollback never fires. That is how this defect shipped.');
-  assert.match(sh, /relay-names\/mine/,
-    'the update does not look up the relay\'s own public address, so it can only ever check loopback');
   const idx = sh.indexOf('relay-identity');
+  assert.notEqual(idx, -1, 'the identity probe is gone from relay-update.sh entirely');
   assert.ok(idx > sh.indexOf('systemctl restart'),
     'the identity probe runs before the restart, so it proves nothing about the new build');
+});
+
+// ── ITEM 1: A BOX MUST SAY WHAT IT DECLARES, AND SAY WHEN THAT MEANS NOBODY CAN REACH IT ────────────────
+//
+// Silent success is what let the original defect hide: a relay declaring loopback and nothing else looked
+// identical, in every log and every health check, to one reachable by the whole congregation. These two cases
+// assert on the OUTPUT OF A SPAWNED RELAY — never on the text of gateway.mjs, where `false && ` would leave
+// every word of the warning in place.
+const NO_PUBLIC_ROAD = { RELAY_PUBLIC_URL: '', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale' };
+const WARNING = /NO PUBLIC ADDRESS DECLARED/;
+const said = (box, re) => H.waitFor(() => box.log.some((l) => re.test(l)),
+  { timeout: 15000, label: 'the relay to say what it declares' }).then(() => true, () => false);
+
+test('a relay with no public address says so, loudly, and names the consequence', async () => {
+  const box = await H.startRelay({ name: 'undeclared', env: { ...NO_PUBLIC_ROAD } });
+  try {
+    assert.equal(await said(box, WARNING), true,
+      'a relay that will refuse every member who is not on this machine started up saying nothing about it. ' +
+      'That silence is the whole defect: on our own shared box the operator had no way to know, from any log ' +
+      'or any health check, that the congregation had been cut off.\n' + box.log.join('\n'));
+    assert.equal(await said(box, /refuse every member/), true,
+      'the warning does not say what BREAKS. "relay-addresses.json not found" does not tell an operator ' +
+      'reading a journal at 11pm that nobody can reach their church.\n' + box.log.join('\n'));
+    assert.equal(await said(box, /RELAY_LOOPBACK_ONLY/), true,
+      'the warning does not tell a genuine LAN operator how to say they meant it, so their next update fails ' +
+      'with no way to have known\n' + box.log.join('\n'));
+  } finally { box.stop(); }
+});
+
+test('a box that says it is loopback-only on purpose is not warned', async () => {
+  // Otherwise every desktop Suite box prints a fleet-outage warning on every launch, and an operator learns
+  // to ignore the one line that matters. The opt-in is the difference between "nobody configured this" and
+  // "this is a LAN relay", which the process cannot tell apart on its own.
+  const box = await H.startRelay({ name: 'lan-on-purpose', env: { ...NO_PUBLIC_ROAD, RELAY_LOOPBACK_ONLY: '1' } });
+  try {
+    assert.equal(await said(box, /declares \d+ address/), true,
+      'precondition: the box never reported its declared set at all, so the absence below proves nothing\n' + box.log.join('\n'));
+    assert.equal(box.log.some((l) => WARNING.test(l)), false,
+      'a relay told to be loopback-only was warned anyway. A warning every correct box prints is a warning ' +
+      'nobody reads.\n' + box.log.join('\n'));
+  } finally { box.stop(); }
 });
 
 test('teardown leaves nothing behind', () => {

@@ -1435,4 +1435,74 @@ export const CASES = [
     replace: ``,
     test: 'scripts/a-console-write-with-no-relay-is-not-silent.test.mjs',
   },
+  // ── AUDIT 2026-09-02: a relay must declare where it answers, and the update must check ──
+  {
+    name: 'declared-addresses: the loopback-only warning never fires',
+    file: 'scripts/gateway.mjs',
+    // the plausible slip — an inverted condition, so the one box that needs telling is the one box that is not told
+    find: `    if (!pub.length && !_loopbackOnlyOptIn()) {`,
+    replace: `    if (pub.length && !_loopbackOnlyOptIn()) {`,
+    test: 'scripts/a-relay-declares-where-it-answers.test.mjs',
+  },
+  {
+    name: 'declared-addresses: the loopback-only opt-in is ignored',
+    file: 'scripts/gateway.mjs',
+    // every correct LAN box now prints a fleet-outage warning on every launch, which is how a warning stops being read
+    find: `  if (/^(1|true|yes|on)$/i.test(String(process.env.RELAY_LOOPBACK_ONLY || '').trim())) return true;`,
+    replace: `  if (false) return true;`,
+    test: 'scripts/a-relay-declares-where-it-answers.test.mjs',
+  },
+  {
+    name: 'declared-addresses: loopback counts as a public address',
+    file: 'scripts/gateway.mjs',
+    // the exact shape of the original defect — a box with no road to the outside world looks configured, because it declares itself
+    find: `    if (!k || _loopbackKeys.has(k) || seen.has(k)) continue;`,
+    replace: `    if (!k || seen.has(k)) continue;`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: an address that answers nothing is accepted',
+    file: 'scripts/relay-update.sh',
+    // the guard runs, dials, and then ignores what came back
+    find: `    if [ "$code" != "200" ]; then`,
+    replace: `    if [ "$code" = "999" ]; then`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: a proof naming someone else is accepted',
+    file: 'scripts/relay-update.sh',
+    // status-code-only checking — the forwarding hole passes, and members refuse the relay after release
+    find: `    if [ "$(_norm_addr "$got")" != "$(_norm_addr "$u")" ]; then`,
+    replace: `    if false; then`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: a box that declares no public address passes anyway',
+    file: 'scripts/relay-update.sh',
+    // the behaviour that shipped: "no public address known — proof checked on loopback only", and every update passed
+    find: `    log "THIS RELAY DECLARES NO PUBLIC ADDRESS, so it will refuse every member who is not on this machine"
+    log "set RELAY_PUBLIC_URL=wss://your.host/relay in the service environment, or list the addresses in $DIR/relay/relay-addresses.json"
+    log "if it really is loopback/LAN-only, set RELAY_LOOPBACK_ONLY=1 and request the update again"
+    return 1`,
+    replace: `    log "no public address known for this relay — proof checked on loopback only"
+    return 0`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: the credential is lost, so nothing can be asked',
+    file: 'scripts/relay-update.sh',
+    // TODAY'S BUG ONE LEVEL DOWN — the probe cannot read the token, and must FAIL rather than quietly checking nothing
+    find: `"http://localhost:$PORT/local-token"`,
+    replace: `"http://localhost:$PORT/local-token-moved"`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
+  {
+    name: 'relay-update: a degraded relay is called healthy',
+    file: 'scripts/relay-update.sh',
+    // reads the field and then treats every value as success — the shape the old body-discarding check had
+    find: `    *'"ok":true'*)  ok=1; break;;
+    *'"ok":false'*) log "relay is answering but reports itself DEGRADED — it is refusing writes, so it is not healthy";;`,
+    replace: `    *'"ok":'*)  ok=1; break;;`,
+    test: 'scripts/relay-declared-address-probe.test.mjs',
+  },
 ];

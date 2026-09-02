@@ -205,13 +205,26 @@ chmod 0644 "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
 log "restarting $SVC"
 systemctl restart "$SVC"
 
+# ── IS IT DOING ITS JOB, NOT MERELY ANSWERING ── (scripts/relay-declared-address-probe.test.mjs lifts this block)
+#
+# /status returns 200 unconditionally, so `curl -fsS … >/dev/null` — which is what this was — passed against a
+# relay that is up, listening and REFUSING EVERY WRITE. That is the worst state to report as healthy: nothing
+# saves, the clients are told nothing, and every dashboard stays green. The `ok` field exists precisely to
+# distinguish it (gateway.mjs, AUDIT 2026-08-02: `ok: !STORE_DEGRADED`) and nothing anywhere read it.
+# Discarding the body threw away the only part of the answer that carried information.
+HEALTH_TRIES="${HEALTH_TRIES:-15}"   # × 2s. Lower it to make a test wait seconds instead of half a minute.
 ok=0
-for _ in $(seq 1 15); do
+for _ in $(seq 1 "$HEALTH_TRIES"); do
   sleep 2
-  if curl -fsS "http://localhost:$PORT/status" >/dev/null 2>&1; then ok=1; break; fi
+  st="$(curl -fsS --max-time 5 "http://localhost:$PORT/status" 2>/dev/null)" || continue
+  case "$st" in
+    *'"ok":true'*)  ok=1; break;;
+    *'"ok":false'*) log "relay is answering but reports itself DEGRADED — it is refusing writes, so it is not healthy";;
+  esac
 done
+# ── end health check ──
 
-# CAN IT PROVE ITSELF WHERE MEMBERS ACTUALLY REACH IT?
+# ── PROVE IT WHERE MEMBERS ACTUALLY REACH IT ── (scripts/relay-declared-address-probe.test.mjs lifts this block)
 #
 # `/status` on localhost says the process is up. It does NOT say the box can answer the possession proof at
 # its PUBLIC address, and since 2026-09-02 that is what decides whether any phone will talk to it. A relay
@@ -219,27 +232,85 @@ done
 # how a fleet-wide silent outage would have shipped: every box reporting "healthy", every member cut off,
 # rollback never firing because nothing failed.
 #
-# So ask the box the question a member asks. `/relay-identity?for=` is refused (421) when the address is not
-# one this relay declares, which is exactly the failure we are looking for. A box with no public address
-# configured at all is NOT failed here — that is a legitimate loopback-only or LAN deployment — but it is
-# reported, so an operator is told rather than left to find out from a member.
-pub_url="$(curl -fsS --max-time 5 "http://localhost:$PORT/relay-names/mine" 2>/dev/null \
-  | sed -n 's/.*"relayWss":"\([^"]*\)".*/\1/p')"
-if [ "$ok" = 1 ] && [ -n "$pub_url" ]; then
-  nonce="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  probe_base="$(printf '%s' "$pub_url" | sed -e 's|^wss://|https://|' -e 's|^ws://|http://|' -e 's|/relay/*$||')"
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-    "$probe_base/relay-identity?nonce=$nonce&for=$(printf '%s' "$pub_url" | sed 's|:|%3A|g; s|/|%2F|g')" 2>/dev/null)"
-  if [ "$code" != "200" ]; then
-    log "relay is up but CANNOT PROVE ITSELF at $pub_url (HTTP ${code:-no answer})"
-    log "members reach it there, so it will refuse them. declare that address and re-run."
-    ok=0
-  else
-    log "identity proof verified at $pub_url"
+# THE FIRST VERSION OF THIS BLOCK WAS ITSELF INERT, and that is why it is written this way now. It read the
+# public address from `/relay-names/mine` — an adminOK-gated route — and sent no credential, so the fetch was
+# always a 401, `pub_url` was always empty, the "no public address" branch always ran, and EVERY update
+# passed. Two lessons are built in below:
+#   • ASK WITH A CREDENTIAL. /local-token hands the admin token to a request that genuinely originates on this
+#     machine, which this script does. An empty token is a FAILURE, never a fall-through to the pass branch —
+#     that is today's bug one level down.
+#   • ASK FOR THE WHOLE SET. `ownUrl()` returns only its first match, so our own shared box's second canonical
+#     road would never have been checked even with a working credential.
+#
+# A box with genuinely no public address is not failed — a loopback-only or LAN relay is a real deployment —
+# but it must SAY SO (RELAY_LOOPBACK_ONLY=1, or {"loopbackOnly":true} in relay-addresses.json). Silence there
+# is the state that shipped the outage, so silence fails. Cost: a LAN box needs the flag once, and finds out
+# here, where an operator is present and a rollback puts the working build straight back.
+_norm_addr() {   # host+port+path, lowercased, default ports dropped — the same boundary gateway.mjs signs on
+  printf '%s' "$1" | tr 'A-Z' 'a-z' \
+    | sed -e 's|^wss://||' -e 's|^ws://||' -e 's|^https://||' -e 's|^http://||' \
+          -e 's|:443/|/|' -e 's|:443$||' -e 's|:80/|/|' -e 's|:80$||' -e 's|/*$||'
+}
+probe_declared_addresses() {   # 0 = this relay can be reached where it says it can; 1 = it cannot
+  local tok body addrs loop_only n bad u nonce probe_base enc resp code got
+  tok="$(curl -fsS --max-time 5 "http://localhost:$PORT/local-token" 2>/dev/null | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  if [ -z "$tok" ]; then
+    log "could not read this relay's own admin token from /local-token, so there is no way to ask which addresses it declares"
+    log "treating that as a FAILURE — an unchecked relay is exactly what shipped the last outage"
+    return 1
   fi
-elif [ "$ok" = 1 ]; then
-  log "no public address known for this relay — proof checked on loopback only"
+  body="$(curl -fsS --max-time 5 -H "Authorization: Bearer $tok" "http://localhost:$PORT/relay-addresses" 2>/dev/null)"
+  if [ -z "$body" ]; then
+    log "this relay did not report the addresses it declares (/relay-addresses gave nothing) — it may be older than this check"
+    return 1
+  fi
+  loop_only="$(printf '%s\n' "$body" | awk '$1=="loopbackOnly"{print $2; exit}')"
+  addrs="$(printf '%s\n' "$body" | awk '$1=="public"{print $2}')"
+  if [ -z "$addrs" ]; then
+    if [ "$loop_only" = "1" ]; then
+      log "no public address declared, and this box says it is loopback/LAN-only on purpose — nothing to prove from outside"
+      return 0
+    fi
+    log "THIS RELAY DECLARES NO PUBLIC ADDRESS, so it will refuse every member who is not on this machine"
+    log "set RELAY_PUBLIC_URL=wss://your.host/relay in the service environment, or list the addresses in $DIR/relay/relay-addresses.json"
+    log "if it really is loopback/LAN-only, set RELAY_LOOPBACK_ONLY=1 and request the update again"
+    return 1
+  fi
+  n=0; bad=0
+  while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    n=$((n+1))
+    nonce="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    probe_base="$(printf '%s' "$u" | sed -e 's|^wss://|https://|' -e 's|^ws://|http://|' -e 's|/relay/*$||')"
+    enc="$(printf '%s' "$u" | sed 's|:|%3A|g; s|/|%2F|g')"
+    resp="$(curl -s --max-time 10 -w '\n%{http_code}' "$probe_base/relay-identity?nonce=$nonce&for=$enc" 2>/dev/null)"
+    code="$(printf '%s' "$resp" | tail -n1)"
+    if [ "$code" != "200" ]; then
+      log "CANNOT PROVE ITSELF at $u (HTTP ${code:-no answer}) — members reach it there, so it will refuse them"
+      bad=$((bad+1)); continue
+    fi
+    # A 200 IS NOT ENOUGH. A proof naming a DIFFERENT address is the forwarding hole, not a pass: something in
+    # front of this box answered for it, and the phone that dialled $u will compare and refuse.
+    got="$(printf '%s' "$resp" | sed -n 's/.*\["relay","\([^"]*\)"\].*/\1/p' | head -n1)"
+    if [ "$(_norm_addr "$got")" != "$(_norm_addr "$u")" ]; then
+      log "answered at $u but signed a proof naming ${got:-nothing at all} — something in front of this relay is answering for it"
+      bad=$((bad+1)); continue
+    fi
+    log "identity proof verified at $u"
+  done <<EOF
+$addrs
+EOF
+  if [ "$bad" -gt 0 ]; then
+    log "$bad of $n declared public address(es) could not prove this relay — refusing to call this update healthy"
+    return 1
+  fi
+  log "all $n declared public address(es) proved this relay"
+  return 0
+}
+if [ "$ok" = 1 ]; then
+  probe_declared_addresses || ok=0
 fi
+# ── end declared-address probe ──
 
 if [ "$ok" = 1 ]; then
   log "update complete — relay healthy on :$PORT"
