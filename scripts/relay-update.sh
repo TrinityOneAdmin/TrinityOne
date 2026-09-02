@@ -283,7 +283,12 @@ probe_declared_addresses() {   # 0 = this relay can be reached where it says it 
     nonce="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     probe_base="$(printf '%s' "$u" | sed -e 's|^wss://|https://|' -e 's|^ws://|http://|' -e 's|/relay/*$||')"
     enc="$(printf '%s' "$u" | sed 's|:|%3A|g; s|/|%2F|g')"
-    resp="$(curl -s --max-time 10 -w '\n%{http_code}' "$probe_base/relay-identity?nonce=$nonce&for=$enc" 2>/dev/null)"
+    # -g IS LOAD-BEARING, not tidiness. `enc` percent-encodes : and / but leaves [ and ], so a declared
+    # bracketed IPv6 literal (ws://[::1]:8000/relay) puts brackets in the QUERY — and curl reads those as a
+    # glob range, exits 3 before sending anything, and this probe reports "cannot prove itself". A healthy
+    # relay would be rolled back for declaring an address the route was deliberately made text-not-JSON to
+    # carry. Measured 2026-09-02: without -g exit 3 and no request; with -g, HTTP 200.
+    resp="$(curl -gs --max-time 10 -w '\n%{http_code}' "$probe_base/relay-identity?nonce=$nonce&for=$enc" 2>/dev/null)"
     code="$(printf '%s' "$resp" | tail -n1)"
     if [ "$code" != "200" ]; then
       log "CANNOT PROVE ITSELF at $u (HTTP ${code:-no answer}) — members reach it there, so it will refuse them"

@@ -275,3 +275,53 @@ test('a 200 is not enough — a proof naming a different address is refused', as
       'operator has that they should look at their proxy\n' + r.out);
   } finally { box.stop(); behind.stop(); proxy.stop(); }
 });
+
+// ── A DECLARED IPv6 LITERAL MUST NOT FALSE-FAIL A HEALTHY RELAY ─────────────────────────
+//
+// FOUND BY AUDIT, 2026-09-02, and it is the failure this probe is least able to survive: a FALSE failure.
+// `relay-update.sh` runs as root and turns any non-200 into a rollback, so a healthy box wrongly reported
+// as unprovable does not merely log — it gets its update reverted.
+//
+// The mechanism, measured rather than reasoned: `enc` percent-encodes `:` and `/` but leaves `[` and `]`,
+// so a declared `ws://[::1]:PORT/relay` puts brackets in the QUERY STRING. curl reads those as a glob range
+// and exits 3 WITHOUT SENDING ANYTHING — which this probe cannot distinguish from a dead relay, so it
+// reports "cannot prove itself". Measured on this box: without `-g`, exit 3 and no request; with `-g`,
+// HTTP 200 from the same URL.
+//
+// The bitter part is that `/relay-addresses` was made line-oriented text INSTEAD OF JSON precisely because
+// `ws://[::1]:8000/relay` breaks a sed slice of a JSON array. The format was built to carry this address and
+// the dialler could not dial it.
+test('a declared bracketed IPv6 address is DIALLED, not swallowed by the shell', async () => {
+  // Assert the thing that actually broke: whether the probe's curl can CONSTRUCT and SEND the request. Do
+  // not stage this end-to-end against an IPv6 listener — `BIND_HOST` defaults to 0.0.0.0, which is v4-only,
+  // so an unreachable [::1] would fail for a completely different reason and this case would pass or fail
+  // for the wrong one.
+  //
+  // Run the probe's own encoding and its own curl invocation against a box that DOES answer, with the
+  // brackets present in the query. Without `-g`, curl exits 3 on the glob and sends nothing — which the
+  // probe cannot distinguish from a dead relay, so a healthy box gets rolled back.
+  const box = await H.startRelay({ name: 'v6-query' });
+  try {
+    const enc = 'ws%3A%2F%2F[%3A%3A1]%3A8000%2Frelay';
+    const url = `${box.base}/relay-identity?nonce=${'ab'.repeat(16)}&for=${enc}`;
+    const run = (args) => new Promise((res) => {
+      const p = spawn('curl', [...args, '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '5', url]);
+      let out = ''; p.stdout.on('data', (d) => { out += d; });
+      p.on('close', (code) => res({ exit: code, body: out }));
+    });
+    const bare = await run([]);
+    const globbed = await run(['-g']);
+    assert.equal(bare.exit, 3,
+      'curl no longer glob-fails on brackets in a query, so this case is no longer staging the defect — ' +
+      're-anchor it or delete it, but do not leave it asserting nothing.');
+    assert.equal(globbed.exit, 0,
+      'the probe\'s curl could not send a request whose query carries a bracketed IPv6 address. That is a ' +
+      'healthy relay reported as unprovable, and relay-update.sh turns that into a rollback.');
+    const sh = readFileSync(new URL('../scripts/relay-update.sh', import.meta.url), 'utf8');
+    const block = probeBlock();
+    assert.ok(/curl\s+-[a-zA-Z]*g/.test(block),
+      'the probe block dials without -g, so a declared bracketed IPv6 address exits 3 before any request ' +
+      'is made. /relay-addresses was made line-oriented text precisely to carry that address shape.');
+    void sh;
+  } finally { box.stop(); }
+});
