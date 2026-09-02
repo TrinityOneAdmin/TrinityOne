@@ -110,7 +110,17 @@ origin root, `publish()` has zero admitted targets and enrolment can never publi
 does (`fellowship.src.js:650`). A box that just answered the C2 proof is admissible by definition —
 that is what the proof is for. Symmetry with the read side is the rule here, not an exception to it.
 
-## REVISED APPROACH (architecture review, 2026-09-02): manual first, not automatic
+## ~~REVISED APPROACH: manual first~~ — SUPERSEDED 2026-09-02 by the owner
+
+**The manual-confirm increment below is REJECTED.** Owner: *"I don't really want a panel to say
+anything, it should be all under the hood... not allow, and not look for."* Enrolment is automatic and
+silent. Kept for its reasoning about which blockers the manual path was carrying — and that is the
+point: **B2 and most of B0's blast radius were being carried by the human, so with no human they must
+be genuinely fixed.** A confirmation dialog is not available as a safety net for a mechanism that runs
+without one. Also superseded: its "auto-sign the origin box only" fix for B4 — a partner church's box
+is never your origin, so origin-only scoping breaks mutual hosting. Scope by network membership.
+
+### Original text, for its blocker analysis
 
 An architecture review at `e1e7d83` judged the design correct and the complexity forced, but found a
 better first increment than "call it on boot".
@@ -205,6 +215,35 @@ audit and to be re-measured.
 
 Root 3 matches **pubkey, never URL**. `fellowship.src.js:650` stays unfiltered. Additive-never-
 subtractive in `enrolRelayNet`. Nothing writes to `trinityone/relays`.
+
+## COLD START — the hardest precondition, and it fails today
+
+A brand-new church must have working relays the moment it is created, and **some churches have no
+computer at all — only a phone**. For such a church at cold start, root 1 is the ONLY route: root 2
+needs a box of its own, and root 3's document does not exist yet.
+
+`proveRelay()` requires the C2 proof **before** reaching any root — a failed proof returns at the
+`!_isHex64(provenPub)` check, so root 1 is never consulted. And **both canonical relays return HTTP
+404 on `/relay-identity` today**; the local relay on current `gateway.mjs` returns 200, so this is a
+deployment gap, not a code gap.
+
+**So if the gate shipped before the relays were updated, a church started on a phone would have ZERO
+relays** — unable to publish its own profile, create a group, or invite anyone. Not degraded:
+uncreatable. This is the most severe form of the ordering rule and it lands on the churches with the
+least hardware.
+
+Verify it, do not trust it:
+
+```sh
+N=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+curl -s -o /dev/null -w "%{http_code}\n" "https://app.trinityone.church/relay-identity?nonce=$N"   # must be 200
+```
+
+**Structural note:** a hardware-less church depends entirely on relays we run — one box behind
+Cloudflare, against a threat model whose premise is that this box gets blocked or compelled. Mutual
+hosting is their answer, which makes root 3 essential rather than merely primary. The bind: **the
+church that most needs mutual hosting is the one least able to configure it**, and no console ceremony
+is permitted. Open, with the architecture review.
 
 ## Verification before merge
 
