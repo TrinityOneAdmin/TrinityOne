@@ -6439,7 +6439,6 @@
   var verifyEvent2 = i2.verifyEvent;
 
   // src/relay-identity.src.js
-  var RELAY_PROOF_WINDOW_SEC = 300;
   function relayIdentityNonce() {
     try {
       const c = typeof globalThis !== "undefined" && globalThis.crypto || null;
@@ -6508,8 +6507,6 @@
       };
       if (tag("nonce").toLowerCase() !== nonce) return null;
       if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
-      if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
       return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
     } catch {
       return null;

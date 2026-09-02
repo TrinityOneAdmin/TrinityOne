@@ -38,7 +38,9 @@ deanon red-team. **Never describe this binding as closing that case.**
 ## Step one: proof
 
 `verifyRelayIdentity(url)` in `src/relay-identity.src.js` sends a 128-bit CSPRNG nonce; the relay
-signs it (`GET /relay-identity?nonce=<32 hex>`, `gateway.mjs:3097`, 400 on a bad nonce). ±300s window.
+signs it (`GET /relay-identity?nonce=<32 hex>`, `gateway.mjs:3097`, 400 on a bad nonce). **No clock window:**
+the nonce is the freshness, and requiring a fresh clock too denied every relay to any phone more than five
+minutes out (audit 2026-09-02 #1).
 Only the holder of the relay's secret key can answer.
 
 ## Step two: the roots — diagnostics, and one refusal

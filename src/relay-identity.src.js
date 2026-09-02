@@ -36,9 +36,10 @@
 // the relay's own address and pass.
 import { verifyEvent } from 'nostr-tools/pure';
 
-// The house freshness window, ±5 minutes — the same number gateway.mjs applies to every other kind-27235
-// proof it checks (_exportAuth, _syncAuth, the relay-name claims). Not a new constant: a second, different
-// window would mean a proof one side calls fresh and the other calls stale.
+// NOT CONSULTED BY verifyRelayIdentity — see the note at the end of it. The nonce is this exchange's
+// freshness, and requiring a clock as well denied every relay to anyone whose phone was five minutes out.
+// Still exported because four tests lift it by name to build fixtures, and because gateway.mjs applies the
+// same house number to the kind-27235 proofs that have no nonce and therefore do need a clock.
 export const RELAY_PROOF_WINDOW_SEC = 300;
 
 // 32 hex characters = 128 bits from the platform CSPRNG. Returns '' if there is no CSPRNG at all, which
@@ -151,8 +152,21 @@ export async function verifyRelayIdentity(wssUrl) {
     // that rewrites Host to the real relay's name gets a proof naming THAT relay, which is not what we
     // dialled. Compare against `wssUrl`, the argument — never anything derived from the response.
     if (relayAddrKey(tag('relay')) !== relayAddrKey(wssUrl)) return null;
-    const age = Math.abs(Math.floor(Date.now() / 1000) - (Number(ev.created_at) || 0));
-    if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
+    // NO CLOCK CHECK HERE, DELIBERATELY. THE NONCE IS THE FRESHNESS.
+    //
+    // This used to also require |now - created_at| <= 300s, and that one line sat underneath every other
+    // protection in the product. A phone whose clock is more than five minutes out — a cheap Android with
+    // no NTP, a handset flat for a fortnight, anywhere the network does not hand out time — could admit NO
+    // relay at all. Not "fewer relays": none. Every send then fails with "NOT sent, speak to a leader in
+    // person", and nothing anywhere on the screen mentions the clock, so the member cannot act on it and
+    // neither can their steward. That is the first audience this product is for (2026-09-02 audit, #1).
+    //
+    // It bought nothing. Freshness here is the 128-bit CSPRNG nonce, checked above: this exchange is a
+    // question only the holder of the relay's key can answer, asked once. A replayed old proof carries the
+    // wrong nonce and is already refused at that line; a proof with the right nonce was minted for THIS
+    // call, whatever its clock says. The relay's own kind-27235 checks (_exportAuth, _syncAuth, the
+    // relay-name claims) still apply their 900s window to the things they protect — those are one-way
+    // assertions with no nonce, so a clock is the only freshness they have. This one has better.
     return { relayPub: String(ev.pubkey).toLowerCase(), url: tag('relay') };
   } catch { return null; }
 }
