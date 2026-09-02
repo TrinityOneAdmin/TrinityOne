@@ -123,6 +123,20 @@ and which of your instincts about it are wrong.
   unchanged by relay-sharing: it is equally true of the shared relays we run, which only widens who holds the
   disk.
 
+- **A TrinityOne relay is one running our software — and that is the whole admission rule.**
+  `DECIDED 2026-09-02.` Owner, after being shown the trade: *"it shouldn't be hard to say 't1 steward app
+  only connects to t1 relays', surely?"* — and, choosing: *"runs our software"*. A relay is admitted iff it
+  answers the C2 nonce challenge with a valid signed proof. **Nothing else is consulted** — not a canonical
+  pin, not the serving origin, not a church-signed list. This is the owner's own recorded definition of
+  "non-TrinityOne" (*"people that run our specific relay software"*) implemented literally.
+  **What it gives up, knowingly:** someone deliberately running our software can be admitted and would see
+  the pubkey-level social graph — never names, never message contents. An architecture review dissented and
+  recommended the stricter "a box my church chose" rule; the owner decided after the gap was stated. Do not
+  re-open without new information.
+  **What it bought:** mutual hosting and hardware-less churches work with zero configuration, and the four
+  enrolment blockers — including one that could have wiped a church's relay membership — cease to exist
+  because nothing writes that document any more. See `reference/PLAN-T1-ONLY-2026-09-02.md`.
+
 - **Churches SHARE each other's relays. That is the point of decentralisation, and it was the original
   request.** `ESTABLISHED 2026-09-02.` Owner, correcting a session that had treated relay-sharing as an edge
   case: *"The three pilots will self host, but the entire point is that they share each others relays.
