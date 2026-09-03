@@ -2867,7 +2867,10 @@ window.Fellowship = {
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
     }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
+    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     return evt;
   },
 
@@ -5086,7 +5089,10 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || '' });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
+    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     return evt;
   },
   // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
@@ -5106,7 +5112,10 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const content = JSON.stringify({ event: eventId, v: verdict });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
+    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     return evt;
   },
   subscribeMyRsvps(onRsvps) {

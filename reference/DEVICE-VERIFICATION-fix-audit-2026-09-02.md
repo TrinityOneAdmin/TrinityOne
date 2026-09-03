@@ -170,3 +170,29 @@ a console that has not yet loaded the admitted and blocked lists must not show a
 everyone would look pending. The probe has to stub it true or the rows under test never appear. In the Node
 test the helper is absent entirely, so the `!window.stewardStreamLoaded` arm makes it true — the two
 environments reach the same place by opposite routes, which is worth remembering before trusting either.
+
+## Batch 7 — serving replies, RSVPs and leaving report what happened (#6) — VERIFIED ON DEVICE
+
+MEMBER APK this time, not the steward one. Which build the phone loaded, read from its own WebView:
+
+    447945 bytes · appliesAClockWindow false · servingReturnsNullOnFailure true
+
+The three shipped methods lifted out of the bundle THE PHONE LOADED and run on the handset, against a
+`_publishAny` that rejects the way the real one does when no relay accepted:
+
+| method | no relay accepted | a relay accepted |
+|---|---|---|
+| `respondToServingRequest` | **null** | the event |
+| `setEventRsvp` | **null** | the event |
+| `leaveMembership` | **null** | the event |
+
+**Why lifted rather than called live, and this is a real limit.** Calling `F.respondToServingRequest(...)`
+on the phone returns `undefined` before touching any network: `if (!cp || !sk) return;` — this install has
+no identity. Creating one would mean a keypair and a profile publish, and a handset has no
+`--host-resolver-rules`, so that write could reach the live relays. The owner's instruction is that a8 is
+left alone. So the shipped BYTES are executed on the device with their collaborators stubbed; the
+end-to-end "member taps Yes with no signal" path is NOT covered here.
+
+**Still owed on this batch (the plan marks it DEVICE for exactly this):** the wedged-socket case, where
+`_publishAny` times out at 11 s rather than rejecting, only reproduces on a phone whose radio drops
+mid-publish. That needs a church on the phone and airplane mode at the right moment.

@@ -8991,7 +8991,8 @@
       }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },
@@ -11723,7 +11724,8 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]], content }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },
@@ -11767,7 +11769,8 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },

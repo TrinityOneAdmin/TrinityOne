@@ -741,9 +741,19 @@ function App() {
     return () => { try { _stopProfile && _stopProfile(); } catch (e) {} try { _stopRelays && _stopRelays(); } catch (e) {} };
   };
   // leave a church: tombstone the membership (steward sees them drop) + stop following locally
-  const leaveChurch = (npub) => {
+  // THE ONE THAT MUST NEVER BE OPTIMISTIC. Leaving used to drop the church from this device whether or not
+  // the relay was ever told — so the member believed they had left, while the church's own records, its
+  // rota and its directory still had them, and nothing on either side would ever correct it. Audit #6.
+  const leaveChurch = async (npub) => {
     const F = window.Fellowship;
-    if (F && F.leaveMembership) { try { F.leaveMembership(npub); } catch (e) {} }
+    if (F && F.leaveMembership) {
+      let told = null;
+      try { told = await F.leaveMembership(npub); } catch (e) { told = null; }
+      if (!told) {
+        toast('Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.');
+        return false;
+      }
+    }
     const remaining = churches.filter(c => c.id !== npub);
     setChurches(remaining);
     if (activeChurch === npub) {
@@ -751,6 +761,7 @@ function App() {
       setActiveChurch(next); lsSet('trinityone.activeChurch', next);
     }
     toast('You’ve left the church');
+    return true;
   };
   // membership heartbeat: refresh the member event on launch so quiet members (who read but never
   // post) don't look inactive, and so an uninstalled app stops refreshing and ages out. Throttled ~12h.
@@ -1858,7 +1869,7 @@ function App() {
     openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); markServingSeen(); if (desktop) setTab('chat'); },   // opening the overlay is what clears the card's "something new" mark — every route in, not only the Today card, and never on launch or a timer
     servingTab, careFocus,
     openEvent: (e) => setEventOv(e),
-    respondServing: (item, verdict, swapTo) => {
+    respondServing: async (item, verdict, swapTo) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
       // item may be a request, or a rota-derived slot that carries its matching request in .req
       const reqId = (item.req && item.req.id) || (typeof item.id === 'string' && item.id.indexOf('rota:') !== 0 ? item.id : null);
@@ -1868,7 +1879,15 @@ function App() {
       // rota with no matching request tapped "I'm away", saw the thank-you, and the relay received nothing.
       // The caller cannot know that without an answer, so give it one.
       if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
-      if (window.Fellowship && window.Fellowship.respondToServingRequest) window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
+      // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest returns null when no relay accepted.
+      // This fired and forgot, so "Yes, I can serve" was recorded on the member's own screen and nowhere
+      // else — the rota keeps showing the slot unfilled and they believe they have answered. Audit #6.
+      if (!(window.Fellowship && window.Fellowship.respondToServingRequest)) return false;
+      const sent = await window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
+      if (!sent) {
+        toast('Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.');
+        return false;
+      }
       setServReplies(m => ({ ...m, [reqId]: verdict }));
       return true;
     },
@@ -1877,11 +1896,16 @@ function App() {
     // Priyanka: "It already said You're going. I tapped Going to confirm — and it wiped my answer." She then
     // had to work out for herself that pressing it again put it back. Losing an answer is a fine thing to
     // allow and a terrible thing to do silently, so say what happened.
-    setRsvp: (eventId, verdict) => {
+    setRsvp: async (eventId, verdict) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
       const cleared = myRsvps[eventId] === verdict;
       const next = cleared ? null : verdict;
-      if (window.Fellowship && window.Fellowship.setEventRsvp) window.Fellowship.setEventRsvp(np, eventId, next || 'none');
+      if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return;
+      const sent = await window.Fellowship.setEventRsvp(np, eventId, next || 'none');
+      if (!sent) {
+        toast('Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.');
+        return;
+      }
       setMyRsvps(m => ({ ...m, [eventId]: next }));
       if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
     },
