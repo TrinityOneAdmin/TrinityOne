@@ -14,6 +14,13 @@ if (typeof document !== 'undefined' && !window.__stewEscWired) {
   window.__stewEscWired = true;
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !_stewBack.length) return;
+    // A DOCUMENT-WIDE Escape HANDLER MUST NOT STEAL Escape FROM WHAT HAS FOCUS. Audit 2026-09-02 #27.
+    // Escape closes an open <select> and cancels an IME composition; swallowing it there shut the whole
+    // modal instead, losing whatever the steward had typed. Costs one thing, said plainly: with a SELECT
+    // focused, Escape no longer closes the modal — tab off it first.
+    if (e.isComposing) return;
+    const el = typeof document !== 'undefined' && document.activeElement;
+    if (el && String(el.tagName || '').toUpperCase() === 'SELECT') return;
     e.preventDefault();
     const top = _stewBack[_stewBack.length - 1];
     try { top.close(); } catch (err) {}

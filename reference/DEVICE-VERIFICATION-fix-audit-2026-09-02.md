@@ -334,3 +334,15 @@ The church's video/audio feed rows are CONSOLE, covered by the same commit's str
     failure object role="alert"   icon present  "Couldn't send your answer — you're still shown as…"
 
 The role flips, which is what a screen reader acts on; the icon changes from a tick to a shield.
+
+## Batches 18 & 19 — accessibility; delete what nothing references — VERIFIED ON DEVICE
+
+Steward APK, the real `NewGroupModal` rendered on the phone:
+
+    announces itself as a dialog   true
+    aria-modal                     "true"
+    has an accessible name         true, and it resolves to the heading "New group"
+    password fields with no name   0
+
+Batch 19 deletes two files nothing referenced; a test asserts they are gone AND that nothing references
+them, so their removal cannot silently break a page.
