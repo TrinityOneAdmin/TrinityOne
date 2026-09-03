@@ -210,7 +210,13 @@ window.useStewardRequests = makeSub(S, 'subscribeRequests', () => []);
 window.useStewardBlocked = makeSub(S, 'subscribeBlocked', () => []);
 window.useStewardStewards = makeSub(S, 'subscribeStewards', () => []);
 window.usePendingStewards = makeSub(S, 'subscribeStewardRequests', () => []);
-window.useStewardSafeguard = makeSub(S, 'subscribeSafeguard', () => ({ minors: [], approved: [] }));
+// minorsKnown:false IN THE DEFAULT, and it is the whole point of the flag. This default is what every
+// screen sees on its FIRST PAINT, before subscribeSafeguard has called back. Without the key here, a
+// consumer asking "is it known?" gets `undefined` and has to guess — and both consumers guessed the unsafe
+// way, so a child's care request was still shown as an adult's at cold start and check-in still claimed
+// the church had marked nobody. Found by the batch 3-7 audit, 2026-09-03: the batch 4 fix did not actually
+// work until this line changed. An empty list plus "not known" is the honest starting state.
+window.useStewardSafeguard = makeSub(S, 'subscribeSafeguard', () => ({ minors: [], approved: [], minorsKnown: false }));
 window.useStewardGuardianRequests = makeSub(S, 'subscribeGuardianRequests', () => []);
 window.useStewardGuardians = makeSub(S, 'subscribeGuardians', () => ({}));
 window.useStewardJoinPolicy = makeSub(S, 'subscribeJoinPolicy', () => false);

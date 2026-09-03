@@ -150,3 +150,43 @@ test('A YOUNG PERSON IS NOT TOLD TO ASK PEOPLE WHO DO NOT EXIST', async () => {
   assert.match(some, /ask one of them/,
     'a church that HAS cleared adults must keep the instruction — this fix is about the empty case only');
 });
+
+// ── THE COLD-START CASE, which the first version of this file missed entirely ──────────────────────────────
+// Every test above passes `minorsKnown` explicitly. The hook's own PRE-SUBSCRIPTION default did not carry
+// the key at all (`{ minors: [], approved: [] }` — app/steward-root.jsx), which is what every screen sees on
+// its FIRST PAINT. Both consumers read an absent key as "known", so the bug this file is named for was still
+// live at cold start, and these tests were green over it. Found by the batch 3-7 audit, 2026-09-03.
+test('AN ABSENT minorsKnown IS NOT "KNOWN" — the first paint must fail closed', async () => {
+  const r = await careRequests({ minors: [], approved: [] });   // no minorsKnown key at all
+  assert.equal(r.setUpHelp.length, 0,
+    'with the safeguarding answer missing entirely, a care request was still offered "Set up help" — the ' +
+    'control that publishes a need to the whole congregation. An absent answer is not a "no"');
+  assert.match(r.words, /CHECKING WHO THESE ARE FROM/);
+});
+
+test('…and check-in says loading rather than claiming the church marked nobody', async () => {
+  const { React, draw } = miniReact();
+  const Comp = await loadFrom('app/stew-dashboard.jsx', 'DashCheckin', 'function DashCheckin()', {
+    React,
+    window: { useStewardCheckins: () => [], useStewardSafeguard: () => ({ minors: [] }), useStewardGuardians: () => ({}),
+              useStewardMembers: () => [], addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
+    Icon: Stub('Icon'), Panel: function Panel(p) { return p.children; }, SkPill: Stub('SkPill'),
+    DismissibleNote: Stub('DismissibleNote'), todayISO: () => '2026-09-03',
+    setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
+  });
+  const words = texts(draw(Comp, {})).join(' ');
+  assert.doesNotMatch(words, /No children marked yet/,
+    'with no safeguarding answer at all, check-in told a leader at the door that the church has marked no ' +
+    'children — a claim about the church made from a list that had not arrived');
+  assert.match(words, /Loading the children/);
+});
+
+test('the hook default itself says the lists are not known yet', () => {
+  // The source of the whole problem: this is what every screen is handed before the first callback.
+  const root = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
+  const line = (root.split('\n').find(l => l.includes("makeSub(S, 'subscribeSafeguard'")) || '');
+  assert.ok(line, 'useStewardSafeguard is no longer built with makeSub — re-anchor this test');
+  assert.match(line, /minorsKnown:\s*false/,
+    'the pre-subscription default does not carry minorsKnown:false, so every screen\'s first paint has to ' +
+    'guess what an absent key means — and both consumers guessed the unsafe way once already');
+});

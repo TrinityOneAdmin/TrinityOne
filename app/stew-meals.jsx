@@ -512,7 +512,7 @@ function StewCareRequests() {
   // What is left is the console's own honesty: shown among a dozen meal trains and lifts it reads as one more
   // errand, and the control beside it — "Set up help" — publishes a NEED, which the whole congregation reads
   // and signs up to. That is how a child's private disclosure becomes a notice board item with their name on.
-  const _sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const _sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], minorsKnown: false };
   const _minors = new Set((_sg.minors || []).map(x => String(x || '').toLowerCase()));
   // FAIL CLOSED WHILE WE DO NOT YET KNOW WHO THE CHILDREN ARE. Audit 2026-09-02 #3.
   //
@@ -526,7 +526,11 @@ function StewCareRequests() {
   // `minorsKnown` and NOT `loaded`: `loaded` requires the minors DOCUMENT, which a church that has never
   // marked a child never publishes, so gating on it would put every request in the confidential section for
   // ever in exactly those churches — the care module silently switched off. See subscribeSafeguard.
-  const _minorsKnown = _sg.minorsKnown !== false;   // absent (an older console) reads as known, not as blocked
+  // FAIL CLOSED ON ABSENT, not open. This read `!== false`, so a payload with no `minorsKnown` key counted
+  // as "known" — and the hook's own pre-subscription default was exactly such a payload, so on first paint
+  // every request was classed by an empty minors list. That is the bug this gate exists to stop, still
+  // happening. `=== true` is the only reading that is safe when the answer is missing.
+  const _minorsKnown = _sg.minorsKnown === true;
   const isChild = (r) => !_minorsKnown || _minors.has(String(r && r.from || '').toLowerCase());
   const childReqs = reqs.filter(isChild), adultReqs = reqs.filter(r => !isChild(r));
   if (!reqs.length) return null;

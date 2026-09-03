@@ -2803,6 +2803,18 @@ function DashGroups() {
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
+  // PUBLISH THE DOCUMENT, NOT THE ROW. Found by the batch 3-7 audit, 2026-09-03.
+  //
+  // `items` below decorates each group for DISPLAY: `sub` is replaced with a computed live string
+  // ("2 members · invite-only"), and `ic`/`fg` are added for the icon. Batch 3 changed the row controls to
+  // republish "the whole row" — which meant republishing that DISPLAY string over the group's real
+  // subtitle. A church whose Prayer room said "Weekly prayer for the sick and grieving" would have had it
+  // overwritten with "2 members · invite-only" by pressing Undo, or the child-safe toggle, or the category
+  // picker. The fix batch 3 needed was "publish every field", not "publish the object on screen".
+  //
+  // So every control resolves back to the RAW group document by id before publishing.
+  const rawById = new Map(all.map(g => [g.id, g]));
+  const raw = (g) => (g && rawById.get(g.id)) || g;
   const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
@@ -2831,7 +2843,7 @@ function DashGroups() {
   // `undo` is the row itself (setUndo(g) below), and publishGroup reads named fields only and ignores the
   // rest — setGroupLeaders/setGroupEventPolicy already pass a whole row the same way — so hand it the row.
   const doUndo = () => {
-    if (undo) pubOr(window.Steward.publishGroup(undo), 'Couldn’t restore “' + (undo.name || 'that group') + '” — the relay didn’t accept it. Nothing was brought back; try Undo again.');
+    if (undo) pubOr(window.Steward.publishGroup(raw(undo)), 'Couldn’t restore “' + (undo.name || 'that group') + '” — the relay didn’t accept it. Nothing was brought back; try Undo again.');
     clearTimeout(undoTimer.current); setUndo(null);
   };
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
@@ -2869,13 +2881,13 @@ function DashGroups() {
         </div>
       ) : null}
       <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
-        reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...g, order: i }); })}
+        reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
         renderRight={(it) => (
           <React.Fragment>
             {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...it, category: e.target.value || undefined }), 'Couldn’t move “' + (it.name || 'that group') + '” into that category — the relay didn’t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), 'Couldn’t move “' + (it.name || 'that group') + '” into that category — the relay didn’t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
                 <option value="">No category</option>
                 {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -2883,7 +2895,7 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => pubOr(window.Steward.publishGroup({ ...it, childsafe: !it.childsafe }), 'Couldn’t change child-safe on “' + (it.name || 'that group') + '” — the relay didn’t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
+            <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn’t change child-safe on “' + (it.name || 'that group') + '” — the relay didn’t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
             {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
             {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
@@ -4993,7 +5005,7 @@ function CheckoutModal({ rec, onConfirm, onClose }) {
 }
 function DashCheckin() {
   const recs = window.useStewardCheckins ? window.useStewardCheckins() : [];
-  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [] };
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
   const minors = sg.minors || [];
   const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -5049,7 +5061,7 @@ function DashCheckin() {
           "this church has marked nobody" and went looking in Members for records that were already there.
           Say which of the two it is. `minorsKnown`, not `loaded` — see subscribeSafeguard: `loaded` never
           becomes true in a church that has never marked a child, which is exactly this screen's empty case. */}
-      {!minors.length && sg.minorsKnown === false ? (
+      {!minors.length && sg.minorsKnown !== true ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>Loading the children’s list…</p></div>
       ) : !minors.length ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>

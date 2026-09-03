@@ -209,3 +209,18 @@ backup helpers stubbed (no file written, no network touched):
 
 Note: the JSX→JS transpile strips comments, so a marker-comment grep against the APK assets returns 0. The
 behaviour above is the proof, not the comment.
+
+## Audit response (batches 3-7 audit) — cold-start safeguarding, and the row-vs-document fix — ON DEVICE
+
+Two defects the independent audit of batches 3-7 found, both fixed and both checked on the steward APK.
+
+**The hook's first-paint default**, read from inside a real render on the phone:
+
+    { minors: [], approved: [], minorsKnown: false }   hasMinorsKnownKey true
+
+**Both screens given a payload with the key ABSENT** (the shape the old default had):
+
+    care requests:  0 "Set up help",  "CHECKING WHO THESE ARE FROM"
+    check-in:       no "No children marked yet",  "Loading the children's list…"
+
+So the batch 4 gate now holds at cold start, which is where the audit proved it did not.
