@@ -160,6 +160,9 @@ async function newGroupModal() {
     React, window: win, CustomEvent, Promise, setTimeout,
     Icon: Stub('Icon'), SkToggle: Stub('SkToggle'), SkPill: Stub('SkPill'),
     nameHandle: () => '', shortNpub: () => 'npub1…',
+    // The modal announces itself as a dialog and traps focus since the a11y batch (2026-09-03), through the
+    // same shared helper every other console modal uses.
+    useStewDialog: () => ({}),
   });
   const props = { open: true, onClose: () => {} };
   let tree = draw(Comp, props);
