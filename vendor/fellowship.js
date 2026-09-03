@@ -6545,11 +6545,37 @@
     const clean3 = [...new Set(readers.map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))];
     return { readers: clean3, narrowed: !Array.isArray(group) };
   }
+  async function _fetchStewardsWithCap(cp, cap) {
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": ["trinityone/stewards:" + cp] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (e.pubkey !== cp) continue;
+        if (!best || e.created_at > best.created_at) best = e;
+      }
+      if (!best) return [];
+      const o = JSON.parse(best.content);
+      const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+      const caps = o.caps && typeof o.caps === "object" ? o.caps : null;
+      const want = String(cap || "").toLowerCase();
+      return pks.filter((pk) => {
+        if (!caps) return true;
+        const c = caps[pk];
+        if (!Array.isArray(c)) return true;
+        return c.some((x) => String(x || "").toLowerCase() === want);
+      }).map((x) => String(x).toLowerCase());
+    } catch (e) {
+      return [];
+    }
+  }
   async function _fetchCareTeam(cp) {
     try {
       const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CARETEAM_D + cp] }]);
+      const careStewards = await _fetchStewardsWithCap(cp, "care");
+      const allowed = /* @__PURE__ */ new Set([String(cp).toLowerCase(), ...careStewards]);
       let best = null;
       for (const e of evs || []) {
+        if (!allowed.has(String(e.pubkey || "").toLowerCase())) continue;
         if (!best || e.created_at > best.created_at) best = e;
       }
       if (best) {

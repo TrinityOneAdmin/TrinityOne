@@ -327,10 +327,50 @@ function _safeReaders(cp, by, group) {
   const clean = [...new Set(readers.map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))];
   return { readers: clean, narrowed: !Array.isArray(group) };
 }
+// WHICH STEWARDS THE CHURCH HAS GIVEN A CAPABILITY TO. Read from the OWNER-SIGNED stewards document only,
+// and mirroring the relay's own compatibility rule: a roster entry with no capabilities recorded is a FULL
+// steward (`stewardCan`: `if (!caps) return true`). Diverging from that would under-trust every church whose
+// roster predates capabilities. Two callers: _fetchCareTeam (below) and _fetchChildCareAudience.
+async function _fetchStewardsWithCap(cp, cap) {
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': ['trinityone/stewards:' + cp] }]);
+    let best = null;
+    for (const e of (evs || [])) {
+      if (e.pubkey !== cp) continue;                 // OWNER-ONLY: a steward cannot enrol themselves
+      if (!best || e.created_at > best.created_at) best = e;
+    }
+    if (!best) return [];
+    const o = JSON.parse(best.content);
+    const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+    const caps = (o.caps && typeof o.caps === 'object') ? o.caps : null;
+    const want = String(cap || '').toLowerCase();
+    return pks.filter(pk => {
+      if (!caps) return true;
+      const c = caps[pk];
+      if (!Array.isArray(c)) return true;
+      return c.some(x => String(x || '').toLowerCase() === want);
+    }).map(x => String(x).toLowerCase());
+  } catch (e) { return []; }
+}
 async function _fetchCareTeam(cp) {
   try {
     const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CARETEAM_D + cp] }]);
-    let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
+    // TRUST THE DOCUMENT ONLY FROM AN AUTHOR THE RELAY WOULD ACCEPT. Audit 2026-09-02 #19 (backlog HIGH S1).
+    //
+    // This took the NEWEST careteam: document from ANY author. The relay refuses a stranger's write, so on a
+    // healthy relay that is academic — but this is a client-side read over whatever a relay hands back, and
+    // the whole point of the closed-network work is that a relay may not be one of ours. A newer document
+    // from a stranger key decided who a care request seals to, which is who can read a member's private
+    // request for help.
+    //
+    // The rule mirrors the relay's: the church key itself, or a steward the church has given `care` to.
+    const careStewards = await _fetchStewardsWithCap(cp, 'care');
+    const allowed = new Set([String(cp).toLowerCase(), ...careStewards]);
+    let best = null;
+    for (const e of (evs || [])) {
+      if (!allowed.has(String(e.pubkey || '').toLowerCase())) continue;
+      if (!best || e.created_at > best.created_at) best = e;
+    }
     if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean); }
     } catch (e) { return null; }   // could not READ the roster — not the same as a church with nobody on it
     // NO DOCUMENT FOUND. That is a real answer only if we were genuinely connected when we asked. querySync

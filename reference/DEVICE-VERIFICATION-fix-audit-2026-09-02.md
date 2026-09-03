@@ -273,3 +273,13 @@ decisions in BOTH arrival orders:
     newer hide,    delivered reversed    -> ["m1"]  (message stays removed)
 
 The outcome no longer depends on which relay answered last, which is what makes an Undo button honest.
+
+## Batch 12 — the care team comes from the church (#19, backlog HIGH S1) — VERIFIED ON DEVICE
+
+Member APK. The shipped `_fetchCareTeam` lifted from the phone's own bundle, its steward-capability helper
+injected, and fed competing `careteam:` documents:
+
+    a stranger's NEWER list        -> ["real"]                 (the church's own is used)
+    the care steward's newer list  -> ["from-care-steward"]    (the delegation works)
+    the FINANCE steward's newer    -> ["from-church"]          (refused — capability keys hold)
+    a roster with no caps recorded -> ["from-steward"]         (compat rule preserved)
