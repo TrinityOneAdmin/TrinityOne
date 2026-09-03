@@ -261,3 +261,15 @@ against a relay that CLAIMS a key on `/status` but cannot produce the proof. Not
 
 `online: true` on the liar is deliberate: "reachable but cannot prove itself" must stay visible, or an old
 relay looks dead rather than old.
+
+## Batch 11 — removing a message can be undone (#16) — VERIFIED ON DEVICE
+
+Steward APK. The shipped `subscribeHidden` lifted from the phone's own bundle and fed two stewards'
+decisions in BOTH arrival orders:
+
+    newer un-hide, delivered in order    -> []      (message is back)
+    newer un-hide, delivered reversed    -> []      (message is back)
+    newer hide,    delivered in order    -> ["m1"]  (message stays removed)
+    newer hide,    delivered reversed    -> ["m1"]  (message stays removed)
+
+The outcome no longer depends on which relay answered last, which is what makes an Undo button honest.

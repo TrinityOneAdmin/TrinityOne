@@ -20063,13 +20063,16 @@ zoo`.split("\n");
     // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
     subscribeHidden(cb) {
       const hidden = /* @__PURE__ */ new Map();
-      const emit = () => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id)));
+      const emit = () => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#p": [pub] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
           const msgId = d.slice(HIDE_D.length);
-          hidden.set(msgId, !(e.tags.some((t) => t[0] === "deleted") || !e.content));
+          const at = Number(e.created_at) || 0;
+          const prev = hidden.get(msgId);
+          if (prev && prev.at > at) return;
+          hidden.set(msgId, { at, hidden: !(e.tags.some((t) => t[0] === "deleted") || !e.content) });
           emit();
         },
         oneose() {

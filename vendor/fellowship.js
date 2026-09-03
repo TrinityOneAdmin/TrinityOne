@@ -10016,14 +10016,16 @@
       }
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
-      const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
+      const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
           const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
           if (!_groupEventTrusted(cp, gid, e.pubkey)) return;
-          hidden.set(d.slice(HIDE_D.length), !(e.tags.some((t) => t[0] === "deleted") || !e.content));
+          const _mid = d.slice(HIDE_D.length), _at = Number(e.created_at) || 0, _prev = hidden.get(_mid);
+          if (_prev && _prev.at > _at) return;
+          hidden.set(_mid, { at: _at, hidden: !(e.tags.some((t) => t[0] === "deleted") || !e.content) });
           emit();
         },
         oneose() {

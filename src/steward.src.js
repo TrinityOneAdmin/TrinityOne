@@ -5959,14 +5959,24 @@ window.Steward = {
   },
   // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
   subscribeHidden(cb) {
-    const hidden = new Map();   // msgId -> hidden? (latest wins)
-    const emit = () => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id)));
+    // NEWEST DECISION WINS, BY ITS OWN TIMESTAMP — not by which relay answered last. Audit 2026-09-02 #16.
+    //
+    // A hide is `d = hide:<msgId>`, so the SAME steward hiding and then un-hiding replaces one addressable
+    // document and there is nothing to resolve. Two DIFFERENT stewards are two documents under two authors,
+    // both delivered, and this used to take whichever arrived last — so "steward B un-hides what steward A
+    // hid" came out differently depending on which relay answered first, and could flip back on the next
+    // reconnect. Undo has to mean something before it is worth putting on screen.
+    const hidden = new Map();   // msgId -> { at, hidden }
+    const emit = () => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(HIDE_D)) return;
         const msgId = d.slice(HIDE_D.length);
-        hidden.set(msgId, !(e.tags.some(t => t[0] === 'deleted') || !e.content));
+        const at = Number(e.created_at) || 0;
+        const prev = hidden.get(msgId);
+        if (prev && prev.at > at) return;   // an older decision cannot undo a newer one
+        hidden.set(msgId, { at, hidden: !(e.tags.some(t => t[0] === 'deleted') || !e.content) });
         emit();
       },
       oneose() { emit(); },

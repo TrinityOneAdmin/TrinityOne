@@ -3763,8 +3763,11 @@ window.Fellowship = {
   subscribeHidden(groupId, cb) {
     const cp = window.Fellowship.churchPub;
     if (!cp || !groupId) { cb(new Set()); return () => {}; }
-    const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> hidden? (latest wins)
-    const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
+    // NEWEST DECISION WINS, BY ITS OWN TIMESTAMP — see the same note on the console's subscribeHidden.
+    // Two stewards moderating the same message are two addressable documents under two authors, and taking
+    // whichever ARRIVED last made "un-hide" depend on which relay answered first.
+    const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> { at, hidden }
+    const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#t': [groupId] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -3774,7 +3777,9 @@ window.Fellowship = {
         // hideMessage() tags the group id (['t',gid]); if absent (legacy) _groupEventTrusted falls back to church/steward.
         const gid = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
         if (!_groupEventTrusted(cp, gid, e.pubkey)) return;
-        hidden.set(d.slice(HIDE_D.length), !(e.tags.some(t => t[0] === 'deleted') || !e.content));
+        const _mid = d.slice(HIDE_D.length), _at = Number(e.created_at) || 0, _prev = hidden.get(_mid);
+        if (_prev && _prev.at > _at) return;   // an older decision cannot undo a newer one
+        hidden.set(_mid, { at: _at, hidden: !(e.tags.some(t => t[0] === 'deleted') || !e.content) });
         emit();
       },
       oneose() { emit(); },

@@ -2549,6 +2549,17 @@ function GroupChatModal({ group, onClose }) {
   const [rxFor, setRxFor] = React.useState('');
   const [pin, setPin] = React.useState(null);     // the group's pinned message { msgId, text, by, ts } or null
   const [menuFor, setMenuFor] = React.useState('');   // message id whose moderation menu is open
+  // MODERATION IS REVERSIBLE AND NEVER SAID SO. Audit 2026-09-02 #16.
+  // `unhideMessage` has been built on both surfaces since the feature landed and was called by nothing, so
+  // "Remove message" read as permanent to every steward who used it. It also fired and forgot, so a removal
+  // the relay refused looked identical to one it took.
+  const [modMsg, setModMsg] = React.useState(null);   // { text, undo? }
+  const modTimer = React.useRef(null);
+  const showMod = (text, undo) => {
+    setModMsg({ text, undo });
+    clearTimeout(modTimer.current);
+    modTimer.current = setTimeout(() => setModMsg(null), 9000);
+  };
   const scRef = React.useRef(null);
   const GROUP_EMOJI = ['❤️', '🙏', '👍', '😂', '🔥', '🎉'];
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
@@ -2556,9 +2567,27 @@ function GroupChatModal({ group, onClose }) {
   React.useEffect(() => { if (scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs]);
   const send = () => { if (!text.trim()) return; window.Steward.publishPost(text.trim(), group.id); setText(''); };
   const react = (m, emoji) => { window.Steward.reactGroup(group.id, m.id, m.by, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
-  const doPin = (m) => { window.Steward.pinPost(group.id, m); setMenuFor(''); };
-  const doUnpin = () => { window.Steward.unpin(group.id); };
-  const doRemove = (m) => { window.Steward.hideMessage(group.id, m.id); setMenuFor(''); };
+  const doPin = (m) => {
+    setMenuFor('');
+    Promise.resolve(window.Steward.pinPost(group.id, m))
+      .then((r) => { if (!r) showMod('Couldn’t pin that — the relay didn’t accept it.'); })
+      .catch(() => showMod('Couldn’t pin that — the relay could not be reached.'));
+  };
+  const doUnpin = () => {
+    Promise.resolve(window.Steward.unpin(group.id))
+      .then((r) => { if (!r) showMod('Couldn’t unpin that — the relay didn’t accept it.'); })
+      .catch(() => showMod('Couldn’t unpin that — the relay could not be reached.'));
+  };
+  const doRemove = (m) => {
+    setMenuFor('');
+    Promise.resolve(window.Steward.hideMessage(group.id, m.id)).then((r) => {
+      if (!r) return showMod('Couldn’t remove that message — the relay didn’t accept it, so it is still visible.');
+      showMod('Message removed', () => {
+        Promise.resolve(window.Steward.unhideMessage(group.id, m.id))
+          .then((u) => showMod(u ? 'Message put back' : 'Couldn’t put it back — the relay didn’t accept it.'));
+      });
+    }).catch(() => showMod('Couldn’t remove that message — the relay could not be reached.'));
+  };
   const msgText = (m) => {   // render polls gracefully (members vote in the member app); avoids showing raw JSON
     if (m.kind === 'poll') { try { const p = JSON.parse(m.text); return '📊 ' + (p.question || 'Poll') + ' — ' + (p.options || []).join(' · '); } catch { return '📊 Poll'; } }
     return (m.kind === 'prayer' ? '🙏 ' : '') + m.text;
@@ -2586,6 +2615,15 @@ function GroupChatModal({ group, onClose }) {
           <button onClick={() => setComposeEvt(v => !v)} title="Schedule an event for this group" style={{ border: 'none', background: composeEvt ? 'var(--clay-soft)' : 'var(--clay)', color: composeEvt ? 'var(--clay-ink)' : '#fff', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}><Icon name="calPlus" size={15} color="currentColor" /> Event</button>
           <button onClick={onClose} title="Close chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
         </div>
+        {modMsg ? (
+          <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
+            background: modMsg.undo ? 'color-mix(in oklab, var(--sage) 11%, var(--surface))' : 'color-mix(in oklab, var(--clay) 10%, var(--surface))',
+            borderBottom: '1px solid var(--line)' }}>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>{modMsg.text}</div>
+            {modMsg.undo ? <button onClick={() => { const u = modMsg.undo; setModMsg(null); u(); }} aria-label="Undo removing that message" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}>Undo</button> : null}
+            <button onClick={() => setModMsg(null)} aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12.5, flexShrink: 0 }}>Dismiss</button>
+          </div>
+        ) : null}
         {pin && pin.msgId ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
             <Icon name="pin" size={14} color="#8a6717" style={{ marginTop: 2, flexShrink: 0 }} />
