@@ -224,3 +224,27 @@ Two defects the independent audit of batches 3-7 found, both fixed and both chec
     check-in:       no "No children marked yet",  "Loading the children's list…"
 
 So the batch 4 gate now holds at cold start, which is where the audit proved it did not.
+
+## Batch 9 — relay adoption waits for its proof; a member can drop an address (#10, #21, #9) — ON DEVICE
+
+Member APK.
+
+**`proveRelays` on the shipped Fellowship, called live against an address that cannot answer:**
+
+    exists true · result [] · took 208 ms
+
+It resolves with nothing proved rather than rejecting or hanging — which is the whole requirement, because
+a recovery screen must not die on a dead relay. (208 ms is the local failure path, not the 2G case.)
+
+**The Remove control, rendered on the phone with three relays — one proved, one unproved, one canonical:**
+
+    offered on the unproved row   yes
+    offered on the proved relay   NO
+    offered on the canonical      NO
+    removed after one tap         0
+    confirm appeared              yes
+    removed after confirming      1
+
+**NOT covered here, and the plan marks this batch DEVICE for it:** the 2G timing this fixes. The failure
+mode is a recovery on a slow link where all three search passes land inside the proof window; a local relay
+failing in 208 ms cannot produce it. That needs a throttled radio and a real church.

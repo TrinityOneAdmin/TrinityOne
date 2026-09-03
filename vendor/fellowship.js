@@ -8861,6 +8861,22 @@
         return false;
       }
     },
+    // PROVE THESE ADDRESSES NOW, AND WAIT FOR THE ANSWER. Audit 2026-09-02 #10.
+    //
+    // `relayVerified` above only reports what the gate ALREADY knows; it starts nothing. So a caller that had
+    // just added a relay and immediately read over the gated set saw nothing from it — the proof had not been
+    // asked for yet. That is the "my church runs its own relay" recovery: it adds the address, reads, finds
+    // no church, and tells the member "No church found" while the relay it was handed is sitting there
+    // unproved. On a slow link all three of its passes can land inside that window.
+    //
+    // Returns the subset that proved. Never throws: a recovery screen must not die because a relay was down.
+    proveRelays(urls) {
+      try {
+        return Promise.resolve(_gate.refresh(urls || [], window.Fellowship.churchPub)).catch(() => []);
+      } catch (e) {
+        return Promise.resolve([]);
+      }
+    },
     // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
     // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
     // serving/rota caches and the care module's cached needs, slots, skips and settings. Called on lock and at
@@ -8963,7 +8979,7 @@
       }, sk);
       const dup = _outbox.some((o) => o && o.evt && o.evt.id === evt.id);
       if (!dup) {
-        _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+        _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
         _outboxSave();
       }
       let ok = false;
@@ -9176,7 +9192,7 @@
         if (!url) return false;
         let ok = false;
         try {
-          ok = await isNetworkRelay2(cp, url);
+          ok = (await _gate.refresh([url], cp)).includes(url);
         } catch (e) {
           ok = false;
         }

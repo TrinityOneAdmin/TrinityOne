@@ -177,6 +177,17 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     try { hit = await window.Fellowship.resolveRelayName(n); } catch (e) { hit = null; }
     if (!hit) { setRBusy(''); setRErr('No church relay by that name. Check the spelling with your church — or use their invite link.'); return; }
     try { window.Fellowship.addRelay(hit.url); } catch (e) {}
+    // WAIT FOR THE PROOF WE JUST ASKED FOR. Audit 2026-09-02 #10.
+    //
+    // addRelay only puts the address in the list. Nothing is published to it, and nothing is READ from it,
+    // until the gate has proved it is one of this church's relays — and adding it does not start that proof.
+    // So the search below ran over the GATED set, which did not yet contain this relay, found nothing, and
+    // told the member "No church found" while the address their church gave them sat there unproved. On a
+    // slow link every one of the three passes can land inside that window.
+    //
+    // proveRelays never throws and never hangs the screen on a dead relay — it resolves with whatever
+    // proved, which may be nothing, and then the search runs against a gate that has actually been asked.
+    try { await window.Fellowship.proveRelays([hit.url]); } catch (e) {}
     setRBusy('Found it — looking for your church…');
     // Do NOT clear rNoChurch here. This runs FROM the no-church screen, so clearing it mid-search dropped the
     // member back to whichever screen they arrived from (the 12-word textarea) for the length of the lookup and

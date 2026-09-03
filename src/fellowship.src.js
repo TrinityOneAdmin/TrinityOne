@@ -2723,6 +2723,19 @@ window.Fellowship = {
   // proved is still IN the list and still retried — it is simply not published to, and the sheet says so
   // rather than the address quietly ceasing to matter.
   relayVerified(url) { try { return _gate.admits(url, window.Fellowship.churchPub); } catch (e) { return false; } },
+  // PROVE THESE ADDRESSES NOW, AND WAIT FOR THE ANSWER. Audit 2026-09-02 #10.
+  //
+  // `relayVerified` above only reports what the gate ALREADY knows; it starts nothing. So a caller that had
+  // just added a relay and immediately read over the gated set saw nothing from it — the proof had not been
+  // asked for yet. That is the "my church runs its own relay" recovery: it adds the address, reads, finds
+  // no church, and tells the member "No church found" while the relay it was handed is sitting there
+  // unproved. On a slow link all three of its passes can land inside that window.
+  //
+  // Returns the subset that proved. Never throws: a recovery screen must not die because a relay was down.
+  proveRelays(urls) {
+    try { return Promise.resolve(_gate.refresh(urls || [], window.Fellowship.churchPub)).catch(() => []); }
+    catch (e) { return Promise.resolve([]); }
+  },
 
   // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
   // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
@@ -2840,7 +2853,15 @@ window.Fellowship = {
     // church got a line in the console log. UX audit 2026-08-04.
     const dup = _outbox.some(o => o && o.evt && o.evt.id === evt.id);
     if (!dup) {
-      _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+      // A JOIN QUEUES WITH NO RELAY LIST, DELIBERATELY. Audit 2026-09-02 #21.
+      //
+      // Snapshotting the list here froze the set the retry would use — and a join is the one moment the list
+      // is CHANGING, because adopting the invite's relay happens alongside it. So the snapshot could be the
+      // pre-adoption list, and the flush would go on retrying against relays that were never this church's
+      // while the one that was sat unused. `_outboxFlush` already reads
+      // `item.relays.length ? item.relays : window.Fellowship.relays`, so an empty list means "whatever the
+      // live list is when this actually goes" — which for a join is the only sane answer.
+      _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
       _outboxSave();
     }
     let ok = false;
@@ -3029,7 +3050,15 @@ window.Fellowship = {
     const take = async (url) => {
       if (!url) return false;
       let ok = false;
-      try { ok = await isNetworkRelay(cp, url); } catch (e) { ok = false; }
+      // PROVE IT ONCE, AND LEAVE THE ANSWER WHERE THE NEXT PUBLISH WILL READ IT. Audit 2026-09-02 #21.
+      //
+      // `isNetworkRelay` answers the question but does not necessarily leave the gate's cache holding the
+      // result the publish path then consults, so the very next write proved the same address a second
+      // time — two /relay-identity round trips for one adoption, on the slowest link a member ever has
+      // (joining from an invite, often on mobile data). `_gate.refresh` does the proof AND is what the
+      // publish path reads, so one exchange serves both. It also joins an in-flight proof for the same
+      // address rather than starting a second.
+      try { ok = (await _gate.refresh([url], cp)).includes(url); } catch (e) { ok = false; }
       if (ok) {
         if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), url]);
         out.added.push(url);

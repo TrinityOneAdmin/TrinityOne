@@ -548,8 +548,21 @@ function RelaysSheet({ open, onClose, ctx }) {
   const rows = list || fromReal();
   const bare = (u) => (u || '').replace(/^wss?:\/\//, '');
 
-  const toggle = (u) => setList(rows.map(r => r.url === u ? { ...r, status: r.status === 'on' ? 'off' : 'on' } : r));  // visual only
-  const remove = (u) => { if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
+  // REMOVE EXISTED AND WAS NEVER RENDERED. Audit 2026-09-02 #9.
+  //
+  // An address gets into this list from an invite, and nothing ever takes one out. It stays, is retried,
+  // and keeps receiving a signed NIP-42 AUTH and the shape of this member's church and groups every time it
+  // is re-checked — including one adopted from a hostile invite before the C5 gate existed. The control to
+  // drop it was written and left unwired, so there was no way, in the product, to stop talking to an address.
+  //
+  // Offered only on rows that have NOT proved themselves, and never on a canonical address: a relay actually
+  // carrying this church's traffic is not something to remove by accident, and dropping a shipped default is
+  // how a member loses their church rather than a stray address. (The dead `toggle` above it, which only
+  // changed a row's colour, is gone.)
+  const [confirmDrop, setConfirmDrop] = useIx(null);
+  const CANON = (FS && FS.CANONICAL_RELAYS) || ((FS && FS.CANONICAL_RELAY) ? [FS.CANONICAL_RELAY] : []);
+  const canRemove = (r) => r.status !== 'on' && !CANON.includes(r.url);
+  const remove = (u) => { setConfirmDrop(null); if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
 
   return (
     <BottomSheet open={open} onClose={onClose} z={60}>
@@ -582,6 +595,12 @@ function RelaysSheet({ open, onClose, ctx }) {
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
                 <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
                 {r.status === 'on' ? 'Connected' : r.status === 'checking' ? 'Not in use' : 'Off'}</span>
+              {canRemove(r) ? (confirmDrop === r.url
+                ? <React.Fragment>
+                    <button onClick={() => remove(r.url)} aria-label={'Confirm: stop using ' + bare(r.url)} style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>
+                    <button onClick={() => setConfirmDrop(null)} aria-label="Keep it" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Keep</button>
+                  </React.Fragment>
+                : <button onClick={() => setConfirmDrop(r.url)} aria-label={'Stop using ' + bare(r.url) + ' — asks you to confirm'} title="This address has not shown it is one of your church's relays. Remove it and nothing more is sent to it." style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>) : null}
             </div>
           ))}
         </div>
