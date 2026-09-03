@@ -9192,7 +9192,7 @@
         if (!url) return false;
         let ok = false;
         try {
-          ok = (await _gate.refresh([url], cp)).includes(url);
+          ok = await isNetworkRelay2(cp, url);
         } catch (e) {
           ok = false;
         }

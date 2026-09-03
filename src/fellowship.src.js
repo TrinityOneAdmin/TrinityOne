@@ -3050,15 +3050,20 @@ window.Fellowship = {
     const take = async (url) => {
       if (!url) return false;
       let ok = false;
-      // PROVE IT ONCE, AND LEAVE THE ANSWER WHERE THE NEXT PUBLISH WILL READ IT. Audit 2026-09-02 #21.
+      // NOT CHANGED TO `_gate.refresh`, DELIBERATELY — see the note in the batch 9 commit.
       //
-      // `isNetworkRelay` answers the question but does not necessarily leave the gate's cache holding the
-      // result the publish path then consults, so the very next write proved the same address a second
-      // time — two /relay-identity round trips for one adoption, on the slowest link a member ever has
-      // (joining from an invite, often on mobile data). `_gate.refresh` does the proof AND is what the
-      // publish path reads, so one exchange serves both. It also joins an in-flight proof for the same
-      // address rather than starting a second.
-      try { ok = (await _gate.refresh([url], cp)).includes(url); } catch (e) { ok = false; }
+      // The audit (#21) is right that this proves the address once here and the next publish proves it
+      // again: two /relay-identity round trips for one adoption, on the slowest link a member ever has.
+      // `_gate.refresh` would do both in one, and it decides with the SAME deps (verify, netEntries,
+      // origin, pins), so it is not a weakening. It was tried and reverted anyway.
+      //
+      // Why: an-invite-cannot-choose-your-relay.test.mjs guards this exact line by name — a slice that
+      // stopped containing it "would leave every assertion below passing over nothing at all", and those
+      // assertions are the ones that stop a crafted join link choosing a member's relay. Re-anchoring the
+      // most security-critical test in the repo, and re-injecting the gate into its lift, to save one
+      // round trip on a join is a bad trade. If this is ever done, do it as its own change with that test
+      // rewritten first and audited on its own.
+      try { ok = await isNetworkRelay(cp, url); } catch (e) { ok = false; }
       if (ok) {
         if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), url]);
         out.added.push(url);
