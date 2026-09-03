@@ -60,7 +60,8 @@ function run({ docs, caps = null, stewards = [CARE_STEWARD, PLAIN_STEWARD] }) {
   const fn = new Function('pool', 'churchRelays', 'CARETEAM_D', '_relayAuthedAt', '_fetchStewardsWithCap',
     'JSON', 'Set', 'Array', 'String',
     body + '\nreturn _fetchCareTeam;')(
-    { querySync }, () => ['wss://r/relay'], 'trinityone/careteam:', 1, helper, JSON, Set, Array, String);
+    { querySync }, () => ['wss://r/relay'], 'trinityone/careteam:', 1,
+    stewards === null ? async () => null : helper, JSON, Set, Array, String);
   return fn(CHURCH);
 }
 
@@ -109,4 +110,34 @@ test('A CHURCH WHOSE ROSTER PREDATES CAPABILITIES STILL WORKS', async () => {
   assert.deepEqual(team, ['from-steward-no-caps'],
     'a church whose steward roster has no capabilities recorded lost its care team. The relay treats a ' +
     'capability-less entry as a full steward and the client must agree, or the two disagree about who helps');
+});
+
+// ── FOUND BY THE PRE-MERGE AUDIT, 2026-09-04 ───────────────────────────────────────────────────────────────
+// Refusing a document is right. Answering "[]" after refusing one is not: [] is a statement that the church
+// has named NOBODY, and adult requests would then seal to the church key alone while the relay goes on
+// serving them to the team that does exist. null is this function's own word for "could not read it", and
+// every caller already handles it.
+test('refusing every care-team document answers "unknown", not "nobody"', async () => {
+  const team = await run({
+    docs: [doc(STRANGER, 999, ['stranger-1'])],   // the only document there is, and it is not trusted
+    caps: { [CARE_STEWARD]: ['care'] },
+  });
+  assert.equal(team, null,
+    'every care-team document was refused and the answer came back as "this church has no care team". ' +
+    'That is a claim, not an absence — a church whose list was written by a steward who has since lost the ' +
+    'care capability would silently stop sealing requests to anyone but the church key');
+});
+
+test('…and a steward roster we could not read does not narrow anything either', async () => {
+  const team = await run({ docs: [doc(CHURCH, 100, ['real'])], stewards: null });
+  assert.equal(team, null,
+    'a transient failure reading the steward roster was treated as "this church has no stewards", which ' +
+    'narrows the trusted set to the church key on a bad connection');
+});
+
+test('CONTROL: no documents at all, on a connected relay, is still a real "none"', async () => {
+  const team = await run({ docs: [], caps: { [CARE_STEWARD]: ['care'] } });
+  assert.deepEqual(team, [],
+    'a church that genuinely has no care team must still get a definite answer — otherwise every screen ' +
+    'that asks sits in "unknown" for ever');
 });

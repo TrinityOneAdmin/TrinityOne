@@ -350,7 +350,9 @@ async function _fetchStewardsWithCap(cp, cap) {
       if (!Array.isArray(c)) return true;
       return c.some(x => String(x || '').toLowerCase() === want);
     }).map(x => String(x).toLowerCase());
-  } catch (e) { return []; }
+    // A ROSTER WE COULD NOT READ IS NOT A CHURCH WITH NO STEWARDS. Returning [] narrows the allowed set to
+    // the church key alone on a transient read failure; callers treat null as "unknown". Audit 2026-09-04.
+  } catch (e) { return null; }
 }
 async function _fetchCareTeam(cp) {
   try {
@@ -365,13 +367,20 @@ async function _fetchCareTeam(cp) {
     //
     // The rule mirrors the relay's: the church key itself, or a steward the church has given `care` to.
     const careStewards = await _fetchStewardsWithCap(cp, 'care');
+    // A ROSTER WE COULD NOT READ IS NOT A CHURCH WITH NO STEWARDS — do not narrow on a guess.
+    if (careStewards === null) return null;
     const allowed = new Set([String(cp).toLowerCase(), ...careStewards]);
-    let best = null;
+    let best = null, refused = 0;
     for (const e of (evs || [])) {
-      if (!allowed.has(String(e.pubkey || '').toLowerCase())) continue;
+      if (!allowed.has(String(e.pubkey || '').toLowerCase())) { refused++; continue; }
       if (!best || e.created_at > best.created_at) best = e;
     }
     if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean); }
+    // DOCUMENTS EXISTED AND WE REFUSED THEM ALL — that is "unknown", never "this church has nobody".
+    // Found by the pre-merge audit, 2026-09-04. A careteam: written by a steward whose `care` capability was
+    // later removed is rightly not trusted, but answering [] then states as a FACT that the church has no
+    // care team: adult requests would seal to the church key alone while the relay still serves the team.
+    if (refused) return null;
     } catch (e) { return null; }   // could not READ the roster — not the same as a church with nobody on it
     // NO DOCUMENT FOUND. That is a real answer only if we were genuinely connected when we asked. querySync
     // RESOLVES with an empty list on a relay that is unreachable, still connecting, or has not answered the
@@ -5034,7 +5043,11 @@ window.Fellowship = {
     if (!sk || !cp) return null;
     const clean = Array.isArray(tags) ? tags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 8) : [];
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); }
+    // A SEND THAT LANDED NOWHERE IS NOT A LISTING. The same shape batch 7 fixed for the serving reply, the
+    // RSVP and leaving a church — this pair was not in the plan's list, so batch 15's screen fix ("Couldn't
+    // list you") could never fire: the engine handed back the event whatever happened. Found by the
+    // pre-merge audit, 2026-09-04.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); return null; }
     return evt;
   },
   async clearCareAvail() {
@@ -5042,7 +5055,9 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch {}
+    // …and coming OFF the list must not be claimed either: a member who thinks they withdrew, and did not,
+    // is still being counted on.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { return null; }
     return evt;
   },
   // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to

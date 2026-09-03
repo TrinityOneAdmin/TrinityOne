@@ -6565,23 +6565,28 @@
         return c.some((x) => String(x || "").toLowerCase() === want);
       }).map((x) => String(x).toLowerCase());
     } catch (e) {
-      return [];
+      return null;
     }
   }
   async function _fetchCareTeam(cp) {
     try {
       const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CARETEAM_D + cp] }]);
       const careStewards = await _fetchStewardsWithCap(cp, "care");
+      if (careStewards === null) return null;
       const allowed = /* @__PURE__ */ new Set([String(cp).toLowerCase(), ...careStewards]);
-      let best = null;
+      let best = null, refused = 0;
       for (const e of evs || []) {
-        if (!allowed.has(String(e.pubkey || "").toLowerCase())) continue;
+        if (!allowed.has(String(e.pubkey || "").toLowerCase())) {
+          refused++;
+          continue;
+        }
         if (!best || e.created_at > best.created_at) best = e;
       }
       if (best) {
         const o = JSON.parse(best.content);
         if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean);
       }
+      if (refused) return null;
     } catch (e) {
       return null;
     }
@@ -11563,6 +11568,7 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care avail publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11578,7 +11584,8 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },

@@ -65,8 +65,15 @@ test('the dismiss buttons can be hit and can be named', () => {
   const src = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
   for (const m of src.matchAll(/<button[^>]*Dismiss this message[^>]*>/g)) {
     assert.match(m[0], /aria-label=/, 'a dismiss button has a title but no accessible name');
-    assert.match(m[0], /minWidth: 24|minHeight: 24/,
-      'a dismiss button is a bare 15px icon — under any reasonable touch target, on the screen a steward ' +
-      'uses to clear an error');
+    // THE PROPERTY IS "BIG ENOUGH TO HIT", NOT "HAS THESE TWO KEYS". One of these buttons already had
+    // padding:14 with margin:-14 — a ~44px target that costs no layout — and asserting on minWidth alone
+    // said it was broken, which is how a second `style` came to be added beside the first and silently win.
+    // Accept either shape, and say what is actually required.
+    assert.match(m[0], /minWidth: 2[4-9]|minHeight: 2[4-9]|padding: (1[0-9]|[2-9][0-9])/,
+      'a dismiss button is a bare icon with no padding — under any reasonable touch target, on the screen ' +
+      'a steward uses to clear an error');
+    assert.equal((m[0].match(/style=/g) || []).length <= 1, true,
+      'this button has TWO style props. JSX keeps the last and drops the first silently, so whichever fix ' +
+      'was added second is the only one that ran');
   }
 });

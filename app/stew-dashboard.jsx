@@ -324,8 +324,9 @@ function PublishErrorBanner() {
       style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
       <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
       <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
+      {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
+          accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
-        style={{ padding: 6, minWidth: 24, minHeight: 24, boxSizing: 'content-box' }}
         style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 14, margin: -14 }}><Icon name="x" size={16} /></button>
     </div>
   );
@@ -2316,6 +2317,13 @@ function NewGroupModal({ open, onClose }) {
   // Owner's decision, 2026-08-22. Existing groups are untouched: this is the default for NEW ones.
   const encByDefault = !church.features || church.features.encryptComms !== false;
   React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
+  // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
+  // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
+  // always mounted with `open` toggling, so opening it changed the hook count and React threw #310 and
+  // rendered nothing. No steward could create a group on that build. Caught by the pre-merge audit driving
+  // the real component in a browser; the source-text test and the device check (which rendered it already
+  // open, the one transition that works) both missed it.
+  const ngDlgRef = useStewDialog(onClose, open);
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const create = () => {
@@ -2364,7 +2372,6 @@ function NewGroupModal({ open, onClose }) {
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
-  const ngDlgRef = useStewDialog(onClose, open);
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 30,
       background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>

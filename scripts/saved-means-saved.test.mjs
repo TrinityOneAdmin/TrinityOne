@@ -65,3 +65,35 @@ test('the feed rows only tick when the publish landed', () => {
     assert.match(body, /Couldn’t save/, `${fn} still gives the steward nothing when the relay refuses`);
   }
 });
+
+// ── THE STUB ANSWERED THE QUESTION, and the pre-merge audit caught it ──────────────────────────────────────
+// The helper-card test above stubs `care.setAvail`, so it proves the SCREEN reads a falsy answer. It cannot
+// prove the ENGINE ever gives one — and it did not: `setCareAvail` swallowed a failed publish and returned
+// the event regardless, exactly like the three functions batch 7 fixed. The screen fix was therefore inert
+// and both its test and its device check were stubbed the same way. Drive the shipped engine instead.
+test('the ENGINE reports a care listing that reached no relay', async () => {
+  const bundle = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+  for (const name of ['setCareAvail', 'clearCareAvail']) {
+    const i = bundle.indexOf('async ' + name + '(');
+    assert.ok(i > 0, name + ' is not in the shipped bundle — re-anchor this test');
+    let d = 0, end = -1;
+    for (let k = bundle.indexOf('{', i); k < bundle.length; k++) {
+      if (bundle[k] === '{') d++;
+      else if (bundle[k] === '}') { d--; if (!d) { end = k + 1; break; } }
+    }
+    const body = bundle.slice(i, end);
+    const mk = (fails) => new Function('window', 'sk', 'finalizeEvent2', '_publishAny', 'churchRelays',
+      'CAREAVAIL_D', 'NET', '_sealChurchDocMember', 'JSON', 'Date', 'Math', 'Array', 'String', 'console',
+      'return ({ ' + body + ' })')(
+      { Fellowship: { churchPub: 'cc', ready: Promise.resolve() } }, 'sk',
+      (e) => ({ ...e, id: 'x' }),
+      async () => { if (fails) throw new Error('NO_NETWORK_RELAY'); return true; },
+      () => ['wss://r/relay'], 'trinityone/careavail:', 'trinityone',
+      () => 'sealed', JSON, Date, Math, Array, String, { warn() {} })[name];
+    assert.equal(await mk(true)(['meal'], 'n'), null,
+      name + ' handed its event back after every relay refused it, so the screen above can never see a ' +
+      'failure and a member who was never listed is told they are');
+    assert.ok(await mk(false)(['meal'], 'n'),
+      'CONTROL: ' + name + ' no longer returns its event on the happy path');
+  }
+});
