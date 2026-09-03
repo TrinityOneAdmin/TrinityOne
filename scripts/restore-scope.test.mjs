@@ -87,7 +87,12 @@ _rsTest('restoreChurchData has exactly one caller, and it is the screen a stewar
       });
     }
   }
-  _rsAssert.deepEqual(hits, ['app/stew-dashboard.jsx:6515'],
+  // The pin is a LINE number, so any edit above this call moves it and this test goes red without anything
+  // being wrong. That is the intended cost — the guard is worth a re-pin — but re-pin only after checking the
+  // call itself is unchanged, never by pasting whatever the failure printed. 2026-09-03: moved 6515 -> 6547 by
+  // batch 3's edits in DashGroups; the call is byte-identical to 50e196c's, verified with
+  //   git show 50e196c:app/stew-dashboard.jsx | sed -n '6515p'
+  _rsAssert.deepEqual(hits, ['app/stew-dashboard.jsx:6547'],
     'restoreChurchData is called from somewhere new: ' + JSON.stringify(hits) + '\n' +
     'Its destination is UNGATED, and the only reason that is safe is that a steward types the address on a ' +
     'screen that says what it does. A programmatic caller makes that false and the corpus goes wherever it ' +

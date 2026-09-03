@@ -2786,6 +2786,15 @@ function DashGroups() {
     }
     setSealing(null);
   };
+  // A ROW CONTROL THAT CANNOT FAIL OUT LOUD WILL FAIL SILENTLY. Every control on a group row was
+  // fire-and-forget: publishGroup returns null when NO relay accepted (and false-y on a partial write, which
+  // is the case that matters — the rule landed on one relay of three and is enforced on one of three), and
+  // each of these threw the answer away and left the row painted as though it had worked. Audit 2026-09-02 #4.
+  const [rowErr, setRowErr] = React.useState('');
+  const pubOr = (promise, what) => Promise.resolve(promise).then(r => {
+    setRowErr(r ? '' : what);
+    return r;
+  }).catch(() => { setRowErr(what); return null; });
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const [chatGroup, setChatGroup] = React.useState(null);
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
@@ -2805,11 +2814,26 @@ function DashGroups() {
   })();
   const confirmDelete = () => {
     const g = pendingDelete; if (!g) return;
-    window.Steward.removeGroup(g.id);
+    // removeGroup returns the publish promise. Reporting a failure matters more here than elsewhere: a
+    // steward told the room is gone, when it is not, stops telling anyone about it.
+    pubOr(window.Steward.removeGroup(g.id), 'Couldn’t remove “' + (g.name || 'that group') + '” — the relay didn’t accept it, and it is still there.');
     setPendingDelete(null); setUndo(g);
     clearTimeout(undoTimer.current); undoTimer.current = setTimeout(() => setUndo(null), 9000);
   };
-  const doUndo = () => { if (undo) window.Steward.publishGroup({ id: undo.id, name: undo.name, kind: undo.kind, sub: undo.sub, icon: undo.icon, accent: undo.accent, category: undo.category }); clearTimeout(undoTimer.current); setUndo(null); };
+  // UNDO MUST BRING THE ROOM BACK AS IT WAS, NOT A ROOM WITH THE SAME NAME.
+  //
+  // This used to rebuild the group from seven named fields — id, name, kind, sub, icon, accent, category —
+  // and publishGroup fills every field it is not given with its default. So a room that was invite-only,
+  // encrypted and child-safe came back OPEN, UNENCRYPTED and not child-safe, under its own name, with its
+  // member list emptied. A steward who deleted "Safeguarding leads" by mistake and pressed Undo got a room
+  // the whole congregation could read. Audit 2026-09-02 #2.
+  //
+  // `undo` is the row itself (setUndo(g) below), and publishGroup reads named fields only and ignores the
+  // rest — setGroupLeaders/setGroupEventPolicy already pass a whole row the same way — so hand it the row.
+  const doUndo = () => {
+    if (undo) pubOr(window.Steward.publishGroup(undo), 'Couldn’t restore “' + (undo.name || 'that group') + '” — the relay didn’t accept it. Nothing was brought back; try Undo again.');
+    clearTimeout(undoTimer.current); setUndo(null);
+  };
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
   const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
   return (
@@ -2836,6 +2860,14 @@ function DashGroups() {
           <button onClick={doUndo} style={{ border: 'none', background: 'rgba(255,255,255,.16)', color: '#fff', borderRadius: 9, padding: '6px 13px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>Undo</button>
         </div>
       ) : null}
+      {rowErr ? (
+        <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12,
+          background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))' }}>
+          <Icon name="shield" size={16} color="var(--clay-ink)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{rowErr}</div>
+          <button onClick={() => setRowErr('')} aria-label="Dismiss" className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>Dismiss</button>
+        </div>
+      ) : null}
       <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...g, order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
@@ -2843,7 +2875,7 @@ function DashGroups() {
         renderRight={(it) => (
           <React.Fragment>
             {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => window.Steward.publishGroup({ ...it, category: e.target.value || undefined })} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...it, category: e.target.value || undefined }), 'Couldn’t move “' + (it.name || 'that group') + '” into that category — the relay didn’t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
                 <option value="">No category</option>
                 {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -2851,7 +2883,7 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => window.Steward.publishGroup({ ...it, childsafe: !it.childsafe })} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
+            <button onClick={() => pubOr(window.Steward.publishGroup({ ...it, childsafe: !it.childsafe }), 'Couldn’t change child-safe on “' + (it.name || 'that group') + '” — the relay didn’t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
             {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
             {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
