@@ -3216,7 +3216,11 @@ function DashRelaysCard() {
       // that name" would be a plain untruth for the second, and this project has shipped six controls that
       // told a steward a comforting story about something that did not happen. Say both possibilities.
       if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
-      window.Steward.addRelay(j.url);
+      // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
+      // the address is already in the list, or when it IS this console's own relay — and in both cases the
+      // message below said "Added", which is at best confusing and at worst tells a steward they have a
+      // second box when they have one. Audit 2026-09-02 #17.
+      const added = window.Steward.addRelay ? window.Steward.addRelay(j.url) : false;
       window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
       setByNameMsg({ text: 'Connecting your church…' });
       let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, church.name); } catch (e) {}
@@ -3227,7 +3231,7 @@ function DashRelaysCard() {
       const needsName = !reg.ok && /name/i.test(String(reg.why || ''));
       setByNameMsg(needsName
         ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
-        : { ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
+        : { ok: true, text: reg.ok ? ((added ? '✓ Connected to “' : '✓ “') + n + (added ? '” — your church is registered and can post.' : '” was already on your list — your church is registered there and can post.')) : '✓ ' + (added ? 'Added “' : 'Already had “') + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };

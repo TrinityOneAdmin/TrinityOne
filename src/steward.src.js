@@ -3062,8 +3062,22 @@ window.Steward = {
     for (const u of relays()) {
       let base = String(u).replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
       base = base.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+      // THE KEY COMES FROM THE PROOF, NOT FROM /status. Audit 2026-09-02 #11.
+      //
+      // `/status` reports `relayPub` as a bare unauthenticated string — CLAUDE.md rule 10 says in as many
+      // words that it "is never proof". This used it as the relay's IDENTITY, and two things downstream
+      // count DISTINCT identities: syncEnable, which decides which boxes may exchange a church's whole
+      // corpus with each other, and backupState, which is what prints "Backup on. Your 2 relays mirror each
+      // other — if one goes down, nothing is lost." So the church's durability promise, and its sync set,
+      // were both counted from a string any host can type.
+      //
+      // verifyRelayIdentity is the nonce-bound, address-bound proof. A relay too old to answer it now has
+      // an empty pubkey and falls OUT of the sync set and the redundancy count — which is the fleet-order
+      // rule RELAY-ADMISSION already states (relays before apps): an old relay is not a second copy.
+      // `/status` is kept for `online` alone, so "reachable but too old to prove itself" stays visible.
       let s = null; try { s = await (await fetch(base + '/status', { cache: 'no-store' })).json(); } catch {}
-      out.push({ url: u, base, pubkey: (s && s.relayPub) || '', name: '', online: !!s });
+      let proof = null; try { proof = await verifyRelayIdentity(u); } catch (e) { proof = null; }
+      out.push({ url: u, base, pubkey: (proof && proof.relayPub) || '', name: '', online: !!s });
     }
     return out;
   },
@@ -3080,7 +3094,11 @@ window.Steward = {
     for (const r of ids) { if (r.pubkey && !byBox.has(r.pubkey)) byBox.set(r.pubkey, { pubkey: r.pubkey, url: r.base }); }
     const trusted = [...byBox.values()];
     if (trusted.length < 2) throw new Error('Sync needs at least two separate TrinityOne relays — add another the church runs.');
-    await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }, sk));
+    // A SETTING NOBODY ACCEPTED IS NOT A SETTING. Audit 2026-09-02 #17.
+    // This awaited the publish and discarded it, so "✓ Sync on" appeared over a document no relay took —
+    // and the church believed its two boxes were mirroring each other when nothing had been told to.
+    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }, sk));
+    if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
     return { relays: trusted.length };
   },
   // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,

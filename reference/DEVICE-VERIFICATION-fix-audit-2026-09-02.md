@@ -248,3 +248,16 @@ a recovery screen must not die on a dead relay. (208 ms is the local failure pat
 **NOT covered here, and the plan marks this batch DEVICE for it:** the 2G timing this fixes. The failure
 mode is a recovery on a slow link where all three search passes land inside the proof window; a local relay
 failing in 208 ms cannot produce it. That needs a throttled radio and a real church.
+
+## Batch 10 — redundancy counted from the proof; sync reports (#11, #17) — VERIFIED ON DEVICE
+
+Steward APK. The shipped `relayIdentities` and `syncEnable` lifted from the bundle the phone loaded and run
+against a relay that CLAIMS a key on `/status` but cannot produce the proof. Nothing published anywhere.
+
+    a relay that only CLAIMS a key   pubkey ""          online true
+    a relay that PROVES a key        pubkey aaaaaaaa…
+    sync with no relay accepting     throws "Sync could not be switched on — no relay accepted the setting"
+    sync when a relay accepted       { relays: 2 }
+
+`online: true` on the liar is deliberate: "reachable but cannot prove itself" must stay visible, or an old
+relay looks dead rather than old.

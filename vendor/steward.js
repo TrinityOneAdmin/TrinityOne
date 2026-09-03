@@ -17060,7 +17060,13 @@ zoo`.split("\n");
           s = await (await fetch(base + "/status", { cache: "no-store" })).json();
         } catch {
         }
-        out.push({ url: u, base, pubkey: s && s.relayPub || "", name: "", online: !!s });
+        let proof = null;
+        try {
+          proof = await verifyRelayIdentity(u);
+        } catch (e) {
+          proof = null;
+        }
+        out.push({ url: u, base, pubkey: proof && proof.relayPub || "", name: "", online: !!s });
       }
       return out;
     },
@@ -17076,7 +17082,8 @@ zoo`.split("\n");
       }
       const trusted = [...byBox.values()];
       if (trusted.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 add another the church runs.");
-      await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }, sk));
+      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }, sk));
+      if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
       return { relays: trusted.length };
     },
     // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
