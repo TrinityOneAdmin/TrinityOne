@@ -346,3 +346,22 @@ Steward APK, the real `NewGroupModal` rendered on the phone:
 
 Batch 19 deletes two files nothing referenced; a test asserts they are gone AND that nothing references
 them, so their removal cannot silently break a page.
+
+## Audit response (full-branch audit) — the modal crash, on device, through the transition that broke
+
+The pre-merge audit proved that `NewGroupModal` threw React #310 the moment it OPENED, because a hook sat
+below its early return. **No steward could create a group on that build.** My own device check had rendered
+it ALREADY OPEN — the one transition that does not throw — so it passed over a crash.
+
+Re-checked on the steward APK through the full cycle a steward actually drives:
+
+    mounted closed, renders nothing   true
+    opens without throwing            true
+    the Name field is there           true
+    closes again                      true
+    REOPENS                           true
+    React errors captured on window   [] (none)
+
+**The lesson, kept here because it cost the most:** a device check that does not drive the STATE CHANGE is
+not a device check. Render closed, then open, then close, then open again.
+

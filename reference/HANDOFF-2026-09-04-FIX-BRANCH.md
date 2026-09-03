@@ -52,6 +52,31 @@ Nearly all of it is one shape: **a control reported success over a write nobody 
 
 ---
 
+## 2b. A third audit ran after the handoff was first written — read this
+
+The full-branch audit returned "**not yet safe to merge**" and was right. Four things it found, all now
+fixed and all re-verified:
+
+- **A crash I shipped.** `NewGroupModal` called a hook below its early return, so opening it threw React
+  #310 and rendered nothing — **no steward could create a group**. My test was a source-text match and my
+  device check rendered the modal already open, the one transition that works. There is now a structural
+  test that walks every component and fails on a hook below an early return, and the device check drives
+  closed → open → closed → open.
+- **"I'm here to help" was inert.** The engine swallowed the failed publish, so the screen fix could never
+  fire — and its test stubbed the very thing that was broken. Fixed, with a test that drives the shipped
+  engine and cannot be satisfied by a stub. **Eight more functions share that shape and are listed in the
+  commit, deliberately not changed overnight.**
+- **Two duplicate JSX attributes** silently killed two of my own fixes (a double-fire guard and a touch
+  target). Swept the whole branch; no others.
+- **Refusing a care-team document answered "this church has nobody"** rather than "unknown", which would
+  have narrowed who a request seals to. Now returns unknown.
+
+**Still open and needing your decision — do this one first:** the relay refuses NIP-42 auth beyond its own
+window, and batch 2 removed only the CLIENT's clock check. A phone 15 minutes out now *admits* the relay
+and then silently fails to authenticate: gated reads come back empty with nothing on screen, and the
+console's care requests and check-in sit in "loading" for ever. Better than "no relay at all", still wrong.
+Changing a relay-side auth window is a security decision and I have not made it.
+
 ## 3. What I would test by hand, in this order
 
 1. **The clock fix** — set the phone's clock 15 minutes out and use the app normally. This is the one with
