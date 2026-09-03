@@ -166,10 +166,10 @@ function RecoverySheet({ open, onClose, ctx }) {
   // what to do instead. These words are the account; "copied" over an empty clipboard is the worst lie the
   // app can tell. Audit 2026-09-02 #13.
   const copyPhrase = () => {
-    if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead'); return; }
+    if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead', { error: true }); return; }
     navigator.clipboard.writeText(words.join(' '))
       .then(() => ctx.toast('Phrase copied — paste somewhere safe'))
-      .catch(() => ctx.toast('Couldn’t copy — write the words down instead'));
+      .catch(() => ctx.toast('Couldn’t copy — write the words down instead', { error: true }));
   };
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="88%" z={60}>

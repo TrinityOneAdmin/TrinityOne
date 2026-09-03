@@ -1419,8 +1419,8 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
               if (needFull && !twoWords(name)) return;
               setEdit(false);
               Promise.resolve(onSave({ name: name.trim(), avatar: av }))
-                .then((ok) => ctx.toast(ok ? 'Profile saved' : 'Couldn’t save your profile — your church still sees the old name. Try again.'))
-                .catch(() => ctx.toast('Couldn’t save your profile — try again.'));
+                .then((ok) => (ok ? ctx.toast('Profile saved') : ctx.toast('Couldn’t save your profile — your church still sees the old name. Try again.', { error: true })))
+                .catch(() => ctx.toast('Couldn’t save your profile — try again.', { error: true }));
             }} disabled={needFull && !twoWords(name)} style={{
               border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '9px 16px', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (needFull && !twoWords(name)) ? 0.5 : 1 }}>Save</button>
           </div>
@@ -1833,10 +1833,10 @@ function FamilySheet({ open, onClose, ctx }) {
               // the write happened — and swallowed the failure — for the ONE screen that shows a child's
               // twelve words once. A parent who reads "copied", closes the sheet and finds an empty
               // clipboard has lost that account. Same shape as the working control at :879.
-              if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead'); return; }
+              if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead', { error: true }); return; }
               navigator.clipboard.writeText(made.mnemonic)
                 .then(() => ctx.toast('Recovery words copied — store them safely'))
-                .catch(() => ctx.toast('Couldn’t copy — write the words down instead'));
+                .catch(() => ctx.toast('Couldn’t copy — write the words down instead', { error: true }));
             }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '11px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', marginBottom: 22 }}>Copy the 12 words</button>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '0 4px 10px' }}>HAND IT TO THE CHILD’S DEVICE</div>
             {/* "TrinityOne's camera" sent a parent hunting for an in-app scanner that does not exist and was

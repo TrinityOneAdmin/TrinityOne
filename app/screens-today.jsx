@@ -862,8 +862,8 @@ function CareAvailability({ ctx, part }) {
   const save = () => {
     setEditing(false);
     Promise.resolve(care.setAvail ? care.setAvail(tags, note) : null)
-      .then((ok) => { if (ok) setOpt(true); else { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told. Try again when you have signal.'); } })
-      .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.'); });
+      .then((ok) => { if (ok) setOpt(true); else { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true }); } })
+      .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.', { error: true }); });
   };
   const turnOff = () => { if (care.clearAvail) care.clearAvail(); setOpt(false); setEditing(false); setTags([]); setNote(''); };
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;

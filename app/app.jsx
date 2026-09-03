@@ -750,7 +750,7 @@ function App() {
       let told = null;
       try { told = await F.leaveMembership(npub); } catch (e) { told = null; }
       if (!told) {
-        toast('Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.');
+        toast('Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.', { error: true });
         return false;
       }
     }
@@ -1607,9 +1607,15 @@ function App() {
     return FS.ready.then(() => FS.setProfile(meta)).catch(() => null);
   };
 
-  const toast = (msg) => {
-    setToastMsg(msg); clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastMsg(''), 1900);
+  // toast(text) keeps working exactly as it did — that is what ~120 call sites pass, and they keep the tick.
+  // toast(text, { error: true }) marks it as a failure: no tick, and it stays up long enough to READ. A
+  // failure sentence in this app is often 20-30 words ("you're still a member there", "write the words down
+  // instead"), and 1.9s is not enough for any of them. Audit 2026-09-02 #12.
+  const toast = (msg, opts) => {
+    const bad = !!(opts && opts.error);
+    setToastMsg(bad ? { text: msg, kind: 'error' } : msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(''), bad ? 6000 : 1900);
   };
   window.trinityToast = toast;   // a few non-React globals (e.g. the audio engine) surface notices through this
   // A REFUSED INVITE RELAY IS SAID OUT LOUD (closed-network plan C5). A printed slip naming a box the church
@@ -1700,7 +1706,7 @@ function App() {
         if (s.enc && !dec) { toast('This encrypted sermon needs the church media key'); return; }
         const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
         window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: cname, src, album: cname });
-      } catch (e) { toast('Couldn’t load: ' + (e.message || 'error')); }
+      } catch (e) { toast('Couldn’t load: ' + (e.message || 'error'), { error: true }); }
     },
     openWord: (id) => setWordOv(id),
     openConcordance: () => setConcord(true),
@@ -1889,7 +1895,7 @@ function App() {
       if (!(window.Fellowship && window.Fellowship.respondToServingRequest)) return false;
       const sent = await window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
       if (!sent) {
-        toast('Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.');
+        toast('Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.', { error: true });
         return false;
       }
       setServReplies(m => ({ ...m, [reqId]: verdict }));
@@ -1907,7 +1913,7 @@ function App() {
       if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return;
       const sent = await window.Fellowship.setEventRsvp(np, eventId, next || 'none');
       if (!sent) {
-        toast('Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.');
+        toast('Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
         return;
       }
       setMyRsvps(m => ({ ...m, [eventId]: next }));

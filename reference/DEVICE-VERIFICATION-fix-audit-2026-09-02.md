@@ -318,3 +318,19 @@ Member APK. The shipped `saveIdentity` and the helper card's `save` lifted from 
     helper card, accepted       -> listed
 
 The church's video/audio feed rows are CONSOLE, covered by the same commit's structural test.
+
+## Batches 16 & 17 — care/finance confirmations; a tick means success — VERIFIED ON DEVICE
+
+**Batch 16** (steward APK), the shipped `closeCheck` and the import modal's `doPost`:
+
+    end check, nothing accepted -> confirm STAYS OPEN, "It is still live, and members are still being asked…"
+    end check, accepted         -> confirm closes, no error
+    import, one line failed     -> modal STAYS OPEN and names the line
+    import, all posted          -> modal closes
+
+**Batch 17** (member APK), the shipped `Toast` rendered on the phone:
+
+    plain string   role="status"  icon present  "Saved"
+    failure object role="alert"   icon present  "Couldn't send your answer — you're still shown as…"
+
+The role flips, which is what a screen reader acts on; the icon changes from a tick to a shield.
