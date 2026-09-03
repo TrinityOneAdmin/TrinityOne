@@ -100,7 +100,12 @@ function RecoverySheet({ open, onClose, ctx }) {
       // returned — but doExport resolves normally on its short-passphrase early-return AND in its catch, so
       // the durable "backed up" flag was set even when no valid backup was written, silencing the backup
       // nudge and leaving the member one lost device away from losing their identity with no warning.
-      markSaved();
+      // …AND "THE SUCCESS PATH" HAS TO MEAN THE WARN BRANCH TOO. Audit 2026-09-02 #7.
+      // This call sat ABOVE the `res.warn` check below, so a save that fell back — one whose own message
+      // tells the member no copy may have been kept — set the durable flag on its way past. Removing the
+      // duplicate call from inside that branch (which is what the fix plan asked for) changed nothing,
+      // because the flag had already been written here. Moved below the check instead. Caught by the test,
+      // not by reading.
       // NAME THE PLACE. "Save it somewhere safe" is advice, not a receipt — and on the app this path used to
       // open a share sheet and write nothing, so the member had no way to tell the two apart.
       const at = window.TrinityBackup.savedWhere ? window.TrinityBackup.savedWhere(res) : '';
@@ -111,7 +116,20 @@ function RecoverySheet({ open, onClose, ctx }) {
       // call, 2026-08-16.
       // A fallback save is weaker than a direct one, and the member is the only person who can put that
       // right — so if saveFile says so, that sentence wins over the cheerful one.
-      if (res && res.warn) { setBkErr(res.warn); setBusy(''); markSaved(); return; }
+      // DO NOT RECORD A BACKUP ON THE BRANCH THAT SAYS THERE MAY NOT BE ONE. Audit 2026-09-02 #7.
+      //
+      // `res.warn` is saveFile telling us the direct write did not happen and it fell back — the message it
+      // carries says, in the member's own words, that no copy may have been kept. Calling markSaved() here
+      // wrote the durable "last backed up" date anyway, and that key is what SILENCES the recovery nudge on
+      // Today (screens-today.jsx:1267, identity.jsx:1170). So the reminder went quiet for precisely the
+      // people who had not got a file — the ones who needed it most — and the Security screen showed them a
+      // date for a backup that may not exist.
+      //
+      // The warning still shows. The flag is simply not written, so the nudge keeps asking until a save
+      // actually succeeds. The 12-word ceremony (identity.jsx:347, :806) writes the same key on its own and
+      // is untouched: writing the words down IS a backup.
+      if (res && res.warn) { setBkErr(res.warn); setBusy(''); return; }
+      markSaved();
       ctx.toast(at ? ('Backup saved to ' + at + ' — keep a copy somewhere safe') : 'Backup created — keep it somewhere safe'); setBk(null); setPass('');
     } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
   };

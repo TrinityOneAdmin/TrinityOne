@@ -196,3 +196,16 @@ end-to-end "member taps Yes with no signal" path is NOT covered here.
 **Still owed on this batch (the plan marks it DEVICE for exactly this):** the wedged-socket case, where
 `_publishAny` times out at 11 s rather than rejecting, only reproduces on a phone whose radio drops
 mid-publish. That needs a church on the phone and airplane mode at the right moment.
+
+## Batch 8 — a backup is recorded only when one exists (#7) — VERIFIED ON DEVICE
+
+Member APK. The shipped `doExport` lifted out of the file the phone loaded and both branches run with the
+backup helpers stubbed (no file written, no network touched):
+
+| saveFile said | backup recorded? | member shown |
+|---|---|---|
+| `{ saved: true, warn: "…no copy may have been kept" }` | **false** | the warning |
+| `{ saved: true, where: "Documents" }` | true | nothing (the ordinary toast) |
+
+Note: the JSX→JS transpile strips comments, so a marker-comment grep against the APK assets returns 0. The
+behaviour above is the proof, not the comment.
