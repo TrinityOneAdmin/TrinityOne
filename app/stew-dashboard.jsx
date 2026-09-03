@@ -4341,11 +4341,24 @@ function DashMembers() {
       .catch(() => { if (nophotoBackfillDone === sig) nophotoBackfillDone = ''; });
   }, [kidPhotosAllowed, sg.loaded, sg.minors, sg.nophoto]);
 
-  const toggleMinor = (pk) => {
+  // A SAFEGUARDING WRITE THAT ONLY PARTLY LANDED MUST NOT BE PAINTED AS DONE. Audit 2026-09-02 #4.
+  //
+  // setMinors/setApproved/setGuardians go through _publishToRelays, which returns FALSE when the document
+  // reached some relays and not others — and that is the case that matters, because a relay polices a
+  // church's traffic with its OWN copy. "Marked as a child" landing on one relay of three means the child is
+  // protected on one of three, while the row says it is done. toggleApproved below already gates its reseal
+  // on the result; this brings its siblings up to that standard.
+  const toggleMinor = async (pk) => {
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
-    const r = window.Steward.setMinors(next);
+    let r = null;
+    try { r = await Promise.resolve(window.Steward.setMinors(next)); } catch (e) { r = null; }
+    if (!r) {
+      setMinorNotice({ pk, tone: 'fail', text: (unmarking ? 'Couldn’t unmark ' : 'Couldn’t mark ') + (nameByPub[pk] || 'this member')
+        + ' — the relay didn’t accept the change, so nothing about their status has changed. Check the relay and try again.' });
+      return null;
+    }
     // MARKING SOMEBODY AS A CHILD MUST DEAL WITH THE PHOTOGRAPH THEY ALREADY HAVE.
     // The relay now refuses a NEW photo from a minor whose church has children's photos off, but it cannot
     // rewrite a kind-0 somebody already signed — and the ordinary way a church learns a member is under 18 is
@@ -4363,16 +4376,27 @@ function DashMembers() {
     // (see the note above). But it happened in silence: a steward correcting a mis-tap destroyed a real
     // volunteer's clearance with no warning, no undo, and nothing to say that re-clearing was now needed.
     // Found on the device, 2026-08-27. The action stays as it is; only the silence is the defect.
-    setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
-      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
-      : null);
+    let clearanceRemoved = true;
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
       // Whether the CLEARED list has actually been read — not whether the list of children has. Asking the
       // wrong document broke the exact case this record was written for: a brand-new church clearing its first
       // volunteer has no children marked, so the answer was always "we have not looked", and a clearance
       // granted that minute was recorded as "no record of when".
-      try { window.Steward.setApproved(nextApproved, { listKnown: !!sg.clearedKnown }); } catch (e) {}
+      let ok2 = null;
+      try { ok2 = await Promise.resolve(window.Steward.setApproved(nextApproved, { listKnown: !!sg.clearedKnown })); } catch (e) { ok2 = null; }
+      clearanceRemoved = ok2 !== false && ok2 !== null;
     }
+    if (unmarking && (sg.approved || []).indexOf(pk) >= 0 && !clearanceRemoved) {
+      // Do not tell a steward a clearance was revoked when it was not. The relay still holds it, and the
+      // person is still cleared to work with young people until this succeeds.
+      setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is no longer marked as a child, but their '
+        + 'youth-work clearance could NOT be removed — the relay didn’t accept it, so they are still cleared. Try again.' });
+      _reseal(next, sg.approved || [], [pk]);
+      return r;
+    }
+    setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
+      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
+      : null);
     _reseal(next, nextApproved, [pk]); return r;
   };
   // A CHILD CANNOT BE CLEARED TO WORK WITH CHILDREN. The relay refuses to store it; refuse it here too, so a
@@ -4418,14 +4442,32 @@ function DashMembers() {
     catch (e) { return 'no record of when'; }
   };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
-  const approveGuardian = (r) => {
+  const approveGuardian = async (r) => {
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
-    window.Steward.setGuardians(nextG);
-    // Re-seal UNCONDITIONALLY. This used to run only when the child was not already marked a minor, so linking
-    // a parent to an already-marked child never reached that child's phone at all.
-    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];   // a linked child is a minor
-    if (!minorsSet.has(r.child)) window.Steward.setMinors(nextM);
+    let okG = null;
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    if (!okG) {
+      setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t confirm that guardian link — the relay didn’t accept it, '
+        + 'so nobody has been linked and the request is still waiting. Check the relay and try again.' });
+      return null;
+    }
+    // A LINKED CHILD IS A MINOR, and if that half fails the link exists without the protection that is its
+    // whole point — so say which half landed rather than resealing over a half-written state.
+    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];
+    if (!minorsSet.has(r.child)) {
+      let okM = null;
+      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
+      if (!okM) {
+        setMinorNotice({ pk: r.child, tone: 'fail', text: 'The guardian link was saved, but marking them as a child was '
+          + 'NOT — the relay refused it. They are linked to a parent and are not yet treated as a child. Try again.' });
+        _reseal(sg.minors || [], sg.approved || [], [r.child], nextG);
+        return null;
+      }
+    }
+    // Re-seal UNCONDITIONALLY once both halves are in. This used to run only when the child was not already
+    // marked a minor, so linking a parent to an already-marked child never reached that child's phone at all.
     _reseal(nextM, sg.approved || [], [r.child], nextG);
+    return true;
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
@@ -4435,20 +4477,43 @@ function DashMembers() {
   // steward's writes are rejected. Hide those actions when acting as someone else's steward, so the UI
   // matches the relay instead of silently no-op'ing. (Pills stay visible so they can still SEE the state.)
   const delegated = !!(window.Steward && window.Steward.actingChurch);
-  const linkParent = (childPub, parentPub) => {
+  const linkParent = async (childPub, parentPub) => {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
     const nextG = { ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] };
-    window.Steward.setGuardians(nextG);
+    let okG = null;
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    if (!okG) {
+      setMinorNotice({ pk: childPub, tone: 'fail', text: 'Couldn’t save that guardian link — the relay didn’t accept it, '
+        + 'so nobody has been linked. Check the relay and try again.' });
+      return null;
+    }
     const nextM = minorsSet.has(childPub) ? (sg.minors || []) : [...(sg.minors || []), childPub];   // a linked child is a minor
-    if (!minorsSet.has(childPub)) window.Steward.setMinors(nextM);
+    if (!minorsSet.has(childPub)) {
+      let okM = null;
+      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
+      if (!okM) {
+        setMinorNotice({ pk: childPub, tone: 'fail', text: 'The guardian link was saved, but marking them as a child was '
+          + 'NOT — the relay refused it. Try again, or they will not be treated as a child.' });
+        _reseal(sg.minors || [], sg.approved || [], [childPub], nextG);
+        return null;
+      }
+    }
     _reseal(nextM, sg.approved || [], [childPub], nextG);   // unconditional — see approveGuardian
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
     if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
   };
-  const unlinkParent = (childPub, parentPub) => {
+  const unlinkParent = async (childPub, parentPub) => {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
     const next = { ...guardians }; if (cur.length) next[childPub] = cur; else delete next[childPub];
-    window.Steward.setGuardians(next);
+    let okG = null;
+    try { okG = await Promise.resolve(window.Steward.setGuardians(next)); } catch (e) { okG = null; }
+    if (!okG) {
+      // Failing to REMOVE a link is the worse direction: the adult stays a parent the child's app will always
+      // let through. Never let the row imply it is gone.
+      setMinorNotice({ pk: childPub, tone: 'fail', text: 'Couldn’t remove that guardian link — the relay didn’t accept it, '
+        + 'so that adult is STILL linked as their guardian and can still message them. Try again.' });
+      return null;
+    }
     // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
     // and goes on treating a removed adult as a parent it may always message.
     _reseal(sg.minors || [], sg.approved || [], [childPub], next);
@@ -4467,7 +4532,12 @@ function DashMembers() {
     || (window.stewardStreamLoaded('subscribeAdmitted', mIdv) && window.stewardStreamLoaded('subscribeBlocked', mIdv));
   const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !isBlocked(m.pubkey)) : [];
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
-  const admitMember = (pk) => window.Steward.setAdmitted([...admittedList, pk]);
+  // Its bulk sibling admitAll already checks its result; this one did not, so a single Approve that the relay
+  // refused still moved the row out of the waiting list on screen while the relay kept refusing the member.
+  const admitMember = (pk) => Promise.resolve(window.Steward.setAdmitted([...admittedList, pk]))
+    .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
+      + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
+    .catch(() => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — the relay could not be reached.' }); return null; });
   // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
   // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
   // eighteen round trips for a single decision.
@@ -4625,8 +4695,9 @@ function DashMembers() {
               was not on their screen. The other three write minors:/approved:/guardians:, which the relay
               really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
           {minorNotice && minorNotice.pk === m.pubkey ? (
-            <div role="status" style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
-              background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))', color: 'var(--ink)' }}>
+            <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+              background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+              border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
               {minorNotice.text}
             </div>
           ) : null}

@@ -112,3 +112,25 @@ child. On the device it shows 1.
 `#24` (the young person's explainer) is in the MEMBER app; the wording is present in the installed member
 assets. Not yet driven on screen as a minor — that needs a church with a child account on the phone, which
 the no-production-writes limit above rules out for now.
+
+## Batch 5 — safeguarding writes are checked before the screen asserts them (#4 core) — VERIFIED ON DEVICE
+
+Steward APK rebuilt from this branch and installed. Proved the packaged code carried the fix first:
+`clearanceRemoved` 3, `tone: "fail"` 9 in `assets/public/app/stew-dashboard.js`.
+
+The packaged `DashMembers` rendered under the phone's own React, one active member, the child control
+pressed with real DOM clicks, and the relay's answer stubbed to fail the way `_publishToRelays` does:
+
+| what the relay did | reseal to the member's phone | what the steward is told |
+|---|---|---|
+| refused the child mark | **0** — nothing sealed | "Couldn't mark …" and nothing about their status changed |
+| took the child mark, refused the clearance removal | 1 (correct: they ARE no longer a minor) | "**still cleared** / could NOT be removed" — and NOT "clearance was removed" |
+| took both | 1 | "clearance was removed" — the honest consequence, as before |
+
+The middle row is the one that matters. Before this batch the console said the youth-work clearance had
+been removed whether or not the relay accepted it, so a steward could believe a person was no longer
+cleared to work with young people while every relay still said they were.
+
+**Note on the harness, for whoever repeats this:** `DashMembers` hides members whose `lastTs` is older than
+90 days, so a fixture with `lastTs: 1` renders "0 ACTIVE" and no row at all. Use a recent timestamp or the
+control under test is not on screen.

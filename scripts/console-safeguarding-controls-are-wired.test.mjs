@@ -75,7 +75,7 @@ async function loadSlices(anchors, exportNames, globals) {
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
 // One member's row, drawn the way the Members panel draws it, over a church whose safeguarding state we set.
-async function memberRowFor({ minor = false, cleared = false }) {
+async function memberRowFor({ minor = false, cleared = false, results = {} }) {
   const { React } = miniReact();
   const calls = { minors: [], approved: [], nophoto: [], reseal: [], notice: [], blocked: [] };
   const sg = {
@@ -86,14 +86,16 @@ async function memberRowFor({ minor = false, cleared = false }) {
   };
   const win = {
     Steward: {
-      setMinors: (l) => { calls.minors.push(l); return true; },
-      setApproved: (l, o) => { calls.approved.push([l, o]); return true; },
+      // `results` lets a test make a write FAIL the way _publishToRelays does: it returns false when the
+      // document reached some relays and not others, which is the case these controls used to ignore.
+      setMinors: (l) => { calls.minors.push(l); return 'minors' in results ? results.minors : true; },
+      setApproved: (l, o) => { calls.approved.push([l, o]); return 'approved' in results ? results.approved : true; },
       setNoPhoto: (l) => { calls.nophoto.push(l); return true; },
     },
     dispatchEvent: (e) => { calls.blocked.push(e); return true; },
   };
   const mod = await loadSlices(
-    [['const toggleMinor = (pk) => {', 'toggleMinor'],
+    [['const toggleMinor = async (pk) => {', 'toggleMinor'],
      ['const toggleApproved = (pk) => {', 'toggleApproved'],
      ['const memberRow = (m, inactive) => {', 'memberRow']],
     ['memberRow'],
@@ -195,4 +197,50 @@ test('…and a cleared adult’s clearance can still be REMOVED, marked as a chi
   assert.equal(r.calls.approved.length, 1,
     'a clearance held by somebody now marked as a child cannot be removed from the console');
   assert.deepEqual(r.calls.approved[0][0], [], 'the member is still on the published cleared list after removal');
+});
+
+// ── AUDIT 2026-09-02 #4: a write that only partly landed must not be painted as done ───────────────────────
+// _publishToRelays returns FALSE when the document reached some relays and not others. That is the case that
+// matters: a relay polices a church's traffic with its OWN copy, so "marked as a child" landing on one relay
+// of three means the child is protected on one of three. These controls discarded that answer.
+const tick = () => new Promise(r => setTimeout(r, 5));
+
+test('A CHILD MARK THE RELAY REFUSED IS NOT SHOWN AS DONE', async () => {
+  const r = await memberRowFor({ results: { minors: false } });
+  r.byLabel('Mark as a child').props.onClick();
+  await tick();
+  assert.equal(r.calls.reseal.length, 0,
+    'the church resealed a safeguarding answer to the member’s phone over a write the relay refused — their ' +
+    'app is now told they are a child while the church document says nothing of the kind');
+  const notices = r.calls.notice.filter(Boolean);
+  assert.ok(notices.length, 'the steward was told nothing at all: the row simply looks marked');
+  assert.equal(notices[notices.length - 1].tone, 'fail');
+  assert.match(notices[notices.length - 1].text, /didn’t accept|nothing about their status has changed/i);
+});
+
+test('UNMARKING A CLEARED ADULT MUST NOT CLAIM A CLEARANCE WAS REMOVED WHEN IT WAS NOT', async () => {
+  // The dangerous direction. Unmarking a child also revokes their youth clearance; if THAT write fails and
+  // the console still says "their youth-work clearance was removed with it", a steward believes someone is
+  // no longer cleared to work with young people while every relay still says they are.
+  const r = await memberRowFor({ minor: true, cleared: true, results: { approved: false } });
+  r.byLabel('Unmark as a child').props.onClick();
+  await tick();
+  const last = r.calls.notice.filter(Boolean).pop();
+  assert.ok(last, 'no notice at all after unmarking a cleared adult');
+  assert.doesNotMatch(last.text, /clearance was removed/i,
+    'the console said the youth-work clearance was removed. The relay refused that write — they are still cleared');
+  assert.equal(last.tone, 'fail');
+  assert.match(last.text, /still cleared|could NOT be removed/i,
+    'the failure notice does not tell the steward the person is STILL cleared, which is the fact that matters');
+});
+
+test('CONTROL: when both writes land, the steward still gets the plain-English consequence', async () => {
+  const r = await memberRowFor({ minor: true, cleared: true });
+  r.byLabel('Unmark as a child').props.onClick();
+  await tick();
+  const last = r.calls.notice.filter(Boolean).pop();
+  assert.ok(last, 'the notice that explains the clearance was revoked has gone missing');
+  assert.match(last.text, /clearance was removed/i);
+  assert.notEqual(last.tone, 'fail');
+  assert.equal(r.calls.reseal.length, 1, 'the successful path must still reseal to the member’s phone');
 });
