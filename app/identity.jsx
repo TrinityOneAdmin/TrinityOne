@@ -1415,7 +1415,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
             <button onClick={() => setEdit(false)} style={{ border: 'none', background: 'none', color: 'var(--ink-2)', fontWeight: 600, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Edit profile</span>
-            <button onClick={() => { if (needFull && !twoWords(name)) return; onSave({ name: name.trim(), avatar: av }); setEdit(false); ctx.toast('Profile saved'); }} disabled={needFull && !twoWords(name)} style={{
+            <button onClick={() => {
+              if (needFull && !twoWords(name)) return;
+              setEdit(false);
+              Promise.resolve(onSave({ name: name.trim(), avatar: av }))
+                .then((ok) => ctx.toast(ok ? 'Profile saved' : 'Couldn’t save your profile — your church still sees the old name. Try again.'))
+                .catch(() => ctx.toast('Couldn’t save your profile — try again.'));
+            }} disabled={needFull && !twoWords(name)} style={{
               border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '9px 16px', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (needFull && !twoWords(name)) ? 0.5 : 1 }}>Save</button>
           </div>
         </div>

@@ -856,7 +856,15 @@ function CareAvailability({ ctx, part }) {
   const toggleTag = (id) => setTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
   const [custom, setCustom] = React.useState('');
   const addCustom = () => { const v = custom.trim().slice(0, 24); if (v && !tags.includes(v)) setTags(t => [...t, v]); setCustom(''); };
-  const save = () => { if (care.setAvail) care.setAvail(tags, note); setOpt(true); setEditing(false); };
+  // DO NOT LIST SOMEBODY WHO WAS NEVER LISTED. Audit 2026-09-02 #18. This flipped the card to "you're
+  // listed" before knowing, so a member who volunteered to help and was never recorded believes their
+  // church can call on them. `setAvail` already returns the engine's answer (app.jsx:1795).
+  const save = () => {
+    setEditing(false);
+    Promise.resolve(care.setAvail ? care.setAvail(tags, note) : null)
+      .then((ok) => { if (ok) setOpt(true); else { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told. Try again when you have signal.'); } })
+      .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.'); });
+  };
   const turnOff = () => { if (care.clearAvail) care.clearAvail(); setOpt(false); setEditing(false); setTags([]); setNote(''); };
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;
   const box = { padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 14 };

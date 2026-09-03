@@ -5750,8 +5750,22 @@ function DashMediaPanel({ church }) {
   const [aud, setAud] = React.useState(''); const [audSaved, setAudSaved] = React.useState(false);
   React.useEffect(() => { setVid(church.channel || ''); }, [church.channel]);
   React.useEffect(() => { setAud(church.audioFeed || ''); }, [church.audioFeed]);
-  const saveVid = () => { window.Steward.publishProfile({ channel: vid.trim() }); setVidSaved(true); setTimeout(() => setVidSaved(false), 1700); };
-  const saveAud = () => { window.Steward.publishProfile({ audioFeed: aud.trim() }); setAudSaved(true); setTimeout(() => setAudSaved(false), 1700); };
+  // "✓ Saved" FOLLOWS THE PUBLISH. Audit 2026-09-02 #17. publishProfile already returns its result; these
+  // discarded it and showed the tick regardless, so a feed the relay never took looked set. A steward then
+  // waits for videos that will never appear in members' Watch tab.
+  const [feedErr, setFeedErr] = React.useState('');
+  const saveVid = () => {
+    setFeedErr('');
+    Promise.resolve(window.Steward.publishProfile({ channel: vid.trim() }))
+      .then((r) => { if (r) { setVidSaved(true); setTimeout(() => setVidSaved(false), 1700); } else setFeedErr('Couldn’t save the video channel — the relay didn’t accept it.'); })
+      .catch(() => setFeedErr('Couldn’t save the video channel — the relay could not be reached.'));
+  };
+  const saveAud = () => {
+    setFeedErr('');
+    Promise.resolve(window.Steward.publishProfile({ audioFeed: aud.trim() }))
+      .then((r) => { if (r) { setAudSaved(true); setTimeout(() => setAudSaved(false), 1700); } else setFeedErr('Couldn’t save the audio feed — the relay didn’t accept it.'); })
+      .catch(() => setFeedErr('Couldn’t save the audio feed — the relay could not be reached.'));
+  };
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
   const inp = { flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' };
   return (
@@ -5769,6 +5783,7 @@ function DashMediaPanel({ church }) {
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" aria-label="Podcast RSS feed address" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
         <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {audSaved ? 'Saved' : 'Save'}</button>
+        {feedErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 6 }}>{feedErr}</div> : null}
       </div>
       {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 14, lineHeight: 1.5 }}>Want to host your church’s <b>own</b> audio/video (members-only, no YouTube)? That lives in <b>Resources → Sermons</b>.</div>

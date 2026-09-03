@@ -307,3 +307,14 @@ three clipboards. Nothing was written to the real clipboard:
 deferring on a SLEEPING SCREEN — the phone put down mid-onboarding. The fix is covered by tests against the
 shipped source, but producing the actual hang needs a sleeping handset and is still owed if the owner
 wants it seen.
+
+## Batch 15 — "Saved" follows the save (#17-publishProfile, #18) — VERIFIED ON DEVICE
+
+Member APK. The shipped `saveIdentity` and the helper card's `save` lifted from the phone's own files:
+
+    profile, nothing accepted   -> null                (so the toast says it failed)
+    profile, accepted           -> truthy
+    helper card, not accepted   -> not listed, and "Couldn't list you — the church hasn't been told"
+    helper card, accepted       -> listed
+
+The church's video/audio feed rows are CONSOLE, covered by the same commit's structural test.

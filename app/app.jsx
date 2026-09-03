@@ -1600,7 +1600,11 @@ function App() {
     if (patch.name != null) meta.name = String(patch.name).trim();
     if (patch.avatar != null) meta.av = patch.avatar;
     if (patch.hidden != null) meta.hidden = !!patch.hidden;
-    FS.ready.then(() => FS.setProfile(meta)).catch(() => {});
+    // RETURN IT. Audit 2026-09-02 #18. This swallowed the result, so identity.jsx toasted "Profile saved"
+    // over a publish nobody accepted — and a member whose display name never reached the relay goes on
+    // appearing as Anonymous to their whole church while their own screen shows the name they typed.
+    // setProfile may withhold up to ~6s before resolving, so the confirmation is now LATE rather than wrong.
+    return FS.ready.then(() => FS.setProfile(meta)).catch(() => null);
   };
 
   const toast = (msg) => {
