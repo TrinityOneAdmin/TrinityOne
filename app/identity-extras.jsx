@@ -162,7 +162,15 @@ function RecoverySheet({ open, onClose, ctx }) {
     if (ID && ID.exportMnemonic) ID.exportMnemonic().then(m => setWords(m ? m.split(' ') : [])).catch(() => setWords([]));
     else setWords(window.TrinityData.RECOVERY_PHRASE || []);
   }, [open]);
-  const copyPhrase = () => { if (navigator.clipboard) navigator.clipboard.writeText(words.join(' ')).catch(() => {}); ctx.toast('Phrase copied — paste somewhere safe'); };
+  // Same rule as identity.jsx's twelve-word screen: the reassurance follows the write, and a failure says
+  // what to do instead. These words are the account; "copied" over an empty clipboard is the worst lie the
+  // app can tell. Audit 2026-09-02 #13.
+  const copyPhrase = () => {
+    if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead'); return; }
+    navigator.clipboard.writeText(words.join(' '))
+      .then(() => ctx.toast('Phrase copied — paste somewhere safe'))
+      .catch(() => ctx.toast('Couldn’t copy — write the words down instead'));
+  };
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="88%" z={60}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -422,6 +430,7 @@ function MovePhoneSheet({ open, onClose, ctx }) {
   const [out, setOut] = useIx(null);          // { qr, code } sealed for the new phone
   const [err, setErr] = useIx('');
   const [copied, setCopied] = useIx(false);
+  const [copyErr, setCopyErr] = useIx('');   // a failed copy has to say so — the QR above is the way through
   useIxE(() => { if (!open) { setStage('intro'); setOut(null); setErr(''); setCopied(false); } }, [open]);
   const onScan = async (text) => {
     setErr('');
@@ -457,8 +466,16 @@ function MovePhoneSheet({ open, onClose, ctx }) {
           <div style={{ width: 250, height: 250, background: '#fff', borderRadius: 20, padding: 12, boxShadow: 'var(--shadow-lg)', boxSizing: 'border-box' }}
             dangerouslySetInnerHTML={{ __html: (out && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(out.qr) : '' }} />
         </div>
-        <button onClick={() => { try { if (navigator.clipboard && out) navigator.clipboard.writeText(out.qr); } catch (e) {} setCopied(true); setTimeout(() => setCopied(false), 2500); }}
+        <button onClick={() => {
+          // The QR above is the other way across, so a failed copy is recoverable — but it has to SAY so
+          // rather than showing a tick. Audit 2026-09-02 #13.
+          if (!navigator.clipboard || !out) { setCopyErr('Couldn’t copy — scan the code above instead'); setTimeout(() => setCopyErr(''), 3000); return; }
+          navigator.clipboard.writeText(out.qr)
+            .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); })
+            .catch(() => { setCopyErr('Couldn’t copy — scan the code above instead'); setTimeout(() => setCopyErr(''), 3000); });
+        }}
           style={{ width: '100%', padding: 11, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: copied ? 'var(--sage)' : 'var(--ink)', marginBottom: 12 }}>{copied ? 'Copied — paste it into the new phone' : 'Can’t scan? Copy the code instead'}</button>
+        {copyErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', textAlign: 'center', marginTop: 6 }}>{copyErr}</div> : null}
         {/* This code now covers the WHOLE exchange — both keys and the sealed payload — so it cannot exist
             until the two phones have actually swapped codes, and it cannot be ground out in advance. The
             four-character version it replaced was derived from the new phone's public key alone (2^20, and

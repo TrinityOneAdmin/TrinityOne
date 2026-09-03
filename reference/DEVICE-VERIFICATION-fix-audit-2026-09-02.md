@@ -293,3 +293,17 @@ real relay and drives a real websocket (9/9, and the new case proved failing aga
 Remember the standing trap when checking this anywhere: a relay process OLDER than `scripts/gateway.mjs`
 enforces the old parsing against new clients and makes this look unfixed. Check
 `ps -o lstart=` against `stat -c '%y' scripts/gateway.mjs` before diagnosing.
+
+## Batch 14 — "copied" means copied; the wizard cannot skip words it never showed (#13, #14) — ON DEVICE
+
+Member APK. The shipped `copyPhrase` lifted from the phone's own `app/identity-extras.js` and run against
+three clipboards. Nothing was written to the real clipboard:
+
+    clipboard refuses     -> "Couldn't copy — write the words down instead"
+    no clipboard at all   -> "This phone won't let the app copy — write the words down instead"
+    clipboard works       -> "Phrase copied — paste somewhere safe"
+
+**NOT reproduced on the device, and the plan flags it:** #14's real-world trigger is SecureStorage
+deferring on a SLEEPING SCREEN — the phone put down mid-onboarding. The fix is covered by tests against the
+shipped source, but producing the actual hang needs a sleeping handset and is still owed if the owner
+wants it seen.

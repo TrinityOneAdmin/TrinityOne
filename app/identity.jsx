@@ -19,6 +19,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   const [av, setAv] = useId({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
   const [words, setWords] = useId([]);
   const [ack, setAck] = useId(false);
+  const [wordsErr, setWordsErr] = useId('');   // the secure store never produced the phrase — say so, do not sit on "Preparing…"
   const [confirmSkip, setConfirmSkip] = useId(false);   // ask once more before an irreversible shortcut
   const [skippedWords, setSkippedWords] = useId(false);  // …and remember, so the PIN step can say what it means
   const [copied, setCopied] = useId(false);
@@ -397,17 +398,26 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   useIdE(() => { if (open) { setIntro(true); setRMode('choose'); setXfer(null); setXferStage('show'); setXferSeen(null); setStep(0); setName(suggestedName || ''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
   // fetch the member's own 12 words when we reach the back-up step. The secure store can answer empty for a
   // moment right after boot, so retry until we get a full phrase rather than getting stuck on "Preparing…".
+  // AFTER TWELVE TRIES, SAY SO. Audit 2026-09-02 #14.
+  //
+  // The secure store can answer empty for a moment after boot, hence the retries. But when they ran out the
+  // screen went on saying "Preparing…" for ever WITH THE TICK-BOX AND CONTINUE STILL ENABLED — so a member
+  // could confirm they had written down words they had never been shown, and land on a check screen with
+  // nothing to check. The real-world cause is SecureStorage deferring on a sleeping screen, which is exactly
+  // when someone sets a phone down mid-onboarding.
   useIdE(() => {
     if (step !== 1 || words.length) return;
+    setWordsErr('');
     let cancelled = false, tries = 0;
     const grab = () => {
       if (cancelled || !window.TrinityIdentity || !window.TrinityIdentity.exportMnemonic) return;
       window.TrinityIdentity.exportMnemonic().then(m => {
         if (cancelled) return;
         const w = String(m || '').trim().split(/\s+/).filter(Boolean);
-        if (w.length >= 12) setWords(w);
+        if (w.length >= 12) { setWords(w); setWordsErr(''); }
         else if (tries++ < 12) setTimeout(grab, 300);
-      }).catch(() => { if (!cancelled && tries++ < 12) setTimeout(grab, 300); });
+        else setWordsErr(1);   // give up loudly rather than sitting on "Preparing…" for ever
+      }).catch(() => { if (cancelled) return; if (tries++ < 12) setTimeout(grab, 300); else setWordsErr(1); });
     };
     grab();
     return () => { cancelled = true; };
@@ -946,7 +956,16 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
             <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1, accentColor: 'var(--clay)', flexShrink: 0 }} />
             <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
           </label>
-          <button onClick={() => setStep(2)} disabled={!ack} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ack ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
+          {wordsErr ? (
+            <div role="alert" style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)', padding: '11px 13px', borderRadius: 12, marginBottom: 12,
+              background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, var(--line))' }}>
+              <b style={{ color: 'var(--ink)' }}>This phone hasn’t produced your words yet.</b> Close and reopen the app and come
+              back to this screen. If it keeps happening, do not skip this step — your account cannot be
+              recovered without these words.
+              <button onClick={() => { setWordsErr(''); setWords([]); setStep(1); }} style={{ display: 'block', marginTop: 8, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 10, padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Try again</button>
+            </div>
+          ) : null}
+          <button onClick={() => setStep(2)} disabled={!ack || words.length < 12} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (ack && words.length >= 12) ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
           <button onClick={() => setConfirmSkip(true)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
         </React.Fragment>) : step === 2 ? (<React.Fragment>
           <button onClick={confirmWords} disabled={!canConfirm} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: canConfirm ? 'pointer' : 'default', marginBottom: 10, background: canConfirm ? 'var(--clay)' : 'var(--surface-2)', color: canConfirm ? '#fff' : 'var(--ink-3)', boxShadow: canConfirm ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
@@ -1803,7 +1822,16 @@ function FamilySheet({ open, onClose, ctx }) {
                 </div>
               ))}
             </div>
-            <button onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(made.mnemonic).catch(() => {}); ctx.toast('Recovery words copied — store them safely'); }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '11px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', marginBottom: 22 }}>Copy the 12 words</button>
+            <button onClick={() => {
+              // "COPIED" MUST MEAN COPIED. Audit 2026-09-02 #13. This toasted the reassurance whether or not
+              // the write happened — and swallowed the failure — for the ONE screen that shows a child's
+              // twelve words once. A parent who reads "copied", closes the sheet and finds an empty
+              // clipboard has lost that account. Same shape as the working control at :879.
+              if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead'); return; }
+              navigator.clipboard.writeText(made.mnemonic)
+                .then(() => ctx.toast('Recovery words copied — store them safely'))
+                .catch(() => ctx.toast('Couldn’t copy — write the words down instead'));
+            }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '11px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', marginBottom: 22 }}>Copy the 12 words</button>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '0 4px 10px' }}>HAND IT TO THE CHILD’S DEVICE</div>
             {/* "TrinityOne's camera" sent a parent hunting for an in-app scanner that does not exist and was
                 never meant to: a fresh install offers only the device-TRANSFER scanner, which expects a live
