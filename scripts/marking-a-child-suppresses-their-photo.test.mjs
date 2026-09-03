@@ -32,8 +32,11 @@ const slice = (from, to) => {
 };
 
 // Run the SHIPPED toggleMinor with everything it touches injected, and record what it publishes.
-function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared = false, pk = 'kidpub' }) {
-  const body = slice('const toggleMinor = (pk) => {', '\n  };') + '\n  };';
+// ASYNC since 2026-09-03: toggleMinor now AWAITS setMinors/setApproved so it can refuse to paint a
+// safeguarding change the relay did not accept (audit #4). The lift must await it too, or `calls` is read
+// before the writes have been recorded and every assertion here reads an empty list.
+async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared = false, pk = 'kidpub' }) {
+  const body = slice('const toggleMinor = async (pk) => {', '\n  };') + '\n  };';
   const calls = { minors: [], approved: [], nophoto: [], reseal: [], notice: [] };
   const sg = {
     minors: marking ? [] : [pk],
@@ -41,7 +44,7 @@ function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared = fal
     nophoto: alreadySuppressed ? [pk] : [],
     clearedKnown: true,
   };
-  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls',
+  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls', 'nameByPub',
     body + '\nreturn toggleMinor;')(
     sg,
     new Set(sg.minors),
@@ -55,55 +58,56 @@ function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared = fal
     (...a) => calls.reseal.push(a),
     (n) => calls.notice.push(n),
     calls,
+    { },   // nameByPub — only read on the failure branches, which these cases do not take
   );
-  fn(pk);
+  await fn(pk);
   return calls;
 }
 
-test('marking a member as a child suppresses the photo they already have', () => {
-  const c = runToggle({ marking: true, kidPhotosAllowed: false });
+test('marking a member as a child suppresses the photo they already have', async () => {
+  const c = await runToggle({ marking: true, kidPhotosAllowed: false });
   assert.equal(c.nophoto.length, 1,
     'the member is marked as a child and their photograph keeps rendering on every other member\'s device — ' +
     'measured on a phone, this is the vector that needs no tampering at all');
   assert.ok(c.nophoto[0].includes('kidpub'), 'the child was not actually added to the suppression list');
 });
 
-test('…and they are still recorded as a child', () => {
-  const c = runToggle({ marking: true, kidPhotosAllowed: false });
+test('…and they are still recorded as a child', async () => {
+  const c = await runToggle({ marking: true, kidPhotosAllowed: false });
   assert.equal(c.minors.length, 1, 'the child mark itself stopped being published');
   assert.ok(c.minors[0].includes('kidpub'));
 });
 
-test('a church that ALLOWS children’s photos is left alone', () => {
+test('a church that ALLOWS children’s photos is left alone', async () => {
   // Churches safeguard differently. If this church has chosen to permit them, we do not overrule it.
-  const c = runToggle({ marking: true, kidPhotosAllowed: true });
+  const c = await runToggle({ marking: true, kidPhotosAllowed: true });
   assert.equal(c.nophoto.length, 0,
     'a church that deliberately allows children’s photos had one suppressed anyway');
 });
 
-test('somebody already on the suppression list is not written twice', () => {
-  const c = runToggle({ marking: true, kidPhotosAllowed: false, alreadySuppressed: true });
+test('somebody already on the suppression list is not written twice', async () => {
+  const c = await runToggle({ marking: true, kidPhotosAllowed: false, alreadySuppressed: true });
   assert.equal(c.nophoto.length, 0, 'republishes the whole list for no change, on every mark');
 });
 
-test('UNMARKING does not un-suppress — a steward’s own moderation must survive', () => {
-  const c = runToggle({ marking: false, kidPhotosAllowed: false, alreadySuppressed: true });
+test('UNMARKING does not un-suppress — a steward’s own moderation must survive', async () => {
+  const c = await runToggle({ marking: false, kidPhotosAllowed: false, alreadySuppressed: true });
   assert.equal(c.nophoto.length, 0,
     'unmarking a child re-allowed their photo. That list is also how a steward suppresses a photo for ' +
     'ordinary moderation, and the two cannot be told apart — silently undoing that is the worse mistake.');
 });
 
-test('UNMARKING someone who was NOT suppressed must not suppress them', () => {
+test('UNMARKING someone who was NOT suppressed must not suppress them', async () => {
   // This case exists because the previous test could not catch a missing `!unmarking`: it passed
   // alreadySuppressed, so the `!nophotoSet.has(pk)` guard blocked the write anyway and a sabotage that
   // dropped the unmarking check stayed green. Two guards, one of them masking the other, is exactly how a
   // test ends up unable to fail.
-  const c = runToggle({ marking: false, kidPhotosAllowed: false, alreadySuppressed: false });
+  const c = await runToggle({ marking: false, kidPhotosAllowed: false, alreadySuppressed: false });
   assert.equal(c.nophoto.length, 0,
     'unmarking a child SUPPRESSED their photo — the opposite of what the action means');
 });
 
-test('kidPhotosAllowed is derived from the CHURCH, and derived correctly', () => {
+test('kidPhotosAllowed is derived from the CHURCH, and derived correctly', async () => {
   // runToggle injects kidPhotosAllowed as a free variable, so the real derivation sits outside the slice it
   // runs. The audit's exact defeat: change that one line to `const kidPhotosAllowed = true;` and a photo-OFF
   // church silently stops suppressing marked children's existing photos while all these tests stay green.
@@ -121,9 +125,9 @@ test('kidPhotosAllowed is derived from the CHURCH, and derived correctly', () =>
     'a non-boolean unlocks children’s photos — this must be an identity check, not a truthy one');
 });
 
-test('the comment explaining why it is one-way is still there', () => {
+test('the comment explaining why it is one-way is still there', async () => {
   // Not decoration: the next reader will otherwise "fix" the asymmetry above and reopen it.
-  const around = stripComments(slice('const toggleMinor = (pk) => {', '\n  };'));
+  const around = stripComments(slice('const toggleMinor = async (pk) => {', '\n  };'));
   assert.match(around, /setNoPhoto/, 're-anchor: toggleMinor no longer touches the suppression list at all');
 });
 
@@ -223,8 +227,8 @@ test('running twice on the same state publishes once', async () => {
 // the relay treats as cleared to privately message children. What was wrong is that it happened in silence, so
 // a steward correcting a mis-tap destroyed a real volunteer's clearance with no warning and no hint that
 // re-clearing was needed. Found on the device, 2026-08-27.
-test('unmarking a CLEARED child tells the steward their clearance went with it', () => {
-  const c = runToggle({ marking: false, kidPhotosAllowed: false, cleared: true });
+test('unmarking a CLEARED child tells the steward their clearance went with it', async () => {
+  const c = await runToggle({ marking: false, kidPhotosAllowed: false, cleared: true });
   assert.equal(c.approved.length, 1, 'the clearance was NOT revoked — a stale clearance on a former child is ' +
     'the exact hazard the surrounding code exists to prevent');
   const said = c.notice.filter(Boolean);
@@ -233,12 +237,12 @@ test('unmarking a CLEARED child tells the steward their clearance went with it',
   assert.match(said[0].text, /Clear for youth/, 'it does not say how to put it back');
 });
 
-test('unmarking someone who was NOT cleared says nothing', () => {
-  const c = runToggle({ marking: false, kidPhotosAllowed: false, cleared: false });
+test('unmarking someone who was NOT cleared says nothing', async () => {
+  const c = await runToggle({ marking: false, kidPhotosAllowed: false, cleared: false });
   assert.deepEqual(c.notice.filter(Boolean), [], 'it claims a clearance was removed when there was none');
 });
 
-test('MARKING says nothing about clearances — it removes none', () => {
-  const c = runToggle({ marking: true, kidPhotosAllowed: false, cleared: false });
+test('MARKING says nothing about clearances — it removes none', async () => {
+  const c = await runToggle({ marking: true, kidPhotosAllowed: false, cleared: false });
   assert.deepEqual(c.notice.filter(Boolean), [], 'marking someone as a child reported a clearance removal');
 });

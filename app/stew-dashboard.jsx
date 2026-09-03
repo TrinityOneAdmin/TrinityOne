@@ -4891,7 +4891,12 @@ function DashMembers() {
                 <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', opacity: 0.85 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>Blocked member</div>
+                    {/* NAME THE PERSON. This row said "Blocked member" for everyone, so a steward looking at
+                        the list could not tell WHO they had blocked, and could not pick the right one to undo.
+                        `nameByPub` is already in scope and already holds the answer. Someone who never set a
+                        name is called out as exactly that, rather than shown a truncated key and left to guess.
+                        Audit 2026-09-02 #17. */}
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{nameByPub[pk] || 'A member with no name set'}</div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{String(pk).slice(0, 12)}…</div>
                   </div>
                   <button onClick={() => unblock(pk)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>

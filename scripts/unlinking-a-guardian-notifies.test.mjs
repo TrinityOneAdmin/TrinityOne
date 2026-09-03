@@ -38,23 +38,26 @@ const SRC = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 
 const KID = 'kid-pubkey', MUM = 'mum-pubkey', DAD = 'dad-pubkey', OTHER_KID = 'otherkid-pubkey';
 
 // Run the SHIPPED unlinkParent with everything it touches injected, and record what it did.
-function runUnlink(guardians, childPub, parentPub) {
-  const body = fnBody(SRC, 'const unlinkParent = (childPub, parentPub) => {', 'unlinkParent');
+// ASYNC since 2026-09-03: unlinkParent now AWAITS setGuardians so it can refuse to say a link was removed
+// when the relay would not take it — failing to REMOVE a link leaves an adult still able to message that
+// child (audit #4). Await it here, or `calls` is read before the write is recorded.
+async function runUnlink(guardians, childPub, parentPub) {
+  const body = fnBody(SRC, 'const unlinkParent = async (childPub, parentPub) => {', 'unlinkParent');
   const calls = { guardians: [], reseal: [], notified: [] };
   const sg = { minors: [KID, OTHER_KID], approved: ['cleared-pubkey'] };
   const win = { Steward: {
     setGuardians: (g) => { calls.guardians.push(g); return true; },
     notifyGuardianRemoved: (parent, child) => { calls.notified.push([parent, child]); },
   } };
-  const fn = new Function('guardians', 'sg', 'window', '_reseal',
-    body + '\nreturn unlinkParent;')(guardians, sg, win, (...a) => calls.reseal.push(a));
-  fn(childPub, parentPub);
+  const fn = new Function('guardians', 'sg', 'window', '_reseal', 'setMinorNotice',
+    body + '\nreturn unlinkParent;')(guardians, sg, win, (...a) => calls.reseal.push(a), () => {});
+  await fn(childPub, parentPub);
   return calls;
 }
 
 test('CONTROL: unlinking really does rewrite the church’s parent map', async () => {
   // If this failed, everything below would be asserting about a function that no longer does its main job.
-  const c = runUnlink({ [KID]: [MUM, DAD], [OTHER_KID]: [MUM] }, KID, MUM);
+  const c = await runUnlink({ [KID]: [MUM, DAD], [OTHER_KID]: [MUM] }, KID, MUM);
   assert.equal(c.guardians.length, 1, 'unlinking published no parent map at all');
   assert.deepEqual(c.guardians[0][KID], [DAD], 'the removed parent is still on the child’s list');
   assert.deepEqual(c.guardians[0][OTHER_KID], [MUM],
@@ -62,7 +65,7 @@ test('CONTROL: unlinking really does rewrite the church’s parent map', async (
 });
 
 test('REMOVING A PARENT LINK TELLS THE PARENT’S APP', async () => {
-  const c = runUnlink({ [KID]: [MUM] }, KID, MUM);
+  const c = await runUnlink({ [KID]: [MUM] }, KID, MUM);
   assert.equal(c.notified.length, 1,
     'the church removed a parent link and nothing reached the parent’s phone. Their app stores the link ' +
     'locally — they never set it up, the console told them it existed — so it keeps showing a child they no ' +
@@ -75,13 +78,13 @@ test('REMOVING A PARENT LINK TELLS THE PARENT’S APP', async () => {
 test('…and the CHILD’s sealed copy is re-issued in the same action', async () => {
   // The child's phone holds its own sealed answer about who its parents are. Without this it goes on
   // treating a removed adult as somebody it may always message — the exact hole this function opens up.
-  const c = runUnlink({ [KID]: [MUM] }, KID, MUM);
+  const c = await runUnlink({ [KID]: [MUM] }, KID, MUM);
   assert.equal(c.reseal.length, 1, 'the child’s own sealed parent list was never re-issued');
   assert.deepEqual(c.reseal[0][2], [KID], 're-sealed somebody other than the child whose link was removed');
 });
 
 test('the child is dropped from the map entirely when their LAST parent goes', async () => {
-  const c = runUnlink({ [KID]: [MUM], [OTHER_KID]: [DAD] }, KID, MUM);
+  const c = await runUnlink({ [KID]: [MUM], [OTHER_KID]: [DAD] }, KID, MUM);
   assert.equal(Object.prototype.hasOwnProperty.call(c.guardians[0], KID), false,
     'a child with no parents left is kept in the map as an empty entry, which reads as "linked" everywhere ' +
     'the map is consulted by presence');
@@ -90,7 +93,7 @@ test('the child is dropped from the map entirely when their LAST parent goes', a
 });
 
 test('unlinking one of TWO parents leaves the other family link alone, and notifies only the one removed', async () => {
-  const c = runUnlink({ [KID]: [MUM, DAD] }, KID, DAD);
+  const c = await runUnlink({ [KID]: [MUM, DAD] }, KID, DAD);
   assert.deepEqual(c.guardians[0][KID], [MUM], 'the remaining parent lost their link as well');
   assert.deepEqual(c.notified, [[DAD, KID]],
     'the wrong parent was told their link was removed — a parent who still has one would then stop being ' +

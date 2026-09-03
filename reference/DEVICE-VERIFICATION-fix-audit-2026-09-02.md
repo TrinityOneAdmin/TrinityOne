@@ -134,3 +134,19 @@ cleared to work with young people while every relay still said they were.
 **Note on the harness, for whoever repeats this:** `DashMembers` hides members whose `lastTs` is older than
 90 days, so a fixture with `lastTs: 1` renders "0 ACTIVE" and no row at all. Use a recent timestamp or the
 control under test is not on screen.
+
+## Batch 6 (part) — the blocked list names who was blocked (#17-blocked-list) — VERIFIED ON DEVICE
+
+Packaged `DashMembers` rendered on the phone under its own React, two blocked pubkeys, one of whom is a
+known member and one of whom never set a name; the "See blocked" toggle pressed with a real DOM click:
+
+    namesTheBlockedPerson  true    ("Bram Whitlock" is on screen)
+    stillSaysBlockedMember false   (the old label is gone)
+    callsOutTheNameless    true    ("A member with no name set")
+
+Fails first on 50e196c: `not ok 2 A BLOCKED MEMBER IS NAMED`, `not ok 3 …somebody who never set a name`,
+with the CONTROL (the list opens at all) green on both.
+
+**NOT done in this part, and still open:** the one-tap ✕ on the JOIN QUEUE, which blocks permanently and
+rotates every church key with no confirm (audit #5). The two-step it needs already exists in the members
+list a few lines away.
