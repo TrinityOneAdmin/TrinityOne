@@ -40,7 +40,10 @@ function render({ minors, reqs }) {
     window: {
       useStewardChurch: () => ({ npub: 'npub1church' }),
       useStewardMembers: () => [{ pubkey: CHILD, name: 'Ellie' }, { pubkey: ADULT, name: 'Margaret' }],
-      useStewardSafeguard: () => ({ minors, approved: [] }),
+      // minorsKnown: true — these cases are all about a console whose lists HAVE arrived. Since the
+      // 2026-09-03 audit fix the gate fails CLOSED on a missing answer, so a fixture that omits this key
+      // is asserting about the loading state instead of the one it names. Say which state it is in.
+      useStewardSafeguard: () => ({ minors, approved: [], minorsKnown: true }),
       StewardMeals: { subscribeCareRequests: () => () => {}, declineCareRequest: () => {} },
     },
     mealsLbl: {}, MEALS_TYPE_ICON: {}, mealsTypeLabel: () => 'Someone to talk to',
