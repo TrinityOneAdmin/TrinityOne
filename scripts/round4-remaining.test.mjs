@@ -37,7 +37,7 @@ test('pressing the answer you already gave does not silently throw it away', () 
   // Priyanka: "It already said You're going. I tapped Going to confirm — and it wiped my answer." Pressing
   // your current answer clears it, which is a deliberate toggle and a reasonable thing to want — but the
   // common press is a confirmation, and losing an answer should never be the silent outcome of one tap.
-  const fn = fnBody(APP, 'setRsvp: (eventId, verdict) =>');
+  const fn = fnBody(APP, 'setRsvp: async (eventId, verdict) =>');
   // A first draft matched /cleared/ — which the variable name satisfies whether or not anything is said.
   // Proven vacuous by sabotage. Assert the guarded call itself.
   assert.match(fn, /if \(cleared\) toast\(/,
