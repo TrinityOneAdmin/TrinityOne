@@ -6,10 +6,28 @@ the evidence, batch by batch. CLAUDE.md rule 6: the suite passing is not the gat
 **The device.** Oppo CPH2477 (`J77HDMTC7TKBZDFM`), `com.trinityone.app`, debug build, attached over
 `adb` + CDP with `webContentsDebuggingEnabled` ON (pilot posture).
 
-**What the phone can and cannot verify.** The APK carries the MEMBER app only — `index.html`, `app/*.js`
-and `vendor/*.js`. **The steward console is not in the APK** (`steward.html` is never synced), so a
-console-only change has no phone surface and its real surface is a desktop browser. Each entry below says
-which it was. Claiming a console fix was "verified on the phone" would be a false claim in the record.
+**CORRECTION, 2026-09-03 — the first version of this file was WRONG.** It said "the steward console is not
+in the APK, so a console-only change has no phone surface", and logged batches 3 and 4 as unverifiable.
+The owner corrected me. **There are two Android apps**, built from the one shared `android/` project:
+
+- `com.trinityone.app` — the member app. `scripts/sync-web.sh` never copies `steward.html`, so the MEMBER
+  APK holds the member app only. That much was right.
+- `com.trinityone.steward` — **the console as its own Android app**, so a steward can run a church from a
+  phone when the web console is blocked. Built by `scripts/build-steward-apk.sh`, which swaps the
+  applicationId / name / icon / webDir and always restores the member project on exit.
+
+So console work IS phone-testable, and everything below the batch-2 entry has been redone on the device.
+
+**Use `source scripts/android-env.sh`** — JAVA_HOME, ANDROID_HOME, GRADLE_USER_HOME and PATH all point at
+`/mnt/storage/android-tools`. Nothing is on the default PATH and there is no system JDK. Do not hand-roll
+those paths (I did, before finding the script).
+
+**A LIMIT I KEPT DELIBERATELY.** The phone can reach the live relays for real — there is no
+`--host-resolver-rules` on a handset. The owner's instruction is that a8 stays untouched, and creating or
+restoring a church on the phone console would self-register it to the canonical relays. So no church was
+created or restored on the phone. The console checks below render the PACKAGED component under the page's
+own React, with the outbound calls stubbed and no network touched at all. That proves the shipped code
+behaves correctly on the device; it does not exercise a relay round-trip, and this file does not claim it.
 
 **Building the branch onto the phone** — the toolchain is not on `PATH`:
 
@@ -60,13 +78,37 @@ the new build admits it at every skew tested. That is the finding and the fix, o
 
 ---
 
-## Batch 3 — Undo restores a room's protections (#2, #4-DashGroups) — NO PHONE SURFACE
-Console-only (`app/stew-dashboard.jsx`). Not in the APK. Verified by the point-of-use tests in
-`scripts/undo-brings-the-room-back-whole.test.mjs` driving the real component, proved failing against
-50e196c. **Still wants a human on a desktop console before merge.**
+## Batch 3 — Undo restores a room's protections (#2, #4-DashGroups) — VERIFIED ON DEVICE
 
-## Batch 4 — safeguarding lists fail closed (#3, #17-checkin, #24) — PART PHONE, PART CONSOLE
-- `#3` care requests and `#17-checkin` are console-only. No phone surface. Same status as batch 3.
-- `#24` the young person's explainer IS the member app. Present in the installed assets, verified by
-  string on the device (`app/screens-chat.js` carries the empty-cleared-list wording). **Not yet driven
-  on screen as a minor** — that needs a church on the phone with a minor account, which is a longer setup.
+Steward APK built from this branch and installed (`com.trinityone.steward`, 2026-09-03 08:25). Proved the
+packaged code carried the fix before trusting anything: `pubOr` 5, `rowErr` 3, `setRowErr` 4 in
+`assets/public/app/stew-dashboard.js`, matching the source exactly.
+
+The packaged `DashGroups` rendered under the phone's own React, delete -> confirm -> Undo driven with real
+DOM clicks. The room went in as invite-only, encrypted, 2 members, 1 leader. What Undo published:
+
+    visibility "invite" · members ["aa11","bb22"] · encrypted true · leaders ["aa11"]
+    name "Safeguarding leads" · category "staff"
+
+Every field the old build dropped came back. Failure-first was proved on the desktop against 50e196c
+(`the room came back OPEN. It was invite-only`); this entry proves the shipped APK behaves correctly on the
+handset.
+
+## Batch 4 — safeguarding lists fail closed (#3, #17-checkin, #24) — VERIFIED ON DEVICE
+
+Packaged console components rendered on the phone under its own React:
+
+| component | state | result |
+|---|---|---|
+| care requests | lists not yet known | **0** "Set up help", heading reads "CHECKING WHO THESE ARE FROM", does NOT claim "FROM A YOUNG PERSON" |
+| care requests | known, church has no children marked | **1** "Set up help" — the care module still works |
+| check-in | lists not yet known | "Loading the children's list…" |
+| check-in | known, no children marked | "No children marked yet" |
+
+The second row is the one that matters most: it is the design decision under test. Gating these screens on
+`loaded` instead of `minorsKnown` would show 0 there, permanently, in every church that has never marked a
+child. On the device it shows 1.
+
+`#24` (the young person's explainer) is in the MEMBER app; the wording is present in the installed member
+assets. Not yet driven on screen as a minor — that needs a church with a child account on the phone, which
+the no-production-writes limit above rules out for now.
