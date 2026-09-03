@@ -4939,7 +4939,14 @@ function DashCheckin() {
       <button onClick={() => setPicking(true)} disabled={!minors.length || !sgKey} title={!sgKey ? 'The register’s key hasn’t reached this console yet — a check-in written now would not be saved.' : ''} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (minors.length && sgKey) ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>This is a <b>door operation</b>, done by a leader on this device — parents do nothing in their own app, and nothing about check-in appears there. Say so when you announce it, or they will go looking. Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext, and the only people who can open them are you and anyone you have given <b>Safeguarding</b> to.</DismissibleNote>
-      {!minors.length ? (
+      {/* "No children marked yet" is a CLAIM ABOUT THE CHURCH, and for the first moments of every mount the
+          list is simply empty because it has not arrived. A leader opening check-in at the door read it as
+          "this church has marked nobody" and went looking in Members for records that were already there.
+          Say which of the two it is. `minorsKnown`, not `loaded` — see subscribeSafeguard: `loaded` never
+          becomes true in a church that has never marked a child, which is exactly this screen's empty case. */}
+      {!minors.length && sg.minorsKnown === false ? (
+        <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>Loading the children’s list…</p></div>
+      ) : !minors.length ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>
       ) : (
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>

@@ -18731,6 +18731,7 @@ zoo`.split("\n");
       let cleared = {};
       const isLoaded = () => sawMinors && sawEose;
       const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed();
+      const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed();
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -18745,7 +18746,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -18759,7 +18760,7 @@ zoo`.split("\n");
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -18770,7 +18771,7 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === GUARDIANS_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
@@ -18780,7 +18781,7 @@ zoo`.split("\n");
             } catch {
               guardians = {};
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -18791,7 +18792,7 @@ zoo`.split("\n");
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
           sawEose = true;
-          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
         }
       });
       return () => {

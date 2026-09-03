@@ -514,7 +514,20 @@ function StewCareRequests() {
   // and signs up to. That is how a child's private disclosure becomes a notice board item with their name on.
   const _sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
   const _minors = new Set((_sg.minors || []).map(x => String(x || '').toLowerCase()));
-  const isChild = (r) => _minors.has(String(r && r.from || '').toLowerCase());
+  // FAIL CLOSED WHILE WE DO NOT YET KNOW WHO THE CHILDREN ARE. Audit 2026-09-02 #3.
+  //
+  // This asked the minors list a question it could not yet answer. The lists arrive over a subscription, so
+  // for the first moments of every console mount `_minors` is EMPTY — and an empty set answers "no" to
+  // "is this from a child?" exactly as confidently as a loaded one does. A request arriving in that window
+  // was filed with the adults, under the "Set up help" button, and that button publishes a NEED the whole
+  // congregation reads and signs up to. That is a child's private disclosure turned into a notice board item
+  // with their name on it, and nothing about the screen looked wrong.
+  //
+  // `minorsKnown` and NOT `loaded`: `loaded` requires the minors DOCUMENT, which a church that has never
+  // marked a child never publishes, so gating on it would put every request in the confidential section for
+  // ever in exactly those churches — the care module silently switched off. See subscribeSafeguard.
+  const _minorsKnown = _sg.minorsKnown !== false;   // absent (an older console) reads as known, not as blocked
+  const isChild = (r) => !_minorsKnown || _minors.has(String(r && r.from || '').toLowerCase());
   const childReqs = reqs.filter(isChild), adultReqs = reqs.filter(r => !isChild(r));
   if (!reqs.length) return null;
   const renderRow = (r, child) => (
@@ -535,7 +548,7 @@ function StewCareRequests() {
     <div style={{ marginBottom: 16 }}>
       {childReqs.length ? (
         <div style={{ marginBottom: 14 }}>
-          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>FROM A YOUNG PERSON · {childReqs.length} · CONFIDENTIAL</div>
+          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>{_minorsKnown ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px', padding: '9px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
             Only people on your <b>cleared list</b> can see these, and nobody on the care rota sees them unless they are cleared too. Reply privately below. There is no “set up help” here on purpose: that publishes a need the whole church reads and signs up to, which is not somewhere a young person’s request belongs. Handle it under your safeguarding policy.
           </div>

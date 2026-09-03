@@ -4471,22 +4471,36 @@ window.Steward = {
     // on a dropped socket, and believing it then would stamp today's date onto people cleared years ago.
     // Wrong in this direction costs a missing date; wrong in the other direction rewrites history.
     const clearedKnown = () => sawApproved || (sawEose && _isRelayAuthed());
+    // DO WE KNOW WHO THE CHILDREN ARE? A THIRD QUESTION, and it is not `loaded`.
+    //
+    // `loaded` is sawMinors && sawEose, and it exists for the clearance back-fill, where being wrong
+    // REWRITES HISTORY — so it insists on holding the document itself. That strictness makes it permanently
+    // false for a church that has never marked a child: no minors document is ever published, so sawMinors
+    // never becomes true. The comment above clearedKnown records that exact case biting once already.
+    //
+    // Anything that merely wants to DISPLAY a request safely needs the weaker, honest question: has the relay
+    // told us everything it has, while we were authenticated to read the owner-only minors doc? Gate a screen
+    // on `loaded` instead and a church that has never marked a child shows every care request as confidential
+    // for ever — which is not caution, it is the care module switched off with nothing saying so.
+    // Same shape as clearedKnown, for the same reason: bare EOSE also fires on a 4.4s client timeout and on a
+    // dropped socket, so it is evidence only WHILE AUTHENTICATED. Audit 2026-09-02 #3.
+    const minorsKnown = () => sawMinors || (sawEose && _isRelayAuthed());
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; sawApproved = true; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
           // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
           // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped
           // every clearance date permanently, because the wipe then echoed back as the truth. A church with
           // two stewards and one stale browser tab would have lost its history. Keep what we hold.
           if (_a.cleared && typeof _a.cleared === 'object') cleared = _a.cleared;
-          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
+          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -4494,7 +4508,7 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); },
+      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
