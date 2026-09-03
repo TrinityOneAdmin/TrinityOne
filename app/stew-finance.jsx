@@ -252,11 +252,25 @@ function FinanceImport({ book, F, onPost, onClose }) {
   const allSel = selectable.length > 0 && selectable.every(r => r.selected);
   const toggleAll = () => setRowState(rs => rs.map(r => r.dup ? r : { ...r, selected: !allSel }));
 
-  const doPost = () => {
+  // KEEP THE MODAL OPEN IF ANY LINE DID NOT POST, and name the ones that did not. Audit 2026-09-02 #17.
+  // This closed unconditionally, so a treasurer who imported a statement that reached no relay was returned
+  // to a books page they believed was reconciled. Closing is the confirmation; it has to be earned.
+  const [posting, setPosting] = React.useState(false);
+  const doPost = async () => {
     const picks = [];
     lines.forEach((l, i) => { const r = rowState[i]; if (r.selected && !r.dup) picks.push({ line: l, account: r.account, fund: r.fund }); });
     if (!picks.length) { setErr('Select at least one transaction to import.'); return; }
-    onPost(picks); onClose();
+    setErr(''); setPosting(true);
+    let res = null;
+    try { res = await onPost(picks); } catch (e) { res = null; }
+    setPosting(false);
+    const failed = (res && res.failed) || [];
+    if (res && !failed.length) { onClose(); return; }
+    setErr(!res
+      ? 'Nothing was imported — the import failed before it started. Your books are unchanged.'
+      : failed.length + ' of ' + picks.length + ' line' + (picks.length === 1 ? '' : 's') + ' did not reach the relay, and ' + (failed.length === 1 ? 'it is' : 'they are') + ' NOT in your books: '
+        + failed.slice(0, 4).map(l => (l.date || '') + ' ' + (l.description || '').slice(0, 28)).join('; ')
+        + (failed.length > 4 ? ' …and ' + (failed.length - 4) + ' more' : '') + '. Try again.');
   };
 
   const colSelect = (val, onChange, allowNone) => (
@@ -333,7 +347,7 @@ function FinanceImport({ book, F, onPost, onClose }) {
             {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
             <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
               <button onClick={() => { setStep('upload'); setErr(''); }} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>← Back</button>
-              <button onClick={doPost} disabled={!nSel} style={{ flex: 2, height: 44, border: 'none', background: nSel ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: nSel ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post {nSel} transaction{nSel === 1 ? '' : 's'}</button>
+              <button onClick={doPost} disabled={posting} disabled={!nSel} style={{ flex: 2, height: 44, border: 'none', background: nSel ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: nSel ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post {nSel} transaction{nSel === 1 ? '' : 's'}</button>
             </div>
           </>
         )}
@@ -680,16 +694,29 @@ function DashFinanceBook() {
   const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
   // Post the lines the treasurer selected in the import modal. Each carries its statement lineKey as importKey
   // so a future re-import of the same statement is flagged as already-imported (see FinanceImport de-dup).
-  const importStatement = (picks) => {
+  // AN IMPORT THAT POSTED NOTHING MUST NOT CLOSE AS THOUGH IT HAD. Audit 2026-09-02 #17.
+  //
+  // Every line was posted locally and its publish fired and forgotten, so a bank statement that reached no
+  // relay left the modal closing on a books page the treasurer believed was reconciled. `record`/`undo`
+  // above already await pubEntry and read it; this is the same treatment for the bulk path.
+  // Promise.all, not a serial await: a statement can be 200 lines.
+  const importStatement = async (picks) => {
     const b = bookRef.current;
+    const attempts = [];
     for (const { line, account, fund } of picks) {
       const amount = line.amountMinor;
       const P = line.dir === 'in'
         ? [{ account: 'bank', dir: 'dr', amount }, { account, fund, dir: 'cr', amount }]
         : [{ account, fund, dir: 'dr', amount }, { account: 'bank', dir: 'cr', amount }];
-      try { const entry = F.post(b, { date: line.date, memo: line.description, importKey: line.key, postings: P }); pubEntry(b, entry); } catch (e) {}
+      try {
+        const entry = F.post(b, { date: line.date, memo: line.description, importKey: line.key, postings: P });
+        attempts.push(Promise.resolve(pubEntry(b, entry)).then(ok => ({ ok: !!ok, line })).catch(() => ({ ok: false, line })));
+      } catch (e) { attempts.push(Promise.resolve({ ok: false, line })); }
     }
+    const results = await Promise.all(attempts);
     bump();
+    const failed = results.filter(r => !r.ok).map(r => r.line);
+    return { posted: results.length - failed.length, failed };
   };
   const funds = F.fundBalances(book);
   const ie = F.incomeExpenditure(book);

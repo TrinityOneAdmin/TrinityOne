@@ -303,7 +303,20 @@ function SafetyCheckPanel() {
     if (ok) setComposing(false);
     else setSendErr("Couldn't send — you may be offline or every relay is unreachable. Nobody was alerted. Try again.");
   };
-  const closeCheck = async () => { if (busy) return; setBusy(true); try { await window.Steward.closeSafetyCheck(check && check.id); } catch (e) {} setBusy(false); setConfirmEnd(false); };
+  // ENDING A SAFETY CHECK IS THE MOMENT A CHURCH STOPS LOOKING FOR PEOPLE. Audit 2026-09-02 #17.
+  // This swallowed the result and closed the confirm regardless, so a steward whose "end" never reached a
+  // relay believed the roll-call was over while it was still live on every member's phone — and members who
+  // had not answered were still being counted as unaccounted for. `start()` twelve lines above already
+  // reports this way; this is the same treatment for the other end of it.
+  const closeCheck = async () => {
+    if (busy) return;
+    setBusy(true); setSendErr('');
+    let ev = null;
+    try { ev = await window.Steward.closeSafetyCheck(check && check.id); } catch (e) { ev = null; }
+    setBusy(false);
+    if (ev) setConfirmEnd(false);
+    else setSendErr("Couldn’t end the check — every relay refused it. It is still live, and members are still being asked to mark themselves safe.");
+  };
   const [minimized, setMinimized] = React.useState(false);   // collapse a live check to a slim bar so other care work isn't blocked (persisted per check)
   React.useEffect(() => { if (!check) { setMinimized(false); return; } try { setMinimized(localStorage.getItem('trinityone.safetymin.' + check.id) === '1'); } catch (e) {} }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   const toggleMin = () => setMinimized(m => { const nm = !m; try { if (check) localStorage.setItem('trinityone.safetymin.' + check.id, nm ? '1' : '0'); } catch (e) {} return nm; });
@@ -502,6 +515,8 @@ function StewCareRequests() {
   const nameOf = (pk) => { const m = (members || []).find(x => (x.pubkey || '').toLowerCase() === String(pk || '').toLowerCase()); return (m && m.name) || ''; };
   const [reqs, setReqs] = React.useState([]);
   const [approving, setApproving] = React.useState(null);
+  const [closing, setClosing] = React.useState(null);    // request id awaiting "yes, close it"
+  const [closeErr, setCloseErr] = React.useState('');
   const [chatting, setChatting] = React.useState(null);
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub]);
   // A YOUNG PERSON'S REQUEST IS NOT ORDINARY CARE, AND MUST NOT SIT IN THE SAME LIST.
@@ -540,11 +555,27 @@ function StewCareRequests() {
             <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{mealsTypeLabel(r)}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
           </div>
+          {closeErr && closing === null ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginBottom: 6 }}>{closeErr}</div> : null}
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
             {!r.sealed && !child ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: mealsTypeLabel(r) })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
-            <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>
+            {/* CLOSING SOMEBODY'S REQUEST FOR HELP IS NOT AN UNDO-ABLE TAP. Audit 2026-09-02 #17.
+                One press ended a member's request outright, with no confirmation and no check that it
+                landed. On a CHILD's row the wording avoids "care team" deliberately — a young person's
+                request is not seen by the rota (DOMAIN.md), and copy that implies otherwise is the error
+                this section exists to prevent. */}
+            {closing === r.id
+              ? <React.Fragment>
+                  <button onClick={() => {
+                    setClosing(null);
+                    Promise.resolve(window.StewardMeals.declineCareRequest(r))
+                      .then((ok) => { if (!ok) setCloseErr('Couldn’t close that request — the relay didn’t accept it, so it is still open.'); })
+                      .catch(() => setCloseErr('Couldn’t close that request — the relay could not be reached.'));
+                  }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}>{child ? 'Yes, close this young person’s request' : 'Yes, close it'}</button>
+                  <button onClick={() => setClosing(null)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Keep it open</button>
+                </React.Fragment>
+              : <button onClick={() => { setCloseErr(''); setClosing(r.id); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>}
           </div>
         </div>
       );
