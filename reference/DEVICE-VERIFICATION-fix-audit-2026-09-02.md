@@ -283,3 +283,13 @@ injected, and fed competing `careteam:` documents:
     the care steward's newer list  -> ["from-care-steward"]    (the delegation works)
     the FINANCE steward's newer    -> ["from-church"]          (refused — capability keys hold)
     a roster with no caps recorded -> ["from-steward"]         (compat rule preserved)
+
+## Batch 13 — NIP-42 on an IPv6-literal host (#20) — NO PHONE SURFACE
+
+`scripts/gateway.mjs` is the RELAY. It does not ship in either APK, so there is nothing to install on the
+handset: its surface is a running relay process. Covered by `relay-auth-binding.test.mjs`, which spawns a
+real relay and drives a real websocket (9/9, and the new case proved failing against the 50e196c relay).
+
+Remember the standing trap when checking this anywhere: a relay process OLDER than `scripts/gateway.mjs`
+enforces the old parsing against new clients and makes this look unfixed. Check
+`ps -o lstart=` against `stat -c '%y' scripts/gateway.mjs` before diagnosing.

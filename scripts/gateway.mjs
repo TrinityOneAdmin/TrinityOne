@@ -5062,7 +5062,17 @@ wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   // The host this client actually dialled, for the NIP-42 relay-binding check below. Cloudflare/Tailscale
   // tunnels forward the original Host, so this is the public name the member typed/was invited to.
-  ws._host = String((req && req.headers && req.headers.host) || '').split(':')[0].toLowerCase();
+  // AN IPv6-LITERAL HOST IS "[::1]:8000", AND SPLITTING ON ":" TURNS IT INTO "[". Audit 2026-09-02 #20.
+  //
+  // The auth binding below compares this against `new URL(relayTag).hostname`, which for an IPv6 literal is
+  // "::1" WITHOUT brackets. So on any IPv6-addressed relay the two could never match and NIP-42 auth could
+  // never succeed — every gated read (the roster, care records, a member's own DMs) silently returned
+  // nothing, with "auth-failed: not addressed to this relay" as the only clue.
+  //
+  // Strip the port from the RIGHT (so "::1" survives), then the brackets. `/local-token` at :3455 has done
+  // it this way all along; this is the one place that did not. A plain "127.0.0.1:8000" is unaffected — the
+  // port strip is anchored at the end and there are no brackets to remove.
+  ws._host = String((req && req.headers && req.headers.host) || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
   ws._auth = null;                                    // pubkey once the client proves it via NIP-42 AUTH
   ws._rl = { n: 0, t: Date.now(), drop: 0 };          // per-connection inbound rate limit (CPU-DoS guard)
   ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
@@ -5265,7 +5275,7 @@ wss.on('connection', (ws, req) => {
         // that member: their DMs, the roster, care records. Require the tag to name the host this connection
         // was actually dialled on. (Tunnels forward the original Host, so this is the name the member used.)
         let boundToUs = false;
-        try { const rt = evt && (evt.tags.find(t => t[0] === 'relay') || [])[1]; boundToUs = !!rt && !!ws._host && new URL(String(rt)).hostname.toLowerCase() === ws._host; } catch { boundToUs = false; }
+        try { const rt = evt && (evt.tags.find(t => t[0] === 'relay') || [])[1]; boundToUs = !!rt && !!ws._host && new URL(String(rt)).hostname.replace(/^\[|\]$/g, '').toLowerCase() === ws._host; } catch { boundToUs = false; }
         if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && boundToUs && verifyEvent(evt) && !BLOCKED.has(evt.pubkey)) {
           // SECURITY-AUDIT-2026-07-06 H1: a BLOCKED pubkey must never satisfy a read gate — refuse to authenticate it.
           ws._auth = evt.pubkey; ws.send(JSON.stringify(['OK', evt.id, true, '']));

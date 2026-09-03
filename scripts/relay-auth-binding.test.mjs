@@ -135,3 +135,55 @@ test('a public read is unaffected — no challenge, no delay', async () => {
   assert.notEqual(r.eoseMs, null, 'a read that withholds nothing private must EOSE immediately');
   assert.ok(r.eoseMs < 1500, `public reads must not pay the auth grace (arrived at ${r.eoseMs}ms)`);
 });
+
+// ── AUDIT 2026-09-02 #20: an IPv6-literal Host broke the binding entirely ──────────────────────────────────
+// `ws._host` was `host.split(':')[0]`. For an IPv6 literal the Host header is "[::1]:8858", so that produced
+// "[" — and the binding below compares it against `new URL(relayTag).hostname`, which for the same address is
+// "::1" WITHOUT brackets. The two could never match, so on any IPv6-addressed relay NIP-42 auth could never
+// succeed and every gated read (the roster, care records, a member's own DMs) silently returned nothing,
+// with "auth-failed: not addressed to this relay" as the only clue anywhere.
+//
+// This does not need an IPv6 socket: the defect is entirely in parsing the header, so the connection is made
+// over IPv4 with the Host header SET to the literal. That is exactly what a tunnel forwarding an IPv6
+// original would present.
+const connectAs = (hostHeader) => new Promise((res, rej) => {
+  const ws = new WebSocket(WS_URL, { headers: { Host: hostHeader } });
+  ws.on('open', () => res(ws)); ws.on('error', rej);
+});
+
+test('a member on an IPv6-literal host can authenticate', async () => {
+  const ws = await connectAs(`[::1]:${PORT}`);
+  try {
+    const r = await probe(ws, 'ipv6', { kinds: [30078], '#d': [MINORS_D + church.pub] },
+      { authAs: member, relayUrl: `ws://[::1]:${PORT}/relay`, window: 1800 });
+    assert.equal(r.gotAuth, true, 'the relay never challenged — re-anchor this test');
+    assert.notEqual(r.authOk, false,
+      'auth was refused on an IPv6-literal host. `host.split(":")[0]` turns "[::1]:8858" into "[", which can ' +
+      'never equal the relay tag\'s hostname "::1" — so on an IPv6 relay every gated read comes back empty');
+  } finally { try { ws.close(); } catch {} }
+});
+
+test('CONTROL: a plain IPv4 host with a port still authenticates', async () => {
+  // The port strip is anchored at the end and the bracket strip only touches brackets, so ordinary hosts
+  // must be completely unaffected. If this goes red the fix broke every relay that is not IPv6.
+  const ws = await connectAs(`127.0.0.1:${PORT}`);
+  try {
+    const r = await probe(ws, 'ipv4', { kinds: [30078], '#d': [MINORS_D + church.pub] },
+      { authAs: member, relayUrl: WS_URL, window: 1800 });
+    assert.equal(r.gotAuth, true, 'the relay never challenged — re-anchor this test');
+    assert.notEqual(r.authOk, false, 'an ordinary IPv4 host stopped authenticating');
+  } finally { try { ws.close(); } catch {} }
+});
+
+test('CONTROL: a relay tag naming somebody ELSE is still refused', () => new Promise(async (resolve) => {
+  // The binding still has to do its job: this is the attack it exists for — a hostile relay harvesting a
+  // challenge and replaying the signed result. Bracket-stripping must not have widened it.
+  const ws = await connectAs(`[::1]:${PORT}`);
+  const r = await probe(ws, 'ipv6-wrong', { kinds: [30078], '#d': [MINORS_D + church.pub] },
+    { authAs: member, relayUrl: 'ws://someone-else.example/relay', window: 1800 });
+  assert.equal(r.authOk, false,
+    'an auth naming a DIFFERENT relay was accepted — the binding that stops a harvested challenge being ' +
+    'replayed is gone');
+  try { ws.close(); } catch {}
+  resolve();
+}));
