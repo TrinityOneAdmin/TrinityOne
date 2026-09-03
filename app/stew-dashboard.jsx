@@ -4640,7 +4640,15 @@ function DashMembers() {
       }
     } catch (e) {}
   };
-  const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));
+  // Letting someone back in is a decision too, and it is made from a list that until now would not even
+  // say who they were. Two taps, and read the result — setBlocked goes through _publishToRelays and returns
+  // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
+  const [confirmUnblock, setConfirmUnblock] = React.useState(null);
+  const [blockErr, setBlockErr] = React.useState('');
+  const unblock = (pk) => Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk)))
+    .then((ok) => { setConfirmUnblock(null); setBlockErr(ok ? '' : 'Couldn’t unblock ' + (nameByPub[pk] || 'that member')
+      + ' — the relay didn’t accept it, so they are still blocked. Try again.'); return ok; })
+    .catch(() => { setConfirmUnblock(null); setBlockErr('Couldn’t reach the relay to unblock them.'); return null; });
   const total = members.length;
   // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.
   const INACTIVE_DAYS = 90;
@@ -4809,7 +4817,19 @@ function DashMembers() {
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                   </div>
                   <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
-                  <button onClick={() => block(m.pubkey)} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
+                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
+                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
+                      church's keys — irreversible, from the screen a steward is fastest on. The members
+                      list has asked "are you sure" for this same action all along; the join queue never
+                      did. Audit 2026-09-02 #5.
+                      `confirmBlock` is shared with the members list, so opening one closes the other —
+                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
+                  {confirmBlock === m.pubkey
+                    ? <React.Fragment>
+                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
+                      </React.Fragment>
+                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
                 </div>
               );
             })}
@@ -4887,6 +4907,10 @@ function DashMembers() {
               <button onClick={() => setShowBlocked(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'var(--surface)', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
                 <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedList.length}
               </button>
+              {showBlocked && blockErr ? (
+                <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11, marginBottom: 8,
+                  background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 38%, var(--line))', color: 'var(--ink)' }}>{blockErr}</div>
+              ) : null}
               {showBlocked ? blockedList.map(pk => (
                 <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', opacity: 0.85 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
@@ -4899,7 +4923,12 @@ function DashMembers() {
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{nameByPub[pk] || 'A member with no name set'}</div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{String(pk).slice(0, 12)}…</div>
                   </div>
-                  <button onClick={() => unblock(pk)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>
+                  {confirmUnblock === pk
+                    ? <React.Fragment>
+                        <button onClick={() => unblock(pk)} aria-label={'Confirm: let ' + (nameByPub[pk] || 'this member') + ' back in'} style={{ border: 'none', background: 'var(--sage-ink)', color: 'var(--on-sage, #fff)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Let them back in</button>
+                        <button onClick={() => setConfirmUnblock(null)} aria-label="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Cancel</button>
+                      </React.Fragment>
+                    : <button onClick={() => setConfirmUnblock(pk)} aria-label={'Unblock ' + (nameByPub[pk] || 'this member') + ' — asks you to confirm'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>}
                 </div>
               )) : null}
             </React.Fragment>

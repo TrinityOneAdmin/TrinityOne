@@ -150,3 +150,23 @@ with the CONTROL (the list opens at all) green on both.
 **NOT done in this part, and still open:** the one-tap ✕ on the JOIN QUEUE, which blocks permanently and
 rotates every church key with no confirm (audit #5). The two-step it needs already exists in the members
 list a few lines away.
+
+## Batch 6 (rest) — declining a joiner takes two taps (#5) — VERIFIED ON DEVICE
+
+Packaged `DashMembers` on the phone, one person waiting in the join queue, driven with real DOM clicks:
+
+    declineNamesThem     true   (the ✕ is labelled "Decline Nia Okafor — asks you to confirm")
+    blockedAfterOneTap   0      (one tap blocks NOBODY)
+    confirmAppeared      true
+    confirmNamesThem     true   ("Confirm: block Nia Okafor and refuse them entry")
+    blockedAfterConfirm  1      (the second tap is what acts)
+
+Fails first on 50e196c: `not ok 2/3/4`, with the CONTROL (the row renders with a Decline) green on both.
+
+**A guard worth knowing about, found doing this.** `pendingJoins` is gated on `mRosterLoaded`, which is
+`!window.stewardStreamLoaded || (stewardStreamLoaded('subscribeAdmitted') && …('subscribeBlocked'))`. On a
+console with NO church that helper exists and answers false, so the join queue correctly renders nothing —
+a console that has not yet loaded the admitted and blocked lists must not show a "pending" queue, because
+everyone would look pending. The probe has to stub it true or the rows under test never appear. In the Node
+test the helper is absent entirely, so the `!window.stewardStreamLoaded` arm makes it true — the two
+environments reach the same place by opposite routes, which is worth remembering before trusting either.
