@@ -9487,15 +9487,17 @@
       if (p.av) wire.av = p.av;
       if (p.hidden) wire.hidden = true;
       const body = JSON.stringify(wire);
-      if (_profilePubFor === pub && _profilePubBody === body) return null;
-      let evt = null, sent = false;
-      if (known) {
+      const wireUnchanged = _profilePubFor === pub && _profilePubBody === body;
+      let evt = null, sent = false, lost = false;
+      if (wireUnchanged) {
+      } else if (known) {
         evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
         sent = true;
         try {
           await _publishAny(window.Fellowship.relays, evt);
         } catch (e) {
           sent = false;
+          lost = true;
           console.warn("[fellowship] profile publish failed", e);
           if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
             let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
@@ -9510,6 +9512,7 @@
       } else {
         console.warn("[fellowship] profile publish withheld \u2014 our own kind-0 has not arrived, publishing now would blank it");
         if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+          lost = true;
           try {
             if (window.trinityToast) window.trinityToast("Your photo and profile details aren\u2019t saved yet \u2014 this phone is still connecting to your church\u2019s relay. Try again in a moment.");
           } catch (x) {
@@ -9533,7 +9536,8 @@
       } catch {
       }
       window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
-      return evt;
+      if (lost) return null;
+      return evt || true;
     },
     // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
     requestProfiles(pubkeys) {
@@ -10270,13 +10274,15 @@
       const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
       let clr = null;
       let _clrTs = 0, _clrId = "";
+      let sawMinors = false, _sgEosedAt = 0;
       const emit = () => {
         _noPhoto = pubSet(nophoto);
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
         _sgSelf = { cp: pubk, me: me || "", isMinor, known: !!clr };
-        onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+        const minorsKnown = sawMinors || !!(_sgEosedAt && _relayAuthedAt && _sgEosedAt >= _relayAuthedAt);
+        onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
@@ -10286,6 +10292,7 @@
           if (d === "trinityone/minors:" + pubk) {
             if (_ts < _sgTs.minors) return;
             _sgTs.minors = _ts;
+            sawMinors = true;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -10334,6 +10341,7 @@
           }
         },
         oneose() {
+          _sgEosedAt = Date.now();
           emit();
         }
       });

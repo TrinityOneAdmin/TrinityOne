@@ -837,6 +837,9 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         dietary: type === 'meals' ? diet : [],
         meals: type === 'meals' ? meals : [], dayMeals: type === 'meals' ? dayMeals : {},
       });
+      // The sheet closed on a refused publish, so a steward who had just typed a family's name and dates was
+      // returned to a needs list they believed carried it. publishNeed now answers null for that.
+      if (!saved) { setErr('Couldn’t save this — it didn’t reach the church, so nothing has changed. Try again in a moment.'); setBusy(false); return; }
       onSaved && onSaved(saved);
     } catch (e) { setErr((e && e.message) || 'Save failed.'); setBusy(false); }
   };

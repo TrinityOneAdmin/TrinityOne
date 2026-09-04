@@ -3127,7 +3127,13 @@ window.Steward = {
   // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
   async syncDisable() {
     if (!sk || !pub) throw new Error('No church key on this device');
-    await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }, sk));
+    // THE SIBLING FIX, WHICH WAS SKIPPED. syncEnable above was given this on 2026-09-02 and its twin was not:
+    // "Sync turned off." appeared over a document no relay accepted, so the boxes went on mirroring each
+    // other while the console said they had stopped. That is the wrong direction to be wrong in — this is
+    // pressed when a church is decommissioning a relay or reacting to a seizure, and believing mirroring has
+    // stopped when it has not is the whole harm.
+    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }, sk));
+    if (!ev) throw new Error('Sync could not be switched off — no relay accepted the change, so your relays are STILL mirroring each other. Try again.');
     return { relays: 0 };
   },
   // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the

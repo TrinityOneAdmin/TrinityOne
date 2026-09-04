@@ -147,7 +147,11 @@ test('…and warns when children are marked but nobody is cleared', () => {
 // same failure, one layer up.
 const TODAY = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
 
-function renderMemberTriage({ minors, cleared, careAdmin, reqs }) {
+// minorsKnown defaults TRUE: every case below is about a phone whose safeguarding lists HAVE arrived.
+// Since the 2026-09-04 fix the member app's triage fails CLOSED on a missing answer — exactly as the console
+// has since 2026-09-03 — so a fixture that omits this is asserting about the LOADING state instead of the one
+// it names. Say which state it is in. `a-childs-request-is-held-until-we-know.test.mjs` covers the other one.
+function renderMemberTriage({ minors, cleared, careAdmin, reqs, minorsKnown = true }) {
   const src = transformSync(fnBody(TODAY, 'function CareRequests({ ctx })', 'CareRequests'),
     { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
   const nodes = [];
@@ -176,7 +180,7 @@ function renderMemberTriage({ minors, cleared, careAdmin, reqs }) {
   fn({ ctx: {
     care: { myPub: 'me', settings: { adminGroupId: 'careteam' } },
     churchRosters: careAdmin ? [{ team: 'careteam', people: [{ pub: 'me' }] }] : [],
-    safeguard: { minors, cleared },
+    safeguard: { minors, cleared, minorsKnown },
     church: { npub: 'npub1x' },
   } });
   return {

@@ -79,7 +79,15 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
   const [noteDraft, setNoteDraft] = React.useState({});
   const [savedFlash, setSavedFlash] = React.useState({});
   const myNoteFor = (iso) => { const f = fillsFor(iso).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()); return f ? (f.note || '') : ''; };
-  const saveNote = (iso) => { const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso); (care.setNote || care.fill)(need.id, iso, (cur || '').trim()); setSavedFlash(f => ({ ...f, [iso]: true })); };
+  // "✓ Saved" WAS DRAWN BEFORE THE ANSWER CAME BACK. The note ("bringing a lasagne, no nuts") is the one
+  // field here that other people act on, and the flash fired synchronously whatever happened — so the batch
+  // that added a failure toast on 2026-09-04 put a green tick beside its own error message. Audit same day.
+  const saveNote = (iso) => {
+    const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso);
+    Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim()))
+      .then(ok => { if (ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
+      .catch(() => {});
+  };
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden', background: 'var(--surface)' }}>
       <button onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '12px 13px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
@@ -513,9 +521,25 @@ function CareRequests({ ctx }) {
   // under "FROM A YOUNG PERSON · CONFIDENTIAL" with the safeguarding explainer — and row() passes
   // onApprove = null for anything marked as a child, so it could not be actioned from the only screen that
   // shows it. Audit, 2026-08-29.
+  // FAIL CLOSED WHILE WE DO NOT YET KNOW WHO THE CHILDREN ARE. Audit 2026-09-04.
+  //
+  // This asked `_kids` a question it could not yet answer. The lists arrive over a subscription, so for the
+  // first moments of every launch `_kids` is EMPTY — and an empty set answers "no, not a child" exactly as
+  // confidently as a loaded one does. A request arriving in that window was filed with the adults, under
+  // "Set up help", and that button publishes a NEED the whole congregation reads and signs up to. That is a
+  // young person's private disclosure turned into a notice-board item with their name on it, and nothing on
+  // the screen looked wrong.
+  //
+  // The console's copy of this triage was fixed on 2026-09-03 and this one — the same job, done by a care
+  // admin on their PHONE — was left. `minorsKnown` and not "is the list non-empty": a church that has never
+  // marked a child never publishes the document, so gating on the list itself would hold every request in the
+  // confidential queue for ever in exactly those churches, which is the care module silently switched off.
+  // See subscribeChurchSafeguard.
+  const _minorsKnown = !!(ctx.safeguard && ctx.safeguard.minorsKnown);
   const fromChild = (r) => {
     if (String(r.from || '').toLowerCase() === myPub) return false;
-    return isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true;
+    if (!isCareAdmin) return true;
+    return _minorsKnown ? _kids.has(String(r.from || '').toLowerCase()) : true;
   };
   const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
   const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
@@ -523,9 +547,11 @@ function CareRequests({ ctx }) {
     <div style={{ marginBottom: 18 }}>
       {childReqs.length ? (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 8px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="shield" size={15} color="var(--clay)" /> FROM A YOUNG PERSON · {childReqs.length} · CONFIDENTIAL</div>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 8px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="shield" size={15} color="var(--clay)" /> {_minorsKnown ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px', padding: '9px 12px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
-            You are seeing this because your church has cleared you to work with young people. Reply privately below. There is no “set up help” here on purpose — that publishes a need the whole church reads and signs up to. Follow your church’s safeguarding policy.
+            {_minorsKnown
+              ? 'You are seeing this because your church has cleared you to work with young people. Reply privately below. There is no “set up help” here on purpose — that publishes a need the whole church reads and signs up to. Follow your church’s safeguarding policy.'
+              : 'Still checking which of these came from a young person, so all of them are being held here for now. Reply privately below. “Set up help” is not offered until we know — it publishes a need the whole church reads.'}
           </div>
           {childReqs.map(r => row(r, true))}
         </div>
@@ -880,7 +906,15 @@ function CareAvailability({ ctx, part }) {
       .then((ok) => { if (ok) setOpt(true); else { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true }); } })
       .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.', { error: true }); });
   };
-  const turnOff = () => { if (care.clearAvail) care.clearAvail(); setOpt(false); setEditing(false); setTags([]); setNote(''); };
+  // COMING OFF THE LIST IS THE SAME PROMISE IN REVERSE, and only the "on" direction was fixed. A member who
+  // believes they withdrew, and did not, is still being counted on by everyone reading the list — and this
+  // is the control someone uses when they can no longer help. Audit 2026-09-04.
+  const turnOff = () => {
+    setEditing(false);
+    Promise.resolve(care.clearAvail ? care.clearAvail() : null)
+      .then((ok) => { if (ok) { setOpt(false); setTags([]); setNote(''); } else { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told, so people can still see you as ready to help. Try again when you have signal.', { error: true }); } })
+      .catch(() => { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told.', { error: true }); });
+  };
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;
   const box = { padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 14 };
   const chipStyle = (on) => ({ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 16%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' });

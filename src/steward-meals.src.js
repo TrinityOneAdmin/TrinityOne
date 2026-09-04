@@ -203,7 +203,17 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
       }
     }
     const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
-    return { id, ...rec, ts: e && e.created_at };
+    // A REFUSED PUBLISH IS NOT A SAVED NEED, and this is where the 2026-09-04 fix to approveCareRequest was
+    // built on sand. `publish()` in steward.src.js returns **false** at BOTH failure exits (no proven relay;
+    // every relay rejected) — but this wrapped it as `{ id, ...rec, ts: false }`, which is truthy AND carries
+    // an id. So `if (!saved || !saved.id)` never fired, the console said help was set up, and the asker's
+    // request was marked approved pointing at a need that exists nowhere.
+    //
+    // Three different failure contracts live in this codebase and the wrapper is the trap: `publish()`
+    // returns false, `_publishAny` in fellowship THROWS, and this used to return a truthy object around
+    // either. Callers below: approveCareRequest here, and StewNeedSheet.save in app/stew-meals.jsx.
+    if (!e) return null;
+    return { id, ...rec, ts: e.created_at };
   }
   // Open a need read off the relay. v1 docs (pre-2026-07-20) carry the fields in the clear and are read
   // as-is — a church mid-pilot must not lose its open needs. `_sealed` marks one we could not open, so the

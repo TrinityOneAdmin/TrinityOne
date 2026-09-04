@@ -3395,19 +3395,33 @@ window.Fellowship = {
     if (p.av) wire.av = p.av;
     if (p.hidden) wire.hidden = true;
     const body = JSON.stringify(wire);
-    if (_profilePubFor === pub && _profilePubBody === body) return null;
+    // AN IDENTICAL WIRE COPY IS A REASON NOT TO PUBLISH. IT IS NOT A REASON TO DROP THE SAVE.
+    // Audit 2026-09-04, and it was wrong in two ways at once.
+    //
+    // Since Stage 2 the NAME does not travel in kind-0 — `wire` is about/picture/av/hidden only. So an
+    // ordinary name change leaves `body` byte-identical, and this `return null` fired BEFORE the local write,
+    // `syncSealedNames()` and localStorage below. Two consequences, both silent: the member's SECOND name
+    // edit in a session was dropped entirely — never stored, never re-sealed, never sent to the church — and
+    // the screen, which reads this return, said "Couldn't save your profile — your church still sees the old
+    // name" about the one edit that had nothing to publish and had lost nothing.
+    //
+    // Skip the PUBLISH, keep everything else.
+    const wireUnchanged = (_profilePubFor === pub && _profilePubBody === body);
     // REFUSE THE WIRE COPY — not the whole call. Since Stage 2 the NAME does not travel in kind-0 at all: it
     // goes out sealed, through syncSealedNames below. So refusing outright to protect kind-0 would leave a
     // member on a slow link unable to tell their congregation what they are called, which is the one thing
     // they set — a worse failure than the one being fixed, and aimed at exactly the same people. Everything
     // local still happens; only the replaceable publish is withheld.
-    let evt = null, sent = false;
-    if (known) {
+    let evt = null, sent = false, lost = false;   // `lost` = a field that TRAVELS did not reach the relay
+    if (wireUnchanged) {
+      // nothing on the wire changed, so there is nothing to publish and nothing to lose; the name half below
+      // still runs, and still re-seals.
+    } else if (known) {
       evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
       sent = true;
       try { await _publishAny(window.Fellowship.relays, evt); }
       catch (e) {
-        sent = false; console.warn('[fellowship] profile publish failed', e);
+        sent = false; lost = true; console.warn('[fellowship] profile publish failed', e);
         // SAY SO. The withheld branch below already tells the member, and this one — the publish we DID
         // attempt and that no relay accepted — said nothing at all, while the change was still written to
         // this device. So the switch sat in its new position and the church went on seeing the old profile.
@@ -3433,6 +3447,7 @@ window.Fellowship = {
       // kind-0 — a name-only save has lost nothing, so saying "not saved" about it would be a lie.
       console.warn('[fellowship] profile publish withheld — our own kind-0 has not arrived, publishing now would blank it');
       if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+        lost = true;
         try { if (window.trinityToast) window.trinityToast('Your photo and profile details aren’t saved yet — this phone is still connecting to your church’s relay. Try again in a moment.'); } catch (x) {}
       }
     }
@@ -3442,7 +3457,13 @@ window.Fellowship = {
     if (p.name) setTimeout(() => { try { window.Fellowship.syncSealedNames(); } catch (x) {} }, 0);
     try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch {}
     window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } }));
-    return evt;
+    // WHAT THE SCREEN IS ASKING IS "DID MY CHANGE SAVE?", and this used to answer with the event object — set
+    // the moment we DECIDED to publish, never cleared when the publish was refused. So "Profile saved"
+    // appeared over a kind-0 no relay accepted, which is precisely the failure the caller's own comment says
+    // it was fixed to stop. Answer the question actually asked: truthy unless something that travels was
+    // lost. A name-only edit is a success — the name goes out sealed, through syncSealedNames above.
+    if (lost) return null;
+    return evt || true;
   },
 
   // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
@@ -3964,6 +3985,19 @@ window.Fellowship = {
     // published clearances yet), so this degrades rather than breaks.
     let clr = null;   // { minor, cleared } from my own sealed doc, or null if none has arrived
     let _clrTs = 0, _clrId = '';   // …and which event won, for the same-second tiebreak below
+    // DO WE YET KNOW WHO THE CHILDREN ARE? An empty `minors` answers "no" to "is this from a child?" exactly
+    // as confidently as a loaded one does, and the member app's care-request triage believed it — see the
+    // note on `fromChild` in app/screens-today.jsx. The console was given this on 2026-09-03 and this side,
+    // which runs the SAME triage for a care admin on their phone, was not.
+    //
+    // `sawMinors` alone is not enough and this is the trap the console hit first: a church that has never
+    // marked a child never publishes the document, so waiting for it would hold every request in the
+    // confidential queue for ever in exactly those churches — the feature silently switched off. So the
+    // second question: did the relay answer us AFTER it knew who we are? Timestamps, not booleans, for the
+    // reason spelled out at `_relayAuthedAt`: an EOSE arrives before the auth round trip completes on a cold
+    // boot, and a boolean would be satisfied by that pre-auth EOSE. `>=` because both are Date.now() and a
+    // fast local relay can land both in the same millisecond.
+    let sawMinors = false, _sgEosedAt = 0;
     const emit = () => {
       _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
@@ -3984,7 +4018,8 @@ window.Fellowship = {
       // in a session (a 12-word restore, an adopted steward seed, or the child account minted on a parent's
       // phone by createChildAccount before the phone is handed over). Every reader goes through _sgMine.
       _sgSelf = { cp: pubk, me: me || '', isMinor, known: !!clr };
-      onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+      const minorsKnown = sawMinors || !!(_sgEosedAt && _relayAuthedAt && _sgEosedAt >= _relayAuthedAt);
+      onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
@@ -4016,7 +4051,7 @@ window.Fellowship = {
         // hazard. AUDIT-9. The remaining clock question — that this drops rather than clamps, and that a slow
         // phone therefore fails OPEN to "adult" — is tracked; it needs the same treatment on both sides at
         // once, because console and member disagreeing is how the worst defect of the last round happened.
-        if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
+        if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
         else if (d === APPROVED_D + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
         else if (d === 'trinityone/guardians:' + pubk) { if (_ts < _sgTs.guardians) return; _sgTs.guardians = _ts; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
         else if (d === 'trinityone/nophoto:' + pubk) { if (_ts < _sgTs.nophoto) return; _sgTs.nophoto = _ts; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
@@ -4042,7 +4077,7 @@ window.Fellowship = {
           emit();
         }
       },
-      oneose() { emit(); },
+      oneose() { _sgEosedAt = Date.now(); emit(); },
     });
   },
 

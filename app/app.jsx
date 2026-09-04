@@ -1119,12 +1119,14 @@ function App() {
   }, [activeChurch, churches, connTick]);
   // safeguarding: is THIS member a child for the active church, and who's cleared to contact youth.
   // Used to show a child only child-safe groups and to gate DMs (the relay enforces both regardless).
-  const [safeguard, setSafeguard] = useA({ minors: [], approved: [], guardians: {}, isMinor: false });
+  // minorsKnown starts FALSE, and that is the whole point: an empty minors list is not the same answer as
+  // "this church has no children", and the care-request triage on this phone must not read it as one.
+  const [safeguard, setSafeguard] = useA({ minors: [], approved: [], guardians: {}, isMinor: false, minorsKnown: false });
   useAE(() => {
     if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false }); return; }
+    if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false, minorsKnown: false }); return; }
     return F.subscribeChurchSafeguard(np, setSafeguard);
   }, [activeChurch, churches, connTick, lazyReady]);
   // safeguarding: pick up STEWARD-INITIATED guardian links addressed to me (a church-signed, encrypted notice)

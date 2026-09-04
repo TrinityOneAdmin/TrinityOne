@@ -117,26 +117,136 @@ test('CONTROL: a clean approval leaves the list quiet', async () => {
   assert.equal(alerts(tree), '', 'a clean approval now warns the steward about nothing');
 });
 
-// ── the engine half, from the SHIPPED console bundle ──────────────────────────────────────────────────────
-test('the console engine reports which publish failed', async () => {
+// ── the engine half, from the SHIPPED console bundle, with the REAL publishNeed ─────────────────────────
+//
+// The first version of this test stubbed `publishNeed`. The whole question is whether a REFUSED need publish
+// is noticed, and the stub answered "it succeeded" — so it passed over a fix that did nothing. The audit of
+// 2026-09-04 found it. Both functions are lifted now, and the only thing faked is the relay's answer.
+//
+// The trap underneath, worth stating because it will recur: `publish()` in steward.src.js returns **false**
+// on total failure, and publishNeed used to wrap that as `{ id, ...rec, ts: false }` — TRUTHY, with an id.
+// Three failure contracts in one codebase (false, a throw, a truthy wrapper) and this is the one that lies.
+function consoleEngine({ needLands, statusLands }) {
   const BUNDLE = readFileSync(new URL('../vendor/steward-meals.js', import.meta.url), 'utf8');
-  const i = BUNDLE.indexOf('async function approveCareRequest(');
-  assert.ok(i > 0, 'approveCareRequest is not in vendor/steward-meals.js — re-anchor this test');
-  let d = 0, end = i;
-  for (let k = BUNDLE.indexOf('{', i); k < BUNDLE.length; k++) {
-    if (BUNDLE[k] === '{') d++;
-    else if (BUNDLE[k] === '}') { d--; if (!d) { end = k + 1; break; } }
-  }
-  const src = '(' + BUNDLE.slice(i, end).replace(/^async function/, 'async function') + ')';
-  const mk = (statusLands) => new Function('publishNeed', 'setCareRequestStatus', 'Array', 'Set', 'String',
-    'return ' + src)(
-      async () => ({ id: 'care-1' }),
-      async () => (statusLands ? { id: 'status' } : null), Array, Set, String);
+  const lift = (decl) => {
+    const i = BUNDLE.indexOf(decl);
+    assert.ok(i > 0, decl + ' is not in vendor/steward-meals.js — re-anchor this test');
+    let d = 0;
+    for (let k = BUNDLE.indexOf('{', i); k < BUNDLE.length; k++) {
+      if (BUNDLE[k] === '{') d++;
+      else if (BUNDLE[k] === '}') { d--; if (!d) return BUNDLE.slice(i, k + 1); }
+    }
+    throw new Error('unbalanced braces slicing ' + decl);
+  };
+  const published = [];
+  const S = () => ({
+    churchPub: 'church-pub',
+    careSeal: () => 'sealed-blob',
+    careSealTo: () => null,
+    careKeyChecked: () => true,
+    async publishSigned(evt) {
+      const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+      const lands = d.startsWith('finance') ? true : (d.includes('carereqstatus') ? statusLands : needLands);
+      published.push({ d, lands });
+      return lands ? { ...evt, id: 'evt-id', created_at: evt.created_at } : false;   // publish() returns FALSE, not null
+    },
+  });
+  const src = '(function(){' + [lift('async function publishNeed('), lift('function setCareRequestStatus('),
+                                lift('async function approveCareRequest(')].join('\n')
+    + '\nreturn { publishNeed, setCareRequestStatus, approveCareRequest };})()';
+  const names  = ['S', 'uid', '_normNeed', 'SEALED_FIELDS', 'NEED_D', 'CARESTATUS_D', 'NET', 'now', '_rand32',
+                  '_sha256hex', 'JSON', 'String', 'Array', 'Set', 'Number', 'console'];
+  const values = [S, () => 'care-NEW', (n) => ({ ...n, dates: n.dates || [] }),
+                  ['displayLabel', 'recipient', 'notes', 'dietary'], 'care:', 'carereqstatus:', 'trinityone',
+                  () => 1756900000, () => 'secret', async () => 'hash', JSON, String, Array, Set, Number, { warn() {} }];
+  const api = new Function(...names, 'return ' + src)(...values);
+  return { ...api, published };
+}
 
-  const clean = await mk(true)(REQ, { dates: ['2026-09-10'], notes: '' });
-  assert.equal(clean.stillOpen, false, 'CONTROL: a clean approval must not be flagged');
-  const half = await mk(false)(REQ, { dates: ['2026-09-10'], notes: '' });
-  assert.ok(half && half.id, 'the need was published and accepted — approve must not report total failure');
-  assert.equal(half.stillOpen, true,
-    'the console engine discarded the status result again, so the screen above it cannot know');
+const APPROVE_ARGS = [{ id: 'req-1', from: 'asker', forSelf: true, type: 'meals', note: 'x' }, { dates: ['2026-09-10'], notes: '' }];
+
+test('the need was REFUSED: approve reports total failure, and does not mark the request approved', async () => {
+  const { approveCareRequest, published } = consoleEngine({ needLands: false, statusLands: true });
+  const out = await approveCareRequest(...APPROVE_ARGS);
+  assert.equal(out, null,
+    'a need no relay accepted came back as a saved need, so the console said help was set up and marked the ' +
+    "asker's request approved — pointing at a need that exists nowhere");
+  assert.equal(published.filter(p => p.d.includes('carereqstatus')).length, 0,
+    'the request was marked approved even though the need was refused');
 });
+
+test('BOTH refused: still a total failure, not "help is set up but…"', async () => {
+  const { approveCareRequest } = consoleEngine({ needLands: false, statusLands: false });
+  assert.equal(await approveCareRequest(...APPROVE_ARGS), null,
+    'with nothing published at all the console said help WAS set up and only the request had not closed');
+});
+
+test('only the STATUS refused: help really is set up, so say which half', async () => {
+  const { approveCareRequest } = consoleEngine({ needLands: true, statusLands: false });
+  const out = await approveCareRequest(...APPROVE_ARGS);
+  assert.ok(out && out.id, 'the need was published and accepted — this must not report total failure');
+  assert.equal(out.stillOpen, true, 'the request was never marked approved and nothing said so');
+});
+
+test('CONTROL: everything accepted is a clean approval', async () => {
+  const { approveCareRequest } = consoleEngine({ needLands: true, statusLands: true });
+  const out = await approveCareRequest(...APPROVE_ARGS);
+  assert.ok(out && out.id, 'a clean approval must return the need');
+  assert.equal(out.stillOpen, false, 'a clean approval is flagged — without this control the fix could be "always warn"');
+});
+
+test('publishNeed itself answers null for a refused publish', async () => {
+  const { publishNeed } = consoleEngine({ needLands: false, statusLands: true });
+  assert.equal(await publishNeed({ type: 'meals', dates: ['2026-09-10'], displayLabel: 'A member' }), null,
+    'publishNeed wrapped a FALSE publish in a truthy object carrying an id, so every caller read it as saved');
+  const ok = consoleEngine({ needLands: true, statusLands: true });
+  const saved = await ok.publishNeed({ type: 'meals', dates: ['2026-09-10'], displayLabel: 'A member' });
+  assert.ok(saved && saved.id, 'CONTROL: a need that WAS accepted must still come back');
+});
+
+// ── the OTHER caller of publishNeed: the console's own need sheet (rule 2) ────────────────────────────────
+function needSheet(publishNeedResult) {
+  const { React, draw } = miniReact();
+  const globals = {
+    React, console, setTimeout, clearTimeout,
+    Icon: function Icon() { return null; },
+    todayISO: () => '2026-09-04',
+    document: { addEventListener() {}, removeEventListener() {} },
+    window: {
+      confirm: () => false,
+      useStewardChurch: () => ({ npub: 'npub1church' }),
+      useStewardMembers: () => [],
+      useStewardSafeguard: () => ({ minors: [], approved: [], minorsKnown: true }),
+      StewardMeals: { publishNeed: async () => publishNeedResult, removeNeed: async () => true },
+    },
+  };
+  return { draw, ...loadScreen('app/stew-meals.jsx', ['MealsNeedModal'], globals) };
+}
+
+const EXISTING = { id: 'care-1', displayLabel: 'The Ellis family', type: 'meals', dates: ['2026-09-10'],
+                   notes: '', recipient: '', dietary: [], meals: ['dinner'], dayMeals: {} };
+
+test('the need sheet does not close as saved over a refused publish', async () => {
+  const { draw, MealsNeedModal } = needSheet(null);
+  let saved = 'not called';
+  const props = { need: EXISTING, onClose() {}, onSaved: (x) => { saved = x; }, onDeleted() {} };
+  let tree = draw(MealsNeedModal, props);
+  const b = button(tree, 'Save')[0];
+  assert.ok(b, 'no Save control on the need sheet — re-anchor this test');
+  await b.props.onClick({ stopPropagation() {} });
+  tree = draw(MealsNeedModal, props);
+  assert.equal(saved, 'not called',
+    'the sheet reported the need saved when no relay accepted it, so a steward who had just typed a family ' +
+    "name and dates was returned to a needs list that does not carry it");
+  assert.match(texts(tree).join(' '), /didn.t reach the church/i, 'and nothing on screen said why');
+});
+
+test('CONTROL: a need that saved still closes the sheet', async () => {
+  const { draw, MealsNeedModal } = needSheet({ id: 'care-1' });
+  let saved = 'not called';
+  const props = { need: EXISTING, onClose() {}, onSaved: (x) => { saved = x; }, onDeleted() {} };
+  const tree = draw(MealsNeedModal, props);
+  await button(tree, 'Save')[0].props.onClick({ stopPropagation() {} });
+  assert.notEqual(saved, 'not called', 'a successful save no longer finishes — the fix must not close the door');
+});
+

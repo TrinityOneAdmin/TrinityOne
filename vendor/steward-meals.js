@@ -190,7 +190,8 @@
         }
       }
       const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
-      return { id, ...rec, ts: e && e.created_at };
+      if (!e) return null;
+      return { id, ...rec, ts: e.created_at };
     }
     function openNeed(rec) {
       if (!rec || !rec.enc) return rec;

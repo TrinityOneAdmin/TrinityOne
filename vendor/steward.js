@@ -17122,7 +17122,8 @@ zoo`.split("\n");
     // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
     async syncDisable() {
       if (!sk || !pub) throw new Error("No church key on this device");
-      await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }, sk));
+      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }, sk));
+      if (!ev) throw new Error("Sync could not be switched off \u2014 no relay accepted the change, so your relays are STILL mirroring each other. Try again.");
       return { relays: 0 };
     },
     // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
