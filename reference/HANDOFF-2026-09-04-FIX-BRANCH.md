@@ -104,13 +104,13 @@ version of it, but every Lightning surface is off for the pilot.
 
 Every one of these is written up because it was **considered and deliberately not done**, not missed.
 
-1. **`minorsKnown` is a courtesy, not a protection — and I said otherwise at first.** `_relayAuthedAt` is
-   stamped when the phone SIGNS the auth event, not when the relay accepts it. On a thin link, or when the
-   relay refuses the auth (a skewed clock, a blocked key), the guard can read "we know who the children are"
-   over an answer the relay never gated. What actually keeps a young person's request from the wrong reader
-   is the relay's own read gate, which withholds it from the same socket. **The real fix is to stamp on the
-   relay's OK for the AUTH event** — that changes a signal four other gates read, so it wants its own branch
-   and its own audit.
+1. ~~**`minorsKnown` rests on "we signed an auth" rather than "the relay agreed".**~~ **DONE, `ea4e65c`.**
+   There is now a second signal, `_relayAuthOkAt`, stamped only when a relay answers OK to our AUTH, and the
+   guard asks for that one. Deliberately a SECOND signal and not a stricter first: four gates read
+   `_relayAuthedAt` and all of them fail closed, so tightening it would make them refuse in more cases — a
+   blank screen with nothing to say why. **It is still only a courtesy**: what keeps a young person's request
+   from the wrong reader is the relay's own read gate. **Owed: a hand test.** The build is verified on the
+   phone; the live round trip is not, because the test phone had no church loaded.
 2. **The relay's NIP-42 window** (your decision to leave it). Related to 1: under clock skew the phone is
    admitted and then silently unauthenticated, and the relay reports it as "bad signature", which
    misattributes a clock problem. A distinct reason plus one line on screen would close it without touching

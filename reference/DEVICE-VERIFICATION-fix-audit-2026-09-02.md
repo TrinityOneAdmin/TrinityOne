@@ -460,3 +460,18 @@ Nothing here is claimed for the member app's half-landed toast or the safeguardi
 the earlier device pass already recorded; the new coverage for those is in the suite, and both were
 sabotage-verified (the flattened toast 15/1, the token-blind rule 7/2).
 
+## The auth-acceptance signal (`ea4e65c`) — build verified, ROUND TRIP NOT
+
+    minorsKnown asks for _relayAuthOkAt (the relay agreed)   true
+    …and no longer for _relayAuthedAt (we signed)            true
+
+**And that is all this probe proves.** The phone had no church loaded (`churchPub` empty), so the
+safeguarding stream answered `minorsKnown: false` from having nothing to ask about — not from a relay
+refusing an auth. A probe that stops at an earlier condition looks exactly like one that passed, which is the
+second time that has caught me on this branch.
+
+**Still owed, by hand:** join the phone to a church, confirm the care screens fill (so the OK is arriving and
+the signal is being set), then set the clock 15 minutes out and confirm the care-request triage holds
+everything as confidential rather than offering "Set up help". That is the whole point of the change and only
+a real relay round trip can show it.
+
