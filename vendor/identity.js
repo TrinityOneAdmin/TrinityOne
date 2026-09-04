@@ -12093,6 +12093,40 @@ zoo`.split("\n"));
       return false;
     }
   }
+  async function backfillEncOwner(m) {
+    try {
+      const ownerPub = deriveProfile(m).pubkey;
+      if (!ownerPub) return false;
+      if (!isNative()) {
+        const o = encMarker();
+        if (!o || o.pub === ownerPub) return false;
+        try {
+          localStorage.setItem(ENC_KEY, JSON.stringify({ ...o, pub: ownerPub }));
+        } catch (e) {
+        }
+        return true;
+      }
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      const raw = await SecureStorage.get(ENC_KEY);
+      const blob = raw ? JSON.parse(String(raw)) : null;
+      if (!blob || !blob.ct) return false;
+      if (blob.pub !== ownerPub) {
+        const next = JSON.stringify({ ...blob, pub: ownerPub });
+        if (!await secureSetEnc(next)) return false;
+      }
+      const mk = encMarker();
+      if (!mk || mk.pub !== ownerPub) {
+        try {
+          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub }));
+        } catch (e) {
+        }
+      }
+      return true;
+    } catch (e) {
+      console.warn("[identity] could not record the blob owner", e);
+      return false;
+    }
+  }
   async function orphanEncOwner() {
     try {
       const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
@@ -12490,6 +12524,7 @@ zoo`.split("\n"));
         }
       } catch (e) {
       }
+      await backfillEncOwner(m);
       return true;
     },
     // check a PIN with NO side effects (gates "turn off" / "change PIN")

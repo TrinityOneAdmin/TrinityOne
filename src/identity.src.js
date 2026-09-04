@@ -227,6 +227,45 @@ async function hasOrphanEncBlob() {
 // is answerable, which is what lets the recovery below rebuild a COMPLETE marker instead of one the
 // "stay open" record can never be checked against. Returns '' for a blob written before that, and the
 // caller must treat that exactly as it always did — as "cannot tell", never as "must be fine".
+// BACK-FILL THE OWNER ONTO A BLOB THAT PREDATES IT. Audit #5, and without this the "stay open" fix helped
+// nobody who already had a PIN — which is every device in the pilot. `setPin` records the owner now, but a
+// blob written by an earlier build has none, `orphanEncOwner()` answers '' for it, and the recovery path
+// still rebuilds an anonymous marker: tick the box, one force-stop, locked and the record destroyed. The
+// reported bug, unchanged, on exactly the phones that reported it.
+//
+// `unlock()` is the one place that holds both the blob and the seed, so it is the one place that can answer
+// "whose is this?" without guessing. Called there, after a successful decrypt.
+//
+// NOTHING IS EVER REMOVED. secureSetEnc read-back verifies and returns false if the write did not land; on
+// any failure we leave both copies exactly as they were, which is the state we came in with. The blob holds
+// the only copy of the key, so the rule is add-or-leave, never replace-and-hope.
+async function backfillEncOwner(m) {
+  try {
+    const ownerPub = deriveProfile(m).pubkey;
+    if (!ownerPub) return false;
+    if (!isNative()) {
+      // web/desktop: the marker IS the blob. "Stay open" is not offered here, but a whole marker costs
+      // nothing and keeps the two platforms answering the same question the same way.
+      const o = encMarker();
+      if (!o || o.pub === ownerPub) return false;
+      try { localStorage.setItem(ENC_KEY, JSON.stringify({ ...o, pub: ownerPub })); } catch (e) {}
+      return true;
+    }
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
+    const raw = await SecureStorage.get(ENC_KEY);
+    const blob = raw ? JSON.parse(String(raw)) : null;
+    if (!blob || !blob.ct) return false;                      // nothing in the hardware store to back-fill
+    if (blob.pub !== ownerPub) {
+      const next = JSON.stringify({ ...blob, pub: ownerPub });
+      if (!(await secureSetEnc(next))) return false;          // verified durable, or we change nothing at all
+    }
+    const mk = encMarker();
+    if (!mk || mk.pub !== ownerPub) {
+      try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub })); } catch (e) {}
+    }
+    return true;
+  } catch (e) { console.warn('[identity] could not record the blob owner', e); return false; }
+}
 async function orphanEncOwner() {
   try {
     const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
@@ -589,6 +628,9 @@ window.TrinityIdentity = {
         if (raw && await secureSetEnc(raw)) { try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) {} }
       }
     } catch (e) {}
+    // …and record WHOSE key this is, if the blob predates that being written. Without this the "stay open"
+    // fix reaches only accounts whose PIN was set after it shipped — i.e. nobody currently in the pilot.
+    await backfillEncOwner(m);
     return true;
   },
   // check a PIN with NO side effects (gates "turn off" / "change PIN")

@@ -205,3 +205,102 @@ test('setPin writes the owner alongside the ciphertext', async () => {
   assert.equal(JSON.parse(web.local).ct !== undefined, true, 'on web the FULL blob must stay in localStorage');
 });
 
+// ── AND init() ITSELF, because the cases above only proved the PARTS ──────────────────────────────────────
+//
+// Audit #5: the case that said "exactly what init() now does on that branch" then did it itself, so the two
+// lines in init() that ARE the fix were never executed. Both sabotages — recovery never consulting the
+// record, and the marker rebuilt without the owner — left this file 6/0 green. Fifth time on this branch.
+// So run the shipped init().
+function bootWith(p) {
+  const i = BUNDLE.indexOf('async function init(');
+  assert.ok(i > 0, 'init is not in vendor/identity.js — re-anchor this test');
+  let d = 0, end = i;
+  for (let k = BUNDLE.indexOf('{', i + 20); k < BUNDLE.length; k++) {
+    if (BUNDLE[k] === '{') d++;
+    else if (BUNDLE[k] === '}') { d--; if (!d) { end = k + 1; break; } }
+  }
+  const applied = [];
+  const helpers = [
+    lift('async function hasOrphanEncBlob(', 'hasOrphanEncBlob'),
+    lift('async function orphanEncOwner(', 'orphanEncOwner'),
+    lift('async function rememberedSeed(', 'rememberedSeed'),
+    lift('async function rememberRead(', 'rememberRead'),
+    lift('async function rememberClear(', 'rememberClear'),
+    lift('function encOwnerPub(', 'encOwnerPub'),
+    lift('function encMarker(', 'encMarker'),
+    lift('function hasEnc(', 'hasEnc'),
+  ].join('\n');
+  const src = (helpers + '\n' + BUNDLE.slice(i, end))
+    .replace(/await Promise\.resolve\(\)\.then\(\(\) => \(init_esm\(\), esm_exports\)\)/g, '({ SecureStorage: __SS })');
+  const names  = ['ENC_KEY', 'REMEMBER_KEY', 'localStorage', 'isNative', 'nowSec', 'console', 'JSON', 'String',
+                  'Date', '__SS', 'apply', 'applyLocked', 'deriveProfile', 'secureGet', 'secureSet',
+                  'generateSeedWords', 'isEphemeral'];
+  const values = ['trinityone.nostr.mnemonic.enc', 'trinityone.nostr.remember', p.localStorage,
+                  () => true, () => Math.floor(Date.now() / 1000), { warn() {} }, JSON, String, Date, p.SecureStorage,
+                  (prof) => applied.push({ open: true, pub: prof && prof.pubkey }),
+                  () => applied.push({ open: false }),
+                  (m) => ({ pubkey: m === SEED ? OWNER : 'other' }),
+                  async () => null, async () => {}, () => SEED, () => false];
+  const fn = new Function(...names, 'let sessionMnemonic = null;\n' + src + '\nreturn init;')(...values);
+  return { run: fn, applied };
+}
+
+test('a boot that lost the marker opens the phone instead of locking it', async () => {
+  const p = phone(); afterSetPin(p);
+  p.killBeforeFlush();                     // the app was killed before the WebView flushed
+  const boot = bootWith(p);
+  await boot.run();
+  assert.deepEqual(boot.applied, [{ open: true, pub: OWNER }],
+    'the shipped init() locked the phone despite holding a valid 30-day record and a blob that says whose ' +
+    'it is — this is the bug as the member experiences it, and the parts passing individually did not catch it');
+  assert.ok(p.secure.has('trinityone.nostr.remember'), 'and it destroyed the record on the way');
+  assert.equal(JSON.parse(p.local.get('trinityone.nostr.mnemonic.enc')).pub, OWNER,
+    'the rebuilt marker is anonymous again, so the next boot will fail the same way');
+});
+
+test('MEASURED: a boot with an OLD blob (no owner recorded) still locks — and that is why unlock back-fills', async () => {
+  const p = phone(); afterSetPin(p, { blobCarriesOwner: false });
+  p.killBeforeFlush();
+  const boot = bootWith(p);
+  await boot.run();
+  assert.deepEqual(boot.applied, [{ open: false }],
+    'a blob with no owner must still fail closed — guessing whose key it is is the one thing not to do here');
+});
+
+test('CONTROL: a boot with the marker intact opens without touching the recovery path', async () => {
+  const p = phone(); afterSetPin(p);
+  const boot = bootWith(p);
+  await boot.run();
+  assert.deepEqual(boot.applied, [{ open: true, pub: OWNER }], 'the ordinary remembered boot broke');
+});
+
+// ── the back-fill, so the fix reaches a phone whose PIN predates it ───────────────────────────────────────
+test('unlocking an OLD blob records whose it is, so the next kill does not lose the record', async () => {
+  const i = BUNDLE.indexOf('async function backfillEncOwner(');
+  assert.ok(i > 0, 'backfillEncOwner is not in vendor/identity.js — the fix reaches no existing device');
+  let d = 0, end = i;
+  for (let k = BUNDLE.indexOf('{', i + 30); k < BUNDLE.length; k++) {
+    if (BUNDLE[k] === '{') d++;
+    else if (BUNDLE[k] === '}') { d--; if (!d) { end = k + 1; break; } }
+  }
+  const p = phone(); afterSetPin(p, { blobCarriesOwner: false });
+  const src = (lift('function encMarker(', 'encMarker') + '\n' +
+               lift('async function secureSetEnc(', 'secureSetEnc') + '\n' + BUNDLE.slice(i, end))
+    .replace(/await Promise\.resolve\(\)\.then\(\(\) => \(init_esm\(\), esm_exports\)\)/g, '({ SecureStorage: __SS })');
+  const fn = new Function('ENC_KEY', 'localStorage', 'isNative', '__SS', 'deriveProfile', 'console', 'JSON', 'String',
+    src + '\nreturn backfillEncOwner;')('trinityone.nostr.mnemonic.enc', p.localStorage, () => true,
+      p.SecureStorage, () => ({ pubkey: OWNER }), { warn() {} }, JSON, String);
+
+  assert.equal(JSON.parse(p.secure.get('trinityone.nostr.mnemonic.enc')).pub, undefined, 'fixture is not an OLD blob');
+  assert.equal(await fn(SEED), true, 'the back-fill refused to record the owner it had just decrypted');
+  const blob = JSON.parse(p.secure.get('trinityone.nostr.mnemonic.enc'));
+  assert.equal(blob.pub, OWNER, 'the hardware blob still has no owner, so every existing pilot phone keeps the bug');
+  assert.ok(blob.ct && blob.iv && blob.salt, 'the back-fill damaged the ciphertext — that is the only copy of the key');
+
+  // …and now the same boot that used to lock, opens.
+  p.killBeforeFlush();
+  const boot = bootWith(p);
+  await boot.run();
+  assert.deepEqual(boot.applied, [{ open: true, pub: OWNER }], 'back-filled, and it still locks');
+});
+
