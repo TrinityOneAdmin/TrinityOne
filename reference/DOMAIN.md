@@ -105,6 +105,23 @@ and which of your instincts about it are wrong.
   Consequence for planning: make the Suite the advertised route, and the awkward case shrinks to churches who
   deliberately run a bare relay — a smaller, more technical group who can reasonably take one extra step.
 
+- **A Suite box must register the church with itself, automatically.** `ESTABLISHED 2026-09-04.` Owner, after
+  being shown that creating a church on a self-hosting box silently points the whole congregation at the
+  hosted pool instead: *"I think a suite box should auto register, and being asked if it's an 'always on'
+  machine is already part of that setup process."*
+
+  So self-hosting must need **no extra step**: if this computer is the church's box, creating the church on
+  it registers it there, and the console must not have to be told twice.
+
+  **Two things for whoever builds it.** First, registration is deliberately deferred until the church has a
+  NAME — a nameless self-registration is refused on purpose (`gateway.mjs` H4: one box collected 37
+  anonymous rows), so "auto-register" means *at the moment the name is saved*, not at key creation.
+  Second, `INFERRED and NOT YET FOUND IN THE CODE`: the owner refers to an existing "is this an always-on
+  machine?" question in setup. The Suite home asks *"What should this computer do for your church?"*
+  (`relay-app/home.html:39`) with "Run your church" / "Manage a relay", and "Run your church" already says
+  *"This computer keeps your church's records at the same time"* — but there is no literal always-on
+  question that I could find. Check with the owner before treating one as existing.
+
 - **What a seized relay actually yields — MEASURED 2026-09-02, do not re-derive by guessing.**
   Read off a live relay's sqlite, not reasoned from the code. **Encrypted at rest:** group messages (kind 1),
   DMs (kind 4), journal, notes, prayer, bookmarks, highlights, `clearance:`, `guardnotice:`. **Names are

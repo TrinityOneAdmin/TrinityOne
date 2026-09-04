@@ -585,6 +585,15 @@ function _boxHostsKey() { return 'trinityone.steward.boxhosts.' + (pub || ''); }
 function _loadBoxHosts() {
   try { const c = lsGet(_boxHostsKey()); _boxHostsUs = (c === '0') ? false : (c === '1') ? true : null; } catch (e) { _boxHostsUs = null; }
 }
+// Has this church ever been ACCEPTED by any relay? selfRegister records `<pub>@<base>` on a real
+// acceptance and deliberately records nothing on a refusal, so an empty answer here means "this church
+// does not exist on any relay yet" — which is exactly the state a church is in for its first minute.
+function _everSelfRegistered() {
+  try {
+    const d = JSON.parse(lsGet(SELFREG_KEY) || '{}') || {};
+    return Object.keys(d).some(k => k.indexOf((pub || '\u0000') + '@') === 0);
+  } catch (e) { return false; }
+}
 async function _refreshBoxHostsUs() {
   try {
     // NOT just loopback. A self-hosted church is very often reached through a tunnel, so its own relay has a
@@ -599,6 +608,15 @@ async function _refreshBoxHostsUs() {
     const list = (j && (j.churches || j.current || [])) || [];
     const mine = npubEncode(pub);
     const hosted = list.some(c => c && (c.npub === mine || String(c.npub || '') === mine));
+    // A "no" about a church that has never been registered ANYWHERE is a not-yet, never a verdict, and
+    // caching it is permanent. Creating a church calls setKey() -> _refreshBoxHostsUs() straight away, while
+    // registration is deliberately deferred until the church has a NAME (a nameless self-registration is
+    // refused on purpose — steward-root.jsx and gateway H4). So this probe always asks before the answer
+    // CAN be yes; caching that "no" makes ownRelay() return CANONICAL_RELAY, which makes the guard at the
+    // top of this function return early, so the question can never be asked again. A self-hosting church
+    // was pointed at the community pool from the moment it was created and could not be pointed back.
+    // Leaving it UNKNOWN keeps the box in the list, which is what ownRelay()'s own comment asks for.
+    if (!hosted && !_everSelfRegistered()) { _boxHostsUs = null; return; }
     _boxHostsUs = hosted;
     try { lsSet(_boxHostsKey(), hosted ? '1' : '0'); } catch (e) {}
   } catch (e) { /* unreachable, or not a Suite box → leave the box in the list */ }
@@ -6922,6 +6940,14 @@ window.Steward = {
             ? ('This relay has not accepted your church, so nothing you set up will save: “' + why + '”')
             : 'This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings — your church key is safe on this device.' } }));
       } catch (e) {}
+    }
+    // A SUCCESSFUL REGISTRATION IS NEW INFORMATION ABOUT WHERE THIS CHURCH LIVES. The box-hosts answer may
+    // have been cached as "no" while this church existed on no relay at all; nothing else ever rewrites it,
+    // and ownRelay() cannot revisit it once it is false. Drop it and ask again now that the answer can differ.
+    if (accepted) {
+      try { localStorage.removeItem(_boxHostsKey()); } catch (e) {}
+      _boxHostsUs = null;
+      try { _refreshBoxHostsUs(); } catch (e) {}
     }
     return { ok: accepted, refused, unreachable };
     } finally {

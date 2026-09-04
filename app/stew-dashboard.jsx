@@ -698,7 +698,27 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   // default, so the console and the relay always agree about what the policy is. AUDIT-2026-07-28.
   const saveName = async () => {
     const n = name.trim();
-    if (n && n !== church.name) { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 })); setBusy(false); }
+    if (n && n !== church.name) {
+      setBusy(true);
+      // REGISTER THE CHURCH BEFORE PUBLISHING ANYTHING. A relay refuses every write for a church it does
+      // not know, and the console's OTHER self-registration (the effect below, keyed on `church.name`)
+      // waits for the name to come BACK from the relay — which it never can, because the write that would
+      // carry it is the one being refused. On a self-hosted Suite box, with no other relay to break the
+      // tie, that is a deadlock: the box never learns the church, and nothing the steward does in the
+      // whole wizard is stored. Measured on a clean box 2026-09-04 — no church.json, no selfreg record,
+      // and calling selfRegister by hand registered it immediately, so only the trigger was missing.
+      //
+      // This is the first moment a NAME exists, and a nameless self-registration is refused on purpose
+      // (gateway H4 — one box collected 37 anonymous rows), so this is the earliest correct moment.
+      // steward.src.js already documents this as the intent: "Registration now happens where the name
+      // exists; publishes wait for it." Owner's decision, 2026-09-04: a Suite box should auto-register.
+      //
+      // Safe to call unconditionally: selfRegister refuses outright when this console is acting as a
+      // delegated steward, so a delegate can never register their own key under the church's name.
+      try { if (window.Steward.selfRegister) await Promise.resolve(window.Steward.selfRegister(n)); } catch (e) {}
+      await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }));
+      setBusy(false);
+    }
     // AUDIT-2026-07-28 F10: ensureJoinPolicy, not setJoinPolicy. At this point in the wizard the relay may
     // not know this church exists yet, and it refuses the write — which was swallowed here, leaving the
     // church open-join. ensureJoinPolicy retries on registration and on the next console boot, and says so

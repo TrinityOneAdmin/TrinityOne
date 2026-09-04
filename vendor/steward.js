@@ -15196,6 +15196,14 @@ zoo`.split("\n");
       _boxHostsUs = null;
     }
   }
+  function _everSelfRegistered() {
+    try {
+      const d = JSON.parse(lsGet(SELFREG_KEY) || "{}") || {};
+      return Object.keys(d).some((k) => k.indexOf((pub || "\0") + "@") === 0);
+    } catch (e) {
+      return false;
+    }
+  }
   async function _refreshBoxHostsUs() {
     try {
       if (!pub || ownRelay() === CANONICAL_RELAY) return;
@@ -15207,6 +15215,10 @@ zoo`.split("\n");
       const list = j && (j.churches || j.current || []) || [];
       const mine = npubEncode(pub);
       const hosted = list.some((c) => c && (c.npub === mine || String(c.npub || "") === mine));
+      if (!hosted && !_everSelfRegistered()) {
+        _boxHostsUs = null;
+        return;
+      }
       _boxHostsUs = hosted;
       try {
         lsSet(_boxHostsKey(), hosted ? "1" : "0");
@@ -21400,6 +21412,17 @@ zoo`.split("\n");
               what: "church registration",
               message: why ? "This relay has not accepted your church, so nothing you set up will save: \u201C" + why + "\u201D" : "This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings \u2014 your church key is safe on this device."
             } }));
+          } catch (e) {
+          }
+        }
+        if (accepted) {
+          try {
+            localStorage.removeItem(_boxHostsKey());
+          } catch (e) {
+          }
+          _boxHostsUs = null;
+          try {
+            _refreshBoxHostsUs();
           } catch (e) {
           }
         }
