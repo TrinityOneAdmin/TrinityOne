@@ -12093,6 +12093,16 @@ zoo`.split("\n"));
       return false;
     }
   }
+  async function orphanEncOwner() {
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      const s = await SecureStorage.get(ENC_KEY);
+      const o = s ? JSON.parse(String(s)) : null;
+      return o && typeof o.pub === "string" && o.pub ? o.pub : "";
+    } catch (e) {
+      return "";
+    }
+  }
   async function decryptEnc(pin) {
     const o = await getEncBlob();
     if (!o) throw new Error("no encrypted blob");
@@ -12208,9 +12218,16 @@ zoo`.split("\n"));
     let mnemonic = await secureGet();
     if (!mnemonic) {
       if (isNative() && await hasOrphanEncBlob()) {
+        const who = await orphanEncOwner();
         try {
-          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 }));
+          localStorage.setItem(ENC_KEY, JSON.stringify(who ? { v: 2, native: 1, pub: who } : { v: 2, native: 1 }));
         } catch (e) {
+        }
+        const rem = await rememberedSeed();
+        if (rem) {
+          sessionMnemonic = rem;
+          apply(deriveProfile(rem), { ephemeral: false });
+          return;
         }
         applyLocked();
         return;
@@ -12426,10 +12443,10 @@ zoo`.split("\n"));
       await rememberClear();
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
-      const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });
+      const ownerPub = deriveProfile(m).pubkey;
+      const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct), pub: ownerPub });
       if (isNative()) {
         if (!await secureSetEnc(blob)) return false;
-        const ownerPub = deriveProfile(m).pubkey;
         try {
           localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub }));
         } catch (e) {
