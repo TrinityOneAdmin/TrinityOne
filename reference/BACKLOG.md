@@ -175,3 +175,34 @@ backwards-compatibility discipline the pilot needs (`backwards-compatibility-fro
 repurpose, and the relay rehydrates ALL history on every update).
 
 Sequenced after round 7 so the round tests what is currently deployed.
+
+---
+
+## UI polish — the first-launch "Welcome to TrinityOne" buttons are unevenly spaced
+
+Owner, 2026-09-04: *"the buttons are unevenly spaced, and that could look a bit tidier."*
+
+Confirmed, and it is one property. `app/identity.jsx` ~:454–470, the three choice buttons:
+
+| button | `marginBottom` |
+|---|---|
+| "I'm new here" | 10 |
+| "I've used it before" | **absent** |
+| "Someone set this up for me" | 10 |
+
+So the gap between the second and third is 0 while the first and second have 10px, and the last one carries
+a bottom margin against the panel edge that the layout does not need. It reads as two buttons stuck together
+under one that is spaced properly.
+
+**How it got there:** the third button was added later — AUDIT-2026-07-28, "Someone set this up for me",
+raised because a child whose parent made their account has never used TrinityOne and would otherwise pick
+"I'm new here" and orphan the real account. It was inserted with the same style as the first, and the second
+button's missing margin was never noticed because it had been the last one.
+
+**Worth doing properly rather than adding one number:** give the group a single `gap` on the container
+instead of per-button margins, so the next button someone inserts cannot reintroduce this. The three buttons
+carry an otherwise identical inline style; a shared constant would also stop them drifting apart.
+
+Not urgent, and deliberately not done during the audit-fix branch: this is the first screen every new member
+sees, and it wants a look on a real phone at a couple of widths rather than a blind edit.
+
