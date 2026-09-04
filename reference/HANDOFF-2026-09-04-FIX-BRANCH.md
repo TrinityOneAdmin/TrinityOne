@@ -100,6 +100,41 @@ Left alone deliberately: **emoji reactions** (a warning about a thumbs-up is noi
 drawing it until it lands, which is a different change) and **the wallet backup** — same shape, worst
 version of it, but every Lightning surface is off for the pilot.
 
+## 2d. Four audits ran on this branch. Here is what is still OPEN, in the order I would take it
+
+Every one of these is written up because it was **considered and deliberately not done**, not missed.
+
+1. **`minorsKnown` is a courtesy, not a protection — and I said otherwise at first.** `_relayAuthedAt` is
+   stamped when the phone SIGNS the auth event, not when the relay accepts it. On a thin link, or when the
+   relay refuses the auth (a skewed clock, a blocked key), the guard can read "we know who the children are"
+   over an answer the relay never gated. What actually keeps a young person's request from the wrong reader
+   is the relay's own read gate, which withholds it from the same socket. **The real fix is to stamp on the
+   relay's OK for the AUTH event** — that changes a signal four other gates read, so it wants its own branch
+   and its own audit.
+2. **The relay's NIP-42 window** (your decision to leave it). Related to 1: under clock skew the phone is
+   admitted and then silently unauthenticated, and the relay reports it as "bad signature", which
+   misattributes a clock problem. A distinct reason plus one line on screen would close it without touching
+   the window.
+3. **The blocked list still says "A member with no name set"** for people who set one, on any console but
+   the one that blocked them (the relay withholds a blocked key's own documents). The fix records the name
+   at block time — but that changes `setBlocked(pubkeys)`, which four test files slice by that exact
+   signature, and it publishes a NAMED ban list where the relay holds only keys today. It wants sealing
+   under the church name key and a device pass.
+4. **"Remove relay" has three faults**: a church-listed relay is re-added on the same tick; the socket and
+   its subscriptions are never closed; and it is offered on the church's OWN relay whenever the proof cache
+   is cold — which for a self-hosting church is "a member loses their church". CLAUDE.md rule 10 territory.
+5. **`reactDM`, `react`, `publishWalletBackup`** still swallow a failed publish. Reactions want a different
+   fix (don't draw it until it lands); the wallet backup is unreachable while Lightning is off for the pilot.
+6. **The wizard's "Try again" is inert** (its effect's deps are `[step]` and the button sets `step` to the
+   value it already has), and three older test files carry weak assertions.
+
+### Corrections to the permanent record, since a commit message cannot be edited
+
+- df64220's caller list says DirectoryToggle reads `setProfile`'s answer. It does not, deliberately.
+- 3f3b6a6 calls +600s "the relay's clamp". It is OURS; the relay refuses past 900s.
+- df64220's "timestamps not booleans" reasoning holds only when no signing key is present at the challenge.
+  See item 1.
+
 ## 3. What I would test by hand, in this order
 
 1. **The clock fix** — set the phone's clock 15 minutes out and use the app normally. This is the one with

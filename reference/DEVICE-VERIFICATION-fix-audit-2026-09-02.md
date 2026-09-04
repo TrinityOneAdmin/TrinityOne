@@ -441,3 +441,22 @@ real CSV, so it is covered instead by `a-retried-import-does-not-post-twice.test
 ledger and the SHIPPED importStatement against a relay enforcing the real exact-next-seq rule. Worth a human
 pass with a real statement before this reaches a church.
 
+## The fourth audit's repairs, on both APKs from `f8d2d3a`
+
+**The regression, closed, on the shipped ledger in the console that carries it.** Two identical statement
+lines plus one different, against a relay enforcing the real exact-next-seq rule:
+
+    both identical lines posted            true
+    total imported                         £45.00   (the audit measured £25.00 before this)
+    a refused entry rolled back leaves the journal usable   true
+
+**Member app:**
+
+    minorsKnown reads the hub's own eosedAt        true
+    …and no longer stamps the wall clock           true
+    CONTROL: a known adult's request still opens the approve sheet   true
+
+Nothing here is claimed for the member app's half-landed toast or the safeguarding loading state beyond what
+the earlier device pass already recorded; the new coverage for those is in the suite, and both were
+sabotage-verified (the flattened toast 15/1, the token-blind rule 7/2).
+
