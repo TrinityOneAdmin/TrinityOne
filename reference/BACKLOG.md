@@ -178,7 +178,7 @@ Sequenced after round 7 so the round tests what is currently deployed.
 
 ---
 
-## UI polish — the first-launch "Welcome to TrinityOne" buttons are unevenly spaced
+## ~~UI polish — the first-launch "Welcome to TrinityOne" buttons are unevenly spaced~~ DONE
 
 Owner, 2026-09-04: *"the buttons are unevenly spaced, and that could look a bit tidier."*
 
@@ -205,4 +205,10 @@ carry an otherwise identical inline style; a shared constant would also stop the
 
 Not urgent, and deliberately not done during the audit-fix branch: this is the first screen every new member
 sees, and it wants a look on a real phone at a couple of widths rather than a blind edit.
+
+**Done 2026-09-04.** The three buttons now share one style object and one `gap` on their container, and carry
+no margins of their own — so a fourth button inserted beside them inherits the spacing instead of choosing
+it. `scripts/the-welcome-choices-are-evenly-spaced.test.mjs` renders the real screen and fails if any choice
+spaces itself again, if they stop sharing a style, or if one of them is quietly promoted to look like the
+primary action (they are deliberately equal weight). Measured 1/3 against the old spacing.
 

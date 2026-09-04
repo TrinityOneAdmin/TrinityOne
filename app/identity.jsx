@@ -427,6 +427,19 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // "← Show my words again" — so you could read the same three, come back and type them without ever having
   // written anything down. Re-reading now costs you a different three words, which is the point of the check.
   useIdE(() => { if (step === 2 && words.length >= 6) { const n = words.length; const idx = []; let g = 0; while (idx.length < 3 && g++ < 200) { const r = Math.floor(Math.random() * n); if (!idx.includes(r)) idx.push(r); } setCheckIdx(idx.sort((x, y) => x - y)); setAnswers(['', '', '']); setCheckErr(''); } }, [step, words]);
+  // ONE STYLE, ONE GAP, for the three welcome choices. They were three copies of the same inline object with
+  // their spacing done by per-button `marginBottom` — and the second had none, so "I've used it before" and
+  // "Someone set this up for me" sat flush together under a first button that was spaced properly. Owner
+  // spotted it 2026-09-04.
+  //
+  // The cause matters more than the gap: the third button was added later (AUDIT-2026-07-28, the child whose
+  // parent set the account up) with the FIRST button's style, and the second's missing margin went unnoticed
+  // because it had until then been the last in the list. A per-button margin puts the spacing in the wrong
+  // place — it is a property of the GROUP — so the next person to insert one reintroduces exactly this. The
+  // gap now lives on the container and the buttons carry no margin at all, which makes that impossible.
+  const introChoice = { width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' };
+  const introChoiceTitle = { fontSize: 16, fontWeight: 700, color: 'var(--ink)' };
+  const introChoiceSub = { fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 };
   if (!open) return null;
   // ── Welcome: new person, or someone coming back? Asked BEFORE the create-an-account wizard, because the
   // wrong answer here is expensive: a returning member who is walked into making a new identity ends up as a
@@ -451,23 +464,25 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
               answers cost something: a returning member who misses this ends up as a stranger to their own
               church with a duplicate entry on the roster, while at a church rollout almost everyone is new.
               So ask plainly and say what each choice leads to, rather than steering. */}
-          <button onClick={() => setIntro(false)} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I’m new here</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Set up an account and follow your church</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button onClick={() => setIntro(false)} style={introChoice}>
+            <div style={introChoiceTitle}>I’m new here</div>
+            <div style={introChoiceSub}>Set up an account and follow your church</div>
           </button>
-          <button onClick={() => { setRestoring(true); setRErr(''); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I’ve used it before</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Bring my account back — new phone, or reinstalled</div>
+          <button onClick={() => { setRestoring(true); setRErr(''); }} style={introChoice}>
+            <div style={introChoiceTitle}>I’ve used it before</div>
+            <div style={introChoiceSub}>Bring my account back — new phone, or reinstalled</div>
           </button>
           {/* TOP-LEVEL, not tucked under "I've used it before". A child whose parent made their account has
               never used TrinityOne — asking them to claim they have is how a parent picks "I'm new here" and
               creates a SECOND account, leaving the real one (with its church and guardian link) orphaned on
               the parent's phone. The same wording fails a member the church re-seated onto a new key.
               Raised 2026-07-28: "they might not have used it before". AUDIT-2026-07-28. */}
-          <button onClick={() => { setRestoring(true); setRErr(''); setRMode('scan'); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>Someone set this up for me</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>A parent or leader — scan the code they’re showing you</div>
+          <button onClick={() => { setRestoring(true); setRErr(''); setRMode('scan'); }} style={introChoice}>
+            <div style={introChoiceTitle}>Someone set this up for me</div>
+            <div style={introChoiceSub}>A parent or leader — scan the code they’re showing you</div>
           </button>
+          </div>
         </div>
       </div>
       <div style={{ flexShrink: 0, padding: '10px 22px 26px', background: 'var(--paper)' }}>
