@@ -475,3 +475,15 @@ the signal is being set), then set the clock 15 minutes out and confirm the care
 everything as confidential rather than offering "Set up help". That is the whole point of the change and only
 a real relay round trip can show it.
 
+## The welcome screen's spacing, measured on the Pixel (411x804)
+
+    gap between choice 1 and 2      10px
+    gap between choice 2 and 3      10px     (was 0 — that is the defect the owner saw)
+    widths equal                    true
+
+**One thing the fix does NOT change, said here so nobody reports it twice.** The three buttons are 74, 92 and
+92 px tall. That is not spacing: at 411px wide the first button's subtitle ("Set up an account and follow
+your church") fits on one line while the other two wrap onto a second. Forcing a common height would add
+empty space inside the short one to match text that is not there, which looks worse than the difference does.
+Left alone deliberately; if it ever wants addressing, the lever is the wording, not the CSS.
+
