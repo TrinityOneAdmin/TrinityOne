@@ -7048,6 +7048,22 @@
     return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
   }
   var _relayAuthedAt = 0;
+  var _relayAuthOkAt = 0;
+  function _noteAuthAccepted(url) {
+    Promise.resolve().then(() => {
+      let r = null;
+      try {
+        r = pool.relays.get(normalizeURL2(url));
+      } catch (e) {
+      }
+      const p = r && r.authPromise;
+      if (!p || typeof p.then !== "function") return;
+      p.then(() => {
+        _relayAuthOkAt = Date.now();
+      }, () => {
+      });
+    });
+  }
   var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
   var SG_ASSUME_KEY = "trinityone.sgassume.";
   var _mePub = () => window.Fellowship && window.Fellowship.myPubkey || pub || "";
@@ -7097,7 +7113,7 @@
     }
     return "";
   }
-  pool.automaticallyAuth = () => async (authEvent) => {
+  pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
     if (!sk) {
       try {
@@ -7108,6 +7124,7 @@
     if (!sk) throw new Error("no key");
     _relayAuthedAt = Date.now();
     _armAuthRefetch();
+    _noteAuthAccepted(url);
     return finalizeEvent2(authEvent, sk);
   };
   var _authRefetchArmed = false;
@@ -8265,6 +8282,7 @@
   function reconnectAll() {
     _authRefetchArmed = false;
     _relayAuthedAt = 0;
+    _relayAuthOkAt = 0;
     for (const hub of _docsHubs.values()) {
       hub.familyRebuilt = false;
       const c = hub.closer;
@@ -10293,7 +10311,7 @@
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
         _sgSelf = { cp: pubk, me: me || "", isMinor, known: !!clr };
-        const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthedAt && _sgHub.eosedAt >= _relayAuthedAt);
+        const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthOkAt && _sgHub.eosedAt >= _relayAuthOkAt);
         onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {

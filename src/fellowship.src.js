@@ -1061,6 +1061,32 @@ function _monotonicF(tmpl) {
 // the post-auth refetch, so a boolean would still be satisfied by the pre-auth EOSE. The question that
 // actually matters is whether the relay answered us AFTER it knew who we were.
 let _relayAuthedAt = 0;
+// …AND WHEN DID A RELAY ACTUALLY ACCEPT ONE? `_relayAuthedAt` above is stamped when we SIGN the auth event,
+// which is not the same claim and never was: the relay can still refuse it (a clock outside its window, a
+// blocked key) or the socket can die before the answer comes back. The fourth audit of the 2026-09-04 branch
+// caught a safeguarding guard resting on the weaker signal and reading "we know who the children are" over
+// an answer the relay had never gated.
+//
+// A SECOND signal rather than a stricter version of the first, deliberately. Four gates read `_relayAuthedAt`
+// and every one of them fails CLOSED — tightening it would make them refuse in more cases, and a read gate
+// that wrongly refuses is this codebase's worst failure class (a screen that is simply blank, with nothing to
+// say why). So the existing four keep the optimistic signal and its documented limits; anything that wants
+// "the relay agreed" asks for it explicitly. Reset with it in reconnectAll: a new connection has proved
+// nothing yet.
+let _relayAuthOkAt = 0;
+// Observe the relay's OK for our AUTH without waiting on it here. nostr-tools resolves `relay.authPromise`
+// from that OK — and it can only resolve AFTER this signer returns the event, so awaiting it inside the
+// signer would deadlock the auth we are trying to complete. Hand it to a microtask instead.
+// The pool keys its map by normalizeURL(); a raw .get() misses silently (three prior occurrences).
+function _noteAuthAccepted(url) {
+  Promise.resolve().then(() => {
+    let r = null;
+    try { r = pool.relays.get(normalizeURL(url)); } catch (e) {}
+    const p = r && r.authPromise;
+    if (!p || typeof p.then !== 'function') return;
+    p.then(() => { _relayAuthOkAt = Date.now(); }, () => {});   // a refusal leaves it where it was: unproved
+  });
+}
 let _sgSelf = { cp: '', me: '', isMinor: false, known: false };
 // ONE PHONE IS NOT ONE PERSON. The remembered safeguarding answer is keyed by church AND member, and the
 // in-memory copy carries the member it belongs to, for the same reason ADMITTED_OK_LS is keyed `cp|pub`
@@ -1156,12 +1182,13 @@ async function _careNeedRefusal(cp) {
   }
   return '';
 }   // what MY OWN sealed clearance says about me — see subscribeChurchSafeguard
-pool.automaticallyAuth = () => async (authEvent) => {
+pool.automaticallyAuth = (url) => async (authEvent) => {
   if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }
   if (!sk) throw new Error('no key');
   _relayAuthedAt = Date.now();
   _armAuthRefetch();   // once we auth, re-fetch the gated docs that were withheld before we proved membership
+  _noteAuthAccepted(url);   // …and stamp the STRONGER signal only if the relay says yes
   return finalizeEvent(authEvent, sk);
 };
 // A member's church docs (groups, care, roster, chat tags) are NIP-42-gated, and auth is LAZY — it only
@@ -2257,6 +2284,7 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 function reconnectAll() {
   _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
   _relayAuthedAt = 0;          // F12: and it has proved nothing yet, so no gated read is authoritative until it does
+  _relayAuthOkAt = 0;          // …and neither has any relay agreed on this connection
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
   for (const hub of _docsHubs.values()) { hub.familyRebuilt = false; const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }   // F11: re-arm the family rebuild for the new socket
   // Shared subscriptions ride the same sockets, so they die with them. Drop the registry too, or the next
@@ -4025,14 +4053,16 @@ window.Fellowship = {
     // reason spelled out at `_relayAuthedAt`: an EOSE arrives before the auth round trip completes on a cold
     // boot, and a boolean would be satisfied by that pre-auth EOSE.
     //
-    // SAY EXACTLY WHAT THIS IS WORTH, because the first version of this comment overstated it and the fourth
-    // audit was right to call that out. `_relayAuthedAt` is stamped when we SIGN the auth event, not when the
-    // relay accepts it — so on a thin link, or when the relay REFUSES our auth (a skewed clock, a blocked
-    // key), an EOSE can still land after the stamp and this reads `true` over an answer the relay never
-    // gated. It is a screen-level courtesy, NOT the protection: what actually keeps a young person's request
-    // away from the wrong reader is the relay's own read gate (gateway.mjs canRead), which withholds it from
-    // the same unauthenticated socket. Stamping on the relay's OK instead would be the real fix; it changes a
-    // signal four other gates read, so it is written up in the handoff rather than done here.
+    // `_relayAuthOkAt`, NOT `_relayAuthedAt`. The fourth audit of this branch caught the first version resting
+    // on the weaker one: `_relayAuthedAt` is stamped when the phone SIGNS the auth event, so on a thin link —
+    // or when the relay REFUSES it, which is exactly what a skewed clock or a blocked key produces — an EOSE
+    // could land after the stamp and this read `true` over an answer the relay had never gated. The stronger
+    // signal is set only when a relay answers OK to our AUTH. Kept as a SECOND signal rather than tightening
+    // the first, because four gates read that one and every one of them fails closed; see `_relayAuthOkAt`.
+    //
+    // Even so, say what this is worth: it is a screen-level courtesy. What actually keeps a young person's
+    // request away from the wrong reader is the relay's own read gate (gateway.mjs canRead), which withholds
+    // it from an unauthenticated socket whatever this phone believes.
     //
     // The hub's OWN eosedAt, not Date.now() at the moment we are called: a late-registering handler has its
     // `oneose()` invoked synchronously against a REPLAYED buffer (see _onChurchDocs), and stamping the wall
@@ -4060,7 +4090,7 @@ window.Fellowship = {
       // in a session (a 12-word restore, an adopted steward seed, or the child account minted on a parent's
       // phone by createChildAccount before the phone is handed over). Every reader goes through _sgMine.
       _sgSelf = { cp: pubk, me: me || '', isMinor, known: !!clr };
-      const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthedAt && _sgHub.eosedAt >= _relayAuthedAt);
+      const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthOkAt && _sgHub.eosedAt >= _relayAuthOkAt);
       onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {

@@ -107,7 +107,7 @@ test('CONTROL: once the lists have arrived, an ADULT\'s request still gets "Set 
 const SUB = fnBody(BUNDLE, 'subscribeChurchSafeguard(churchNpub, onLists) {', 'subscribeChurchSafeguard');
 const CP = 'c'.repeat(64), MEHEX = 'e'.repeat(64);
 
-function engine({ authedAt, eosedAt, minorsDoc }) {
+function engine({ authedAt, okAt, eosedAt, minorsDoc }) {
   const heard = [];
   const hub = { eosedAt };
   const stubs = {
@@ -119,6 +119,7 @@ function engine({ authedAt, eosedAt, minorsDoc }) {
     _churchRoster: new Map(),
     APPROVED_D: 'trinityone/approved:',
     _relayAuthedAt: authedAt,
+    _relayAuthOkAt: okAt === undefined ? authedAt : okAt,
     _docsHub: () => hub,
     _onChurchDocs: (_cp, h) => {
       // An unrelated safeguarding doc first, so `emit()` fires even in the cases with no EOSE — otherwise
@@ -203,6 +204,82 @@ test('ANCHOR: the shipped rule still has both halves (this one is a token check,
   assert.match(body, /sawMinors\s*\|\|/,
     'minorsKnown must be satisfied by the document OR by an authenticated answer — the document alone leaves ' +
     'a church that has never marked a child waiting for ever');
-  assert.match(body, /_relayAuthedAt/,
-    'the second question is missing: an EOSE from a relay that does not yet know who we are is not an answer');
+  assert.match(body, /_relayAuthOkAt/,
+    'the second question is missing, or has been weakened back to _relayAuthedAt — which is stamped when we ' +
+    'SIGN an auth, not when a relay accepts one. The executable cases above are what actually hold this line');
 });
+
+// ── SIGNING AN AUTH IS NOT THE SAME AS THE RELAY ACCEPTING ONE ────────────────────────────────────────────
+//
+// The fourth audit's finding, and the reason this pair of cases exists at all. `_relayAuthedAt` is stamped
+// when the phone SIGNS the auth event. The relay can still refuse it — a clock outside its ±600s window, a
+// blocked key — and then the EOSE that follows is an UNAUTHENTICATED answer: an empty minors list means
+// "we were not told", not "this church has no children". Only `_relayAuthOkAt`, stamped from the relay's OK,
+// separates the two, and there is no way to tell them apart from the outside.
+test('a signed auth the relay REFUSED does not count as knowing', () => {
+  const o = engine({ authedAt: 500, okAt: 0, eosedAt: 600, minorsDoc: null });
+  assert.equal(o.minorsKnown, false,
+    'the phone signed an auth, the relay refused it (a skewed clock is enough), and the empty list that came ' +
+    'back was read as "this church has no children" — which is what puts a young person\'s request in the ' +
+    'ordinary queue under the button that publishes it to the congregation');
+});
+
+test('CONTROL: an auth the relay ACCEPTED does count', () => {
+  const o = engine({ authedAt: 500, okAt: 500, eosedAt: 600, minorsDoc: null });
+  assert.equal(o.minorsKnown, true,
+    'a properly authenticated answer is no longer believed, which holds every request in the confidential ' +
+    'queue for ever in a church that has never marked a child');
+});
+
+// ── …and the app must actually SET that signal ────────────────────────────────────────────────────────────
+//
+// Every case above injects `_relayAuthOkAt`. On its own that proves the RULE and says nothing about whether
+// anything ever stamps it — which is the shape that has bitten this branch twice. So run the shipped
+// `_noteAuthAccepted` against a relay that answers, and one that refuses.
+//
+// Note what it must NOT do: nostr-tools resolves `relay.authPromise` from the relay's OK, and that OK can
+// only arrive AFTER our signer returns the event. Awaiting it inside the signer would deadlock the very auth
+// it is waiting for, so the observation is handed to a microtask. The `await tick()` below is what stands in
+// for that.
+test('the OK from a relay stamps the signal; a refusal does not', async () => {
+  const src = fnBody(BUNDLE, 'function _noteAuthAccepted(url) {', '_noteAuthAccepted');
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const run = async (settle) => {
+    const state = { at: 0 };
+    let resolve, reject;
+    const authPromise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    const pool = { relays: new Map([['wss://r.example/relay', { authPromise }]]) };
+    // esbuild renames imported helpers (`normalizeURL` -> `normalizeURL2` in this bundle), so read the name
+    // the SHIPPED text actually uses. Passing the wrong one leaves the lookup throwing inside its own
+    // try/catch — silent, and it fails in a way that reads exactly like the feature being broken. Cost one
+    // false failure here before this line existed.
+    const nu = (src.match(/pool\.relays\.get\((\w+)\(/) || [])[1];
+    assert.ok(nu, 'could not find the URL normaliser in the shipped text — re-anchor this test');
+    const fn = new Function('pool', nu, 'Date', '_stamp', 'Promise',
+      // GLOBAL. With a single replace, a version that ALSO stamped on the relay's refusal kept the second
+      // assignment pointing at the real module variable, which is not in this scope — so it threw inside the
+      // rejection handler, was swallowed, and the test passed over the exact defect it is named for.
+      // Measured: that sabotage left this file 13/0 green until this `g` was added.
+      src.replace(/_relayAuthOkAt = Date\.now\(\)/g, '_stamp(Date.now())') + '\nreturn _noteAuthAccepted;')(
+      pool, (u) => u, Date, (v) => { state.at = v; }, Promise);
+    fn('wss://r.example/relay');
+    settle ? resolve(true) : reject(new Error('auth-failed: bad challenge or signature'));
+    await tick(); await tick();
+    return state.at;
+  };
+  assert.ok(await run(true) > 0, 'the relay accepted our auth and nothing recorded it, so every gate that ' +
+    'asks "did a relay agree?" answers no for ever — which holds every care request in the confidential queue');
+  assert.equal(await run(false), 0,
+    'the relay REFUSED our auth and the phone recorded it as proof — a skewed clock produces exactly that');
+});
+
+test('the auth signer hands the URL to that observer', () => {
+  // The pool calls automaticallyAuth(url); the first version of this code ignored the argument entirely, so
+  // there was no way to find the relay whose answer we needed.
+  const i = BUNDLE.indexOf('pool.automaticallyAuth =');
+  assert.ok(i > 0, 'the auth signer has moved — re-anchor this test');
+  const body = BUNDLE.slice(i, i + 700);
+  assert.match(body, /automaticallyAuth = \(url\)/, 'the signer no longer receives the relay URL');
+  assert.match(body, /_noteAuthAccepted\(url\)/, 'the signer no longer watches for the relay\'s answer');
+});
+
