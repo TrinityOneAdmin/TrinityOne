@@ -18,6 +18,16 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   const [name, setName] = useId(suggestedName || '');
   const [av, setAv] = useId({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
   const [words, setWords] = useId([]);
+  // "TRY AGAIN" HAD NOTHING TO CHANGE. The effect that fetches the twelve words lists only `[step]`, and the
+  // button that offers the retry sits INSIDE the failure message, which only ever renders on step 1 — so it
+  // set `step` to the value it already had, React saw no change, and the effect never re-ran. `setWords([])`
+  // could not help either: words is already empty in the one state where the message appears. So the only
+  // control on the screen that promises a second attempt did nothing at all, on the screen where the account
+  // is lost for ever if this step is skipped. Audit 2026-09-04.
+  //
+  // A counter, not a boolean: two consecutive failures must both re-run, and a boolean flipped back would
+  // fire the effect a second time on the way down.
+  const [wordsTry, setWordsTry] = useId(0);
   const [ack, setAck] = useId(false);
   const [wordsErr, setWordsErr] = useId('');   // the secure store never produced the phrase — say so, do not sit on "Preparing…"
   const [confirmSkip, setConfirmSkip] = useId(false);   // ask once more before an irreversible shortcut
@@ -421,7 +431,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     };
     grab();
     return () => { cancelled = true; };
-  }, [step]);
+  }, [step, wordsTry]);   // wordsTry is what makes the "Try again" button below actually retry
   // pick two distinct positions to confirm when we reach the check step
   // Re-draw the three positions EVERY time the check is entered. They used to be drawn once, and step 2 offers
   // "← Show my words again" — so you could read the same three, come back and type them without ever having
@@ -977,7 +987,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
               <b style={{ color: 'var(--ink)' }}>This phone hasn’t produced your words yet.</b> Close and reopen the app and come
               back to this screen. If it keeps happening, do not skip this step — your account cannot be
               recovered without these words.
-              <button onClick={() => { setWordsErr(''); setWords([]); setStep(1); }} style={{ display: 'block', marginTop: 8, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 10, padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Try again</button>
+              <button onClick={() => { setWordsErr(''); setWords([]); setWordsTry(n => n + 1); }} style={{ display: 'block', marginTop: 8, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 10, padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Try again</button>
             </div>
           ) : null}
           <button onClick={() => setStep(2)} disabled={!ack || words.length < 12} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (ack && words.length >= 12) ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
