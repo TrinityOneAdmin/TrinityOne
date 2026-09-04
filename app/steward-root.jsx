@@ -455,7 +455,7 @@ function StewardWelcome() {
         ) : mode === 'steward-pin' ? (
           <div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Set a PIN to protect this device. Your steward key can act for a church, so it’s <b>encrypted on this device</b> and this unlocks it — a lost or shared phone can’t act as a church without it. Use at least 8 characters: a generated password from a password manager is best, or four random words you can picture together.</div>
-            <input type="password" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="At least 8 — a generated password is best" autoComplete="new-password" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 8 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
+            <input type="password" aria-label="Choose a console PIN or passphrase" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="At least 8 — a generated password is best" autoComplete="new-password" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 8 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
             <button onClick={finishWithPin} disabled={pinVal.length < 8 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 8 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
             <button onClick={() => { setErr(''); setMode('steward'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 8 }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
@@ -585,10 +585,10 @@ function StewardForcedPin() {
             church's name, a year, or anything someone could read off your noticeboard.
           </div>
         </div>
-        <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+        <input type="password" aria-label="Choose a console PIN or passphrase" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
           placeholder="At least 8 — a generated password is best" autoComplete="new-password"
           style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
-        <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+        <input type="password" aria-label="Repeat the console PIN or passphrase" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
           placeholder="Type it again" autoComplete="new-password"
           style={{ width: '100%', boxSizing: 'border-box', height: 50, marginTop: 10, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
@@ -659,7 +659,7 @@ function StewardUnlock() {
         <Halo size={40} color="var(--ink)" spark="var(--clay)" />
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Console locked</div>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 18 }}>Enter the PIN to unlock this church on this device.</div>
-        <input type="password" value={pin} autoFocus disabled={blocked} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && !blocked) submit(); }}
+        <input type="password" aria-label="Your console PIN or passphrase" value={pin} autoFocus disabled={blocked} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && !blocked) submit(); }}
           placeholder="Your PIN or passphrase" autoComplete="off"
           style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', opacity: blocked ? .6 : 1 }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}{blocked ? ' (' + waitLeft + 's)' : ''}</div> : null}

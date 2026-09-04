@@ -157,9 +157,14 @@ test('a member on an IPv6-literal host can authenticate', async () => {
     const r = await probe(ws, 'ipv6', { kinds: [30078], '#d': [MINORS_D + church.pub] },
       { authAs: member, relayUrl: `ws://[::1]:${PORT}/relay`, window: 1800 });
     assert.equal(r.gotAuth, true, 'the relay never challenged — re-anchor this test');
-    assert.notEqual(r.authOk, false,
-      'auth was refused on an IPv6-literal host. `host.split(":")[0]` turns "[::1]:8858" into "[", which can ' +
-      'never equal the relay tag\'s hostname "::1" — so on an IPv6 relay every gated read comes back empty');
+    // `equal(..., true)`, NOT `notEqual(..., false)`. `authOk` starts as NULL and only becomes true or false
+    // when an OK actually arrives, so notEqual(false) also passes when the relay answered NOTHING — a silent
+    // relay, a dropped socket, a probe window that expired early. The assertion would then be green over the
+    // exact failure it is named for. Audit 2026-09-04.
+    assert.equal(r.authOk, true,
+      'auth was refused (or never answered) on an IPv6-literal host. `host.split(":")[0]` turns "[::1]:8858" ' +
+      'into "[", which can never equal the relay tag\'s hostname "::1" — so on an IPv6 relay every gated ' +
+      'read comes back empty');
   } finally { try { ws.close(); } catch {} }
 });
 
@@ -171,7 +176,7 @@ test('CONTROL: a plain IPv4 host with a port still authenticates', async () => {
     const r = await probe(ws, 'ipv4', { kinds: [30078], '#d': [MINORS_D + church.pub] },
       { authAs: member, relayUrl: WS_URL, window: 1800 });
     assert.equal(r.gotAuth, true, 'the relay never challenged — re-anchor this test');
-    assert.notEqual(r.authOk, false, 'an ordinary IPv4 host stopped authenticating');
+    assert.equal(r.authOk, true, 'an ordinary IPv4 host stopped authenticating, or the relay answered nothing at all');
   } finally { try { ws.close(); } catch {} }
 });
 

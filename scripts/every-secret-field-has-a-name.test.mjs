@@ -13,19 +13,54 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stripComments } from './test-slice.mjs';
 
-const FILES = ['app/identity.jsx', 'app/identity-extras.jsx', 'app/stew-dashboard.jsx'];
+// steward-root.jsx was missing from this list and holds FOUR password fields, including the console's own
+// PIN gate. Audit 2026-09-04.
+const FILES = ['app/identity.jsx', 'app/identity-extras.jsx', 'app/stew-dashboard.jsx', 'app/steward-root.jsx'];
+
+// FIND THE WHOLE TAG, not `<input[^>]*type="password"[^>]*>`. That pattern stops at the first ">" — and a
+// JSX attribute routinely contains one, in an arrow function: `onChange={e => …}`. So any password input
+// whose handler is written before `type=` was invisible to it. Measured before this fix: it saw 5 of the 7
+// in stew-dashboard.jsx, and steward-root.jsx was not being read at all. A test that silently skips the
+// fields it is meant to police is worse than no test, because the count looks reassuring.
+//
+// Walk out from each `type="password"` to the enclosing `<input`, then forward to the ">" that closes it,
+// tracking brace depth so a ">" inside `{...}` does not end the tag.
+function passwordTags(src) {
+  const out = [];
+  for (const m of src.matchAll(/type="password"/g)) {
+    const start = src.lastIndexOf('<input', m.index);
+    if (start < 0) { out.push('(a password field with no <input before it: ' + src.slice(Math.max(0, m.index - 40), m.index + 20) + ')'); continue; }
+    let depth = 0, end = -1;
+    for (let i = start; i < src.length; i++) {
+      const c = src[i];
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      else if (c === '>' && depth === 0 && i > start) { end = i; break; }
+    }
+    out.push(src.slice(start, end < 0 ? src.length : end + 1));
+  }
+  return out;
+}
 
 test('every secret field says what it is', () => {
   const unnamed = [];
+  let seen = 0;
   for (const f of FILES) {
     const src = stripComments(readFileSync(new URL('../' + f, import.meta.url), 'utf8'));
-    for (const m of src.matchAll(/<input[^>]*type="password"[^>]*>/g)) {
-      const tag = m[0];
+    const tags = passwordTags(src);
+    // The count is part of the assertion: if the extractor ever stops finding them, that must be a failure
+    // and not a quietly empty pass.
+    assert.equal(tags.length, (src.match(/type="password"/g) || []).length,
+      f + ': the tag extractor lost a password field — every one of them must be checked, not most');
+    seen += tags.length;
+    for (const tag of tags) {
       if (!/aria-label=/.test(tag) && !/aria-labelledby=/.test(tag)) {
         unnamed.push(f + ': ' + tag.slice(0, 90).replace(/\s+/g, ' '));
       }
     }
   }
+  assert.ok(seen >= 19, 'only ' + seen + ' password fields found across ' + FILES.length +
+    ' files; there were 19 when this was written, so something is no longer being read');
   assert.deepEqual(unnamed, [],
     'these secret fields have no accessible name. Once something is typed the placeholder is gone and a ' +
     'screen reader can only say "edit text, secure" — and one of these is the PIN that unlocks a church ' +

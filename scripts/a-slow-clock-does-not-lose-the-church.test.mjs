@@ -81,9 +81,23 @@ test('no freshness WINDOW has been reintroduced into the shipped verifier', () =
   for (const f of BUNDLES) {
     const src = readFileSync(new URL('../' + f, import.meta.url), 'utf8');
     const body = slice(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity');
+    // NOT the constant's NAME. A window reintroduced under any other name — an inline number, a fresh
+    // constant, a helper — would sail past that, and the name is the one thing a future edit is least likely
+    // to reuse. Audit 2026-09-04.
+    //
+    // Assert the property that actually matters: this function does not consult a clock AT ALL. It verifies a
+    // signature over a nonce we generated, which is what makes it immune to skew in the first place; it has no
+    // legitimate reason to read the time, and measured against the shipped bundle it reads none.
     assert.equal(/RELAY_PROOF_WINDOW_SEC/.test(body), false,
       `${f}: verifyRelayIdentity applies a freshness window again — a phone with a skewed clock will be ` +
       `locked out of every relay, and told to speak to a leader`);
+    for (const clock of [/Date\.now\s*\(/, /created_at/, /\bnowSec\b/, /Math\.abs\s*\([^)]*-/]) {
+      assert.equal(clock.test(body), false,
+        `${f}: verifyRelayIdentity reads a clock (${clock}). It verifies a signature over a nonce WE chose, ` +
+        `so it needs no notion of time — and any comparison against one locks out a phone whose clock is off, ` +
+        `which is the failure this whole file exists for. If a clock is ever genuinely needed here, that is a ` +
+        `decision to argue for in the commit, not to slip past a test looking for one constant's name`);
+    }
   }
 });
 
