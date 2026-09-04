@@ -53,7 +53,13 @@ PIN on the very next launch. If they have not written the PIN down they are lock
 must use their 12 words. The feature is not merely inert: it deletes the record, so the second and third
 attempts fail the same way with no explanation.
 
-## Not fixed here, deliberately
+## FIXED, `74b1645` — option 1 below was the one taken
+
+Owner chose it the same day. setPin now writes the owner alongside the ciphertext in the hardware store and
+the recovery path rebuilds the marker whole, then consults the remembered seed (that branch never did).
+Re-measured on the Pixel with the identical three steps: open after one force-stop, record intact, 30 days.
+
+## The two options as they were put, kept for the reasoning
 
 Two candidate fixes, and choosing between them is a security decision, not a 3am one:
 

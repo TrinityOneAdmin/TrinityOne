@@ -487,3 +487,19 @@ your church") fits on one line while the other two wrap onto a second. Forcing a
 empty space inside the short one to match text that is not there, which looks worse than the difference does.
 Left alone deliberately; if it ever wants addressing, the lever is the wording, not the CSS.
 
+## "Stay open on this phone" — the same three steps that found the bug, now on the fix (`74b1645`)
+
+Pixel 10 Pro, member APK rebuilt, app uninstalled and installed clean so nothing carried over.
+
+| step | before the fix | after |
+|---|---|---|
+| 1. set a PIN, tick the box | saved, 30 days | saved, 30 days |
+| 2. **ONE force-stop + relaunch** | **locked, record DESTROYED (0 days)** | **open, record intact, 30 days** |
+| 3. again | locked | open, 30 days |
+
+That is the whole defect, closed at the point it was measured.
+
+Owed before merge: leave it a day and confirm it is still open (nothing here proves the 30-day window
+behaves over real time, only that the record survives a kill), and check the same on the Oppo, which used to
+pass this by luck and must not have been made worse.
+
