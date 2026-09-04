@@ -217,3 +217,59 @@ test('MEASURED: without that rollback the next import posts NOTHING, twice over'
   assert.equal(second.posted, 0, '"Try again" recovered on its own, so the rollback would not be needed');
 });
 
+// ── THE TWO CASES TOGETHER, WHICH IS WHERE THE MONEY WENT ─────────────────────────────────────────────────
+//
+// Audit #5. This file already had "two identical lines both import" and "a retry does not double up". Held
+// apart they both passed while the combination lost a donation, and the combination is the ordinary one: two
+// card-reader settlements of the same amount on one day, and the relay dropping between them.
+//
+// With a de-dup that asks "is this key in the book", attempt 2 finds the key (put there by the line that DID
+// land) and skips BOTH rows. `failed` is then empty, so the modal closes as a clean success — £25 posted from
+// a £45 statement, exactly the defect audit #4 found, one tap further on.
+//
+// The rule has to COUNT: two in the file and one in the book means post one more.
+const TWIN = { key: '2026-09-01|2000|standing order giving', date: '2026-09-01',
+               description: 'STANDING ORDER GIVING', amountMinor: 2000, dir: 'in' };
+const GIFT = { key: '2026-09-01|500|gift aid', date: '2026-09-01',
+               description: 'GIFT AID', amountMinor: 500, dir: 'in' };
+
+test('the relay drops BETWEEN two identical lines, and "Try again" still posts the second', async () => {
+  const h = harness({ refuseFrom: 2 });          // the first lands, then the relay goes away
+  const statement = [TWIN, { ...TWIN }, GIFT];
+  const first = await h.importStatement(picks(statement));
+  assert.equal(first.posted, 1, 'the harness did not produce the partial failure this test is about');
+  assert.equal(first.failed.length, 2);
+
+  h.retry();                                     // the relay is back
+  const second = await h.importStatement(picks(statement));
+  assert.equal(h.relay.stored.length, 3,
+    'the second of two identical payments was never posted. On the retry its key was already in the book — ' +
+    'put there by the one that DID land — so both rows were skipped, the modal reported no failures and ' +
+    'closed as a clean success. A real donation missing from a church\'s books, with nothing on screen');
+  assert.equal(second.posted, 2, 'the retry did not finish the statement');
+  assert.equal(second.skipped.length, 1, 'the line that had already landed should be skipped exactly once');
+  assert.equal(second.failed.length, 0);
+});
+
+test('CONTROL: importing that same statement a THIRD time posts nothing', async () => {
+  const h = harness({ refuseFrom: null });
+  const statement = [TWIN, { ...TWIN }, GIFT];
+  await h.importStatement(picks(statement));
+  h.retry();
+  const again = await h.importStatement(picks(statement));
+  assert.equal(again.posted, 0,
+    'counting instead of set-membership must not open the door to re-importing a whole statement');
+  assert.equal(again.skipped.length, 3);
+  assert.equal(h.relay.stored.length, 3);
+});
+
+test('CONTROL: THREE identical lines, one already in the book, posts exactly two', async () => {
+  const h = harness({ refuseFrom: 2 });
+  const statement = [TWIN, { ...TWIN }, { ...TWIN }];
+  await h.importStatement(picks(statement));     // 1 lands
+  h.retry();
+  const second = await h.importStatement(picks(statement));
+  assert.equal(second.posted, 2, 'the count is off when a key repeats more than twice');
+  assert.equal(h.relay.stored.length, 3);
+});
+

@@ -738,12 +738,24 @@ function DashFinanceBook() {
   // modal's flags, because that is the layer a stale screen cannot get past.
   const importStatement = async (picks) => {
     const b = bookRef.current;
-    const already = F.importedKeys(b);
+    // COUNT, DO NOT ASK "IS THIS KEY PRESENT". Audit #5, and it is the SAME £45-becomes-£25 defect one tap
+    // further on. `lineKey` is date|amount|description, so two identical payments on one day share a key K.
+    // With a set: attempt 1 lands the first and the relay drops before the second; on "Try again" K is now in
+    // the book, so BOTH rows are skipped, `failed` is empty, and the modal closes as a clean success with one
+    // donation never posted and nothing on screen.
+    //
+    // The question is not "has this key been imported" but "how many of these does the book already hold
+    // against how many the statement offers". Two in the file and one in the book means post ONE more.
+    // That is right in all three cases: a fresh import (0 held, 2 offered -> post 2), a re-import of the same
+    // file (2 held, 2 offered -> post 0), and a retry after a partial failure (1 held, 2 offered -> post 1).
+    const held = new Map();
+    for (const k of (b.journal || [])) if (k.importKey) held.set(k.importKey, (held.get(k.importKey) || 0) + 1);
     const failed = [], skipped = [];
     let posted = 0;
     for (let i = 0; i < picks.length; i++) {
       const { line, account, fund } = picks[i];
-      if (line.key && already.has(line.key)) { skipped.push(line); continue; }
+      const n = line.key ? (held.get(line.key) || 0) : 0;
+      if (n > 0) { held.set(line.key, n - 1); skipped.push(line); continue; }
       const amount = line.amountMinor;
       const P = line.dir === 'in'
         ? [{ account: 'bank', dir: 'dr', amount }, { account, fund, dir: 'cr', amount }]
@@ -760,13 +772,8 @@ function DashFinanceBook() {
         break;
       }
       posted++;
-      // DO NOT add this key to the guard. `lineKey` is date|amount|description, so two identical
-      // transactions on one day — two card-reader settlements, two standing orders the bank prints the same,
-      // a cash deposit repeated — share one key, and adding it here dropped the SECOND of the pair and then
-      // closed the modal as a clean success: a real donation missing from a church's books with nothing on
-      // screen. The fourth audit measured it (£25 imported where £45 was on the statement); the version
-      // before this branch posted both. The guard read from the BOOK above is the one that matters, and it is
-      // enough: a line that landed on the first attempt is in the book by the time a retry reads it.
+      // Nothing is added to `held` here. A row we have just posted is a row we WANTED to post; the count read
+      // from the book above already accounts for everything that landed on an earlier attempt.
     }
     bump();
     return { posted, failed, skipped };
