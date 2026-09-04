@@ -128,17 +128,33 @@ test('CONTROL: a hosted church still cannot register somebody ELSE', async () =>
     'must only ever add the signer\'s own church');
 });
 
-test('CONTROL: re-announcing does not let a church relabel a relay the operator locked', async () => {
-  // The fix above lets an already-registered church through the invite-only gate. That must not become a
-  // way to overwrite the name the OPERATOR chose — the row still reads `by: "operator"`, so a relabel here
-  // is one party's name under another party's attribution. Measured on 2026-09-04: it did exactly that.
+test('CONTROL: re-announcing cannot relabel the operator\'s view of the row', async () => {
+  // This began as "a church must not overwrite the operator's chosen name". The owner then asked why relays
+  // hold church names at all, and the answer was that they should not: the operator's label is now a petname
+  // derived from the key (churchPetName), so there is nothing a church can supply and nothing to overwrite.
+  // The guarantee is stronger than the one this test originally asserted, so the test asserts the stronger one.
+  const before = await (await fetch(BASE + '/config', { headers: { 'Authorization': 'Bearer ' + token } })).json();
+  const labelBefore = (before.churches.find(c => c.npub === npubEncode(inPub)) || {}).name;
+  assert.match(String(labelBefore || ''), /^[A-Z][a-z]+ [A-Z][a-z]+ \d+$/,
+    'the operator sees no derived label for this row, so they cannot tell it from any other (H4)');
+
   const r = await selfRegister(inSk, inPub, 'RENAMED BY THE CHURCH');
   assert.equal(r.status, 200, 're-announcing must still succeed — that is the whole point of the fix');
-  const cfg = await (await fetch(BASE + '/config', { headers: { 'Authorization': 'Bearer ' + token } })).json();
-  const row = cfg.churches.find(c => c.name === 'RENAMED BY THE CHURCH');
-  assert.equal(row, undefined,
-    'a church renamed itself on a relay whose operator deliberately locked it, and the row still says ' +
-    'by: "operator". It also re-opens the whole-corpus rehydrate loop on every differing re-announce.');
-  assert.ok(cfg.churches.some(c => c.name === 'St Editha of the Test'),
-    'the operator\'s chosen name is gone');
+
+  const after = await (await fetch(BASE + '/config', { headers: { 'Authorization': 'Bearer ' + token } })).json();
+  const labelAfter = (after.churches.find(c => c.npub === npubEncode(inPub)) || {}).name;
+  assert.equal(labelAfter, labelBefore, 'the label a church sees is derived from its key and must not move');
+  assert.ok(!after.churches.some(c => String(c.name || '').indexOf('RENAMED') >= 0),
+    'a church-supplied name reached the operator\'s list — the relay must not store one at all');
+});
+
+test('CONTROL: no church-supplied name is written to disk', async () => {
+  // The point of the change: church.json stops being a compact, readable index of which congregations this
+  // box serves. (It does NOT stop a seized relay yielding church names — those are in the kind-0 profiles,
+  // public by design. See reference/DOMAIN.md; this test must not be read as claiming otherwise.)
+  await selfRegister(inSk, inPub, 'A Very Identifiable Parish');
+  const raw = readFileSync(join(dataDir, 'church.json'), 'utf8');
+  assert.doesNotMatch(raw, /Identifiable|St Editha of the Test/,
+    'a church name is on disk in church.json: ' + raw.slice(0, 200));
+  assert.doesNotMatch(raw, /"name"/, 'church.json still carries a name field');
 });

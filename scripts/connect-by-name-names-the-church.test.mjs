@@ -137,9 +137,16 @@ test('connecting by name registers the church under its real name, and its write
     const rows = await churches(relay);
     assert.equal(rows.length, 1, 'the church was not registered at the relay at all');
     assert.equal(rows[0].npub, npubEncode(church.pub), 'a different key was registered');
-    assert.equal(rows[0].name, 'St Aidan’s, Ferrymead',
-      'the church was registered with no usable name, so the relay operator sees a bare npub and cannot ' +
+    // H4's REQUIREMENT, NOT ITS ORIGINAL SPELLING. The operator must be able to tell one row from another,
+    // or they cannot safely remove one — and removing the wrong row de-provisions a real congregation. That
+    // is still asserted. What changed on 2026-09-05 is WHERE the label comes from: the owner decided a relay
+    // must not hold a church-supplied name at all, so it is now a petname derived from the key
+    // (churchPetName). Asserting the church's own name here would now assert the very thing that was removed.
+    assert.match(String(rows[0].name || ''), /^[A-Z][a-z]+ [A-Z][a-z]+ \d+$/,
+      'the church was registered with no usable label, so the relay operator sees a bare npub and cannot ' +
       'safely act on the row. That is exactly the state rule H4 was written to stop.');
+    assert.doesNotMatch(String(rows[0].name || ''), /Aidan/,
+      'the relay is storing the church\'s own name again — it must not hold one');
 
     const last = card.messages().pop();
     assert.ok(last && last.ok === true, 'the card did not report success after a registration that worked');

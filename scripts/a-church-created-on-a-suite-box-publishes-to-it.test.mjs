@@ -128,7 +128,9 @@ test('a church created in the console lands on the box that made it, in the same
     //    church.json at all (the gateway writes it on the first registration), which is the same finding.
     let cj = null;
     try { cj = JSON.parse(readFileSync(join(relay.dataDir, 'church.json'), 'utf8')); } catch (e) { cj = null; }
-    const row = cj && (cj.churches || []).find(c => c && String(c.npub || '') !== '' && c.name === 'St Columba on the Box');
+    // BY NPUB, NOT BY NAME. The relay stopped storing a church-supplied name on 2026-09-05 (the operator's
+    // label is a petname derived from the key), so a row is identified by the key it is a row FOR.
+    const row = cj && (cj.churches || []).find(c => c && String(c.npub || '') !== '');
     assert.ok(row,
       'the box never registered the church — the wizard did not ask it. With the early probe\'s "0" cached, ' +
       'configBase() names the pool, so unless the wizard opts the serving box in (createHere) the one box the ' +

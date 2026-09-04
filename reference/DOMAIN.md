@@ -142,6 +142,23 @@ and which of your instincts about it are wrong.
   37 rows of bare npubs cannot tell which church to remove, and removing the wrong one de-provisions a real
   congregation. That need is real and must survive.
 
+  **CORRECTED 2026-09-05, before any code was written, and it changes what this is worth.** The church's
+  name is ALSO in cleartext on the relay in its **kind-0 profile** — measured on the live box:
+  `St Editha's, Marchwood` and `SIM St Aidan's`, readable, in `relay.sqlite`. That is public BY DESIGN and
+  the entry below says so: someone joining must see the church's name before they join, so the profile
+  cannot be sealed without breaking the join flow.
+
+  So **removing the name from `church.json` does NOT stop a seized relay yielding church names**, and it must
+  not be described as if it does. What it does buy is smaller and still real: one fewer plaintext copy, the
+  operator's list stops being a compact index of exactly which congregations a box serves, and — the part
+  that started this — there is no longer a church-supplied name on the relay for a church to rename, so the
+  "who may relabel a row" question disappears instead of being answered.
+
+  **The real exposure is the kind-0 profile and it is structural, not a bug.** A relay inherently knows the
+  names of the churches it serves, because members and joiners must read them. Closing that would mean
+  gating church profiles behind membership and finding another way to show a joiner which church a code
+  belongs to. That is a product decision, not a fix, and it is NOT taken here.
+
   **The decision: a petname derived from the church's npub** — the wordlist at `scripts/gateway.mjs:928`
   (`olive, cedar, dove, anchor, lamp, vine, shepherd, harbor…`) already does this for a relay's own memorable
   name. Applied to a church key it gives the operator a stable, distinguishable label ("Quiet Harbor 42")
