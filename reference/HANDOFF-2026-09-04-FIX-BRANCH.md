@@ -77,6 +77,29 @@ and then silently fails to authenticate: gated reads come back empty with nothin
 console's care requests and check-in sit in "loading" for ever. Better than "no relay at all", still wrong.
 Changing a relay-side auth window is a security decision and I have not made it.
 
+## 2c. The eight swallowed publishes — five now fixed, three left on purpose
+
+The audit's "I'm here to help" finding was one instance of a shape; a sweep found nine in all. Worth saying
+plainly: **none of these was ever broken in normal use.** They work whenever the message actually sends,
+which is nearly always. What was broken is the failure case — a send that reached no relay came back looking
+exactly like one that worked.
+
+Fixed, with the screen made to say it, and both apps checked on the phone:
+
+- withdrawing your own request for help
+- a care team closing or approving a request
+- taking a meal slot, and standing down from one
+- a recipient undoing "not this day"
+
+Plus a case neither engine handled: **setting up help is two publishes.** The need goes up, then the request
+is marked dealt-with. If only the first lands, help really IS arranged and the request still reads open —
+the team works it twice and the person who asked is told nothing. Both engines now report which half landed,
+and both screens say so instead of "Opened as a need".
+
+Left alone deliberately: **emoji reactions** (a warning about a thumbs-up is noise; the right fix is not
+drawing it until it lands, which is a different change) and **the wallet backup** — same shape, worst
+version of it, but every Lightning surface is off for the pilot.
+
 ## 3. What I would test by hand, in this order
 
 1. **The clock fix** — set the phone's clock 15 minutes out and use the app normally. This is the one with

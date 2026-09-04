@@ -365,3 +365,40 @@ Re-checked on the steward APK through the full cycle a steward actually drives:
 **The lesson, kept here because it cost the most:** a device check that does not drive the STATE CHANGE is
 not a device check. Render closed, then open, then close, then open again.
 
+## The five swallowed care actions (2026-09-04) — both APKs on the Oppo
+
+Both apps rebuilt from `11e38d9` and installed. Every check below drove the SHIPPED components in the live
+WebView, not a copy of them.
+
+**Which build is loaded** — read off the phone, not assumed:
+
+    cancelCareRequest / setCareRequestStatus / fillCareSlot / clearCareSlot / clearCareSkip
+      all five report failure          true
+    approveCareRequest reports which half landed (member + console)   true
+
+**Member app** — the real `MyRequestRow` and `CareRequestCard`, pressed:
+
+    the row is quiet before anything is pressed        true
+    Withdraw still asks for confirmation first         true
+    a withdrawal that reached no relay says so         true   ("…this request is still open")
+    that failure is a role="alert", not just colour    true
+    CONTROL: a withdrawal that DID land stays quiet    true
+    a close that reached no relay says so              true
+      "That didn't reach the church — this request is still open, and the person who asked
+       has not been told anything."
+
+**Steward console** — the real `StewApproveSheet` and `StewCareRequests`:
+
+    nothing published at all: the sheet stays open and says so   true
+    …and does NOT report success to the list                     true
+    need published, request never closed: reported upward        true
+    the list then shows "it still shows below"                   true
+    CONTROL: a clean approval is not flagged                     true
+    CONTROL: the list stays quiet after a clean approval         true
+
+**One thing the first run of the console probe got wrong, kept because it is the more useful finding.**
+It reported "no Set up help button" and looked like a defect. It is not: the safeguarding lists had not
+arrived in that hidden mount, and since the 2026-09-03 fix an unknown answer holds every request in the
+CONFIDENTIAL section, where that button is absent on purpose. The fail-closed gate was working. The probe
+was corrected to say the lists had arrived; the gate was not touched.
+
