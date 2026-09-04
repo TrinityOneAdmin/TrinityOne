@@ -1010,6 +1010,31 @@ let sk = null, pub = null;
 // unrelated to this flag. The comment that used to sit here described the old, narrowed behaviour and
 // contradicted the line below it; that is exactly how a fixed leak gets un-fixed. Corrected 2026-07-26.)
 let _needAuth = true;
+// A SECOND DECISION IN THE SAME SECOND MUST BEAT THE FIRST, AND `created_at` IS WHOLE SECONDS.
+// Audit 2026-09-04.
+//
+// pin/unpin and hide/unhide are pairs that write the SAME replaceable document, so "undo" is just a second
+// write to it. NIP-01 breaks a created_at tie by keeping the LOWEST event id — a hash, i.e. a coin toss — so
+// Undo pressed within a second of the action it undoes was refused about half the time, measured over 200
+// trials. What a leader sees is a message that will not come back, or a pin that will not clear, with no
+// error: the relay accepted the event and simply kept the older copy.
+//
+// The console has had this since it was written (`_monotonic` in src/steward.src.js, applied inside
+// _publishSigned). This is the same rule for the member app, and it is kept deliberately narrow — only the
+// four moderation writes below, which are the ones a person can genuinely repeat inside a second. Never
+// stamp past the relay's future clamp: take the rare tie instead of a document nothing will accept.
+const _lastStampF = new Map();
+function _monotonicF(tmpl) {
+  const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
+  const nowS = Math.floor(Date.now() / 1000);
+  const want = tmpl.created_at || nowS;
+  const last = _lastStampF.get(d) || 0;
+  let at = want > last ? want : last + 1;
+  if (at > nowS + 600) at = want;
+  _lastStampF.set(d, at);
+  return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
+}
+
 // NIP-42: when a relay challenges, prove our pubkey by signing the auth event with our key — so the relay serves
 // us our church's PRIVATE docs (the member roster, safeguarding lists, media key, Care module, invite groups).
 // SECURITY-AUDIT-2026-07-13: this was `false` (auth only in the guardian flow), which meant an ordinary member
@@ -3873,14 +3898,14 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId || !msg || !msg.id) return null;
     const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.pubkey || msg.by || '', ts: msg._ts || msg.ts || Math.floor(Date.now() / 1000) });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] pinPost failed', e); return null; }
     return evt;
   },
   async unpin(churchNpub, groupId) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId) return null;
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp], ['deleted', '1']], content: '' }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp], ['deleted', '1']], content: '' }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unpin failed', e); return null; }
     return evt;
   },
@@ -3889,7 +3914,7 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !msgId) return null;
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp]];
     if (groupId) tags.push(['t', groupId]);
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ groupId: groupId || '' }) }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ groupId: groupId || '' }) }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] hideMessage failed', e); return null; }
     return evt;
   },
@@ -3898,7 +3923,7 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !msgId) return null;
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp], ['deleted', '1']];
     if (groupId) tags.push(['t', groupId]);
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unhideMessage failed', e); return null; }
     return evt;
   },

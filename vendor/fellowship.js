@@ -7036,6 +7036,17 @@
   var sk = null;
   var pub = null;
   var _needAuth = true;
+  var _lastStampF = /* @__PURE__ */ new Map();
+  function _monotonicF(tmpl) {
+    const d = ((tmpl.tags || []).find((t) => t[0] === "d") || [])[1] || "kind:" + tmpl.kind;
+    const nowS = Math.floor(Date.now() / 1e3);
+    const want = tmpl.created_at || nowS;
+    const last = _lastStampF.get(d) || 0;
+    let at = want > last ? want : last + 1;
+    if (at > nowS + 600) at = want;
+    _lastStampF.set(d, at);
+    return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
+  }
   var _relayAuthedAt = 0;
   var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
   var SG_ASSUME_KEY = "trinityone.sgassume.";
@@ -10093,7 +10104,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !groupId || !msg || !msg.id) return null;
       const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
@@ -10106,7 +10117,7 @@
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !groupId) return null;
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
@@ -10121,7 +10132,7 @@
       if (!cp || !msgId) return null;
       const tags = [["d", "trinityone/hidden:" + msgId], ["t", NET], ["p", cp]];
       if (groupId) tags.push(["t", groupId]);
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
@@ -10136,7 +10147,7 @@
       if (!cp || !msgId) return null;
       const tags = [["d", "trinityone/hidden:" + msgId], ["t", NET], ["p", cp], ["deleted", "1"]];
       if (groupId) tags.push(["t", groupId]);
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {

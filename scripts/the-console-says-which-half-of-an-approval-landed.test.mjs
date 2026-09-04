@@ -250,3 +250,24 @@ test('CONTROL: a need that saved still closes the sheet', async () => {
   assert.notEqual(saved, 'not called', 'a successful save no longer finishes — the fix must not close the door');
 });
 
+// ── closing somebody's request takes TWO presses, RUN rather than read ────────────────────────────────────
+//
+// ebc3cec added the confirmation and asserted it by matching text in app/stew-meals.jsx. That file ships
+// UNBUNDLED, so `false && ` in front of the condition leaves every word in place and the match still passes
+// (CLAUDE.md rule 3) — measured by the 2026-09-04 audit: restoring the one-tap close left that test 9/0
+// green. This drives the real control instead.
+test('one press asks; only the second press closes the request', async () => {
+  const { draw, StewCareRequests } = screen(async () => ({ id: 'care-1', stillOpen: false }));
+  const props = { church: { npub: 'npub1church' } };
+  draw(StewCareRequests, props);
+  let tree = draw(StewCareRequests, props);
+  const first = button(tree, 'Close — not needed')[0];
+  assert.ok(first, 'no close control on the request row — re-anchor this test');
+  first.props.onClick({ stopPropagation() {} });
+  tree = draw(StewCareRequests, props);
+  const words = texts(tree).join(' ');
+  assert.match(words, /Yes, close it|Keep it open/,
+    'the first press produced no confirmation, so one stray tap ends a member\'s request for help');
+  assert.ok(button(tree, 'Keep it open').length, 'there is no way back out of the confirmation');
+});
+

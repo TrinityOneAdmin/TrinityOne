@@ -266,6 +266,15 @@ function FinanceImport({ book, F, onPost, onClose }) {
     setPosting(false);
     const failed = (res && res.failed) || [];
     if (res && !failed.length) { onClose(); return; }
+    // MARK WHAT LANDED, so "Try again" retries the rest and not the lot. The `dup` flags were worked out once,
+    // when this modal opened, so without this every line the relay DID take was still ticked on the retry.
+    // The engine refuses a repeat regardless — this is what stops the screen asking for one.
+    const stillFailing = new Set(failed.map(l => l.key));
+    setRowState(rs => rs.map((r, i) => {
+      const l = lines[i];
+      if (!r.selected || r.dup || !l || stillFailing.has(l.key)) return r;
+      return { ...r, dup: true, selected: false };
+    }));
     setErr(!res
       ? 'Nothing was imported — the import failed before it started. Your books are unchanged.'
       : failed.length + ' of ' + picks.length + ' line' + (picks.length === 1 ? '' : 's') + ' did not reach the relay, and ' + (failed.length === 1 ? 'it is' : 'they are') + ' NOT in your books: '
@@ -700,23 +709,50 @@ function DashFinanceBook() {
   // relay left the modal closing on a books page the treasurer believed was reconciled. `record`/`undo`
   // above already await pubEntry and read it; this is the same treatment for the bulk path.
   // Promise.all, not a serial await: a statement can be 200 lines.
+  // "TRY AGAIN" POSTED THE LINES THAT HAD ALREADY LANDED, A SECOND TIME. Audit 2026-09-04, and the cause was
+  // two things at once — both of which come from the journal being a single-writer, relay-ORDERED, append-only
+  // sequence (gateway.mjs accepts a journal doc only when `seq === FINANCE_SEQ.get(cp) + 1`).
+  //
+  // 1. Promise.all. Two hundred lines were signed and fired at the relay together, so they arrived in
+  //    whatever order the network chose, and every one that arrived out of turn was refused for a gap. The
+  //    partial failure this modal reports was largely manufactured here.
+  // 2. `post()` advances the local book whether or not the publish lands, and never rolled back. So the
+  //    already-landed lines stayed selected in the review list (its `dup` flags were computed once, when the
+  //    modal opened) and went out again on the retry, while the refused ones were numbered past a gap the
+  //    relay can never accept — and carried importKeys, so the de-dup thought they were already imported.
+  //
+  // Serial, stop at the first refusal, and roll the book back to the last entry the relay actually took.
+  // Slower on a long statement; it is the only order the relay will accept, so the parallel version was not
+  // faster, it was wrong. The de-dup guard is re-read from the book on EVERY call rather than trusting the
+  // modal's flags, because that is the layer a stale screen cannot get past.
   const importStatement = async (picks) => {
     const b = bookRef.current;
-    const attempts = [];
-    for (const { line, account, fund } of picks) {
+    const already = F.importedKeys(b);
+    const failed = [], skipped = [];
+    let posted = 0;
+    for (let i = 0; i < picks.length; i++) {
+      const { line, account, fund } = picks[i];
+      if (line.key && already.has(line.key)) { skipped.push(line); continue; }
       const amount = line.amountMinor;
       const P = line.dir === 'in'
         ? [{ account: 'bank', dir: 'dr', amount }, { account, fund, dir: 'cr', amount }]
         : [{ account, fund, dir: 'dr', amount }, { account: 'bank', dir: 'cr', amount }];
+      let entry = null, ok = false;
       try {
-        const entry = F.post(b, { date: line.date, memo: line.description, importKey: line.key, postings: P });
-        attempts.push(Promise.resolve(pubEntry(b, entry)).then(ok => ({ ok: !!ok, line })).catch(() => ({ ok: false, line })));
-      } catch (e) { attempts.push(Promise.resolve({ ok: false, line })); }
+        entry = F.post(b, { date: line.date, memo: line.description, importKey: line.key, postings: P });
+        ok = !!(await pubEntry(b, entry));
+      } catch (e) { ok = false; }
+      if (!ok) {
+        // Undo the local guess and stop: every seq after this one is invalid to the relay anyway.
+        if (entry && F.dropFrom) { try { F.dropFrom(b, entry.seq); } catch (x) {} }
+        for (let j = i; j < picks.length; j++) failed.push(picks[j].line);
+        break;
+      }
+      posted++;
+      if (line.key) already.add(line.key);
     }
-    const results = await Promise.all(attempts);
     bump();
-    const failed = results.filter(r => !r.ok).map(r => r.line);
-    return { posted: results.length - failed.length, failed };
+    return { posted, failed, skipped };
   };
   const funds = F.fundBalances(book);
   const ie = F.incomeExpenditure(book);
