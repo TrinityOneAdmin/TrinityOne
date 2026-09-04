@@ -21360,9 +21360,10 @@ zoo`.split("\n");
         if (!churchSk || !churchPub) return;
         const np = npubEncode(churchPub);
         const force = !!(opts && opts.force);
+        const createHere = !!(opts && opts.createHere);
         const bases = /* @__PURE__ */ new Set();
         const rawOrigin = _ownOrigin();
-        if (rawOrigin) bases.add(rawOrigin);
+        if (createHere && rawOrigin) bases.add(rawOrigin);
         bases.add(window.Steward.configBase());
         for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, ""));
         let done = {};
@@ -21387,6 +21388,25 @@ zoo`.split("\n");
               }
               accepted = true;
               _markRegOk();
+              if (rawOrigin && base === rawOrigin && _boxHostsUs !== true) {
+                _boxHostsUs = true;
+                try {
+                  lsSet(_boxHostsKey(), "1");
+                } catch (e) {
+                }
+                try {
+                  _gate.refresh(relaysRaw(), pub);
+                } catch (e) {
+                }
+                try {
+                  window.dispatchEvent(new CustomEvent("steward-relays"));
+                } catch (e) {
+                }
+                try {
+                  window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url: "" } }));
+                } catch (e) {
+                }
+              }
             } else if (r) {
               let why = "";
               try {

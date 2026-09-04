@@ -715,7 +715,13 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       //
       // Safe to call unconditionally: selfRegister refuses outright when this console is acting as a
       // delegated steward, so a delegate can never register their own key under the church's name.
-      try { if (window.Steward.selfRegister) await Promise.resolve(window.Steward.selfRegister(n)); } catch (e) {}
+      //
+      // `createHere` is THE opt-in that makes the box serving this console a registration target. Owner's
+      // decision, 2026-09-04: a steward deliberately creating a church on this machine is the only moment
+      // the serving box is asked to hold a church — never the boot-time re-announces, which on a community
+      // box would plant an unsolicited row and turn "this box serves the console" into "this box holds the
+      // church". This is the only call site that passes it.
+      try { if (window.Steward.selfRegister) await Promise.resolve(window.Steward.selfRegister(n, { createHere: true })); } catch (e) {}
       await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }));
       setBusy(false);
     }
