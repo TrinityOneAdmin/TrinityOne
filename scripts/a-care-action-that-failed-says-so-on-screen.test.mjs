@@ -191,3 +191,70 @@ test('the optimistic tick is still rolled back as well as explained', async () =
   assert.deepEqual(Object.keys(optCare), [], 'the row still shows the member as signed up after a failure');
 });
 
+// ── THE MEMBER APP'S half-landed report, which had no point-of-use test at all ────────────────────────────
+//
+// 11e38d9 claimed "both screens say which half landed" and only the console's list was driven. The fourth
+// audit reduced the member app's toast to a plain "Opened as a need" and left FIVE test files green — which
+// is CLAUDE.md rule 1 exactly: an engine that reports, and a screen nobody made consult it.
+//
+// A care admin on a phone approves a request. The need is published and accepted; the second write, which
+// marks the request dealt with, is refused. Help IS set up — and the person who asked goes on reading "your
+// care team will be in touch" while the request sits open for the team to work a second time.
+test('the phone says which half landed, not just "Opened as a need"', async () => {
+  const said = [];
+  const { draw, CareRequests } = (function () {
+    const { React, draw } = miniReact();
+    const ME = 'm'.repeat(64);
+    const globals = {
+      React, console, setTimeout, clearTimeout, setInterval, clearInterval,
+      Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+      ChurchBadge: Stub('ChurchBadge'),
+      document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+      navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      lsGet: (k, d) => d, lsSet: () => {},
+      cx: (...a) => a.filter(Boolean).join(' '),
+      SectionLabel: Stub('SectionLabel'), Halo: Stub('Halo'), Sheet: Stub('Sheet'), IconBtn: Stub('IconBtn'),
+      useTrinityAudio: () => ({ track: null, playing: false }),
+      todayISO: () => '2026-09-04',
+      fetch: async () => ({ ok: false, json: async () => ({}) }),
+      window: { addEventListener() {}, removeEventListener() {}, innerWidth: 360,
+        Fellowship: { myPubkey: ME,
+          subscribeCareRequests: (cb) => { cb([{ id: 'req-1', from: 'a'.repeat(64), forSelf: true, type: 'meals', note: 'x', status: 'open' }]); return () => {}; },
+          declineCareRequest: async () => ({ id: 'e' }) },
+        TrinityData: { NOTIFICATIONS: [], PLANS: [], VOTD_POOL: [] },
+        Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1, activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) } },
+    };
+    return { draw, ...loadScreen('app/screens-today.jsx', ['CareRequests'], globals) };
+  })();
+  const ME = 'm'.repeat(64);
+  const ctx = {
+    church: { npub: 'npub1c' },
+    safeguard: { minors: [], approved: [ME], guardians: {}, isMinor: false, cleared: true, minorsKnown: true },
+    churchRosters: [{ team: 'care-team', people: [{ pub: ME }] }],
+    canDMPeer: () => true,
+    toast: (m, o) => said.push({ m: String(m), e: !!(o && o.error) }),
+    care: { myPub: ME, settings: { enabled: true, adminGroupId: 'care-team' } },
+  };
+  draw(CareRequests, { ctx });
+  let tree = draw(CareRequests, { ctx });
+  const b = button(tree, 'Set up help')[0];
+  assert.ok(b, 'no "Set up help" control on the request — re-anchor this test');
+  b.props.onClick({ stopPropagation() {} });
+  tree = draw(CareRequests, { ctx });
+  const sheet = find(tree, n => typeof n.type === 'function' && n.type.name === 'ApproveNeedSheet')[0];
+  assert.ok(sheet, 'the approve sheet did not open — re-anchor this test');
+
+  sheet.props.onDone({ id: 'care-1', stillOpen: true });
+  const half = said[said.length - 1];
+  assert.ok(half && half.e,
+    'the phone said "Opened as a need" over a request that was never marked dealt with, so the care team ' +
+    'works it again and the person who asked is told nothing');
+  assert.match(half.m, /still shows as open|couldn.t close/i, 'the message does not say what is left to do');
+
+  sheet.props.onDone({ id: 'care-2', stillOpen: false });
+  const clean = said[said.length - 1];
+  assert.equal(clean.e, false, 'CONTROL: a clean approval now reports a failure');
+  assert.match(clean.m, /Opened as a need/);
+});
+

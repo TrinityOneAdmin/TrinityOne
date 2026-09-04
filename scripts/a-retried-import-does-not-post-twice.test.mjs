@@ -25,16 +25,23 @@ const FIN = new Function(LEDGER_SRC + '; return FinanceLedger;')();
 const STEW = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'utf8');
 
 // Slice the shipped arrow function, balanced to its closing brace. Not a text match: it is then RUN.
-function liftImportStatement() {
-  const i = STEW.indexOf('const importStatement = async (picks) => {');
-  assert.ok(i > 0, 'importStatement is not in app/stew-finance.jsx — re-anchor this test');
+function lift(anchor, what) {
+  const i = STEW.indexOf(anchor);
+  assert.ok(i > 0, what + ' is not in app/stew-finance.jsx — re-anchor this test');
   let d = 0;
-  for (let k = STEW.indexOf('{', i + 40); k < STEW.length; k++) {
+  for (let k = STEW.indexOf('{', i + anchor.length - 1); k < STEW.length; k++) {
     if (STEW[k] === '{') d++;
     else if (STEW[k] === '}') { d--; if (!d) return STEW.slice(i, k + 1) + ';'; }
   }
-  throw new Error('unbalanced braces slicing importStatement');
+  throw new Error('unbalanced braces slicing ' + what);
 }
+const liftImportStatement = () => lift('const importStatement = async (picks) => {', 'importStatement');
+// record() and _dropIfRefused are lifted too, rather than stubbed. A hand-written _dropIfRefused would prove
+// that dropFrom works and say nothing about whether record() CALLS it — which is the whole claim, and is the
+// trap this codebase keeps falling into. Measured: with record()'s rollback deleted, the stubbed version of
+// this file stayed 8/0 green.
+const liftRecord = () => lift('const _dropIfRefused = (b, entry) =>', '_dropIfRefused')
+                       + lift('const record = ({ dir, account, fund, amountMinor, date, memo }) => {', 'record');
 
 // A relay that behaves like the real one: it stores a journal document only when the seq is exactly next.
 function makeRelay() {
@@ -68,9 +75,10 @@ function harness({ refuseFrom }) {
   };
   const names  = ['bookRef', 'F', 'pubEntry', 'bump'];
   const values = [bookRef, FIN, pubEntry, () => {}];
-  const fn = new Function(...names, liftImportStatement() + ' return importStatement;')(...values);
+  const made = new Function(...names,
+    liftRecord() + liftImportStatement() + ' return { importStatement, record, _dropIfRefused };')(...values);
   // A retry is a fresh attempt, and the relay may be back — so the count restarts and the cut can be lifted.
-  return { importStatement: fn, relay, book,
+  return { importStatement: made.importStatement, record: made.record, relay, book,
            retry: ({ refuseFrom: r = null } = {}) => { attempts = 0; cut = r; } };
 }
 
@@ -138,3 +146,74 @@ test('dropFrom discards only what was never accepted', () => {
   assert.equal(book._seq, 1, 'the next entry would be numbered past a gap the relay refuses');
   assert.equal(book.journal[0].memo, 'kept', 'dropFrom removed an entry the relay HAD accepted');
 });
+
+// ── the regression the FIRST version of this fix introduced ───────────────────────────────────────────────
+//
+// `lineKey` is date|signedAmount|description(40) — so two IDENTICAL transactions on one day share one key.
+// The first de-dup added each posted key to the guard as it went, which dropped the second of such a pair and
+// then closed the modal as a clean success: a real donation missing from a church's books, with nothing on
+// screen. Two card-reader settlements of the same amount, two standing orders the bank prints identically, a
+// repeated cash deposit — all ordinary. The version before this branch posted both, and so must this one.
+//
+// Caught by the fourth audit of the branch, which measured £25 imported from a £45 statement. The test that
+// shipped with the fix used five distinct keys and structurally could not see it.
+test('two IDENTICAL lines in one statement are both imported', async () => {
+  const h = harness({ refuseFrom: null });
+  const twice = [
+    { key: '2026-09-01|2000|standing order giving', date: '2026-09-01', description: 'STANDING ORDER GIVING', amountMinor: 2000, dir: 'in' },
+    { key: '2026-09-01|2000|standing order giving', date: '2026-09-01', description: 'STANDING ORDER GIVING', amountMinor: 2000, dir: 'in' },
+    { key: '2026-09-01|500|gift aid', date: '2026-09-01', description: 'GIFT AID', amountMinor: 500, dir: 'in' },
+  ];
+  const r = await h.importStatement(picks(twice));
+  assert.equal(r.posted, 3,
+    'the second of two identical lines was dropped, and the modal closed as though the statement had ' +
+    'imported cleanly — the money is simply missing from the books');
+  assert.equal(r.skipped.length, 0, 'a legitimate repeat was reported as already imported');
+  assert.equal(h.relay.stored.length, 3);
+});
+
+// ── one refused MANUAL entry must not wedge every later import ────────────────────────────────────────────
+//
+// `dropFrom` was applied only inside the import, so a single refused entry typed by hand still advanced the
+// local book past a seq the relay never took — and every later entry and import was numbered past a gap the
+// relay refuses. The treasurer is told "try again" and cannot succeed until a relay delivery rebuilds the
+// book. record() and undo() now roll back the same way.
+const P2 = [{ account: 'bank', dir: 'dr', amount: 500 }, { account: 'giving', dir: 'cr', amount: 500 }];
+
+test('a manual entry the relay refused does not wedge the next import', async () => {
+  // The relay never saw it: post() still ran locally, which is what record() does before it publishes.
+  // The SHIPPED record(), with the relay away — not a hand-written stand-in for what it is supposed to do.
+  // Injecting my own _dropIfRefused would prove dropFrom works and say nothing about whether record() CALLS
+  // it, which is the whole claim; measured — with record()'s rollback deleted, that version stayed green.
+  const h = harness({ refuseFrom: 1 });
+  const ok = await h.record({ dir: 'in', account: 'giving', fund: 'general', amountMinor: 500, date: '2026-09-01', memo: 'Cash in hand' });
+  assert.equal(ok, false, 'the harness did not produce the refusal this test is about');
+  assert.equal(h.book._seq, 0,
+    'record() left the refused entry in the local book, so every later seq is past a gap the relay refuses');
+
+  h.retry();                                     // the relay is back
+  const r = await h.importStatement(picks(LINES));
+  assert.equal(r.posted, 5, 'the import could not post at all after one refused manual entry');
+  assert.deepEqual(h.relay.seqs(), [1, 2, 3, 4, 5]);
+});
+
+test('CONTROL: an entry the relay DID take stays in the books', async () => {
+  const h = harness({ refuseFrom: null });
+  const ok = await h.record({ dir: 'in', account: 'giving', fund: 'general', amountMinor: 500, date: '2026-09-01', memo: 'Cash in hand' });
+  assert.equal(ok, true);
+  assert.equal(h.book.journal.length, 1, 'record() discarded an entry the relay accepted');
+  assert.equal(h.book._seq, 1);
+});
+
+test('MEASURED: without that rollback the next import posts NOTHING, twice over', async () => {
+  // This is the state the branch shipped in before the fourth audit: record() left the phantom entry behind.
+  const h = harness({ refuseFrom: null });
+  FIN.post(h.book, { date: '2026-09-01', memo: 'Cash in hand', postings: P2 });   // refused, not rolled back
+  const first = await h.importStatement(picks(LINES));
+  assert.equal(first.posted, 0,
+    'this control no longer reproduces the wedge — re-anchor it, or the test above proves nothing');
+  h.retry();
+  const second = await h.importStatement(picks(LINES));
+  assert.equal(second.posted, 0, '"Try again" recovered on its own, so the rollback would not be needed');
+});
+

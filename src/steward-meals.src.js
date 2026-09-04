@@ -211,7 +211,8 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     //
     // Three different failure contracts live in this codebase and the wrapper is the trap: `publish()`
     // returns false, `_publishAny` in fellowship THROWS, and this used to return a truthy object around
-    // either. Callers below: approveCareRequest here, and StewNeedSheet.save in app/stew-meals.jsx.
+    // either. Callers below: approveCareRequest here, and MealsNeedModal.save in app/stew-meals.jsx (both
+    // handle null).
     if (!e) return null;
     return { id, ...rec, ts: e.created_at };
   }

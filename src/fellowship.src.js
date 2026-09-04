@@ -1021,8 +1021,11 @@ let _needAuth = true;
 //
 // The console has had this since it was written (`_monotonic` in src/steward.src.js, applied inside
 // _publishSigned). This is the same rule for the member app, and it is kept deliberately narrow — only the
-// four moderation writes below, which are the ones a person can genuinely repeat inside a second. Never
-// stamp past the relay's future clamp: take the rare tie instead of a document nothing will accept.
+// four moderation writes below, which are the ones a person can genuinely repeat inside a second.
+//
+// The +600s bound is OURS, not the relay's — the relay refuses past +900s (event-store.mjs) and the console
+// uses 600 in `_monotonic`. Two programs that must agree keep the tighter number; 700 undos in one second
+// would otherwise stamp a document nothing will accept, and a rare tie is the better failure.
 const _lastStampF = new Map();
 function _monotonicF(tmpl) {
   const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
@@ -4017,12 +4020,26 @@ window.Fellowship = {
     //
     // `sawMinors` alone is not enough and this is the trap the console hit first: a church that has never
     // marked a child never publishes the document, so waiting for it would hold every request in the
-    // confidential queue for ever in exactly those churches — the feature silently switched off. So the
-    // second question: did the relay answer us AFTER it knew who we are? Timestamps, not booleans, for the
+    // confidential queue for ever in exactly those churches — the feature silently switched off. So a second
+    // question: did the hub's EOSE arrive AFTER we proved who we are? Timestamps, not booleans, for the
     // reason spelled out at `_relayAuthedAt`: an EOSE arrives before the auth round trip completes on a cold
-    // boot, and a boolean would be satisfied by that pre-auth EOSE. `>=` because both are Date.now() and a
-    // fast local relay can land both in the same millisecond.
-    let sawMinors = false, _sgEosedAt = 0;
+    // boot, and a boolean would be satisfied by that pre-auth EOSE.
+    //
+    // SAY EXACTLY WHAT THIS IS WORTH, because the first version of this comment overstated it and the fourth
+    // audit was right to call that out. `_relayAuthedAt` is stamped when we SIGN the auth event, not when the
+    // relay accepts it — so on a thin link, or when the relay REFUSES our auth (a skewed clock, a blocked
+    // key), an EOSE can still land after the stamp and this reads `true` over an answer the relay never
+    // gated. It is a screen-level courtesy, NOT the protection: what actually keeps a young person's request
+    // away from the wrong reader is the relay's own read gate (gateway.mjs canRead), which withholds it from
+    // the same unauthenticated socket. Stamping on the relay's OK instead would be the real fix; it changes a
+    // signal four other gates read, so it is written up in the handoff rather than done here.
+    //
+    // The hub's OWN eosedAt, not Date.now() at the moment we are called: a late-registering handler has its
+    // `oneose()` invoked synchronously against a REPLAYED buffer (see _onChurchDocs), and stamping the wall
+    // clock there would read a pre-auth answer as a post-auth one every time the app re-registers — the 1.2s
+    // lazy load, a connection tick, a church switch. `syncSealedNames` asks the identical question this way.
+    let sawMinors = false;
+    const _sgHub = _docsHub(pubk);
     const emit = () => {
       _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
@@ -4043,7 +4060,7 @@ window.Fellowship = {
       // in a session (a 12-word restore, an adopted steward seed, or the child account minted on a parent's
       // phone by createChildAccount before the phone is handed over). Every reader goes through _sgMine.
       _sgSelf = { cp: pubk, me: me || '', isMinor, known: !!clr };
-      const minorsKnown = sawMinors || !!(_sgEosedAt && _relayAuthedAt && _sgEosedAt >= _relayAuthedAt);
+      const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthedAt && _sgHub.eosedAt >= _relayAuthedAt);
       onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {
@@ -4102,7 +4119,7 @@ window.Fellowship = {
           emit();
         }
       },
-      oneose() { _sgEosedAt = Date.now(); emit(); },
+      oneose() { emit(); },
     });
   },
 

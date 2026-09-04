@@ -87,12 +87,13 @@ test('the stamp is PER DOCUMENT — one room\'s pin does not push another\'s int
 });
 
 test('it never stamps past the relay\'s future clamp', async () => {
-  // 700 writes in one second would run past +600s, which the relay refuses outright. Better a rare tie than
-  // a document nothing will accept.
+  // 700 writes in one second would run past +600s. That bound is OURS, not the relay's — the relay refuses
+  // past +900s (event-store.mjs) and the console's _monotonic uses 600. Two programs that must agree keep the
+  // tighter number, and a rare tie is a better failure than a document nothing will accept.
   const { fns, published } = pair('pinPost', 'unpin', NOW);
   for (let i = 0; i < 700; i++) await fns.pinPost('npub1c', 'g1', { id: 'm' + i });
   const worst = Math.max(...published.map(e => e.created_at));
-  assert.ok(worst <= NOW + 600, 'stamped ' + (worst - NOW) + 's into the future; the relay clamp is 600s');
+  assert.ok(worst <= NOW + 600, 'stamped ' + (worst - NOW) + 's into the future; our own bound is 600s (the relay refuses past 900s)');
 });
 
 test('CONTROL: an ordinary write a second later keeps its own real time', async () => {

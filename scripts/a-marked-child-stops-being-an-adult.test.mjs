@@ -96,6 +96,11 @@ function phone({ replay = [], remembered = null, audience = ['someone-cleared'] 
     // also what makes minorsKnown false throughout, i.e. no case here accidentally asserts about a state it
     // did not set up. See subscribeChurchSafeguard.
     _relayAuthedAt: 0,
+    // `subscribeChurchSafeguard` asks the church-docs hub when its EOSE landed, to decide whether an empty
+    // minors list means "no children here" or "we were not told" (see minorsKnown). These cases are about the
+    // CLEARANCE document, so the honest hub is one that has not EOSEd — which also keeps minorsKnown false
+    // throughout, i.e. nothing here asserts about a state it did not set up.
+    _docsHub: () => ({ eosedAt: 0 }),
     _mayCache: () => true,
     _fetchChildCareAudience: async () => audience,
     localStorage: {

@@ -10285,14 +10285,15 @@
       const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
       let clr = null;
       let _clrTs = 0, _clrId = "";
-      let sawMinors = false, _sgEosedAt = 0;
+      let sawMinors = false;
+      const _sgHub = _docsHub(pubk);
       const emit = () => {
         _noPhoto = pubSet(nophoto);
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
         _sgSelf = { cp: pubk, me: me || "", isMinor, known: !!clr };
-        const minorsKnown = sawMinors || !!(_sgEosedAt && _relayAuthedAt && _sgEosedAt >= _relayAuthedAt);
+        const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthedAt && _sgHub.eosedAt >= _relayAuthedAt);
         onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
@@ -10352,7 +10353,6 @@
           }
         },
         oneose() {
-          _sgEosedAt = Date.now();
           emit();
         }
       });

@@ -690,6 +690,12 @@ function DashFinanceBook() {
     _booksDonateShown = true; setDonate(true);
   }, []);
 
+  // Discard a local entry the relay refused. NOT history editing: an entry nothing accepted is not history,
+  // it is a guess that turned out wrong, and leaving it behind invalidates every seq after it. The one case
+  // this gets wrong is a relay that STORED the entry and lost the OK on the way back — the entry then
+  // reappears on the next delivery, which rebuilds the book from what the relay actually holds. Re-entering
+  // it by hand inside that window is the way to double it, so the wording never invites that.
+  const _dropIfRefused = (b, entry) => { if (entry && F.dropFrom) { try { F.dropFrom(b, entry.seq); } catch (x) {} } };
   const record = ({ dir, account, fund, amountMinor, date, memo }) => {
     const b = bookRef.current;
     const P = dir === 'in'
@@ -697,10 +703,15 @@ function DashFinanceBook() {
       : [{ account, fund, dir: 'dr', amount: amountMinor }, { account: 'bank', dir: 'cr', amount: amountMinor }];
     // Awaited: pubEntry's answer is the only thing that distinguishes a recorded entry from a lost one, and
     // all three call sites used to drop it, so the row rendered as recorded either way.
+    // ROLL BACK A REFUSED ENTRY HERE TOO. Audit 2026-09-04, second pass: `dropFrom` was applied only inside
+    // the import, so ONE refused manual entry still advanced the local book past a seq the relay never took —
+    // and every later entry, and every later import, was then numbered past a gap the relay refuses. Measured:
+    // after one failed manual entry, a three-line import posted 0 of 3, and "Try again" posted 0 again. The
+    // treasurer is told to try again and cannot succeed until a relay delivery rebuilds the book.
     const entry = F.post(b, { date, memo, postings: P });
-    return pubEntry(b, entry).then((ok) => { bump(); return ok; });
+    return pubEntry(b, entry).then((ok) => { if (!ok) _dropIfRefused(b, entry); bump(); return ok; });
   };
-  const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
+  const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { if (!ok) _dropIfRefused(b, rev); bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
   // Post the lines the treasurer selected in the import modal. Each carries its statement lineKey as importKey
   // so a future re-import of the same statement is flagged as already-imported (see FinanceImport de-dup).
   // AN IMPORT THAT POSTED NOTHING MUST NOT CLOSE AS THOUGH IT HAD. Audit 2026-09-02 #17.
@@ -744,12 +755,18 @@ function DashFinanceBook() {
       } catch (e) { ok = false; }
       if (!ok) {
         // Undo the local guess and stop: every seq after this one is invalid to the relay anyway.
-        if (entry && F.dropFrom) { try { F.dropFrom(b, entry.seq); } catch (x) {} }
+        _dropIfRefused(b, entry);
         for (let j = i; j < picks.length; j++) failed.push(picks[j].line);
         break;
       }
       posted++;
-      if (line.key) already.add(line.key);
+      // DO NOT add this key to the guard. `lineKey` is date|amount|description, so two identical
+      // transactions on one day — two card-reader settlements, two standing orders the bank prints the same,
+      // a cash deposit repeated — share one key, and adding it here dropped the SECOND of the pair and then
+      // closed the modal as a clean success: a real donation missing from a church's books with nothing on
+      // screen. The fourth audit measured it (£25 imported where £45 was on the statement); the version
+      // before this branch posted both. The guard read from the BOOK above is the one that matters, and it is
+      // enough: a line that landed on the first attempt is in the book by the time a retry reads it.
     }
     bump();
     return { posted, failed, skipped };
