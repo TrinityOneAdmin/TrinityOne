@@ -15367,9 +15367,14 @@ zoo`.split("\n");
     }
   }
   var _localToken = null;
+  function _originIsLoopback() {
+    const l = typeof location !== "undefined" ? location : null;
+    if (!l || !l.hostname) return false;
+    return /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ""));
+  }
   async function localAdminToken() {
     if (_localToken) return _localToken;
-    if (!ownIsLoopback()) return "";
+    if (!_originIsLoopback()) return "";
     try {
       const r = await fetch("/local-token", { cache: "no-store" });
       if (!r.ok) return "";

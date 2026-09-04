@@ -4059,7 +4059,15 @@ function serveStatic(req, res) {
             // without this an attacker who self-registered once could loop signed re-announces of the same key
             // and force a church.json rewrite + structure-doc rescan on each (Fable audit #1).
             let changed = false;
-            if (existing) { if (name && existing.name !== name) { existing.name = name; changed = true; } }
+            // ON A LOCKED RELAY THE OPERATOR OWNS THE LABEL. Letting an already-registered church fall
+            // through the invite-only gate (so it stops being told "nothing you set up will save") also let
+            // it RENAME itself there — replacing the name the operator typed, while the row still read
+            // `by: "operator"`. Measured 2026-09-04: "St A" became "RENAMED BY CHURCH" on an invite-only
+            // relay. It also re-opened the Fable-audit-#1 rewrite loop, since `changed` drives a whole-corpus
+            // rehydrate, on exactly the relays where it had been unreachable.
+            // Re-announcing is still fine and still returns 200 — it just cannot relabel somebody else's box.
+            const mayRename = isAdmin || !SETTINGS.inviteOnly;
+            if (existing) { if (mayRename && name && existing.name !== name) { existing.name = name; changed = true; } }
             else { list.push({ npub: npubEncode(hex), name, by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); changed = true; }
             if (changed) writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));

@@ -54,6 +54,7 @@ const CANON = 'wss://app.trinityone.church/relay';
 function harness({ cached = null, hostedChurches = [], origin = 'http://127.0.0.1:8000' } = {}) {
   const store = new Map();
   const fetches = [];
+  const originHost = origin ? new URL(origin).hostname : 'example.invalid';
   const stubs = {
     pub: 'PUB',
     _boxHostsUs: cached,
@@ -65,11 +66,29 @@ function harness({ cached = null, hostedChurches = [], origin = 'http://127.0.0.
     // test consults this, a poisoned console can never re-ask — which is the whole bug.
     ownRelay: () => (stubs._boxHostsUs === false ? CANON : 'ws://127.0.0.1:8000/relay'),
     _ownOrigin: () => origin,
-    localAdminToken: async () => 'tok',
+    // THE REAL localAdminToken, NOT A STUB. Stubbing it is what hid the whole defect: the guard was moved
+    // off ownRelay(), but localAdminToken's own guard still went through it, so the cached "no" killed the
+    // function one line later — and a test that hands it a token can never see that. "A stub answers the
+    // question", on the exact function this test is named after. Found by the audit of f0ceb92.
+    // Its dependencies are real too, so a regression anywhere in the chain surfaces here.
+    _localToken: '',
+    location: { hostname: originHost, protocol: 'http:', host: originHost + ':8000' },
+    ownIsLoopback: () => /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/)/i.test(stubs.ownRelay()),
     _authHdr: () => ({}),
     npubEncode: (p) => 'npub_' + p,
-    fetch: async (u) => { fetches.push(u); return { ok: true, json: async () => ({ churches: hostedChurches }) }; },
+    fetch: async (u) => {
+      if (String(u).indexOf('/local-token') >= 0) return { ok: true, json: async () => ({ token: 'tok' }) };
+      fetches.push(u);   // only /config counts as "it asked"
+      return { ok: true, json: async () => ({ churches: hostedChurches }) };
+    },
   };
+  // Degrade when the bundle predates the fix: the OLD localAdminToken does not reference this at all, so
+  // omitting it lets the real (old) token chain run and the BEHAVIOUR assertion fire. Lifting a function
+  // that is not there turns every test red on a missing anchor, which proves a rename, not a regression.
+  if (VENDOR.includes('function _originIsLoopback()')) {
+    stubs._originIsLoopback = lift('function _originIsLoopback() {', '_originIsLoopback', stubs);
+  }
+  stubs.localAdminToken = lift('async function localAdminToken() {', 'localAdminToken', stubs);
   const refresh = lift('async function _refreshBoxHostsUs() {', '_refreshBoxHostsUs', stubs);
   return { store, stubs, fetches, refresh };
 }
@@ -117,4 +136,53 @@ test('CONTROL: it never asks without knowing which church is asking', async () =
   h.stubs.pub = '';
   await h.refresh();
   assert.equal(h.fetches.length, 0, 'asked "do you host us?" without a church to name');
+});
+
+// ── THE OTHER HALF: registering must AIM at the box that served the console ────────────────────────────
+// A cached "no" also poisons where selfRegister sends its registration: `bases` was built from
+// configBase(), which derives from ownRelay(), which returns the community pool once `_boxHostsUs` is
+// false. So the box was not among the relays the console tried to register with — and registering with it
+// was the one thing that could have changed the answer. The deadlock rule, reached by a third route.
+//
+// Measured 2026-09-04: with `bases.add(rawOrigin)` removed, a fresh church on a clean Suite box does not
+// register at all (no church.json) and nothing it publishes is accepted. An audit of f0ceb92 deleted that
+// line and the ENTIRE SUITE stayed green — this test is the gap it found.
+test('registration is aimed at the box that served the console, not only at where ownRelay points', async () => {
+  const posts = [];
+  const scope = {
+    churchSk: new Uint8Array(32).fill(7), churchPub: 'PUB', actingChurch: null,
+    _regNeedsName: false, _armRegGate: () => {}, _openRegGate: () => {}, _markRegOk: () => {},
+    npubEncode: (p) => 'npub_' + p,
+    CANONICAL_RELAYS: ['wss://app.trinityone.church/relay'],
+    SELFREG_KEY: 'sr',
+    finalizeEvent: (e) => ({ ...e, id: 'evt', sig: 'sig', pubkey: 'PUB' }),
+    now: () => 1788500000,
+    // The poisoned state: the box said "not ours", so ownRelay()/configBase() name the community pool.
+    _ownOrigin: () => 'http://127.0.0.1:8000',
+    window: { Steward: { configBase: () => 'https://app.trinityone.church' } },
+    localStorage: { getItem: () => '{}', setItem: () => {} },
+    AbortSignal: { timeout: () => undefined },
+    fetch: async (u) => { posts.push(String(u)); return { ok: true, json: async () => ({}) }; },
+  };
+  const body = fnBody(VENDOR, 'async selfRegister(name, opts) {', 'selfRegister');
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => {
+      if (k === Symbol.unscopables) return undefined;
+      if (k in t) return t[k];
+      const base = String(k).replace(/\d+$/, '');
+      if (base in t) return t[base];
+      throw new ReferenceError('the lifted selfRegister needs `' + String(k) + '` — add a stub');
+    },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  // fnBody hands back object-method shorthand (`async selfRegister(name, opts) {…}`), which is not a valid
+  // expression on its own — put it back in an object literal and take the method off it.
+  const fn = new Function('scope', `with (scope) { return ({ ${body} }).selfRegister; }`)(proxy);
+  await fn.call({}, 'St Hilda of the Test');
+
+  assert.ok(posts.some(u => u.indexOf('http://127.0.0.1:8000/config') === 0),
+    'the console never tried to register with the box that served it. `bases` came from configBase(), ' +
+    'which follows ownRelay() and therefore the cached "this box is not ours" — so the one action that ' +
+    'could correct that answer was aimed everywhere except the box. Posted to: ' + JSON.stringify(posts));
 });

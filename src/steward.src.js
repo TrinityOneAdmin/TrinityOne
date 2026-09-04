@@ -760,9 +760,29 @@ const SELF_NAME_LS = 'trinityone.steward.self-relay-name';
 function selfRelayName() { try { return String(lsGet(SELF_NAME_LS) || '').trim(); } catch { return ''; } }
 function setSelfRelayName(n) { try { const v = String(n || '').trim().toLowerCase(); if (v !== selfRelayName()) lsSet(SELF_NAME_LS, v); } catch (e) {} }
 let _localToken = null;
+// IS THIS ORIGIN LOOPBACK? Read straight off location, never through ownRelay().
+//
+// localAdminToken() asks "can I reach the admin API of the box that served this page", which is a question
+// about the ORIGIN. It was asking ownIsLoopback(), which tests ownRelay(), which returns CANONICAL_RELAY
+// the moment `_boxHostsUs === false` — so a cached "this box is not ours" silently withdrew the token, and
+// _refreshBoxHostsUs (the one thing that could correct that cache) died on the missing token one line after
+// its own guard. The guard was moved off ownRelay() in f0ceb92 and this was the rest of the same chain.
+//
+// It appeared to work only by an accident of boot timing: while the console sits on its PIN screen `pub` is
+// empty, so the cache has not been read, so ownRelay() still names the box — and refreshSelfPublicRelay's
+// 1500ms timer warms `_localToken` in that window. By unlock the warmed token short-circuits the broken
+// guard. Measured 2026-09-04: recovery worked every time, and the PIN screen takes ~6s to paint so the warm
+// always wins. A recovery that depends on one timer firing before a human types a passphrase is not a
+// recovery. Raised by the audit of f0ceb92, whose headline said this path never runs at all — that was
+// wrong for the real app, and right about the fragility.
+function _originIsLoopback() {
+  const l = (typeof location !== 'undefined') ? location : null;
+  if (!l || !l.hostname) return false;
+  return /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ''));
+}
 async function localAdminToken() {
   if (_localToken) return _localToken;
-  if (!ownIsLoopback()) return '';
+  if (!_originIsLoopback()) return '';
   try { const r = await fetch('/local-token', { cache: 'no-store' }); if (!r.ok) return ''; const j = await r.json(); _localToken = (j && j.token) || ''; return _localToken; } catch (e) { return ''; }
 }
 function _authHdr(tok) { return tok ? { 'Authorization': 'Bearer ' + tok } : {}; }

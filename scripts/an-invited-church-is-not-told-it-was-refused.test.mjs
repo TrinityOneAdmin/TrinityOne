@@ -127,3 +127,18 @@ test('CONTROL: a hosted church still cannot register somebody ELSE', async () =>
     'a church already on the relay used its own valid proof to add a DIFFERENT key — self-registration ' +
     'must only ever add the signer\'s own church');
 });
+
+test('CONTROL: re-announcing does not let a church relabel a relay the operator locked', async () => {
+  // The fix above lets an already-registered church through the invite-only gate. That must not become a
+  // way to overwrite the name the OPERATOR chose — the row still reads `by: "operator"`, so a relabel here
+  // is one party's name under another party's attribution. Measured on 2026-09-04: it did exactly that.
+  const r = await selfRegister(inSk, inPub, 'RENAMED BY THE CHURCH');
+  assert.equal(r.status, 200, 're-announcing must still succeed — that is the whole point of the fix');
+  const cfg = await (await fetch(BASE + '/config', { headers: { 'Authorization': 'Bearer ' + token } })).json();
+  const row = cfg.churches.find(c => c.name === 'RENAMED BY THE CHURCH');
+  assert.equal(row, undefined,
+    'a church renamed itself on a relay whose operator deliberately locked it, and the row still says ' +
+    'by: "operator". It also re-opens the whole-corpus rehydrate loop on every differing re-announce.');
+  assert.ok(cfg.churches.some(c => c.name === 'St Editha of the Test'),
+    'the operator\'s chosen name is gone');
+});
