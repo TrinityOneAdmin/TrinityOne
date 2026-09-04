@@ -100,7 +100,12 @@ function RecoverySheet({ open, onClose, ctx }) {
       // returned — but doExport resolves normally on its short-passphrase early-return AND in its catch, so
       // the durable "backed up" flag was set even when no valid backup was written, silencing the backup
       // nudge and leaving the member one lost device away from losing their identity with no warning.
-      markSaved();
+      // …AND "THE SUCCESS PATH" HAS TO MEAN THE WARN BRANCH TOO. Audit 2026-09-02 #7.
+      // This call sat ABOVE the `res.warn` check below, so a save that fell back — one whose own message
+      // tells the member no copy may have been kept — set the durable flag on its way past. Removing the
+      // duplicate call from inside that branch (which is what the fix plan asked for) changed nothing,
+      // because the flag had already been written here. Moved below the check instead. Caught by the test,
+      // not by reading.
       // NAME THE PLACE. "Save it somewhere safe" is advice, not a receipt — and on the app this path used to
       // open a share sheet and write nothing, so the member had no way to tell the two apart.
       const at = window.TrinityBackup.savedWhere ? window.TrinityBackup.savedWhere(res) : '';
@@ -111,7 +116,20 @@ function RecoverySheet({ open, onClose, ctx }) {
       // call, 2026-08-16.
       // A fallback save is weaker than a direct one, and the member is the only person who can put that
       // right — so if saveFile says so, that sentence wins over the cheerful one.
-      if (res && res.warn) { setBkErr(res.warn); setBusy(''); markSaved(); return; }
+      // DO NOT RECORD A BACKUP ON THE BRANCH THAT SAYS THERE MAY NOT BE ONE. Audit 2026-09-02 #7.
+      //
+      // `res.warn` is saveFile telling us the direct write did not happen and it fell back — the message it
+      // carries says, in the member's own words, that no copy may have been kept. Calling markSaved() here
+      // wrote the durable "last backed up" date anyway, and that key is what SILENCES the recovery nudge on
+      // Today (screens-today.jsx:1267, identity.jsx:1170). So the reminder went quiet for precisely the
+      // people who had not got a file — the ones who needed it most — and the Security screen showed them a
+      // date for a backup that may not exist.
+      //
+      // The warning still shows. The flag is simply not written, so the nudge keeps asking until a save
+      // actually succeeds. The 12-word ceremony (identity.jsx:347, :806) writes the same key on its own and
+      // is untouched: writing the words down IS a backup.
+      if (res && res.warn) { setBkErr(res.warn); setBusy(''); return; }
+      markSaved();
       ctx.toast(at ? ('Backup saved to ' + at + ' — keep a copy somewhere safe') : 'Backup created — keep it somewhere safe'); setBk(null); setPass('');
     } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
   };
@@ -144,7 +162,15 @@ function RecoverySheet({ open, onClose, ctx }) {
     if (ID && ID.exportMnemonic) ID.exportMnemonic().then(m => setWords(m ? m.split(' ') : [])).catch(() => setWords([]));
     else setWords(window.TrinityData.RECOVERY_PHRASE || []);
   }, [open]);
-  const copyPhrase = () => { if (navigator.clipboard) navigator.clipboard.writeText(words.join(' ')).catch(() => {}); ctx.toast('Phrase copied — paste somewhere safe'); };
+  // Same rule as identity.jsx's twelve-word screen: the reassurance follows the write, and a failure says
+  // what to do instead. These words are the account; "copied" over an empty clipboard is the worst lie the
+  // app can tell. Audit 2026-09-02 #13.
+  const copyPhrase = () => {
+    if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead', { error: true }); return; }
+    navigator.clipboard.writeText(words.join(' '))
+      .then(() => ctx.toast('Phrase copied — paste somewhere safe'))
+      .catch(() => ctx.toast('Couldn’t copy — write the words down instead', { error: true }));
+  };
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="88%" z={60}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -208,7 +234,7 @@ function RecoverySheet({ open, onClose, ctx }) {
             {bk === 'restore' ? (
               <input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files && e.target.files[0])} style={{ width: '100%', fontSize: 13, marginBottom: 10, fontFamily: 'var(--font-ui)' }} />
             ) : null}
-            <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? ('Choose a passphrase — at least ' + ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) + ' characters') : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            <input type="password" aria-label={bk === 'export' ? 'Choose a passphrase for your backup' : 'Your backup PIN or passphrase'} autoComplete="off" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? ('Choose a passphrase — at least ' + ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) + ' characters') : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
             <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
               <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
@@ -302,7 +328,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
         <React.Fragment>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 16px' }}>
             Enter your PIN to open the church community on this device. Your Bible and study stay open either way.</p>
-          <input type="password" autoFocus value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={inp} />
+          <input type="password" aria-label="Your PIN" autoFocus autoComplete="off" value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={inp} />
           {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doUnlock} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Unlock'}</button>
         </React.Fragment>
@@ -313,8 +339,8 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
           <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55, margin: '8px 0 0' }}>Be aware of what it does <b>not</b> do: someone who inspects this phone properly can still tell that you use TrinityOne and which church you belong to. The PIN protects what is <i>inside</i> your church, not the fact that you are in one.</p>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 16px' }}>
             If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>
-          <input type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN or passphrase" style={inp} />
-          <input type="password" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10 }} />
+          <input type="password" aria-label="Choose a PIN or passphrase" autoComplete="new-password" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN or passphrase" style={inp} />
+          <input type="password" aria-label="Confirm your PIN" autoComplete="new-password" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10 }} />
           {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doEnable} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Turn on protection'}</button>
         </React.Fragment>
@@ -341,7 +367,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
           ) : (
             <div style={{ marginTop: 12, padding: 13, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 9 }}>Enter your PIN to turn protection off. Your identity will be stored unencrypted again.</div>
-              <input type="password" value={off} onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={inp} />
+              <input type="password" aria-label="Your PIN" value={off} autoComplete="off" onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={inp} />
               {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
               <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
                 <button onClick={() => { setShowOff(false); setOff(''); setErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
@@ -404,6 +430,7 @@ function MovePhoneSheet({ open, onClose, ctx }) {
   const [out, setOut] = useIx(null);          // { qr, code } sealed for the new phone
   const [err, setErr] = useIx('');
   const [copied, setCopied] = useIx(false);
+  const [copyErr, setCopyErr] = useIx('');   // a failed copy has to say so — the QR above is the way through
   useIxE(() => { if (!open) { setStage('intro'); setOut(null); setErr(''); setCopied(false); } }, [open]);
   const onScan = async (text) => {
     setErr('');
@@ -439,8 +466,16 @@ function MovePhoneSheet({ open, onClose, ctx }) {
           <div style={{ width: 250, height: 250, background: '#fff', borderRadius: 20, padding: 12, boxShadow: 'var(--shadow-lg)', boxSizing: 'border-box' }}
             dangerouslySetInnerHTML={{ __html: (out && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(out.qr) : '' }} />
         </div>
-        <button onClick={() => { try { if (navigator.clipboard && out) navigator.clipboard.writeText(out.qr); } catch (e) {} setCopied(true); setTimeout(() => setCopied(false), 2500); }}
+        <button onClick={() => {
+          // The QR above is the other way across, so a failed copy is recoverable — but it has to SAY so
+          // rather than showing a tick. Audit 2026-09-02 #13.
+          if (!navigator.clipboard || !out) { setCopyErr('Couldn’t copy — scan the code above instead'); setTimeout(() => setCopyErr(''), 3000); return; }
+          navigator.clipboard.writeText(out.qr)
+            .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); })
+            .catch(() => { setCopyErr('Couldn’t copy — scan the code above instead'); setTimeout(() => setCopyErr(''), 3000); });
+        }}
           style={{ width: '100%', padding: 11, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: copied ? 'var(--sage)' : 'var(--ink)', marginBottom: 12 }}>{copied ? 'Copied — paste it into the new phone' : 'Can’t scan? Copy the code instead'}</button>
+        {copyErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', textAlign: 'center', marginTop: 6 }}>{copyErr}</div> : null}
         {/* This code now covers the WHOLE exchange — both keys and the sealed payload — so it cannot exist
             until the two phones have actually swapped codes, and it cannot be ground out in advance. The
             four-character version it replaced was derived from the new phone's public key alone (2^20, and
@@ -530,8 +565,21 @@ function RelaysSheet({ open, onClose, ctx }) {
   const rows = list || fromReal();
   const bare = (u) => (u || '').replace(/^wss?:\/\//, '');
 
-  const toggle = (u) => setList(rows.map(r => r.url === u ? { ...r, status: r.status === 'on' ? 'off' : 'on' } : r));  // visual only
-  const remove = (u) => { if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
+  // REMOVE EXISTED AND WAS NEVER RENDERED. Audit 2026-09-02 #9.
+  //
+  // An address gets into this list from an invite, and nothing ever takes one out. It stays, is retried,
+  // and keeps receiving a signed NIP-42 AUTH and the shape of this member's church and groups every time it
+  // is re-checked — including one adopted from a hostile invite before the C5 gate existed. The control to
+  // drop it was written and left unwired, so there was no way, in the product, to stop talking to an address.
+  //
+  // Offered only on rows that have NOT proved themselves, and never on a canonical address: a relay actually
+  // carrying this church's traffic is not something to remove by accident, and dropping a shipped default is
+  // how a member loses their church rather than a stray address. (The dead `toggle` above it, which only
+  // changed a row's colour, is gone.)
+  const [confirmDrop, setConfirmDrop] = useIx(null);
+  const CANON = (FS && FS.CANONICAL_RELAYS) || ((FS && FS.CANONICAL_RELAY) ? [FS.CANONICAL_RELAY] : []);
+  const canRemove = (r) => r.status !== 'on' && !CANON.includes(r.url);
+  const remove = (u) => { setConfirmDrop(null); if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
 
   return (
     <BottomSheet open={open} onClose={onClose} z={60}>
@@ -564,6 +612,12 @@ function RelaysSheet({ open, onClose, ctx }) {
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
                 <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
                 {r.status === 'on' ? 'Connected' : r.status === 'checking' ? 'Not in use' : 'Off'}</span>
+              {canRemove(r) ? (confirmDrop === r.url
+                ? <React.Fragment>
+                    <button onClick={() => remove(r.url)} aria-label={'Confirm: stop using ' + bare(r.url)} style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>
+                    <button onClick={() => setConfirmDrop(null)} aria-label="Keep it" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Keep</button>
+                  </React.Fragment>
+                : <button onClick={() => setConfirmDrop(r.url)} aria-label={'Stop using ' + bare(r.url) + ' — asks you to confirm'} title="This address has not shown it is one of your church's relays. Remove it and nothing more is sent to it." style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>) : null}
             </div>
           ))}
         </div>

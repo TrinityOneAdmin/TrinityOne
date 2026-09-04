@@ -431,17 +431,31 @@ function SectionLabel({ children, action, onAction }) {
 }
 
 // ── Toast ──
+// A TICK IS A CLAIM. Audit 2026-09-02 #12.
+//
+// Every toast drew a green check, including the failures — so "Couldn't send your answer", "Couldn't copy —
+// write the words down instead" and "you're still a member there" all arrived under a success mark, and a
+// 30-word explanation of what went wrong then vanished in 1.9 seconds. The icon is the first thing read and
+// it was contradicting the sentence beside it.
+//
+// `msg` still accepts a plain string, which is what all ~120 existing callers pass, and that keeps its tick.
+// A caller that knows better passes { text, kind: 'error' }. Failures also stay up longer — see app.jsx's
+// toast(), where the dwell time now follows the kind: nobody can read a sentence that long in 1.9s.
 function Toast({ msg }) {
   if (!msg) return null;
+  const isObj = msg && typeof msg === 'object';
+  const text = isObj ? msg.text : msg;
+  const bad = isObj && msg.kind === 'error';
+  if (!text) return null;
   return (
-    <div style={{
+    <div role={bad ? 'alert' : 'status'} style={{
       position: 'absolute', bottom: 92, left: 16, right: 16, marginInline: 'auto', width: 'fit-content', maxWidth: 'calc(100% - 32px)',
       zIndex: 60, background: 'var(--ink)', color: 'var(--paper)',
       padding: '11px 18px', borderRadius: 14, fontSize: 13.5, fontWeight: 600, lineHeight: 1.35, textAlign: 'center',
       fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow-lg)',
       animation: 'trinityScale .3s ease both', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
     }}>
-      <Icon name="check" size={16} stroke={2.4} color="var(--clay)" style={{ flexShrink: 0 }} /><span>{msg}</span>
+      <Icon name={bad ? 'shield' : 'check'} size={16} stroke={2.4} color={bad ? 'var(--clay)' : 'var(--sage)'} style={{ flexShrink: 0 }} /><span>{text}</span>
     </div>
   );
 }

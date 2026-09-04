@@ -120,6 +120,11 @@ function liftFetch({ throws = false, events = [], authed = true } = {}) {
     // in that state, and the real pool RESOLVES with [] rather than rejecting — so without this the "throws"
     // case below is the only failure the code can see, and it is the one that almost never happens.
     _relayAuthedAt: authed ? 1 : 0,
+    // Since 2026-09-03 _fetchCareTeam refuses a careteam: document unless its author is the church key or a
+    // steward the church gave `care` to (audit #19 / backlog HIGH S1) — a stranger's newer document used to
+    // decide who a member's private request for help is sealed to. These fixtures publish AS the church, so
+    // the helper answers "no extra stewards" and the church key alone is trusted.
+    _fetchStewardsWithCap: async () => [],
   };
   const names = Object.keys(scope);
   return new Function(...names, body + '\nreturn _fetchCareTeam;')(...names.map(n => scope[n]));
@@ -140,9 +145,12 @@ test('a church that has published no care team answers "none", and that is a rea
 });
 
 test('a published roster is returned, newest document winning', async () => {
+  // `pubkey: CHURCH` since 2026-09-03: _fetchCareTeam now refuses a careteam: document whose author is not
+  // the church key or a steward given `care`. A fixture with no author is a document from nobody, which is
+  // exactly what the gate exists to drop — so these have to say who wrote them.
   const f = liftFetch({ events: [
-    { created_at: 10, content: JSON.stringify({ pubs: [TEAM_A] }) },
-    { created_at: 99, content: JSON.stringify({ pubs: [TEAM_A, TEAM_B] }) },
+    { pubkey: CHURCH, created_at: 10, content: JSON.stringify({ pubs: [TEAM_A] }) },
+    { pubkey: CHURCH, created_at: 99, content: JSON.stringify({ pubs: [TEAM_A, TEAM_B] }) },
   ] });
   assert.deepEqual((await f(CHURCH)).sort(), [TEAM_A, TEAM_B].sort(),
     'a stale care-team document won, so someone removed from the team can still read disclosures — or ' +
@@ -150,7 +158,7 @@ test('a published roster is returned, newest document winning', async () => {
 });
 
 test('an unparseable roster is "unknown" rather than silently empty', async () => {
-  const f = liftFetch({ events: [{ created_at: 1, content: 'not json' }] });
+  const f = liftFetch({ events: [{ pubkey: CHURCH, created_at: 1, content: 'not json' }] });
   assert.equal(await f(CHURCH), null,
     'a corrupt care-team document was read as "this church has nobody", which is the same silent narrowing ' +
     'by another route');

@@ -186,8 +186,9 @@ and which of your instincts about it are wrong.
   their church console should never reach non t1 relays."*
 
 **How admission actually works is written up in `reference/RELAY-ADMISSION.md`** (2026-09-02). Two
-gates — proof of identity, then one of three roots of trust — and four traps that each cost real work
-to find. The one worth knowing without opening it: **same-origin adoption is console-only** (a phone's
+one gate — proof, at the address dialled, that the box holds a relay identity key, i.e. that it runs our
+software — and four traps that each cost real work to find. (The canonical pin, the serving origin and the
+church's signed relay-net doc are computed and reported, but they no longer decide admission.) The one worth knowing without opening it: **same-origin adoption is console-only** (a phone's
 origin is `https://localhost`, so it can never match a church's relay), which means a self-hosting
 church's members reach their relay by exactly one route — the church's own signed list. Nothing
 publishes that list automatically yet.
@@ -266,3 +267,23 @@ reasoning from the code path in front of me instead of from how a church actuall
 | 2026-08-30 | A child can arrive by several routes | The parent-minted flow was the only one |
 | 2026-08-30 | A church may want no kids' rooms at all | An empty list meant something was unconfigured |
 | 2026-08-29 | "Verify it's genuine before acting" | A relayed audit finding was fact |
+
+---
+
+## Owner decisions, 2026-09-03 (from the audit of 2026-09-02)
+
+**A member who leaves keeps their name on what they already wrote.** A privacy narrowing was available —
+stop serving a non-member's profile to members of a church they are not in — and it was declined, because
+the cost is that everyone who has ever left goes blank in old conversations. History stays readable. Do not
+re-propose this as a straightforward fix; it is a decided trade, and the leak it closes is a stranger's
+display name, not their messages.
+
+**A church code that is well-formed but is not a church says "not found".** It is not refused at the point
+of entry and it is not followed as though it were a church. Someone mistyping a code, or given the wrong
+one, is told plainly that there is nothing there.
+
+**Lightning and wallet components are OFF for the pilot and are not to be worked on.** Giving is
+non-custodial by design and switched off (`givingOn = false`). Anything Lightning- or wallet-shaped —
+including the wallet backup path that currently has no button — is out of scope until the owner says
+otherwise. Do not "tidy" it, delete it, or fix its copy.
+

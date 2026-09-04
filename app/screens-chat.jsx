@@ -2349,9 +2349,15 @@ function RestrictedExplainer({ ctx, onClose }) {
               Nothing is broken. Your church has set this account up as a young person’s account, so private
               messages are limited to the adults your church has checked{cleared ? ' — ' + cleared + (cleared === 1 ? ' person' : ' people') + ' so far' : ''}, and to your parent or guardian.
             </p>
+            {/* DO NOT SEND A CHILD TO A SET THAT IS EMPTY. When the church has cleared nobody, `cleared` is 0
+                and this told a young person to "message anyone marked as a leader ... ask one of them" —
+                an instruction with nobody behind it. A church may have cleared no one yet, or may never
+                clear anyone; DOMAIN.md is explicit that the absence is a real configuration, not a fault.
+                Say what is true in each case and nothing more. Audit 2026-09-02 #24. */}
             <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 4px' }}>
-              You can still read, join your groups, and message anyone marked as a leader. If you need to
-              reach someone else, ask one of them and they can help.
+              {cleared
+                ? 'You can still read, join your groups, and message anyone marked as a leader. If you need to reach someone else, ask one of them and they can help.'
+                : 'You can still read and join your groups. Your church hasn’t set up any checked adults to message yet — if you need to reach someone, speak to them in person.'}
             </p>
           </React.Fragment>
         ) : (

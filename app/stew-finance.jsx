@@ -252,11 +252,34 @@ function FinanceImport({ book, F, onPost, onClose }) {
   const allSel = selectable.length > 0 && selectable.every(r => r.selected);
   const toggleAll = () => setRowState(rs => rs.map(r => r.dup ? r : { ...r, selected: !allSel }));
 
-  const doPost = () => {
+  // KEEP THE MODAL OPEN IF ANY LINE DID NOT POST, and name the ones that did not. Audit 2026-09-02 #17.
+  // This closed unconditionally, so a treasurer who imported a statement that reached no relay was returned
+  // to a books page they believed was reconciled. Closing is the confirmation; it has to be earned.
+  const [posting, setPosting] = React.useState(false);
+  const doPost = async () => {
     const picks = [];
     lines.forEach((l, i) => { const r = rowState[i]; if (r.selected && !r.dup) picks.push({ line: l, account: r.account, fund: r.fund }); });
     if (!picks.length) { setErr('Select at least one transaction to import.'); return; }
-    onPost(picks); onClose();
+    setErr(''); setPosting(true);
+    let res = null;
+    try { res = await onPost(picks); } catch (e) { res = null; }
+    setPosting(false);
+    const failed = (res && res.failed) || [];
+    if (res && !failed.length) { onClose(); return; }
+    // MARK WHAT LANDED, so "Try again" retries the rest and not the lot. The `dup` flags were worked out once,
+    // when this modal opened, so without this every line the relay DID take was still ticked on the retry.
+    // The engine refuses a repeat regardless — this is what stops the screen asking for one.
+    const stillFailing = new Set(failed.map(l => l.key));
+    setRowState(rs => rs.map((r, i) => {
+      const l = lines[i];
+      if (!r.selected || r.dup || !l || stillFailing.has(l.key)) return r;
+      return { ...r, dup: true, selected: false };
+    }));
+    setErr(!res
+      ? 'Nothing was imported — the import failed before it started. Your books are unchanged.'
+      : failed.length + ' of ' + picks.length + ' line' + (picks.length === 1 ? '' : 's') + ' did not reach the relay, and ' + (failed.length === 1 ? 'it is' : 'they are') + ' NOT in your books: '
+        + failed.slice(0, 4).map(l => (l.date || '') + ' ' + (l.description || '').slice(0, 28)).join('; ')
+        + (failed.length > 4 ? ' …and ' + (failed.length - 4) + ' more' : '') + '. Try again.');
   };
 
   const colSelect = (val, onChange, allowNone) => (
@@ -333,7 +356,7 @@ function FinanceImport({ book, F, onPost, onClose }) {
             {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
             <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
               <button onClick={() => { setStep('upload'); setErr(''); }} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>← Back</button>
-              <button onClick={doPost} disabled={!nSel} style={{ flex: 2, height: 44, border: 'none', background: nSel ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: nSel ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post {nSel} transaction{nSel === 1 ? '' : 's'}</button>
+              <button onClick={doPost} disabled={posting || !nSel} style={{ flex: 2, height: 44, border: 'none', background: nSel ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: nSel ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post {nSel} transaction{nSel === 1 ? '' : 's'}</button>
             </div>
           </>
         )}
@@ -667,6 +690,12 @@ function DashFinanceBook() {
     _booksDonateShown = true; setDonate(true);
   }, []);
 
+  // Discard a local entry the relay refused. NOT history editing: an entry nothing accepted is not history,
+  // it is a guess that turned out wrong, and leaving it behind invalidates every seq after it. The one case
+  // this gets wrong is a relay that STORED the entry and lost the OK on the way back — the entry then
+  // reappears on the next delivery, which rebuilds the book from what the relay actually holds. Re-entering
+  // it by hand inside that window is the way to double it, so the wording never invites that.
+  const _dropIfRefused = (b, entry) => { if (entry && F.dropFrom) { try { F.dropFrom(b, entry.seq); } catch (x) {} } };
   const record = ({ dir, account, fund, amountMinor, date, memo }) => {
     const b = bookRef.current;
     const P = dir === 'in'
@@ -674,22 +703,80 @@ function DashFinanceBook() {
       : [{ account, fund, dir: 'dr', amount: amountMinor }, { account: 'bank', dir: 'cr', amount: amountMinor }];
     // Awaited: pubEntry's answer is the only thing that distinguishes a recorded entry from a lost one, and
     // all three call sites used to drop it, so the row rendered as recorded either way.
+    // ROLL BACK A REFUSED ENTRY HERE TOO. Audit 2026-09-04, second pass: `dropFrom` was applied only inside
+    // the import, so ONE refused manual entry still advanced the local book past a seq the relay never took —
+    // and every later entry, and every later import, was then numbered past a gap the relay refuses. Measured:
+    // after one failed manual entry, a three-line import posted 0 of 3, and "Try again" posted 0 again. The
+    // treasurer is told to try again and cannot succeed until a relay delivery rebuilds the book.
     const entry = F.post(b, { date, memo, postings: P });
-    return pubEntry(b, entry).then((ok) => { bump(); return ok; });
+    return pubEntry(b, entry).then((ok) => { if (!ok) _dropIfRefused(b, entry); bump(); return ok; });
   };
-  const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
+  const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { if (!ok) _dropIfRefused(b, rev); bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
   // Post the lines the treasurer selected in the import modal. Each carries its statement lineKey as importKey
   // so a future re-import of the same statement is flagged as already-imported (see FinanceImport de-dup).
-  const importStatement = (picks) => {
+  // AN IMPORT THAT POSTED NOTHING MUST NOT CLOSE AS THOUGH IT HAD. Audit 2026-09-02 #17.
+  //
+  // Every line was posted locally and its publish fired and forgotten, so a bank statement that reached no
+  // relay left the modal closing on a books page the treasurer believed was reconciled. `record`/`undo`
+  // above already await pubEntry and read it; this is the same treatment for the bulk path.
+  // Promise.all, not a serial await: a statement can be 200 lines.
+  // "TRY AGAIN" POSTED THE LINES THAT HAD ALREADY LANDED, A SECOND TIME. Audit 2026-09-04, and the cause was
+  // two things at once — both of which come from the journal being a single-writer, relay-ORDERED, append-only
+  // sequence (gateway.mjs accepts a journal doc only when `seq === FINANCE_SEQ.get(cp) + 1`).
+  //
+  // 1. Promise.all. Two hundred lines were signed and fired at the relay together, so they arrived in
+  //    whatever order the network chose, and every one that arrived out of turn was refused for a gap. The
+  //    partial failure this modal reports was largely manufactured here.
+  // 2. `post()` advances the local book whether or not the publish lands, and never rolled back. So the
+  //    already-landed lines stayed selected in the review list (its `dup` flags were computed once, when the
+  //    modal opened) and went out again on the retry, while the refused ones were numbered past a gap the
+  //    relay can never accept — and carried importKeys, so the de-dup thought they were already imported.
+  //
+  // Serial, stop at the first refusal, and roll the book back to the last entry the relay actually took.
+  // Slower on a long statement; it is the only order the relay will accept, so the parallel version was not
+  // faster, it was wrong. The de-dup guard is re-read from the book on EVERY call rather than trusting the
+  // modal's flags, because that is the layer a stale screen cannot get past.
+  const importStatement = async (picks) => {
     const b = bookRef.current;
-    for (const { line, account, fund } of picks) {
+    // COUNT, DO NOT ASK "IS THIS KEY PRESENT". Audit #5, and it is the SAME £45-becomes-£25 defect one tap
+    // further on. `lineKey` is date|amount|description, so two identical payments on one day share a key K.
+    // With a set: attempt 1 lands the first and the relay drops before the second; on "Try again" K is now in
+    // the book, so BOTH rows are skipped, `failed` is empty, and the modal closes as a clean success with one
+    // donation never posted and nothing on screen.
+    //
+    // The question is not "has this key been imported" but "how many of these does the book already hold
+    // against how many the statement offers". Two in the file and one in the book means post ONE more.
+    // That is right in all three cases: a fresh import (0 held, 2 offered -> post 2), a re-import of the same
+    // file (2 held, 2 offered -> post 0), and a retry after a partial failure (1 held, 2 offered -> post 1).
+    const held = new Map();
+    for (const k of (b.journal || [])) if (k.importKey) held.set(k.importKey, (held.get(k.importKey) || 0) + 1);
+    const failed = [], skipped = [];
+    let posted = 0;
+    for (let i = 0; i < picks.length; i++) {
+      const { line, account, fund } = picks[i];
+      const n = line.key ? (held.get(line.key) || 0) : 0;
+      if (n > 0) { held.set(line.key, n - 1); skipped.push(line); continue; }
       const amount = line.amountMinor;
       const P = line.dir === 'in'
         ? [{ account: 'bank', dir: 'dr', amount }, { account, fund, dir: 'cr', amount }]
         : [{ account, fund, dir: 'dr', amount }, { account: 'bank', dir: 'cr', amount }];
-      try { const entry = F.post(b, { date: line.date, memo: line.description, importKey: line.key, postings: P }); pubEntry(b, entry); } catch (e) {}
+      let entry = null, ok = false;
+      try {
+        entry = F.post(b, { date: line.date, memo: line.description, importKey: line.key, postings: P });
+        ok = !!(await pubEntry(b, entry));
+      } catch (e) { ok = false; }
+      if (!ok) {
+        // Undo the local guess and stop: every seq after this one is invalid to the relay anyway.
+        _dropIfRefused(b, entry);
+        for (let j = i; j < picks.length; j++) failed.push(picks[j].line);
+        break;
+      }
+      posted++;
+      // Nothing is added to `held` here. A row we have just posted is a row we WANTED to post; the count read
+      // from the book above already accounts for everything that landed on an earlier attempt.
     }
     bump();
+    return { posted, failed, skipped };
   };
   const funds = F.fundBalances(book);
   const ie = F.incomeExpenditure(book);

@@ -83,15 +83,37 @@ _rsTest('restoreChurchData has exactly one caller, and it is the screen a stewar
         if (!/restoreChurchData\s*\(/.test(line)) return;
         if (/async\s+restoreChurchData/.test(line)) return;          // the definition itself
         if (/^\s*(\/\/|\*)/.test(line)) return;                       // prose about it
-        hits.push(`${r}/${f}:${i + 1}`);
+        hits.push({ at: `${r}/${f}:${i + 1}`, line: line.trim() });
       });
     }
   }
-  _rsAssert.deepEqual(hits, ['app/stew-dashboard.jsx:6515'],
-    'restoreChurchData is called from somewhere new: ' + JSON.stringify(hits) + '\n' +
+  // PINNED BY WHAT THE CALL IS, NOT BY WHERE IT SITS.
+  //
+  // This used to pin `app/stew-dashboard.jsx:6515` exactly, and any edit ANYWHERE above that line turned it
+  // red with nothing wrong — twice in one day during the 2026-09-02 audit fixes. That is not a harmless
+  // cost: a guard that cries wolf on unrelated edits teaches whoever hits it to paste the new number in,
+  // which is precisely the "just update the count" this file's own note forbids. A guard nobody reads is
+  // worse than no guard.
+  //
+  // The security property was never the line. It is: exactly ONE caller, it lives on the restore screen,
+  // and it is the one a steward drives by typing. So assert that — one hit, in that file, and the call
+  // itself still carries the restore screen's own operands (the chosen file's bytes and the typed relay
+  // address). A programmatic caller elsewhere fails on the count; a programmatic caller in this same file
+  // fails on the operands, because it would not have a `restoreFile` the steward picked. Line drift does
+  // nothing, which is the point.
+  _rsAssert.equal(hits.length, 1,
+    'restoreChurchData is called from ' + hits.length + ' places: ' + JSON.stringify(hits.map(h => h.at)) + '\n' +
     'Its destination is UNGATED, and the only reason that is safe is that a steward types the address on a ' +
     'screen that says what it does. A programmatic caller makes that false and the corpus goes wherever it ' +
     'is told. Gate the new caller, or justify it in the note above this test.');
+  _rsAssert.match(hits[0].at, /^app\/stew-dashboard\.jsx:/,
+    'the only caller of restoreChurchData has moved out of the steward console (' + hits[0].at + '). The ' +
+    '"a human typed it" premise is tied to that screen.');
+  _rsAssert.match(hits[0].line, /restoreFile/,
+    'the caller no longer passes a file the steward chose (' + hits[0].at + '): ' + hits[0].line.slice(0, 120));
+  _rsAssert.match(hits[0].line, /relayUrl/,
+    'the caller no longer passes the relay address the steward typed (' + hits[0].at + '): ' + hits[0].line.slice(0, 120));
+
 });
 
 _rsTest('a cleartext restore destination is refused', () => {

@@ -303,7 +303,20 @@ function SafetyCheckPanel() {
     if (ok) setComposing(false);
     else setSendErr("Couldn't send — you may be offline or every relay is unreachable. Nobody was alerted. Try again.");
   };
-  const closeCheck = async () => { if (busy) return; setBusy(true); try { await window.Steward.closeSafetyCheck(check && check.id); } catch (e) {} setBusy(false); setConfirmEnd(false); };
+  // ENDING A SAFETY CHECK IS THE MOMENT A CHURCH STOPS LOOKING FOR PEOPLE. Audit 2026-09-02 #17.
+  // This swallowed the result and closed the confirm regardless, so a steward whose "end" never reached a
+  // relay believed the roll-call was over while it was still live on every member's phone — and members who
+  // had not answered were still being counted as unaccounted for. `start()` twelve lines above already
+  // reports this way; this is the same treatment for the other end of it.
+  const closeCheck = async () => {
+    if (busy) return;
+    setBusy(true); setSendErr('');
+    let ev = null;
+    try { ev = await window.Steward.closeSafetyCheck(check && check.id); } catch (e) { ev = null; }
+    setBusy(false);
+    if (ev) setConfirmEnd(false);
+    else setSendErr("Couldn’t end the check — every relay refused it. It is still live, and members are still being asked to mark themselves safe.");
+  };
   const [minimized, setMinimized] = React.useState(false);   // collapse a live check to a slim bar so other care work isn't blocked (persisted per check)
   React.useEffect(() => { if (!check) { setMinimized(false); return; } try { setMinimized(localStorage.getItem('trinityone.safetymin.' + check.id) === '1'); } catch (e) {} }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   const toggleMin = () => setMinimized(m => { const nm = !m; try { if (check) localStorage.setItem('trinityone.safetymin.' + check.id, nm ? '1' : '0'); } catch (e) {} return nm; });
@@ -457,6 +470,7 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
   const [end, setEnd] = React.useState('');
   const [notes, setNotes] = React.useState(req.note || '');
   const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
   // A NEED WITH NO DAYS CANNOT BE SIGNED UP FOR, so this sheet must not be able to open one. dayRange()
   // returns [] for a blank or unparseable start date — "".split('-') gives NaN, Date.UTC(NaN…) is NaN, and
   // `NaN <= end` is false, so the loop never runs and the catch never fires. The button was disabled only
@@ -471,9 +485,11 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
     // has to be chosen it is the thing that catches an empty one. Nothing new is needed here, and a second
     // message would only say the same thing twice.
     if (!dates.length) return;
-    setBusy(true);
+    setBusy(true); setErr('');
     let ok = null; try { ok = await window.StewardMeals.approveCareRequest(req, { dates, notes, who }); } catch (x) {}
-    setBusy(false); if (ok) onDone();
+    setBusy(false);
+    if (!ok) { setErr('Couldn’t set this up — it didn’t reach the church, so nothing has changed. Try again in a moment.'); return; }
+    onDone(ok);
   };
   const fld = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14 };
   return (
@@ -482,6 +498,7 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Set up help</div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', margin: '6px 0 14px', lineHeight: 1.5 }}>Opens a need the church can sign up for. Pick the dates.</p>
         {!dates.length ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', margin: '0 0 10px', lineHeight: 1.45 }}>Pick the days first — a need with no days is one nobody can sign up to.</div> : null}
+        {err ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', margin: '0 0 10px', lineHeight: 1.45 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input aria-label="From" type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
           <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input aria-label="To" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
@@ -502,6 +519,12 @@ function StewCareRequests() {
   const nameOf = (pk) => { const m = (members || []).find(x => (x.pubkey || '').toLowerCase() === String(pk || '').toLowerCase()); return (m && m.name) || ''; };
   const [reqs, setReqs] = React.useState([]);
   const [approving, setApproving] = React.useState(null);
+  const [closing, setClosing] = React.useState(null);    // request id awaiting "yes, close it"
+  const [closeErr, setCloseErr] = React.useState('');
+  // "The need went up, the request did not close" is neither a success nor a failure, and it is the ONLY
+  // state in which a steward must go back and do something. It gets its own line rather than the per-row
+  // closeErr, which renders on every row at once.
+  const [halfDone, setHalfDone] = React.useState('');
   const [chatting, setChatting] = React.useState(null);
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub]);
   // A YOUNG PERSON'S REQUEST IS NOT ORDINARY CARE, AND MUST NOT SIT IN THE SAME LIST.
@@ -512,9 +535,26 @@ function StewCareRequests() {
   // What is left is the console's own honesty: shown among a dozen meal trains and lifts it reads as one more
   // errand, and the control beside it — "Set up help" — publishes a NEED, which the whole congregation reads
   // and signs up to. That is how a child's private disclosure becomes a notice board item with their name on.
-  const _sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const _sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], minorsKnown: false };
   const _minors = new Set((_sg.minors || []).map(x => String(x || '').toLowerCase()));
-  const isChild = (r) => _minors.has(String(r && r.from || '').toLowerCase());
+  // FAIL CLOSED WHILE WE DO NOT YET KNOW WHO THE CHILDREN ARE. Audit 2026-09-02 #3.
+  //
+  // This asked the minors list a question it could not yet answer. The lists arrive over a subscription, so
+  // for the first moments of every console mount `_minors` is EMPTY — and an empty set answers "no" to
+  // "is this from a child?" exactly as confidently as a loaded one does. A request arriving in that window
+  // was filed with the adults, under the "Set up help" button, and that button publishes a NEED the whole
+  // congregation reads and signs up to. That is a child's private disclosure turned into a notice board item
+  // with their name on it, and nothing about the screen looked wrong.
+  //
+  // `minorsKnown` and NOT `loaded`: `loaded` requires the minors DOCUMENT, which a church that has never
+  // marked a child never publishes, so gating on it would put every request in the confidential section for
+  // ever in exactly those churches — the care module silently switched off. See subscribeSafeguard.
+  // FAIL CLOSED ON ABSENT, not open. This read `!== false`, so a payload with no `minorsKnown` key counted
+  // as "known" — and the hook's own pre-subscription default was exactly such a payload, so on first paint
+  // every request was classed by an empty minors list. That is the bug this gate exists to stop, still
+  // happening. `=== true` is the only reading that is safe when the answer is missing.
+  const _minorsKnown = _sg.minorsKnown === true;
+  const isChild = (r) => !_minorsKnown || _minors.has(String(r && r.from || '').toLowerCase());
   const childReqs = reqs.filter(isChild), adultReqs = reqs.filter(r => !isChild(r));
   if (!reqs.length) return null;
   const renderRow = (r, child) => (
@@ -523,19 +563,36 @@ function StewCareRequests() {
             <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{mealsTypeLabel(r)}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
           </div>
+          {closeErr && closing === null ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginBottom: 6 }}>{closeErr}</div> : null}
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
             {!r.sealed && !child ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: mealsTypeLabel(r) })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
-            <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>
+            {/* CLOSING SOMEBODY'S REQUEST FOR HELP IS NOT AN UNDO-ABLE TAP. Audit 2026-09-02 #17.
+                One press ended a member's request outright, with no confirmation and no check that it
+                landed. On a CHILD's row the wording avoids "care team" deliberately — a young person's
+                request is not seen by the rota (DOMAIN.md), and copy that implies otherwise is the error
+                this section exists to prevent. */}
+            {closing === r.id
+              ? <React.Fragment>
+                  <button onClick={() => {
+                    setClosing(null);
+                    Promise.resolve(window.StewardMeals.declineCareRequest(r))
+                      .then((ok) => { if (!ok) setCloseErr('Couldn’t close that request — the relay didn’t accept it, so it is still open.'); })
+                      .catch(() => setCloseErr('Couldn’t close that request — the relay could not be reached.'));
+                  }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}>{child ? 'Yes, close this young person’s request' : 'Yes, close it'}</button>
+                  <button onClick={() => setClosing(null)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Keep it open</button>
+                </React.Fragment>
+              : <button onClick={() => { setCloseErr(''); setClosing(r.id); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>}
           </div>
         </div>
       );
   return (
     <div style={{ marginBottom: 16 }}>
+      {halfDone ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', lineHeight: 1.5, margin: '0 0 10px', padding: '9px 12px', borderRadius: 12, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>{halfDone}</div> : null}
       {childReqs.length ? (
         <div style={{ marginBottom: 14 }}>
-          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>FROM A YOUNG PERSON · {childReqs.length} · CONFIDENTIAL</div>
+          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>{_minorsKnown ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px', padding: '9px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
             Only people on your <b>cleared list</b> can see these, and nobody on the care rota sees them unless they are cleared too. Reply privately below. There is no “set up help” here on purpose: that publishes a need the whole church reads and signs up to, which is not somewhere a young person’s request belongs. Handle it under your safeguarding policy.
           </div>
@@ -548,7 +605,7 @@ function StewCareRequests() {
           {adultReqs.map(r => renderRow(r, false))}
         </div>
       ) : null}
-      {approving ? <StewApproveSheet req={approving} who={approving.forSelf ? (nameOf(approving.from) || 'A member') : (approving.forName || 'A member')} onClose={() => setApproving(null)} onDone={() => setApproving(null)} /> : null}
+      {approving ? <StewApproveSheet req={approving} who={approving.forSelf ? (nameOf(approving.from) || 'A member') : (approving.forName || 'A member')} onClose={() => setApproving(null)} onDone={(res) => { setApproving(null); setHalfDone(res && res.stillOpen ? 'Help is set up — but we couldn’t mark that request as dealt with, so it still shows below. Close it yourself once you’re back online.' : ''); }} /> : null}
       {chatting ? <StewCareChat reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
     </div>
   );
@@ -780,6 +837,9 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         dietary: type === 'meals' ? diet : [],
         meals: type === 'meals' ? meals : [], dayMeals: type === 'meals' ? dayMeals : {},
       });
+      // The sheet closed on a refused publish, so a steward who had just typed a family's name and dates was
+      // returned to a needs list they believed carried it. publishNeed now answers null for that.
+      if (!saved) { setErr('Couldn’t save this — it didn’t reach the church, so nothing has changed. Try again in a moment.'); setBusy(false); return; }
       onSaved && onSaved(saved);
     } catch (e) { setErr((e && e.message) || 'Save failed.'); setBusy(false); }
   };

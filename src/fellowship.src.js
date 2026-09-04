@@ -327,11 +327,60 @@ function _safeReaders(cp, by, group) {
   const clean = [...new Set(readers.map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))];
   return { readers: clean, narrowed: !Array.isArray(group) };
 }
+// WHICH STEWARDS THE CHURCH HAS GIVEN A CAPABILITY TO. Read from the OWNER-SIGNED stewards document only,
+// and mirroring the relay's own compatibility rule: a roster entry with no capabilities recorded is a FULL
+// steward (`stewardCan`: `if (!caps) return true`). Diverging from that would under-trust every church whose
+// roster predates capabilities. Two callers: _fetchCareTeam (below) and _fetchChildCareAudience.
+async function _fetchStewardsWithCap(cp, cap) {
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': ['trinityone/stewards:' + cp] }]);
+    let best = null;
+    for (const e of (evs || [])) {
+      if (e.pubkey !== cp) continue;                 // OWNER-ONLY: a steward cannot enrol themselves
+      if (!best || e.created_at > best.created_at) best = e;
+    }
+    if (!best) return [];
+    const o = JSON.parse(best.content);
+    const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+    const caps = (o.caps && typeof o.caps === 'object') ? o.caps : null;
+    const want = String(cap || '').toLowerCase();
+    return pks.filter(pk => {
+      if (!caps) return true;
+      const c = caps[pk];
+      if (!Array.isArray(c)) return true;
+      return c.some(x => String(x || '').toLowerCase() === want);
+    }).map(x => String(x).toLowerCase());
+    // A ROSTER WE COULD NOT READ IS NOT A CHURCH WITH NO STEWARDS. Returning [] narrows the allowed set to
+    // the church key alone on a transient read failure; callers treat null as "unknown". Audit 2026-09-04.
+  } catch (e) { return null; }
+}
 async function _fetchCareTeam(cp) {
   try {
     const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CARETEAM_D + cp] }]);
-    let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
+    // TRUST THE DOCUMENT ONLY FROM AN AUTHOR THE RELAY WOULD ACCEPT. Audit 2026-09-02 #19 (backlog HIGH S1).
+    //
+    // This took the NEWEST careteam: document from ANY author. The relay refuses a stranger's write, so on a
+    // healthy relay that is academic — but this is a client-side read over whatever a relay hands back, and
+    // the whole point of the closed-network work is that a relay may not be one of ours. A newer document
+    // from a stranger key decided who a care request seals to, which is who can read a member's private
+    // request for help.
+    //
+    // The rule mirrors the relay's: the church key itself, or a steward the church has given `care` to.
+    const careStewards = await _fetchStewardsWithCap(cp, 'care');
+    // A ROSTER WE COULD NOT READ IS NOT A CHURCH WITH NO STEWARDS — do not narrow on a guess.
+    if (careStewards === null) return null;
+    const allowed = new Set([String(cp).toLowerCase(), ...careStewards]);
+    let best = null, refused = 0;
+    for (const e of (evs || [])) {
+      if (!allowed.has(String(e.pubkey || '').toLowerCase())) { refused++; continue; }
+      if (!best || e.created_at > best.created_at) best = e;
+    }
     if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean); }
+    // DOCUMENTS EXISTED AND WE REFUSED THEM ALL — that is "unknown", never "this church has nobody".
+    // Found by the pre-merge audit, 2026-09-04. A careteam: written by a steward whose `care` capability was
+    // later removed is rightly not trusted, but answering [] then states as a FACT that the church has no
+    // care team: adult requests would seal to the church key alone while the relay still serves the team.
+    if (refused) return null;
     } catch (e) { return null; }   // could not READ the roster — not the same as a church with nobody on it
     // NO DOCUMENT FOUND. That is a real answer only if we were genuinely connected when we asked. querySync
     // RESOLVES with an empty list on a relay that is unreachable, still connecting, or has not answered the
@@ -961,6 +1010,34 @@ let sk = null, pub = null;
 // unrelated to this flag. The comment that used to sit here described the old, narrowed behaviour and
 // contradicted the line below it; that is exactly how a fixed leak gets un-fixed. Corrected 2026-07-26.)
 let _needAuth = true;
+// A SECOND DECISION IN THE SAME SECOND MUST BEAT THE FIRST, AND `created_at` IS WHOLE SECONDS.
+// Audit 2026-09-04.
+//
+// pin/unpin and hide/unhide are pairs that write the SAME replaceable document, so "undo" is just a second
+// write to it. NIP-01 breaks a created_at tie by keeping the LOWEST event id — a hash, i.e. a coin toss — so
+// Undo pressed within a second of the action it undoes was refused about half the time, measured over 200
+// trials. What a leader sees is a message that will not come back, or a pin that will not clear, with no
+// error: the relay accepted the event and simply kept the older copy.
+//
+// The console has had this since it was written (`_monotonic` in src/steward.src.js, applied inside
+// _publishSigned). This is the same rule for the member app, and it is kept deliberately narrow — only the
+// four moderation writes below, which are the ones a person can genuinely repeat inside a second.
+//
+// The +600s bound is OURS, not the relay's — the relay refuses past +900s (event-store.mjs) and the console
+// uses 600 in `_monotonic`. Two programs that must agree keep the tighter number; 700 undos in one second
+// would otherwise stamp a document nothing will accept, and a rare tie is the better failure.
+const _lastStampF = new Map();
+function _monotonicF(tmpl) {
+  const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
+  const nowS = Math.floor(Date.now() / 1000);
+  const want = tmpl.created_at || nowS;
+  const last = _lastStampF.get(d) || 0;
+  let at = want > last ? want : last + 1;
+  if (at > nowS + 600) at = want;
+  _lastStampF.set(d, at);
+  return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
+}
+
 // NIP-42: when a relay challenges, prove our pubkey by signing the auth event with our key — so the relay serves
 // us our church's PRIVATE docs (the member roster, safeguarding lists, media key, Care module, invite groups).
 // SECURITY-AUDIT-2026-07-13: this was `false` (auth only in the guardian flow), which meant an ordinary member
@@ -984,6 +1061,32 @@ let _needAuth = true;
 // the post-auth refetch, so a boolean would still be satisfied by the pre-auth EOSE. The question that
 // actually matters is whether the relay answered us AFTER it knew who we were.
 let _relayAuthedAt = 0;
+// …AND WHEN DID A RELAY ACTUALLY ACCEPT ONE? `_relayAuthedAt` above is stamped when we SIGN the auth event,
+// which is not the same claim and never was: the relay can still refuse it (a clock outside its window, a
+// blocked key) or the socket can die before the answer comes back. The fourth audit of the 2026-09-04 branch
+// caught a safeguarding guard resting on the weaker signal and reading "we know who the children are" over
+// an answer the relay had never gated.
+//
+// A SECOND signal rather than a stricter version of the first, deliberately. Four gates read `_relayAuthedAt`
+// and every one of them fails CLOSED — tightening it would make them refuse in more cases, and a read gate
+// that wrongly refuses is this codebase's worst failure class (a screen that is simply blank, with nothing to
+// say why). So the existing four keep the optimistic signal and its documented limits; anything that wants
+// "the relay agreed" asks for it explicitly. Reset with it in reconnectAll: a new connection has proved
+// nothing yet.
+let _relayAuthOkAt = 0;
+// Observe the relay's OK for our AUTH without waiting on it here. nostr-tools resolves `relay.authPromise`
+// from that OK — and it can only resolve AFTER this signer returns the event, so awaiting it inside the
+// signer would deadlock the auth we are trying to complete. Hand it to a microtask instead.
+// The pool keys its map by normalizeURL(); a raw .get() misses silently (three prior occurrences).
+function _noteAuthAccepted(url) {
+  Promise.resolve().then(() => {
+    let r = null;
+    try { r = pool.relays.get(normalizeURL(url)); } catch (e) {}
+    const p = r && r.authPromise;
+    if (!p || typeof p.then !== 'function') return;
+    p.then(() => { _relayAuthOkAt = Date.now(); }, () => {});   // a refusal leaves it where it was: unproved
+  });
+}
 let _sgSelf = { cp: '', me: '', isMinor: false, known: false };
 // ONE PHONE IS NOT ONE PERSON. The remembered safeguarding answer is keyed by church AND member, and the
 // in-memory copy carries the member it belongs to, for the same reason ADMITTED_OK_LS is keyed `cp|pub`
@@ -1079,12 +1182,13 @@ async function _careNeedRefusal(cp) {
   }
   return '';
 }   // what MY OWN sealed clearance says about me — see subscribeChurchSafeguard
-pool.automaticallyAuth = () => async (authEvent) => {
+pool.automaticallyAuth = (url) => async (authEvent) => {
   if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }
   if (!sk) throw new Error('no key');
   _relayAuthedAt = Date.now();
   _armAuthRefetch();   // once we auth, re-fetch the gated docs that were withheld before we proved membership
+  _noteAuthAccepted(url);   // …and stamp the STRONGER signal only if the relay says yes
   return finalizeEvent(authEvent, sk);
 };
 // A member's church docs (groups, care, roster, chat tags) are NIP-42-gated, and auth is LAZY — it only
@@ -2180,6 +2284,7 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 function reconnectAll() {
   _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
   _relayAuthedAt = 0;          // F12: and it has proved nothing yet, so no gated read is authoritative until it does
+  _relayAuthOkAt = 0;          // …and neither has any relay agreed on this connection
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
   for (const hub of _docsHubs.values()) { hub.familyRebuilt = false; const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }   // F11: re-arm the family rebuild for the new socket
   // Shared subscriptions ride the same sockets, so they die with them. Drop the registry too, or the next
@@ -2483,8 +2588,9 @@ window.Fellowship = {
   // a real relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is
   // the provable form.
   verifyRelayIdentity,
-  // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-  // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document. C4
+  // C3. "Is this relay one of ours?" — the C2 proof, which is what admits it. The canonical pin, the app's
+  // own serving origin and this church's signed trinityone/relay-net document are still computed and still
+  // reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md, 2026-09-02). C4
   // consumes it: the answer, cached, IS the publish set — see _netRelays and the gate above.
   isNetworkRelay,
   // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
@@ -2722,6 +2828,19 @@ window.Fellowship = {
   // proved is still IN the list and still retried — it is simply not published to, and the sheet says so
   // rather than the address quietly ceasing to matter.
   relayVerified(url) { try { return _gate.admits(url, window.Fellowship.churchPub); } catch (e) { return false; } },
+  // PROVE THESE ADDRESSES NOW, AND WAIT FOR THE ANSWER. Audit 2026-09-02 #10.
+  //
+  // `relayVerified` above only reports what the gate ALREADY knows; it starts nothing. So a caller that had
+  // just added a relay and immediately read over the gated set saw nothing from it — the proof had not been
+  // asked for yet. That is the "my church runs its own relay" recovery: it adds the address, reads, finds
+  // no church, and tells the member "No church found" while the relay it was handed is sitting there
+  // unproved. On a slow link all three of its passes can land inside that window.
+  //
+  // Returns the subset that proved. Never throws: a recovery screen must not die because a relay was down.
+  proveRelays(urls) {
+    try { return Promise.resolve(_gate.refresh(urls || [], window.Fellowship.churchPub)).catch(() => []); }
+    catch (e) { return Promise.resolve([]); }
+  },
 
   // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
   // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
@@ -2839,7 +2958,15 @@ window.Fellowship = {
     // church got a line in the console log. UX audit 2026-08-04.
     const dup = _outbox.some(o => o && o.evt && o.evt.id === evt.id);
     if (!dup) {
-      _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+      // A JOIN QUEUES WITH NO RELAY LIST, DELIBERATELY. Audit 2026-09-02 #21.
+      //
+      // Snapshotting the list here froze the set the retry would use — and a join is the one moment the list
+      // is CHANGING, because adopting the invite's relay happens alongside it. So the snapshot could be the
+      // pre-adoption list, and the flush would go on retrying against relays that were never this church's
+      // while the one that was sat unused. `_outboxFlush` already reads
+      // `item.relays.length ? item.relays : window.Fellowship.relays`, so an empty list means "whatever the
+      // live list is when this actually goes" — which for a join is the only sane answer.
+      _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
       _outboxSave();
     }
     let ok = false;
@@ -2866,7 +2993,10 @@ window.Fellowship = {
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
     }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
+    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     return evt;
   },
 
@@ -3025,6 +3155,19 @@ window.Fellowship = {
     const take = async (url) => {
       if (!url) return false;
       let ok = false;
+      // NOT CHANGED TO `_gate.refresh`, DELIBERATELY — see the note in the batch 9 commit.
+      //
+      // The audit (#21) is right that this proves the address once here and the next publish proves it
+      // again: two /relay-identity round trips for one adoption, on the slowest link a member ever has.
+      // `_gate.refresh` would do both in one, and it decides with the SAME deps (verify, netEntries,
+      // origin, pins), so it is not a weakening. It was tried and reverted anyway.
+      //
+      // Why: an-invite-cannot-choose-your-relay.test.mjs guards this exact line by name — a slice that
+      // stopped containing it "would leave every assertion below passing over nothing at all", and those
+      // assertions are the ones that stop a crafted join link choosing a member's relay. Re-anchoring the
+      // most security-critical test in the repo, and re-injecting the gate into its lift, to save one
+      // round trip on a join is a bad trade. If this is ever done, do it as its own change with that test
+      // rewritten first and audited on its own.
       try { ok = await isNetworkRelay(cp, url); } catch (e) { ok = false; }
       if (ok) {
         if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), url]);
@@ -3308,19 +3451,33 @@ window.Fellowship = {
     if (p.av) wire.av = p.av;
     if (p.hidden) wire.hidden = true;
     const body = JSON.stringify(wire);
-    if (_profilePubFor === pub && _profilePubBody === body) return null;
+    // AN IDENTICAL WIRE COPY IS A REASON NOT TO PUBLISH. IT IS NOT A REASON TO DROP THE SAVE.
+    // Audit 2026-09-04, and it was wrong in two ways at once.
+    //
+    // Since Stage 2 the NAME does not travel in kind-0 — `wire` is about/picture/av/hidden only. So an
+    // ordinary name change leaves `body` byte-identical, and this `return null` fired BEFORE the local write,
+    // `syncSealedNames()` and localStorage below. Two consequences, both silent: the member's SECOND name
+    // edit in a session was dropped entirely — never stored, never re-sealed, never sent to the church — and
+    // the screen, which reads this return, said "Couldn't save your profile — your church still sees the old
+    // name" about the one edit that had nothing to publish and had lost nothing.
+    //
+    // Skip the PUBLISH, keep everything else.
+    const wireUnchanged = (_profilePubFor === pub && _profilePubBody === body);
     // REFUSE THE WIRE COPY — not the whole call. Since Stage 2 the NAME does not travel in kind-0 at all: it
     // goes out sealed, through syncSealedNames below. So refusing outright to protect kind-0 would leave a
     // member on a slow link unable to tell their congregation what they are called, which is the one thing
     // they set — a worse failure than the one being fixed, and aimed at exactly the same people. Everything
     // local still happens; only the replaceable publish is withheld.
-    let evt = null, sent = false;
-    if (known) {
+    let evt = null, sent = false, lost = false;   // `lost` = a field that TRAVELS did not reach the relay
+    if (wireUnchanged) {
+      // nothing on the wire changed, so there is nothing to publish and nothing to lose; the name half below
+      // still runs, and still re-seals.
+    } else if (known) {
       evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
       sent = true;
       try { await _publishAny(window.Fellowship.relays, evt); }
       catch (e) {
-        sent = false; console.warn('[fellowship] profile publish failed', e);
+        sent = false; lost = true; console.warn('[fellowship] profile publish failed', e);
         // SAY SO. The withheld branch below already tells the member, and this one — the publish we DID
         // attempt and that no relay accepted — said nothing at all, while the change was still written to
         // this device. So the switch sat in its new position and the church went on seeing the old profile.
@@ -3346,6 +3503,7 @@ window.Fellowship = {
       // kind-0 — a name-only save has lost nothing, so saying "not saved" about it would be a lie.
       console.warn('[fellowship] profile publish withheld — our own kind-0 has not arrived, publishing now would blank it');
       if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+        lost = true;
         try { if (window.trinityToast) window.trinityToast('Your photo and profile details aren’t saved yet — this phone is still connecting to your church’s relay. Try again in a moment.'); } catch (x) {}
       }
     }
@@ -3355,7 +3513,13 @@ window.Fellowship = {
     if (p.name) setTimeout(() => { try { window.Fellowship.syncSealedNames(); } catch (x) {} }, 0);
     try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch {}
     window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } }));
-    return evt;
+    // WHAT THE SCREEN IS ASKING IS "DID MY CHANGE SAVE?", and this used to answer with the event object — set
+    // the moment we DECIDED to publish, never cleared when the publish was refused. So "Profile saved"
+    // appeared over a kind-0 no relay accepted, which is precisely the failure the caller's own comment says
+    // it was fixed to stop. Answer the question actually asked: truthy unless something that travels was
+    // lost. A name-only edit is a success — the name goes out sealed, through syncSealedNames above.
+    if (lost) return null;
+    return evt || true;
   },
 
   // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
@@ -3725,8 +3889,11 @@ window.Fellowship = {
   subscribeHidden(groupId, cb) {
     const cp = window.Fellowship.churchPub;
     if (!cp || !groupId) { cb(new Set()); return () => {}; }
-    const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> hidden? (latest wins)
-    const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
+    // NEWEST DECISION WINS, BY ITS OWN TIMESTAMP — see the same note on the console's subscribeHidden.
+    // Two stewards moderating the same message are two addressable documents under two authors, and taking
+    // whichever ARRIVED last made "un-hide" depend on which relay answered first.
+    const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> { at, hidden }
+    const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#t': [groupId] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -3736,7 +3903,9 @@ window.Fellowship = {
         // hideMessage() tags the group id (['t',gid]); if absent (legacy) _groupEventTrusted falls back to church/steward.
         const gid = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
         if (!_groupEventTrusted(cp, gid, e.pubkey)) return;
-        hidden.set(d.slice(HIDE_D.length), !(e.tags.some(t => t[0] === 'deleted') || !e.content));
+        const _mid = d.slice(HIDE_D.length), _at = Number(e.created_at) || 0, _prev = hidden.get(_mid);
+        if (_prev && _prev.at > _at) return;   // an older decision cannot undo a newer one
+        hidden.set(_mid, { at: _at, hidden: !(e.tags.some(t => t[0] === 'deleted') || !e.content) });
         emit();
       },
       oneose() { emit(); },
@@ -3760,14 +3929,14 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId || !msg || !msg.id) return null;
     const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.pubkey || msg.by || '', ts: msg._ts || msg.ts || Math.floor(Date.now() / 1000) });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] pinPost failed', e); return null; }
     return evt;
   },
   async unpin(churchNpub, groupId) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId) return null;
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp], ['deleted', '1']], content: '' }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp], ['deleted', '1']], content: '' }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unpin failed', e); return null; }
     return evt;
   },
@@ -3776,7 +3945,7 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !msgId) return null;
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp]];
     if (groupId) tags.push(['t', groupId]);
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ groupId: groupId || '' }) }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ groupId: groupId || '' }) }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] hideMessage failed', e); return null; }
     return evt;
   },
@@ -3785,7 +3954,7 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !msgId) return null;
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp], ['deleted', '1']];
     if (groupId) tags.push(['t', groupId]);
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }), sk);
     try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unhideMessage failed', e); return null; }
     return evt;
   },
@@ -3872,6 +4041,35 @@ window.Fellowship = {
     // published clearances yet), so this degrades rather than breaks.
     let clr = null;   // { minor, cleared } from my own sealed doc, or null if none has arrived
     let _clrTs = 0, _clrId = '';   // …and which event won, for the same-second tiebreak below
+    // DO WE YET KNOW WHO THE CHILDREN ARE? An empty `minors` answers "no" to "is this from a child?" exactly
+    // as confidently as a loaded one does, and the member app's care-request triage believed it — see the
+    // note on `fromChild` in app/screens-today.jsx. The console was given this on 2026-09-03 and this side,
+    // which runs the SAME triage for a care admin on their phone, was not.
+    //
+    // `sawMinors` alone is not enough and this is the trap the console hit first: a church that has never
+    // marked a child never publishes the document, so waiting for it would hold every request in the
+    // confidential queue for ever in exactly those churches — the feature silently switched off. So a second
+    // question: did the hub's EOSE arrive AFTER we proved who we are? Timestamps, not booleans, for the
+    // reason spelled out at `_relayAuthedAt`: an EOSE arrives before the auth round trip completes on a cold
+    // boot, and a boolean would be satisfied by that pre-auth EOSE.
+    //
+    // `_relayAuthOkAt`, NOT `_relayAuthedAt`. The fourth audit of this branch caught the first version resting
+    // on the weaker one: `_relayAuthedAt` is stamped when the phone SIGNS the auth event, so on a thin link —
+    // or when the relay REFUSES it, which is exactly what a skewed clock or a blocked key produces — an EOSE
+    // could land after the stamp and this read `true` over an answer the relay had never gated. The stronger
+    // signal is set only when a relay answers OK to our AUTH. Kept as a SECOND signal rather than tightening
+    // the first, because four gates read that one and every one of them fails closed; see `_relayAuthOkAt`.
+    //
+    // Even so, say what this is worth: it is a screen-level courtesy. What actually keeps a young person's
+    // request away from the wrong reader is the relay's own read gate (gateway.mjs canRead), which withholds
+    // it from an unauthenticated socket whatever this phone believes.
+    //
+    // The hub's OWN eosedAt, not Date.now() at the moment we are called: a late-registering handler has its
+    // `oneose()` invoked synchronously against a REPLAYED buffer (see _onChurchDocs), and stamping the wall
+    // clock there would read a pre-auth answer as a post-auth one every time the app re-registers — the 1.2s
+    // lazy load, a connection tick, a church switch. `syncSealedNames` asks the identical question this way.
+    let sawMinors = false;
+    const _sgHub = _docsHub(pubk);
     const emit = () => {
       _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
@@ -3892,7 +4090,8 @@ window.Fellowship = {
       // in a session (a 12-word restore, an adopted steward seed, or the child account minted on a parent's
       // phone by createChildAccount before the phone is handed over). Every reader goes through _sgMine.
       _sgSelf = { cp: pubk, me: me || '', isMinor, known: !!clr };
-      onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+      const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthOkAt && _sgHub.eosedAt >= _relayAuthOkAt);
+      onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
@@ -3924,7 +4123,7 @@ window.Fellowship = {
         // hazard. AUDIT-9. The remaining clock question — that this drops rather than clamps, and that a slow
         // phone therefore fails OPEN to "adult" — is tracked; it needs the same treatment on both sides at
         // once, because console and member disagreeing is how the worst defect of the last round happened.
-        if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
+        if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
         else if (d === APPROVED_D + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
         else if (d === 'trinityone/guardians:' + pubk) { if (_ts < _sgTs.guardians) return; _sgTs.guardians = _ts; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
         else if (d === 'trinityone/nophoto:' + pubk) { if (_ts < _sgTs.nophoto) return; _sgTs.nophoto = _ts; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
@@ -4618,7 +4817,10 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk || !cp || !id) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) {}
+    // A WITHDRAWAL THAT LANDED NOWHERE IS NOT A WITHDRAWAL. The request stays open on the care team's screen
+    // and the member is told it is gone — so they neither expect help nor ask again. Same shape as the
+    // serving reply and the RSVP; found in the 2026-09-04 sweep of every publish whose failure was swallowed.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] cancel request publish failed', e); return null; }
     return evt;
   },
   // ── care-team actions (careAdmin/steward): resolve a request, or approve it INTO a care need ──
@@ -4630,7 +4832,10 @@ window.Fellowship = {
     const tags = [['d', CAREREQSTATUS_D + reqId], ['t', NET], ['t', 'carereqstatus'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);   // so the asker can read their resolution
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ status: String(o.status || 'handled'), needId: String(o.needId || ''), by: pub, at: Math.floor(Date.now() / 1000) }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) {}
+    // …and neither is closing somebody's request. The asker reads this doc to learn what happened to them:
+    // if it never lands they sit on "your care team will be in touch" for ever, and the team sees the request
+    // still open and may work it twice.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request status publish failed', e); return null; }
     return evt;
   },
   async declineCareRequest(req) {
@@ -4653,8 +4858,8 @@ window.Fellowship = {
     const body = { id, type: req.type || 'other', dates, startDate: dates[0] || '', endDate: dates[dates.length - 1] || '', meals: (req.type === 'meals' ? ['dinner'] : []), dayMeals: {}, enc };
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']], content: JSON.stringify(body) }, sk);
     try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
-    await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
-    return { id };
+    const st = await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
+    return { id, stillOpen: !st };
   },
   // MAY THIS PERSON OPEN A PUBLIC NEED? One rule, asked at two doors — the engine below, and the sheet that
   // fronts it. The sheet used to restate it as `!ctx.safeguard.isMinor`, and that is not the same question:
@@ -4792,7 +4997,9 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care slot publish failed', e); }
+    // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
+    // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care slot publish failed', e); return null; }
     return evt;
   },
   async clearCareSlot(careId, iso) {
@@ -4800,7 +5007,9 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch {}
+    // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
+    // still the only name against that day.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care slot publish failed', e); return null; }
     return evt;
   },
   // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
@@ -4912,7 +5121,10 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch {}
+    // Undoing a skip is the recipient saying "actually, yes please" — if it lands nowhere the day stays
+    // crossed out and nobody brings anything. markCareSkip above already reports through `_delivered`;
+    // this direction reported nothing at all.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return null; }
     return evt;
   },
   // ── "I'm here to help" availability — a member signals they're willing to help, so people who need
@@ -4951,7 +5163,11 @@ window.Fellowship = {
     if (!sk || !cp) return null;
     const clean = Array.isArray(tags) ? tags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 8) : [];
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); }
+    // A SEND THAT LANDED NOWHERE IS NOT A LISTING. The same shape batch 7 fixed for the serving reply, the
+    // RSVP and leaving a church — this pair was not in the plan's list, so batch 15's screen fix ("Couldn't
+    // list you") could never fire: the engine handed back the event whatever happened. Found by the
+    // pre-merge audit, 2026-09-04.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); return null; }
     return evt;
   },
   async clearCareAvail() {
@@ -4959,7 +5175,9 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch {}
+    // …and coming OFF the list must not be claimed either: a member who thinks they withdrew, and did not,
+    // is still being counted on.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { return null; }
     return evt;
   },
   // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to
@@ -5085,7 +5303,10 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || '' });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
+    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     return evt;
   },
   // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
@@ -5105,7 +5326,10 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const content = JSON.stringify({ event: eventId, v: verdict });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
+    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     return evt;
   },
   subscribeMyRsvps(onRsvps) {

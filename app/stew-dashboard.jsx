@@ -324,6 +324,8 @@ function PublishErrorBanner() {
       style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
       <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
       <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
+      {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
+          accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
         style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 14, margin: -14 }}><Icon name="x" size={16} /></button>
     </div>
@@ -382,7 +384,8 @@ function JoinNotifier() {
     <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 141, maxWidth: 520, width: 'calc(100% - 32px)', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 15px', borderRadius: 13, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 42%, transparent)', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
       <Icon name="users" size={17} color="var(--sage)" style={{ flexShrink: 0 }} />
       <div style={{ flex: 1, fontSize: 13, color: 'var(--ink)', lineHeight: 1.4, fontWeight: 700 }}>{toast}</div>
-      <button onClick={() => setToast('')} title="Dismiss this message" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} /></button>
+      {/* a11y: a 15px icon with no padding is a ~15px target and has no accessible name. Audit #27. */}
+      <button onClick={() => setToast('')} aria-label="Dismiss this message" title="Dismiss this message" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 6, minWidth: 24, minHeight: 24, boxSizing: 'content-box' }}><Icon name="x" size={15} /></button>
     </div>
   );
 }
@@ -880,7 +883,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
           <div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Paste your relay’s <b>admin token</b> — shown in the TrinityOne Suite window (or the installer output) — to register your church so the relay stops rejecting it.</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <input value={relayToken} onChange={e => setRelayToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doRegister(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ ...fld, height: 44, fontWeight: 400 }} />
+              <input aria-label="Relay admin token" value={relayToken} onChange={e => setRelayToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doRegister(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ ...fld, height: 44, fontWeight: 400 }} />
               <button onClick={doRegister} disabled={relayBusy || !relayToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (relayBusy || !relayToken.trim()) ? .5 : 1 }}>Connect</button>
             </div>
             {relayMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: relayMsg[0] === '✓' ? 'var(--sage-ink)' : relayMsg[0] === '✗' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{relayMsg}</div> : null}
@@ -2314,6 +2317,13 @@ function NewGroupModal({ open, onClose }) {
   // Owner's decision, 2026-08-22. Existing groups are untouched: this is the default for NEW ones.
   const encByDefault = !church.features || church.features.encryptComms !== false;
   React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
+  // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
+  // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
+  // always mounted with `open` toggling, so opening it changed the hook count and React threw #310 and
+  // rendered nothing. No steward could create a group on that build. Caught by the pre-merge audit driving
+  // the real component in a browser; the source-text test and the device check (which rendered it already
+  // open, the one transition that works) both missed it.
+  const ngDlgRef = useStewDialog(onClose, open);
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const create = () => {
@@ -2365,9 +2375,11 @@ function NewGroupModal({ open, onClose }) {
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 30,
       background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
-      <div style={{ width: 480, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      {/* a11y: every other console modal announces itself and traps focus; this one did neither, so a
+          screen-reader user landed inside it with no idea a dialog had opened. Audit 2026-09-02 #27. */}
+      <div ref={ngDlgRef} role="dialog" aria-modal="true" aria-labelledby="new-group-title" tabIndex={-1} style={{ width: 480, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div className="no-scrollbar" style={{ padding: '24px 26px 0', maxHeight: '64vh', overflowY: 'auto' }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>New group</div>
+          <div id="new-group-title" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>New group</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>A chat room (or a broadcast channel) for your church. It’s published as a signed event your members can join.</div>
           <div style={lbl}>NAME</div>
           <input aria-label="Name" autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sunday Service" style={{ ...fld, fontWeight: 600, marginBottom: 16 }} />
@@ -2549,6 +2561,17 @@ function GroupChatModal({ group, onClose }) {
   const [rxFor, setRxFor] = React.useState('');
   const [pin, setPin] = React.useState(null);     // the group's pinned message { msgId, text, by, ts } or null
   const [menuFor, setMenuFor] = React.useState('');   // message id whose moderation menu is open
+  // MODERATION IS REVERSIBLE AND NEVER SAID SO. Audit 2026-09-02 #16.
+  // `unhideMessage` has been built on both surfaces since the feature landed and was called by nothing, so
+  // "Remove message" read as permanent to every steward who used it. It also fired and forgot, so a removal
+  // the relay refused looked identical to one it took.
+  const [modMsg, setModMsg] = React.useState(null);   // { text, undo? }
+  const modTimer = React.useRef(null);
+  const showMod = (text, undo) => {
+    setModMsg({ text, undo });
+    clearTimeout(modTimer.current);
+    modTimer.current = setTimeout(() => setModMsg(null), 9000);
+  };
   const scRef = React.useRef(null);
   const GROUP_EMOJI = ['❤️', '🙏', '👍', '😂', '🔥', '🎉'];
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
@@ -2556,9 +2579,27 @@ function GroupChatModal({ group, onClose }) {
   React.useEffect(() => { if (scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs]);
   const send = () => { if (!text.trim()) return; window.Steward.publishPost(text.trim(), group.id); setText(''); };
   const react = (m, emoji) => { window.Steward.reactGroup(group.id, m.id, m.by, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
-  const doPin = (m) => { window.Steward.pinPost(group.id, m); setMenuFor(''); };
-  const doUnpin = () => { window.Steward.unpin(group.id); };
-  const doRemove = (m) => { window.Steward.hideMessage(group.id, m.id); setMenuFor(''); };
+  const doPin = (m) => {
+    setMenuFor('');
+    Promise.resolve(window.Steward.pinPost(group.id, m))
+      .then((r) => { if (!r) showMod('Couldn’t pin that — the relay didn’t accept it.'); })
+      .catch(() => showMod('Couldn’t pin that — the relay could not be reached.'));
+  };
+  const doUnpin = () => {
+    Promise.resolve(window.Steward.unpin(group.id))
+      .then((r) => { if (!r) showMod('Couldn’t unpin that — the relay didn’t accept it.'); })
+      .catch(() => showMod('Couldn’t unpin that — the relay could not be reached.'));
+  };
+  const doRemove = (m) => {
+    setMenuFor('');
+    Promise.resolve(window.Steward.hideMessage(group.id, m.id)).then((r) => {
+      if (!r) return showMod('Couldn’t remove that message — the relay didn’t accept it, so it is still visible.');
+      showMod('Message removed', () => {
+        Promise.resolve(window.Steward.unhideMessage(group.id, m.id))
+          .then((u) => showMod(u ? 'Message put back' : 'Couldn’t put it back — the relay didn’t accept it.'));
+      });
+    }).catch(() => showMod('Couldn’t remove that message — the relay could not be reached.'));
+  };
   const msgText = (m) => {   // render polls gracefully (members vote in the member app); avoids showing raw JSON
     if (m.kind === 'poll') { try { const p = JSON.parse(m.text); return '📊 ' + (p.question || 'Poll') + ' — ' + (p.options || []).join(' · '); } catch { return '📊 Poll'; } }
     return (m.kind === 'prayer' ? '🙏 ' : '') + m.text;
@@ -2586,6 +2627,15 @@ function GroupChatModal({ group, onClose }) {
           <button onClick={() => setComposeEvt(v => !v)} title="Schedule an event for this group" style={{ border: 'none', background: composeEvt ? 'var(--clay-soft)' : 'var(--clay)', color: composeEvt ? 'var(--clay-ink)' : '#fff', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}><Icon name="calPlus" size={15} color="currentColor" /> Event</button>
           <button onClick={onClose} title="Close chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
         </div>
+        {modMsg ? (
+          <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
+            background: modMsg.undo ? 'color-mix(in oklab, var(--sage) 11%, var(--surface))' : 'color-mix(in oklab, var(--clay) 10%, var(--surface))',
+            borderBottom: '1px solid var(--line)' }}>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>{modMsg.text}</div>
+            {modMsg.undo ? <button onClick={() => { const u = modMsg.undo; setModMsg(null); u(); }} aria-label="Undo removing that message" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}>Undo</button> : null}
+            <button onClick={() => setModMsg(null)} aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12.5, flexShrink: 0 }}>Dismiss</button>
+          </div>
+        ) : null}
         {pin && pin.msgId ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
             <Icon name="pin" size={14} color="#8a6717" style={{ marginTop: 2, flexShrink: 0 }} />
@@ -2786,6 +2836,15 @@ function DashGroups() {
     }
     setSealing(null);
   };
+  // A ROW CONTROL THAT CANNOT FAIL OUT LOUD WILL FAIL SILENTLY. Every control on a group row was
+  // fire-and-forget: publishGroup returns null when NO relay accepted (and false-y on a partial write, which
+  // is the case that matters — the rule landed on one relay of three and is enforced on one of three), and
+  // each of these threw the answer away and left the row painted as though it had worked. Audit 2026-09-02 #4.
+  const [rowErr, setRowErr] = React.useState('');
+  const pubOr = (promise, what) => Promise.resolve(promise).then(r => {
+    setRowErr(r ? '' : what);
+    return r;
+  }).catch(() => { setRowErr(what); return null; });
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const [chatGroup, setChatGroup] = React.useState(null);
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
@@ -2794,6 +2853,18 @@ function DashGroups() {
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
+  // PUBLISH THE DOCUMENT, NOT THE ROW. Found by the batch 3-7 audit, 2026-09-03.
+  //
+  // `items` below decorates each group for DISPLAY: `sub` is replaced with a computed live string
+  // ("2 members · invite-only"), and `ic`/`fg` are added for the icon. Batch 3 changed the row controls to
+  // republish "the whole row" — which meant republishing that DISPLAY string over the group's real
+  // subtitle. A church whose Prayer room said "Weekly prayer for the sick and grieving" would have had it
+  // overwritten with "2 members · invite-only" by pressing Undo, or the child-safe toggle, or the category
+  // picker. The fix batch 3 needed was "publish every field", not "publish the object on screen".
+  //
+  // So every control resolves back to the RAW group document by id before publishing.
+  const rawById = new Map(all.map(g => [g.id, g]));
+  const raw = (g) => (g && rawById.get(g.id)) || g;
   const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
@@ -2805,11 +2876,26 @@ function DashGroups() {
   })();
   const confirmDelete = () => {
     const g = pendingDelete; if (!g) return;
-    window.Steward.removeGroup(g.id);
+    // removeGroup returns the publish promise. Reporting a failure matters more here than elsewhere: a
+    // steward told the room is gone, when it is not, stops telling anyone about it.
+    pubOr(window.Steward.removeGroup(g.id), 'Couldn’t remove “' + (g.name || 'that group') + '” — the relay didn’t accept it, and it is still there.');
     setPendingDelete(null); setUndo(g);
     clearTimeout(undoTimer.current); undoTimer.current = setTimeout(() => setUndo(null), 9000);
   };
-  const doUndo = () => { if (undo) window.Steward.publishGroup({ id: undo.id, name: undo.name, kind: undo.kind, sub: undo.sub, icon: undo.icon, accent: undo.accent, category: undo.category }); clearTimeout(undoTimer.current); setUndo(null); };
+  // UNDO MUST BRING THE ROOM BACK AS IT WAS, NOT A ROOM WITH THE SAME NAME.
+  //
+  // This used to rebuild the group from seven named fields — id, name, kind, sub, icon, accent, category —
+  // and publishGroup fills every field it is not given with its default. So a room that was invite-only,
+  // encrypted and child-safe came back OPEN, UNENCRYPTED and not child-safe, under its own name, with its
+  // member list emptied. A steward who deleted "Safeguarding leads" by mistake and pressed Undo got a room
+  // the whole congregation could read. Audit 2026-09-02 #2.
+  //
+  // `undo` is the row itself (setUndo(g) below), and publishGroup reads named fields only and ignores the
+  // rest — setGroupLeaders/setGroupEventPolicy already pass a whole row the same way — so hand it the row.
+  const doUndo = () => {
+    if (undo) pubOr(window.Steward.publishGroup(raw(undo)), 'Couldn’t restore “' + (undo.name || 'that group') + '” — the relay didn’t accept it. Nothing was brought back; try Undo again.');
+    clearTimeout(undoTimer.current); setUndo(null);
+  };
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
   const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
   return (
@@ -2836,14 +2922,22 @@ function DashGroups() {
           <button onClick={doUndo} style={{ border: 'none', background: 'rgba(255,255,255,.16)', color: '#fff', borderRadius: 9, padding: '6px 13px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>Undo</button>
         </div>
       ) : null}
+      {rowErr ? (
+        <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12,
+          background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))' }}>
+          <Icon name="shield" size={16} color="var(--clay-ink)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{rowErr}</div>
+          <button onClick={() => setRowErr('')} aria-label="Dismiss" className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>Dismiss</button>
+        </div>
+      ) : null}
       <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
-        reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...g, order: i }); })}
+        reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
         renderRight={(it) => (
           <React.Fragment>
             {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => window.Steward.publishGroup({ ...it, category: e.target.value || undefined })} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), 'Couldn’t move “' + (it.name || 'that group') + '” into that category — the relay didn’t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
                 <option value="">No category</option>
                 {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -2851,7 +2945,7 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => window.Steward.publishGroup({ ...it, childsafe: !it.childsafe })} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
+            <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn’t change child-safe on “' + (it.name || 'that group') + '” — the relay didn’t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
             {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
             {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
@@ -3172,7 +3266,11 @@ function DashRelaysCard() {
       // that name" would be a plain untruth for the second, and this project has shipped six controls that
       // told a steward a comforting story about something that did not happen. Say both possibilities.
       if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
-      window.Steward.addRelay(j.url);
+      // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
+      // the address is already in the list, or when it IS this console's own relay — and in both cases the
+      // message below said "Added", which is at best confusing and at worst tells a steward they have a
+      // second box when they have one. Audit 2026-09-02 #17.
+      const added = window.Steward.addRelay ? window.Steward.addRelay(j.url) : false;
       window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
       setByNameMsg({ text: 'Connecting your church…' });
       let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, church.name); } catch (e) {}
@@ -3183,7 +3281,7 @@ function DashRelaysCard() {
       const needsName = !reg.ok && /name/i.test(String(reg.why || ''));
       setByNameMsg(needsName
         ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
-        : { ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
+        : { ok: true, text: reg.ok ? ((added ? '✓ Connected to “' : '✓ “') + n + (added ? '” — your church is registered and can post.' : '” was already on your list — your church is registered there and can post.')) : '✓ ' + (added ? 'Added “' : 'Already had “') + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };
@@ -4309,11 +4407,24 @@ function DashMembers() {
       .catch(() => { if (nophotoBackfillDone === sig) nophotoBackfillDone = ''; });
   }, [kidPhotosAllowed, sg.loaded, sg.minors, sg.nophoto]);
 
-  const toggleMinor = (pk) => {
+  // A SAFEGUARDING WRITE THAT ONLY PARTLY LANDED MUST NOT BE PAINTED AS DONE. Audit 2026-09-02 #4.
+  //
+  // setMinors/setApproved/setGuardians go through _publishToRelays, which returns FALSE when the document
+  // reached some relays and not others — and that is the case that matters, because a relay polices a
+  // church's traffic with its OWN copy. "Marked as a child" landing on one relay of three means the child is
+  // protected on one of three, while the row says it is done. toggleApproved below already gates its reseal
+  // on the result; this brings its siblings up to that standard.
+  const toggleMinor = async (pk) => {
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
-    const r = window.Steward.setMinors(next);
+    let r = null;
+    try { r = await Promise.resolve(window.Steward.setMinors(next)); } catch (e) { r = null; }
+    if (!r) {
+      setMinorNotice({ pk, tone: 'fail', text: (unmarking ? 'Couldn’t unmark ' : 'Couldn’t mark ') + (nameByPub[pk] || 'this member')
+        + ' — the relay didn’t accept the change, so nothing about their status has changed. Check the relay and try again.' });
+      return null;
+    }
     // MARKING SOMEBODY AS A CHILD MUST DEAL WITH THE PHOTOGRAPH THEY ALREADY HAVE.
     // The relay now refuses a NEW photo from a minor whose church has children's photos off, but it cannot
     // rewrite a kind-0 somebody already signed — and the ordinary way a church learns a member is under 18 is
@@ -4331,16 +4442,27 @@ function DashMembers() {
     // (see the note above). But it happened in silence: a steward correcting a mis-tap destroyed a real
     // volunteer's clearance with no warning, no undo, and nothing to say that re-clearing was now needed.
     // Found on the device, 2026-08-27. The action stays as it is; only the silence is the defect.
-    setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
-      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
-      : null);
+    let clearanceRemoved = true;
     if (unmarking && (sg.approved || []).indexOf(pk) >= 0) {
       // Whether the CLEARED list has actually been read — not whether the list of children has. Asking the
       // wrong document broke the exact case this record was written for: a brand-new church clearing its first
       // volunteer has no children marked, so the answer was always "we have not looked", and a clearance
       // granted that minute was recorded as "no record of when".
-      try { window.Steward.setApproved(nextApproved, { listKnown: !!sg.clearedKnown }); } catch (e) {}
+      let ok2 = null;
+      try { ok2 = await Promise.resolve(window.Steward.setApproved(nextApproved, { listKnown: !!sg.clearedKnown })); } catch (e) { ok2 = null; }
+      clearanceRemoved = ok2 !== false && ok2 !== null;
     }
+    if (unmarking && (sg.approved || []).indexOf(pk) >= 0 && !clearanceRemoved) {
+      // Do not tell a steward a clearance was revoked when it was not. The relay still holds it, and the
+      // person is still cleared to work with young people until this succeeds.
+      setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is no longer marked as a child, but their '
+        + 'youth-work clearance could NOT be removed — the relay didn’t accept it, so they are still cleared. Try again.' });
+      _reseal(next, sg.approved || [], [pk]);
+      return r;
+    }
+    setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
+      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
+      : null);
     _reseal(next, nextApproved, [pk]); return r;
   };
   // A CHILD CANNOT BE CLEARED TO WORK WITH CHILDREN. The relay refuses to store it; refuse it here too, so a
@@ -4386,14 +4508,32 @@ function DashMembers() {
     catch (e) { return 'no record of when'; }
   };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
-  const approveGuardian = (r) => {
+  const approveGuardian = async (r) => {
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
-    window.Steward.setGuardians(nextG);
-    // Re-seal UNCONDITIONALLY. This used to run only when the child was not already marked a minor, so linking
-    // a parent to an already-marked child never reached that child's phone at all.
-    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];   // a linked child is a minor
-    if (!minorsSet.has(r.child)) window.Steward.setMinors(nextM);
+    let okG = null;
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    if (!okG) {
+      setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t confirm that guardian link — the relay didn’t accept it, '
+        + 'so nobody has been linked and the request is still waiting. Check the relay and try again.' });
+      return null;
+    }
+    // A LINKED CHILD IS A MINOR, and if that half fails the link exists without the protection that is its
+    // whole point — so say which half landed rather than resealing over a half-written state.
+    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];
+    if (!minorsSet.has(r.child)) {
+      let okM = null;
+      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
+      if (!okM) {
+        setMinorNotice({ pk: r.child, tone: 'fail', text: 'The guardian link was saved, but marking them as a child was '
+          + 'NOT — the relay refused it. They are linked to a parent and are not yet treated as a child. Try again.' });
+        _reseal(sg.minors || [], sg.approved || [], [r.child], nextG);
+        return null;
+      }
+    }
+    // Re-seal UNCONDITIONALLY once both halves are in. This used to run only when the child was not already
+    // marked a minor, so linking a parent to an already-marked child never reached that child's phone at all.
     _reseal(nextM, sg.approved || [], [r.child], nextG);
+    return true;
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
@@ -4403,20 +4543,43 @@ function DashMembers() {
   // steward's writes are rejected. Hide those actions when acting as someone else's steward, so the UI
   // matches the relay instead of silently no-op'ing. (Pills stay visible so they can still SEE the state.)
   const delegated = !!(window.Steward && window.Steward.actingChurch);
-  const linkParent = (childPub, parentPub) => {
+  const linkParent = async (childPub, parentPub) => {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
     const nextG = { ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] };
-    window.Steward.setGuardians(nextG);
+    let okG = null;
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    if (!okG) {
+      setMinorNotice({ pk: childPub, tone: 'fail', text: 'Couldn’t save that guardian link — the relay didn’t accept it, '
+        + 'so nobody has been linked. Check the relay and try again.' });
+      return null;
+    }
     const nextM = minorsSet.has(childPub) ? (sg.minors || []) : [...(sg.minors || []), childPub];   // a linked child is a minor
-    if (!minorsSet.has(childPub)) window.Steward.setMinors(nextM);
+    if (!minorsSet.has(childPub)) {
+      let okM = null;
+      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
+      if (!okM) {
+        setMinorNotice({ pk: childPub, tone: 'fail', text: 'The guardian link was saved, but marking them as a child was '
+          + 'NOT — the relay refused it. Try again, or they will not be treated as a child.' });
+        _reseal(sg.minors || [], sg.approved || [], [childPub], nextG);
+        return null;
+      }
+    }
     _reseal(nextM, sg.approved || [], [childPub], nextG);   // unconditional — see approveGuardian
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
     if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
   };
-  const unlinkParent = (childPub, parentPub) => {
+  const unlinkParent = async (childPub, parentPub) => {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
     const next = { ...guardians }; if (cur.length) next[childPub] = cur; else delete next[childPub];
-    window.Steward.setGuardians(next);
+    let okG = null;
+    try { okG = await Promise.resolve(window.Steward.setGuardians(next)); } catch (e) { okG = null; }
+    if (!okG) {
+      // Failing to REMOVE a link is the worse direction: the adult stays a parent the child's app will always
+      // let through. Never let the row imply it is gone.
+      setMinorNotice({ pk: childPub, tone: 'fail', text: 'Couldn’t remove that guardian link — the relay didn’t accept it, '
+        + 'so that adult is STILL linked as their guardian and can still message them. Try again.' });
+      return null;
+    }
     // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
     // and goes on treating a removed adult as a parent it may always message.
     _reseal(sg.minors || [], sg.approved || [], [childPub], next);
@@ -4435,7 +4598,12 @@ function DashMembers() {
     || (window.stewardStreamLoaded('subscribeAdmitted', mIdv) && window.stewardStreamLoaded('subscribeBlocked', mIdv));
   const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !isBlocked(m.pubkey)) : [];
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
-  const admitMember = (pk) => window.Steward.setAdmitted([...admittedList, pk]);
+  // Its bulk sibling admitAll already checks its result; this one did not, so a single Approve that the relay
+  // refused still moved the row out of the waiting list on screen while the relay kept refusing the member.
+  const admitMember = (pk) => Promise.resolve(window.Steward.setAdmitted([...admittedList, pk]))
+    .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
+      + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
+    .catch(() => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — the relay could not be reached.' }); return null; });
   // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
   // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
   // eighteen round trips for a single decision.
@@ -4538,7 +4706,15 @@ function DashMembers() {
       }
     } catch (e) {}
   };
-  const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));
+  // Letting someone back in is a decision too, and it is made from a list that until now would not even
+  // say who they were. Two taps, and read the result — setBlocked goes through _publishToRelays and returns
+  // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
+  const [confirmUnblock, setConfirmUnblock] = React.useState(null);
+  const [blockErr, setBlockErr] = React.useState('');
+  const unblock = (pk) => Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk)))
+    .then((ok) => { setConfirmUnblock(null); setBlockErr(ok ? '' : 'Couldn’t unblock ' + (nameByPub[pk] || 'that member')
+      + ' — the relay didn’t accept it, so they are still blocked. Try again.'); return ok; })
+    .catch(() => { setConfirmUnblock(null); setBlockErr('Couldn’t reach the relay to unblock them.'); return null; });
   const total = members.length;
   // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.
   const INACTIVE_DAYS = 90;
@@ -4593,8 +4769,9 @@ function DashMembers() {
               was not on their screen. The other three write minors:/approved:/guardians:, which the relay
               really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
           {minorNotice && minorNotice.pk === m.pubkey ? (
-            <div role="status" style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
-              background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))', color: 'var(--ink)' }}>
+            <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+              background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+              border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
               {minorNotice.text}
             </div>
           ) : null}
@@ -4706,7 +4883,19 @@ function DashMembers() {
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                   </div>
                   <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
-                  <button onClick={() => block(m.pubkey)} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
+                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
+                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
+                      church's keys — irreversible, from the screen a steward is fastest on. The members
+                      list has asked "are you sure" for this same action all along; the join queue never
+                      did. Audit 2026-09-02 #5.
+                      `confirmBlock` is shared with the members list, so opening one closes the other —
+                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
+                  {confirmBlock === m.pubkey
+                    ? <React.Fragment>
+                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
+                      </React.Fragment>
+                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
                 </div>
               );
             })}
@@ -4784,14 +4973,28 @@ function DashMembers() {
               <button onClick={() => setShowBlocked(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'var(--surface)', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
                 <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedList.length}
               </button>
+              {showBlocked && blockErr ? (
+                <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11, marginBottom: 8,
+                  background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 38%, var(--line))', color: 'var(--ink)' }}>{blockErr}</div>
+              ) : null}
               {showBlocked ? blockedList.map(pk => (
                 <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', opacity: 0.85 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>Blocked member</div>
+                    {/* NAME THE PERSON. This row said "Blocked member" for everyone, so a steward looking at
+                        the list could not tell WHO they had blocked, and could not pick the right one to undo.
+                        `nameByPub` is already in scope and already holds the answer. Someone who never set a
+                        name is called out as exactly that, rather than shown a truncated key and left to guess.
+                        Audit 2026-09-02 #17. */}
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{nameByPub[pk] || 'A member with no name set'}</div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{String(pk).slice(0, 12)}…</div>
                   </div>
-                  <button onClick={() => unblock(pk)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>
+                  {confirmUnblock === pk
+                    ? <React.Fragment>
+                        <button onClick={() => unblock(pk)} aria-label={'Confirm: let ' + (nameByPub[pk] || 'this member') + ' back in'} style={{ border: 'none', background: 'var(--sage-ink)', color: 'var(--on-sage, #fff)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Let them back in</button>
+                        <button onClick={() => setConfirmUnblock(null)} aria-label="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Cancel</button>
+                      </React.Fragment>
+                    : <button onClick={() => setConfirmUnblock(pk)} aria-label={'Unblock ' + (nameByPub[pk] || 'this member') + ' — asks you to confirm'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>}
                 </div>
               )) : null}
             </React.Fragment>
@@ -4856,7 +5059,7 @@ function CheckoutModal({ rec, onConfirm, onClose }) {
 }
 function DashCheckin() {
   const recs = window.useStewardCheckins ? window.useStewardCheckins() : [];
-  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [] };
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
   const minors = sg.minors || [];
   const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -4907,7 +5110,14 @@ function DashCheckin() {
       <button onClick={() => setPicking(true)} disabled={!minors.length || !sgKey} title={!sgKey ? 'The register’s key hasn’t reached this console yet — a check-in written now would not be saved.' : ''} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (minors.length && sgKey) ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>This is a <b>door operation</b>, done by a leader on this device — parents do nothing in their own app, and nothing about check-in appears there. Say so when you announce it, or they will go looking. Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext, and the only people who can open them are you and anyone you have given <b>Safeguarding</b> to.</DismissibleNote>
-      {!minors.length ? (
+      {/* "No children marked yet" is a CLAIM ABOUT THE CHURCH, and for the first moments of every mount the
+          list is simply empty because it has not arrived. A leader opening check-in at the door read it as
+          "this church has marked nobody" and went looking in Members for records that were already there.
+          Say which of the two it is. `minorsKnown`, not `loaded` — see subscribeSafeguard: `loaded` never
+          becomes true in a church that has never marked a child, which is exactly this screen's empty case. */}
+      {!minors.length && sg.minorsKnown !== true ? (
+        <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>Loading the children’s list…</p></div>
+      ) : !minors.length ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>
       ) : (
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
@@ -5416,7 +5626,7 @@ function DashStewardsPanel({ church }) {
             {approving === r.pubkey ? <div style={{ marginTop: 9 }}>
               <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 6 }}>Enter your PIN to approve <b>{niceName(r.pubkey)}</b>{r.name ? ' (claims to be “' + r.name + '”)' : ''} — check the npub above is who you expect.</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input type="password" autoFocus value={approvePin} onChange={e => { setApprovePin(e.target.value); setApproveErr(''); }} onKeyDown={e => { if (e.key === 'Enter') confirmApprove(); }} placeholder="PIN" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
+                <input type="password" aria-label="Your console PIN, to confirm this" autoComplete="off" autoFocus value={approvePin} onChange={e => { setApprovePin(e.target.value); setApproveErr(''); }} onKeyDown={e => { if (e.key === 'Enter') confirmApprove(); }} placeholder="PIN" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
                 <button onClick={confirmApprove} className="sk-btn sk-btn--clay" style={{ padding: '8px 12px', fontSize: 12.5 }}>Approve</button>
                 <button onClick={() => setApproving(null)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 10px', fontSize: 12.5 }}>Cancel</button>
               </div>
@@ -5552,8 +5762,22 @@ function DashMediaPanel({ church }) {
   const [aud, setAud] = React.useState(''); const [audSaved, setAudSaved] = React.useState(false);
   React.useEffect(() => { setVid(church.channel || ''); }, [church.channel]);
   React.useEffect(() => { setAud(church.audioFeed || ''); }, [church.audioFeed]);
-  const saveVid = () => { window.Steward.publishProfile({ channel: vid.trim() }); setVidSaved(true); setTimeout(() => setVidSaved(false), 1700); };
-  const saveAud = () => { window.Steward.publishProfile({ audioFeed: aud.trim() }); setAudSaved(true); setTimeout(() => setAudSaved(false), 1700); };
+  // "✓ Saved" FOLLOWS THE PUBLISH. Audit 2026-09-02 #17. publishProfile already returns its result; these
+  // discarded it and showed the tick regardless, so a feed the relay never took looked set. A steward then
+  // waits for videos that will never appear in members' Watch tab.
+  const [feedErr, setFeedErr] = React.useState('');
+  const saveVid = () => {
+    setFeedErr('');
+    Promise.resolve(window.Steward.publishProfile({ channel: vid.trim() }))
+      .then((r) => { if (r) { setVidSaved(true); setTimeout(() => setVidSaved(false), 1700); } else setFeedErr('Couldn’t save the video channel — the relay didn’t accept it.'); })
+      .catch(() => setFeedErr('Couldn’t save the video channel — the relay could not be reached.'));
+  };
+  const saveAud = () => {
+    setFeedErr('');
+    Promise.resolve(window.Steward.publishProfile({ audioFeed: aud.trim() }))
+      .then((r) => { if (r) { setAudSaved(true); setTimeout(() => setAudSaved(false), 1700); } else setFeedErr('Couldn’t save the audio feed — the relay didn’t accept it.'); })
+      .catch(() => setFeedErr('Couldn’t save the audio feed — the relay could not be reached.'));
+  };
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
   const inp = { flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' };
   return (
@@ -5571,6 +5795,7 @@ function DashMediaPanel({ church }) {
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" aria-label="Podcast RSS feed address" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
         <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {audSaved ? 'Saved' : 'Save'}</button>
+        {feedErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 6 }}>{feedErr}</div> : null}
       </div>
       {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 14, lineHeight: 1.5 }}>Want to host your church’s <b>own</b> audio/video (members-only, no YouTube)? That lives in <b>Resources → Sermons</b>.</div>
@@ -6462,8 +6687,8 @@ function PinModal({ action, onClose }) {
           // their old PIN is the way back in, rather than leaving them thinking the church is gone.
           ? 'Enter your current PIN to remove the lock. Nothing is kept unlocked, and you’ll be asked to set a new PIN straight away. If you close the console before you do, your current PIN still works — so the church key is never left with nowhere to live.'
           : 'Encrypts the church key on this device. You’ll enter it to open the console; it auto-locks after 10 minutes idle. Don’t forget it — without it (or the 12-word phrase) this device can’t open the church.'}</div>
-        <input type="password" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && remove) save(); }} placeholder={remove ? 'Current PIN' : 'New PIN or passphrase'} autoComplete="off" style={inp} />
-        {!remove ? <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" autoComplete="off" style={inp} /> : null}
+        <input type="password" aria-label="Console PIN" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && remove) save(); }} placeholder={remove ? 'Current PIN' : 'New PIN or passphrase'} autoComplete="off" style={inp} />
+        {!remove ? <input type="password" aria-label="Confirm the console PIN" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" autoComplete="off" style={inp} /> : null}
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginBottom: 8 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 9, marginTop: 6 }}>
           <button onClick={() => onClose(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '11px' }}>Cancel</button>

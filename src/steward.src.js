@@ -2770,8 +2770,9 @@ window.Steward = {
   // reads for the redundancy count stays an unproven claim — it was never a gate and must not look like one.
   verifyRelayIdentity,
 
-  // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-  // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
+  // C3. "Is this relay one of ours?" — the C2 proof, which is what admits it. The canonical pin, this
+  // console's own serving origin and this church's signed trinityone/relay-net document are still computed
+  // and still reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md).
   // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
   isNetworkRelay,
   // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
@@ -3061,8 +3062,22 @@ window.Steward = {
     for (const u of relays()) {
       let base = String(u).replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
       base = base.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+      // THE KEY COMES FROM THE PROOF, NOT FROM /status. Audit 2026-09-02 #11.
+      //
+      // `/status` reports `relayPub` as a bare unauthenticated string — CLAUDE.md rule 10 says in as many
+      // words that it "is never proof". This used it as the relay's IDENTITY, and two things downstream
+      // count DISTINCT identities: syncEnable, which decides which boxes may exchange a church's whole
+      // corpus with each other, and backupState, which is what prints "Backup on. Your 2 relays mirror each
+      // other — if one goes down, nothing is lost." So the church's durability promise, and its sync set,
+      // were both counted from a string any host can type.
+      //
+      // verifyRelayIdentity is the nonce-bound, address-bound proof. A relay too old to answer it now has
+      // an empty pubkey and falls OUT of the sync set and the redundancy count — which is the fleet-order
+      // rule RELAY-ADMISSION already states (relays before apps): an old relay is not a second copy.
+      // `/status` is kept for `online` alone, so "reachable but too old to prove itself" stays visible.
       let s = null; try { s = await (await fetch(base + '/status', { cache: 'no-store' })).json(); } catch {}
-      out.push({ url: u, base, pubkey: (s && s.relayPub) || '', name: '', online: !!s });
+      let proof = null; try { proof = await verifyRelayIdentity(u); } catch (e) { proof = null; }
+      out.push({ url: u, base, pubkey: (proof && proof.relayPub) || '', name: '', online: !!s });
     }
     return out;
   },
@@ -3079,7 +3094,11 @@ window.Steward = {
     for (const r of ids) { if (r.pubkey && !byBox.has(r.pubkey)) byBox.set(r.pubkey, { pubkey: r.pubkey, url: r.base }); }
     const trusted = [...byBox.values()];
     if (trusted.length < 2) throw new Error('Sync needs at least two separate TrinityOne relays — add another the church runs.');
-    await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }, sk));
+    // A SETTING NOBODY ACCEPTED IS NOT A SETTING. Audit 2026-09-02 #17.
+    // This awaited the publish and discarded it, so "✓ Sync on" appeared over a document no relay took —
+    // and the church believed its two boxes were mirroring each other when nothing had been told to.
+    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }, sk));
+    if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
     return { relays: trusted.length };
   },
   // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
@@ -3108,7 +3127,13 @@ window.Steward = {
   // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
   async syncDisable() {
     if (!sk || !pub) throw new Error('No church key on this device');
-    await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }, sk));
+    // THE SIBLING FIX, WHICH WAS SKIPPED. syncEnable above was given this on 2026-09-02 and its twin was not:
+    // "Sync turned off." appeared over a document no relay accepted, so the boxes went on mirroring each
+    // other while the console said they had stopped. That is the wrong direction to be wrong in — this is
+    // pressed when a church is decommissioning a relay or reacting to a seizure, and believing mirroring has
+    // stopped when it has not is the whole harm.
+    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }, sk));
+    if (!ev) throw new Error('Sync could not be switched off — no relay accepted the change, so your relays are STILL mirroring each other. Try again.');
     return { relays: 0 };
   },
   // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
@@ -4470,22 +4495,36 @@ window.Steward = {
     // on a dropped socket, and believing it then would stamp today's date onto people cleared years ago.
     // Wrong in this direction costs a missing date; wrong in the other direction rewrites history.
     const clearedKnown = () => sawApproved || (sawEose && _isRelayAuthed());
+    // DO WE KNOW WHO THE CHILDREN ARE? A THIRD QUESTION, and it is not `loaded`.
+    //
+    // `loaded` is sawMinors && sawEose, and it exists for the clearance back-fill, where being wrong
+    // REWRITES HISTORY — so it insists on holding the document itself. That strictness makes it permanently
+    // false for a church that has never marked a child: no minors document is ever published, so sawMinors
+    // never becomes true. The comment above clearedKnown records that exact case biting once already.
+    //
+    // Anything that merely wants to DISPLAY a request safely needs the weaker, honest question: has the relay
+    // told us everything it has, while we were authenticated to read the owner-only minors doc? Gate a screen
+    // on `loaded` instead and a church that has never marked a child shows every care request as confidential
+    // for ever — which is not caution, it is the care module switched off with nothing saying so.
+    // Same shape as clearedKnown, for the same reason: bare EOSE also fires on a 4.4s client timeout and on a
+    // dropped socket, so it is evidence only WHILE AUTHENTICATED. Audit 2026-09-02 #3.
+    const minorsKnown = () => sawMinors || (sawEose && _isRelayAuthed());
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; sawApproved = true; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
           // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
           // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped
           // every clearance date permanently, because the wipe then echoed back as the truth. A church with
           // two stewards and one stale browser tab would have lost its history. Keep what we hold.
           if (_a.cleared && typeof _a.cleared === 'object') cleared = _a.cleared;
-          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
+          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -4493,7 +4532,7 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() }); },
+      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -5926,14 +5965,24 @@ window.Steward = {
   },
   // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
   subscribeHidden(cb) {
-    const hidden = new Map();   // msgId -> hidden? (latest wins)
-    const emit = () => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id)));
+    // NEWEST DECISION WINS, BY ITS OWN TIMESTAMP — not by which relay answered last. Audit 2026-09-02 #16.
+    //
+    // A hide is `d = hide:<msgId>`, so the SAME steward hiding and then un-hiding replaces one addressable
+    // document and there is nothing to resolve. Two DIFFERENT stewards are two documents under two authors,
+    // both delivered, and this used to take whichever arrived last — so "steward B un-hides what steward A
+    // hid" came out differently depending on which relay answered first, and could flip back on the next
+    // reconnect. Undo has to mean something before it is worth putting on screen.
+    const hidden = new Map();   // msgId -> { at, hidden }
+    const emit = () => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(HIDE_D)) return;
         const msgId = d.slice(HIDE_D.length);
-        hidden.set(msgId, !(e.tags.some(t => t[0] === 'deleted') || !e.content));
+        const at = Number(e.created_at) || 0;
+        const prev = hidden.get(msgId);
+        if (prev && prev.at > at) return;   // an older decision cannot undo a newer one
+        hidden.set(msgId, { at, hidden: !(e.tags.some(t => t[0] === 'deleted') || !e.content) });
         emit();
       },
       oneose() { emit(); },

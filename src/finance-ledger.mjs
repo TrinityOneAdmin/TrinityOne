@@ -72,6 +72,25 @@ export function post(book, { date = '', memo = '', postings, by = '', ts = 0, re
   return entry;
 }
 
+// DISCARD ENTRIES THAT WERE NEVER ACCEPTED. This is not editing history — an entry the relay refused is not
+// history, it is a local guess that turned out to be wrong, and leaving it behind does two kinds of damage.
+//
+// `post()` advances `book._seq` whether or not the publish lands, and the relay's journal rule is EXACTLY
+// the next seq (gateway.mjs: `seq === FINANCE_SEQ.get(cp) + 1` — it rejects gaps, forks and edits alike). So
+// one refused line silently invalidates every seq after it: the retry, and every ordinary entry the
+// treasurer types afterwards, is numbered past a gap the relay will never accept. And the phantom entries
+// carry importKeys, so the import de-dup then treats lines that never reached the relay as already imported
+// and refuses to retry them.
+//
+// Callers: importStatement in app/stew-finance.jsx. Anything else that posts-then-publishes wants it too.
+export function dropFrom(book, seq) {
+  if (!Number.isSafeInteger(seq)) throw new Error('dropFrom needs an integer seq');
+  const before = book.journal.length;
+  book.journal = book.journal.filter(e => e.seq < seq);
+  book._seq = book.journal.length ? Math.max(...book.journal.map(e => e.seq)) : seq - 1;
+  return before - book.journal.length;
+}
+
 // Rebuild path: append an entry at its ORIGINAL seq, enforcing contiguity. This is the single-writer guard on
 // the client side — a gap OR a fork (a repeated seq) throws instead of silently corrupting the ledger.
 export function applyEntry(book, entry) {

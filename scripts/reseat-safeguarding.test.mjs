@@ -95,6 +95,11 @@ function childPhone(childKeys, stewards) {
     _noPhoto: new Set(),
     _churchRoster: new Map([[church.pub, new Set(stewards || [])]]),
     _onChurchDocs: (_p, h) => { handlers = h; return () => {}; },
+    // `subscribeChurchSafeguard` asks the church-docs hub when its EOSE landed, to decide whether an empty
+    // minors list means "no children here" or "we were not told" (see minorsKnown). These cases are about the
+    // CLEARANCE document, so the honest hub is one that has not EOSEd — which also keeps minorsKnown false
+    // throughout, i.e. nothing here asserts about a state it did not set up.
+    _docsHub: () => ({ eosedAt: 0 }),
     sk: childKeys.sk, pub: childKeys.pub,
     [decName]: (c, k) => nip44v2.decrypt(c, k),
     [ckName]: (a, b) => nip44v2.utils.getConversationKey(a, b),

@@ -12,22 +12,38 @@ boundary. Before this branch, any machine could claim to be one of ours and be b
 
 ## The invariant — do not break this
 
-> **A relay gets a church's data only if it (1) cryptographically proved its identity AND
-> (2) holds one of three roots of trust. Both. Every time.**
+> **A relay receives a church's data only if it proves, at the address dialled, that it holds a relay
+> identity key — that is, that it is running TrinityOne relay software. Nothing else is consulted for
+> admission.**
 
-Proving identity alone is worthless — it shows a machine is who it says, not that it is *ours*.
-A root alone is worthless — the name is forgeable. `relayPub` is emitted as a bare unauthenticated
-string by `/status` and NIP-11 and **must never be treated as proof**.
+Owner's decision, 2026-09-02, implemented literally at `src/relay-net.src.js:260`. `relayPub` is emitted as a
+bare unauthenticated string by `/status` and NIP-11 and **must never be treated as proof** — the proof is
+`/relay-identity`, nonce-bound and address-bound.
+
+The canonical pin, the serving origin and the church's signed `relay-net` document are still computed, and
+still returned as `root`, but they are **diagnostics** now — plus **one refusal**, which is not a diagnostic:
+a box answering at an address we SHIP (`SHARED_RELAY_HINTS`) must prove one of the keys we ship
+(`SHARED_RELAY_KEYS`), and that check runs before every root.
+
+**What this defends against, and what it does not — said plainly, because the previous wording overclaimed.**
+It refuses a replacement box at a shipped address, and it refuses a forwarder at a *different* address. It
+does **not** defend against a proxy at the **same** address: whoever controls DNS/TLS for
+`app.trinityone.church` — the tunnel operator, or a compelled change of where that name points — can forward
+the identity request to the genuine relay, which declares that address and signs it. That position is already
+Cloudflare's; sealed content stays sealed, and the exposure is transport metadata, recorded as inherent in the
+deanon red-team. **Never describe this binding as closing that case.**
 
 ---
 
 ## Step one: proof
 
 `verifyRelayIdentity(url)` in `src/relay-identity.src.js` sends a 128-bit CSPRNG nonce; the relay
-signs it (`GET /relay-identity?nonce=<32 hex>`, `gateway.mjs:3097`, 400 on a bad nonce). ±300s window.
+signs it (`GET /relay-identity?nonce=<32 hex>`, `gateway.mjs:3097`, 400 on a bad nonce). **No clock window:**
+the nonce is the freshness, and requiring a fresh clock too denied every relay to any phone more than five
+minutes out (audit 2026-09-02 #1).
 Only the holder of the relay's secret key can answer.
 
-## Step two: one of three roots
+## Step two: the roots — diagnostics, and one refusal
 
 `proveRelay()` in `src/relay-net.src.js`. In order:
 
@@ -39,6 +55,14 @@ Only the holder of the relay's secret key can answer.
 
 Roots 1 and 2 are **URL-bound by construction** — a forwarder at a different address is not the origin
 and is not the pin. Root 3 is **pubkey-only**, deliberately. See the tunnel trap.
+
+**None of the three decides admission any more.** When no root fires, `proveRelay()` still returns
+`{ root: 'software' }` and the relay is admitted on its proof alone (`src/relay-net.src.js:260`). The roots
+are kept because they tell the caller *why* a relay was admitted — which the Relays sheet shows — and because
+re-tightening to "a box my church chose" is then one line rather than an excavation. What this knowingly
+gives up: someone who genuinely runs our relay software, at an address they control, is admitted if that
+address reaches a church's relay list. They see the pubkey-level social graph — never names (sealed), never
+message contents (encrypted). What narrows how an address reaches a list at all is C1 and C5, both merged.
 
 ---
 
@@ -90,7 +114,7 @@ stat -c '%y' scripts/gateway.mjs
 ### 5. A fourth practical admission path: the 30-day verified cache
 
 `VERIFIED_KEY` / `VERIFIED_TTL_SEC` in the gate let a relay stay admitted from cache alone — up to
-~6h before a refresh and 30 days offline. `proveRelay()` has exactly three roots, but the cache means
+~6h before a refresh and 30 days offline. Admission is the software proof (above), but the cache means
 a box removed by the church can keep being talked to for a window. Cold on merge day, so it does not
 affect the enrolment plan, but it is a real fourth path and belongs on this list.
 

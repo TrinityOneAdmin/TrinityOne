@@ -741,9 +741,19 @@ function App() {
     return () => { try { _stopProfile && _stopProfile(); } catch (e) {} try { _stopRelays && _stopRelays(); } catch (e) {} };
   };
   // leave a church: tombstone the membership (steward sees them drop) + stop following locally
-  const leaveChurch = (npub) => {
+  // THE ONE THAT MUST NEVER BE OPTIMISTIC. Leaving used to drop the church from this device whether or not
+  // the relay was ever told — so the member believed they had left, while the church's own records, its
+  // rota and its directory still had them, and nothing on either side would ever correct it. Audit #6.
+  const leaveChurch = async (npub) => {
     const F = window.Fellowship;
-    if (F && F.leaveMembership) { try { F.leaveMembership(npub); } catch (e) {} }
+    if (F && F.leaveMembership) {
+      let told = null;
+      try { told = await F.leaveMembership(npub); } catch (e) { told = null; }
+      if (!told) {
+        toast('Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.', { error: true });
+        return false;
+      }
+    }
     const remaining = churches.filter(c => c.id !== npub);
     setChurches(remaining);
     if (activeChurch === npub) {
@@ -751,6 +761,7 @@ function App() {
       setActiveChurch(next); lsSet('trinityone.activeChurch', next);
     }
     toast('You’ve left the church');
+    return true;
   };
   // membership heartbeat: refresh the member event on launch so quiet members (who read but never
   // post) don't look inactive, and so an uninstalled app stops refreshing and ages out. Throttled ~12h.
@@ -1108,12 +1119,14 @@ function App() {
   }, [activeChurch, churches, connTick]);
   // safeguarding: is THIS member a child for the active church, and who's cleared to contact youth.
   // Used to show a child only child-safe groups and to gate DMs (the relay enforces both regardless).
-  const [safeguard, setSafeguard] = useA({ minors: [], approved: [], guardians: {}, isMinor: false });
+  // minorsKnown starts FALSE, and that is the whole point: an empty minors list is not the same answer as
+  // "this church has no children", and the care-request triage on this phone must not read it as one.
+  const [safeguard, setSafeguard] = useA({ minors: [], approved: [], guardians: {}, isMinor: false, minorsKnown: false });
   useAE(() => {
     if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false }); return; }
+    if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false, minorsKnown: false }); return; }
     return F.subscribeChurchSafeguard(np, setSafeguard);
   }, [activeChurch, churches, connTick, lazyReady]);
   // safeguarding: pick up STEWARD-INITIATED guardian links addressed to me (a church-signed, encrypted notice)
@@ -1589,12 +1602,22 @@ function App() {
     if (patch.name != null) meta.name = String(patch.name).trim();
     if (patch.avatar != null) meta.av = patch.avatar;
     if (patch.hidden != null) meta.hidden = !!patch.hidden;
-    FS.ready.then(() => FS.setProfile(meta)).catch(() => {});
+    // RETURN IT. Audit 2026-09-02 #18. This swallowed the result, so identity.jsx toasted "Profile saved"
+    // over a publish nobody accepted — and a member whose display name never reached the relay goes on
+    // appearing as Anonymous to their whole church while their own screen shows the name they typed.
+    // setProfile may withhold up to ~6s before resolving, so the confirmation is now LATE rather than wrong.
+    return FS.ready.then(() => FS.setProfile(meta)).catch(() => null);
   };
 
-  const toast = (msg) => {
-    setToastMsg(msg); clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastMsg(''), 1900);
+  // toast(text) keeps working exactly as it did — that is what ~120 call sites pass, and they keep the tick.
+  // toast(text, { error: true }) marks it as a failure: no tick, and it stays up long enough to READ. A
+  // failure sentence in this app is often 20-30 words ("you're still a member there", "write the words down
+  // instead"), and 1.9s is not enough for any of them. Audit 2026-09-02 #12.
+  const toast = (msg, opts) => {
+    const bad = !!(opts && opts.error);
+    setToastMsg(bad ? { text: msg, kind: 'error' } : msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(''), bad ? 6000 : 1900);
   };
   window.trinityToast = toast;   // a few non-React globals (e.g. the audio engine) surface notices through this
   // A REFUSED INVITE RELAY IS SAID OUT LOUD (closed-network plan C5). A printed slip naming a box the church
@@ -1685,7 +1708,7 @@ function App() {
         if (s.enc && !dec) { toast('This encrypted sermon needs the church media key'); return; }
         const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
         window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: cname, src, album: cname });
-      } catch (e) { toast('Couldn’t load: ' + (e.message || 'error')); }
+      } catch (e) { toast('Couldn’t load: ' + (e.message || 'error'), { error: true }); }
     },
     openWord: (id) => setWordOv(id),
     openConcordance: () => setConcord(true),
@@ -1773,12 +1796,12 @@ function App() {
       })(),
       skips: careSkips,
       myPub: (window.Fellowship && window.Fellowship.myPubkey) || '',
-      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
-      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
+      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
+      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
-      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note),
+      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (!r) toast('That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
       skip: (careId, iso, reason, skipEnc, author) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc, author),
-      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
+      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (!r) toast('That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,
       setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r) toast('You’re listed — thank you for being ready to help'); return r; }),
@@ -1858,7 +1881,7 @@ function App() {
     openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); markServingSeen(); if (desktop) setTab('chat'); },   // opening the overlay is what clears the card's "something new" mark — every route in, not only the Today card, and never on launch or a timer
     servingTab, careFocus,
     openEvent: (e) => setEventOv(e),
-    respondServing: (item, verdict, swapTo) => {
+    respondServing: async (item, verdict, swapTo) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
       // item may be a request, or a rota-derived slot that carries its matching request in .req
       const reqId = (item.req && item.req.id) || (typeof item.id === 'string' && item.id.indexOf('rota:') !== 0 ? item.id : null);
@@ -1868,7 +1891,15 @@ function App() {
       // rota with no matching request tapped "I'm away", saw the thank-you, and the relay received nothing.
       // The caller cannot know that without an answer, so give it one.
       if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
-      if (window.Fellowship && window.Fellowship.respondToServingRequest) window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
+      // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest returns null when no relay accepted.
+      // This fired and forgot, so "Yes, I can serve" was recorded on the member's own screen and nowhere
+      // else — the rota keeps showing the slot unfilled and they believe they have answered. Audit #6.
+      if (!(window.Fellowship && window.Fellowship.respondToServingRequest)) return false;
+      const sent = await window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
+      if (!sent) {
+        toast('Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.', { error: true });
+        return false;
+      }
       setServReplies(m => ({ ...m, [reqId]: verdict }));
       return true;
     },
@@ -1877,11 +1908,16 @@ function App() {
     // Priyanka: "It already said You're going. I tapped Going to confirm — and it wiped my answer." She then
     // had to work out for herself that pressing it again put it back. Losing an answer is a fine thing to
     // allow and a terrible thing to do silently, so say what happened.
-    setRsvp: (eventId, verdict) => {
+    setRsvp: async (eventId, verdict) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
       const cleared = myRsvps[eventId] === verdict;
       const next = cleared ? null : verdict;
-      if (window.Fellowship && window.Fellowship.setEventRsvp) window.Fellowship.setEventRsvp(np, eventId, next || 'none');
+      if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return;
+      const sent = await window.Fellowship.setEventRsvp(np, eventId, next || 'none');
+      if (!sent) {
+        toast('Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
+        return;
+      }
       setMyRsvps(m => ({ ...m, [eventId]: next }));
       if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
     },

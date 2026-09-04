@@ -223,6 +223,57 @@ async function hasOrphanEncBlob() {
   try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); const s = await SecureStorage.get(ENC_KEY); return !!(s && String(s).indexOf('"ct"') >= 0); }
   catch (e) { return false; }
 }
+// …and WHO does that orphaned blob belong to? Since setPin started recording it alongside the ciphertext this
+// is answerable, which is what lets the recovery below rebuild a COMPLETE marker instead of one the
+// "stay open" record can never be checked against. Returns '' for a blob written before that, and the
+// caller must treat that exactly as it always did — as "cannot tell", never as "must be fine".
+// BACK-FILL THE OWNER ONTO A BLOB THAT PREDATES IT. Audit #5, and without this the "stay open" fix helped
+// nobody who already had a PIN — which is every device in the pilot. `setPin` records the owner now, but a
+// blob written by an earlier build has none, `orphanEncOwner()` answers '' for it, and the recovery path
+// still rebuilds an anonymous marker: tick the box, one force-stop, locked and the record destroyed. The
+// reported bug, unchanged, on exactly the phones that reported it.
+//
+// `unlock()` is the one place that holds both the blob and the seed, so it is the one place that can answer
+// "whose is this?" without guessing. Called there, after a successful decrypt.
+//
+// NOTHING IS EVER REMOVED. secureSetEnc read-back verifies and returns false if the write did not land; on
+// any failure we leave both copies exactly as they were, which is the state we came in with. The blob holds
+// the only copy of the key, so the rule is add-or-leave, never replace-and-hope.
+async function backfillEncOwner(m) {
+  try {
+    const ownerPub = deriveProfile(m).pubkey;
+    if (!ownerPub) return false;
+    if (!isNative()) {
+      // web/desktop: the marker IS the blob. "Stay open" is not offered here, but a whole marker costs
+      // nothing and keeps the two platforms answering the same question the same way.
+      const o = encMarker();
+      if (!o || o.pub === ownerPub) return false;
+      try { localStorage.setItem(ENC_KEY, JSON.stringify({ ...o, pub: ownerPub })); } catch (e) {}
+      return true;
+    }
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
+    const raw = await SecureStorage.get(ENC_KEY);
+    const blob = raw ? JSON.parse(String(raw)) : null;
+    if (!blob || !blob.ct) return false;                      // nothing in the hardware store to back-fill
+    if (blob.pub !== ownerPub) {
+      const next = JSON.stringify({ ...blob, pub: ownerPub });
+      if (!(await secureSetEnc(next))) return false;          // verified durable, or we change nothing at all
+    }
+    const mk = encMarker();
+    if (!mk || mk.pub !== ownerPub) {
+      try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub })); } catch (e) {}
+    }
+    return true;
+  } catch (e) { console.warn('[identity] could not record the blob owner', e); return false; }
+}
+async function orphanEncOwner() {
+  try {
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
+    const s = await SecureStorage.get(ENC_KEY);
+    const o = s ? JSON.parse(String(s)) : null;
+    return (o && typeof o.pub === 'string' && o.pub) ? o.pub : '';
+  } catch (e) { return ''; }
+}
 async function decryptEnc(pin) {   // returns the seed string, or throws on wrong PIN / damaged blob
   const o = await getEncBlob(); if (!o) throw new Error('no encrypted blob');
   return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
@@ -327,7 +378,19 @@ async function init() {
     // SECURITY-AUDIT-2026-07-06 M12 resilience: the localStorage marker may have been lost (app killed before the
     // WebView flushed it), but the encrypted seed is still safe in the hardware store. Recover the PIN-locked
     // identity instead of silently minting a new key. (In the pre-M12 design a lost blob meant the seed was gone.)
-    if (isNative() && await hasOrphanEncBlob()) { try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) {} applyLocked(); return; }
+    if (isNative() && await hasOrphanEncBlob()) {
+      // REBUILD THE MARKER WHOLE. Writing it without the owner is what killed "stay open": rememberedSeed()
+      // has nothing to check the record against, fails closed, and deletes it. The owner now travels with the
+      // ciphertext in the hardware store, so recovery can restore both halves. A blob written before that has
+      // no `pub` and this behaves exactly as it did — no owner recorded, and the remember record refused.
+      const who = await orphanEncOwner();
+      try { localStorage.setItem(ENC_KEY, JSON.stringify(who ? { v: 2, native: 1, pub: who } : { v: 2, native: 1 })); } catch (e) {}
+      // …and now the marker is whole, the remembered seed can be checked. Without this the recovered boot
+      // ALWAYS locked, even holding a valid record — which is the reported bug.
+      const rem = await rememberedSeed();
+      if (rem) { sessionMnemonic = rem; apply(deriveProfile(rem), { ephemeral: false }); return; }
+      applyLocked(); return;
+    }
     mnemonic = generateSeedWords(); await secureSet(mnemonic);
   }
   apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -513,7 +576,21 @@ window.TrinityIdentity = {
     await rememberClear();   // a record made before this PIN was set belongs to a state that no longer exists
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
-    const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });   // M11: carries its iteration count
+    const ownerPub = deriveProfile(m).pubkey;
+    // THE BLOB CARRIES ITS OWN OWNER, and this is the fix for "stay open doesn't stick" (2026-09-04).
+    //
+    // The owner's pubkey used to live ONLY in the localStorage marker below. That marker does not reliably
+    // survive the app being killed — measured on a Pixel 10 Pro, lost on the first force-stop — and init()
+    // then takes its orphan-recovery branch, which rewrites the marker WITHOUT the owner because it has no
+    // way to know it. From that moment rememberedSeed() cannot verify the "stay open" record, fails closed,
+    // and DELETES it. So the member ticks a box, is told it saved, and is asked for their PIN on the very
+    // next launch — every time, for ever.
+    //
+    // Putting it here fixes the cause rather than teaching the recovery path to guess. A pubkey is not a
+    // secret (it is in every event this identity signs), it rides in the same record as the ciphertext, and
+    // the hardware store is the half that actually survives. An older blob has no `pub` and the recovery path
+    // simply behaves as it does today — added, never repurposed.
+    const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct), pub: ownerPub });   // M11: carries its iteration count
     if (isNative()) {
       // SECURITY-AUDIT-2026-07-06 M12: put the ciphertext in the hardware store, and CONFIRM it durably landed
       // BEFORE writing the marker or dropping the plaintext — a failed Keystore write leaves the plaintext seed
@@ -524,7 +601,6 @@ window.TrinityIdentity = {
       // checked against anything, which is how a record left by a previous identity came to open the phone as
       // that identity. The two recovery paths that also write this marker do NOT know the account (that is the
       // point of them), so they leave it absent and rememberedSeed() refuses rather than guesses.
-      const ownerPub = deriveProfile(m).pubkey;
       try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1, pub: ownerPub })); } catch (e) { return false; }
     } else {
       try { localStorage.setItem(ENC_KEY, blob); } catch (e) { return false; }   // web/desktop: no secure store — keep the blob in localStorage
@@ -552,6 +628,9 @@ window.TrinityIdentity = {
         if (raw && await secureSetEnc(raw)) { try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) {} }
       }
     } catch (e) {}
+    // …and record WHOSE key this is, if the blob predates that being written. Without this the "stay open"
+    // fix reaches only accounts whose PIN was set after it shipped — i.e. nobody currently in the pilot.
+    await backfillEncOwner(m);
     return true;
   },
   // check a PIN with NO side effects (gates "turn off" / "change PIN")

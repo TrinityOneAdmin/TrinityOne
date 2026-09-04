@@ -147,3 +147,55 @@ test('the church backup says where the church key went', () => {
     'this file is the only copy of the church key — the steward must be able to check it exists');
   assert.match(around, /savedWhere\(res\)/);
 });
+
+// ── AUDIT 2026-09-02 #7: the flag that silences the nudge must not be written on the warn path ────────────
+// saveFile can come back `{ saved: true, warn: '…' }` — saved SOMEWHERE, by a fallback, with a message that
+// tells the member in their own words that no copy may have been kept. The Security screen showed that
+// warning and then called markSaved() anyway, writing the durable per-npub "last backed up" date. That key
+// is what the recovery nudge on Today checks (screens-today.jsx:1267, identity.jsx:1170), so the reminder
+// went quiet for exactly the people who might have no file at all.
+
+function runExport({ warn }) {
+  const store = {};
+  const state = { bkErr: '', busy: '', toasts: [], bkCleared: false };
+  const body = fnBody(EXTRAS, 'const doExport = async () => {', 'doExport');
+  const fn = new Function(
+    'window', 'localStorage', 'Date', 'setBkErr', 'setBusy', 'ctx', 'setBk', 'setPass', 'pass', 'bk', 'markSaved',
+    body + '\nreturn doExport;')(
+    { TrinityIdentity: { current: { npub: 'npub1me' } },
+      TrinityBackup: {
+        checkPass: () => {},                       // the passphrase rules are tested elsewhere
+        collectMember: async () => ({ me: 1 }),
+        encryptObj: async () => 'ciphertext',
+        saveFile: async () => (warn ? { saved: true, warn: 'Saved, but no copy may have been kept.' } : { saved: true, where: 'Documents' }),
+        savedWhere: (r) => (r && r.where) || '',
+      },
+    },
+    { setItem: (k, v) => { store[k] = v; }, getItem: (k) => store[k] || null },
+    Date,
+    (e) => { state.bkErr = e; }, (b) => { state.busy = b; },
+    { toast: (t) => state.toasts.push(t) },
+    () => { state.bkCleared = true; }, () => {}, 'a-long-enough-passphrase', {},
+    () => { store['trinityone.backedup.npub1me'] = new Date().toISOString(); },
+  );
+  return { fn, store, state };
+}
+
+test('a backup that WARNS no copy may have been kept does not record one', async () => {
+  const r = runExport({ warn: true });
+  await r.fn();
+  assert.equal(r.store['trinityone.backedup.npub1me'], undefined,
+    'the durable "last backed up" date was written on the branch whose own message says no copy may have ' +
+    'been kept. That key silences the recovery nudge on Today, so the reminder goes quiet for exactly the ' +
+    'members who may have no backup at all');
+  assert.match(String(r.state.bkErr), /no copy may have been kept/,
+    'the warning itself must still be shown — this fix removes the false record, not the message');
+});
+
+test('CONTROL: a backup that really saved IS recorded', async () => {
+  const r = runExport({ warn: false });
+  await r.fn();
+  assert.ok(r.store['trinityone.backedup.npub1me'],
+    'a successful save no longer records the backup date, so the nudge would pester members who HAVE ' +
+    'backed up — the opposite mistake');
+});

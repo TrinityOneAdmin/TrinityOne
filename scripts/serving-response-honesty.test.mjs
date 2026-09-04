@@ -27,38 +27,41 @@ const SERV = readFileSync(new URL('../app/screens-serving.jsx', import.meta.url)
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 
 // the shipped helper, lifted and run — not a paraphrase of it
-const svRespond = new Function(fnBody(SERV, 'function svRespond(', 'svRespond') + '\nreturn svRespond;')();
+// ANCHOR ON `async function`, or the slice starts AFTER the async keyword and the lifted body is a plain
+// function containing `await` — which throws a SyntaxError at load, so the whole FILE dies and prints no
+// failure. svRespond became async when respondServing started reporting whether the relay took the reply.
+const svRespond = new Function(fnBody(SERV, 'async function svRespond(', 'svRespond') + '\nreturn svRespond;')();
 
-const spy = (sent) => {
+const spy = async (sent) => {
   const toasts = [], closed = [];
   const ctx = { respondServing: () => sent, toast: (t) => toasts.push(t) };
-  const ok = svRespond(ctx, { id: 'x' }, 'decline', '', 'Taken off — thanks for letting us know', () => closed.push(1));
+  const ok = await svRespond(ctx, { id: 'x' }, 'decline', '', 'Taken off — thanks for letting us know', () => closed.push(1));
   return { ok, toasts, closed };
 };
 
-test('when nothing was sent, the member is NOT thanked', () => {
-  const r = spy(false);
+test('when nothing was sent, the member is NOT thanked', async () => {
+  const r = await spy(false);
   assert.deepEqual(r.toasts, [],
     'the app claimed "Taken off — thanks for letting us know" over a response that never left the phone. ' +
     'respondServing already explained why in its own toast; this one overwrites it.');
   assert.equal(r.ok, false, 'the helper reported success for a send that did not happen');
 });
 
-test('and the sheet is not closed, so they can try again', () => {
-  assert.deepEqual(spy(false).closed, [],
+test('and the sheet is not closed, so they can try again', async () => {
+  assert.deepEqual((await spy(false)).closed, [],
     'the sheet closed on a failed send, so the member has nothing to retry from and no sign anything is wrong');
 });
 
-test('when it WAS sent, the member is told, and the sheet closes', () => {
-  const r = spy(true);
+test('when it WAS sent, the member is told, and the sheet closes', async () => {
+  const r = await spy(true);
   assert.deepEqual(r.toasts, ['Taken off — thanks for letting us know'], 'a successful response now says nothing at all');
   assert.deepEqual(r.closed, [1], 'a successful response leaves the sheet open');
 });
 
-test('respondServing ANSWERS its caller — false when it refuses, true when it sends', () => {
+test('respondServing ANSWERS its caller — false when it refuses, true when it sends', async () => {
   // A caller cannot tell truth from silence unless this returns something. Both branches must be explicit:
   // the guard that toasts "your leader hasn't sent a request" must return false, and the send path true.
-  const body = fnBody(stripComments(APP), 'respondServing: (item, verdict, swapTo) =>', 'respondServing');
+  const body = fnBody(stripComments(APP), 'respondServing: async (item, verdict, swapTo) =>', 'respondServing');
   assert.match(body, /if\s*\(!reqId\)\s*\{[^}]*return false;/,
     'the no-request branch returns nothing, so every caller reads undefined and assumes it worked');
   // THIS ASSERTION USED TO READ `assert.match(body, /return true;/)`, AND THAT WAS THE BUG DEFENDING ITSELF.
@@ -71,14 +74,17 @@ test('respondServing ANSWERS its caller — false when it refuses, true when it 
   // than no test.
   // What is still required is that the send path ANSWERS its caller at all — silence is what makes a caller
   // assume success. Any explicit answer satisfies it, so the honest fix is now free to land.
-  // The underlying defect is NOT fixed here; it is deliberately queued behind the owner's first hand-test,
-  // because it is a four-file async change to a member-facing send path. See
-  // reference/AUDIT-2026-08-25-PRE-PUSH.md and fix-the-control-not-the-label.
+  // THE QUEUED FIX HAS NOW LANDED — 2026-09-03, audit 2026-09-02 #6, batch 7. respondServing is async,
+  // awaits respondToServingRequest, and the engine returns null when no relay accepted instead of handing
+  // back the event regardless. The assertion below stays deliberately loose for the same reason it was
+  // loosened: it must not forbid the next honest shape either. What is asserted is that the send path
+  // ANSWERS its caller; the behaviour itself is covered by the tests above and by
+  // scripts/a-reply-that-did-not-send-is-not-a-reply.test.mjs.
   assert.match(body, /return\s+(true|ok|sent|!!|await|Boolean\()/,
     'the send path answers its caller with nothing, so every caller reads undefined and assumes it worked');
 });
 
-test('NO control talks to respondServing directly — they all go through the helper', () => {
+test('NO control talks to respondServing directly — they all go through the helper', async () => {
   // The structural half. Fixing six call sites is worth little if the seventh, added next month, copies the
   // old shape from one of its neighbours. Comments are stripped: this repo has shipped an assertion that was
   // satisfied by the comment explaining the rule.

@@ -76,10 +76,16 @@ session. Stopping is a control, not a failure of one.
 ## 10. Never widen which relays a church talks to
 
 Read `reference/RELAY-ADMISSION.md` before touching `relay-net.src.js`, `_netRelays`, `churchRelays()`,
-`relaysForChurch()`, or any relay list. Two gates, three roots, and four traps are written up there.
+`relaysForChurch()`, or any relay list. The rule, the roots and four traps are written up there.
 
-The short version: **a relay needs cryptographic proof AND one of three roots — both, every time.**
+The short version: **a relay is admitted iff it proves, at the address dialled, that it holds a relay
+identity key — "it runs our software".** The pin / origin / church roots no longer decide admission: they
+are diagnostics, plus **one refusal** — a box answering at an address we ship must prove a key we ship.
 `relayPub` from `/status` or NIP-11 is an unauthenticated string and is never proof.
+
+And do not overclaim what the proof buys: it refuses a replacement box at a shipped address and a forwarder
+at a DIFFERENT address. A proxy at the SAME address, run by whoever controls that name's DNS/TLS, is not
+refused and never was.
 
 *Why:* the product actively suggested non-TrinityOne relays. Every protection this app has lives in
 the relay, so "which machines get the data" IS the security boundary, not a networking detail.
@@ -105,6 +111,12 @@ produced a false finding on three separate occasions.
 - **A worktree has no `node_modules`,** so ~5 tests fail on `esbuild ENOENT` no matter which commit is
   checked out, and fixed-port tests collide with any concurrent suite. Neither is a code failure. Say
   so in the brief.
+  And hard-link it in (`cp -al ../TrinityOne/node_modules .`), never symlink: through a symlink esbuild
+  writes the absolute host path into every bundle it builds, which would ship this box's directory layout.
+- **`sim-harness-dialogs.test.mjs` fails in ANY worktree** and is not a code failure. The sim drivers are
+  gitignored (`.gitignore:96`, because one once carried 36 private keys), so a worktree has exactly one on
+  disk — enough to defeat that test's "no drivers, skip" guard, not enough for its `>= 3` assertion. It
+  passes 4/4 in the main tree. Say so in the brief, or an auditor files it as a finding.
 
 ## Sabotage must be scoped to the function under test
 

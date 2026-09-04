@@ -86,7 +86,10 @@ function scopeOf(stubs) {
 // injected instead, so "the canonical pool" in these tests is a real relay on a bound port with a real key.
 function gateSource(src) {
   return [
-    stmt(src, 'var RELAY_PROOF_WINDOW_SEC = ', 'RELAY_PROOF_WINDOW_SEC'),
+    // RELAY_PROOF_WINDOW_SEC is no longer sliced: verifyRelayIdentity stopped consulting a clock
+    // (audit 2026-09-02 #1 — a phone 5 min out could admit no relay at all), so esbuild tree-shakes
+    // the constant out of the bundles entirely. Slicing a name that is no longer there makes the
+    // lift THROW, and a test that dies prints no failure — it reads like a pass. See CLAUDE.md.
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
     fnBody(src, 'function relayAddrKey', 'relayAddrKey'),

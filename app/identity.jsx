@@ -18,7 +18,18 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   const [name, setName] = useId(suggestedName || '');
   const [av, setAv] = useId({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
   const [words, setWords] = useId([]);
+  // "TRY AGAIN" HAD NOTHING TO CHANGE. The effect that fetches the twelve words lists only `[step]`, and the
+  // button that offers the retry sits INSIDE the failure message, which only ever renders on step 1 — so it
+  // set `step` to the value it already had, React saw no change, and the effect never re-ran. `setWords([])`
+  // could not help either: words is already empty in the one state where the message appears. So the only
+  // control on the screen that promises a second attempt did nothing at all, on the screen where the account
+  // is lost for ever if this step is skipped. Audit 2026-09-04.
+  //
+  // A counter, not a boolean: two consecutive failures must both re-run, and a boolean flipped back would
+  // fire the effect a second time on the way down.
+  const [wordsTry, setWordsTry] = useId(0);
   const [ack, setAck] = useId(false);
+  const [wordsErr, setWordsErr] = useId('');   // the secure store never produced the phrase — say so, do not sit on "Preparing…"
   const [confirmSkip, setConfirmSkip] = useId(false);   // ask once more before an irreversible shortcut
   const [skippedWords, setSkippedWords] = useId(false);  // …and remember, so the PIN step can say what it means
   const [copied, setCopied] = useId(false);
@@ -177,6 +188,17 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     try { hit = await window.Fellowship.resolveRelayName(n); } catch (e) { hit = null; }
     if (!hit) { setRBusy(''); setRErr('No church relay by that name. Check the spelling with your church — or use their invite link.'); return; }
     try { window.Fellowship.addRelay(hit.url); } catch (e) {}
+    // WAIT FOR THE PROOF WE JUST ASKED FOR. Audit 2026-09-02 #10.
+    //
+    // addRelay only puts the address in the list. Nothing is published to it, and nothing is READ from it,
+    // until the gate has proved it is one of this church's relays — and adding it does not start that proof.
+    // So the search below ran over the GATED set, which did not yet contain this relay, found nothing, and
+    // told the member "No church found" while the address their church gave them sat there unproved. On a
+    // slow link every one of the three passes can land inside that window.
+    //
+    // proveRelays never throws and never hangs the screen on a dead relay — it resolves with whatever
+    // proved, which may be nothing, and then the search runs against a gate that has actually been asked.
+    try { await window.Fellowship.proveRelays([hit.url]); } catch (e) {}
     setRBusy('Found it — looking for your church…');
     // Do NOT clear rNoChurch here. This runs FROM the no-church screen, so clearing it mid-search dropped the
     // member back to whichever screen they arrived from (the 12-word textarea) for the length of the lookup and
@@ -386,26 +408,48 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   useIdE(() => { if (open) { setIntro(true); setRMode('choose'); setXfer(null); setXferStage('show'); setXferSeen(null); setStep(0); setName(suggestedName || ''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
   // fetch the member's own 12 words when we reach the back-up step. The secure store can answer empty for a
   // moment right after boot, so retry until we get a full phrase rather than getting stuck on "Preparing…".
+  // AFTER TWELVE TRIES, SAY SO. Audit 2026-09-02 #14.
+  //
+  // The secure store can answer empty for a moment after boot, hence the retries. But when they ran out the
+  // screen went on saying "Preparing…" for ever WITH THE TICK-BOX AND CONTINUE STILL ENABLED — so a member
+  // could confirm they had written down words they had never been shown, and land on a check screen with
+  // nothing to check. The real-world cause is SecureStorage deferring on a sleeping screen, which is exactly
+  // when someone sets a phone down mid-onboarding.
   useIdE(() => {
     if (step !== 1 || words.length) return;
+    setWordsErr('');
     let cancelled = false, tries = 0;
     const grab = () => {
       if (cancelled || !window.TrinityIdentity || !window.TrinityIdentity.exportMnemonic) return;
       window.TrinityIdentity.exportMnemonic().then(m => {
         if (cancelled) return;
         const w = String(m || '').trim().split(/\s+/).filter(Boolean);
-        if (w.length >= 12) setWords(w);
+        if (w.length >= 12) { setWords(w); setWordsErr(''); }
         else if (tries++ < 12) setTimeout(grab, 300);
-      }).catch(() => { if (!cancelled && tries++ < 12) setTimeout(grab, 300); });
+        else setWordsErr(1);   // give up loudly rather than sitting on "Preparing…" for ever
+      }).catch(() => { if (cancelled) return; if (tries++ < 12) setTimeout(grab, 300); else setWordsErr(1); });
     };
     grab();
     return () => { cancelled = true; };
-  }, [step]);
+  }, [step, wordsTry]);   // wordsTry is what makes the "Try again" button below actually retry
   // pick two distinct positions to confirm when we reach the check step
   // Re-draw the three positions EVERY time the check is entered. They used to be drawn once, and step 2 offers
   // "← Show my words again" — so you could read the same three, come back and type them without ever having
   // written anything down. Re-reading now costs you a different three words, which is the point of the check.
   useIdE(() => { if (step === 2 && words.length >= 6) { const n = words.length; const idx = []; let g = 0; while (idx.length < 3 && g++ < 200) { const r = Math.floor(Math.random() * n); if (!idx.includes(r)) idx.push(r); } setCheckIdx(idx.sort((x, y) => x - y)); setAnswers(['', '', '']); setCheckErr(''); } }, [step, words]);
+  // ONE STYLE, ONE GAP, for the three welcome choices. They were three copies of the same inline object with
+  // their spacing done by per-button `marginBottom` — and the second had none, so "I've used it before" and
+  // "Someone set this up for me" sat flush together under a first button that was spaced properly. Owner
+  // spotted it 2026-09-04.
+  //
+  // The cause matters more than the gap: the third button was added later (AUDIT-2026-07-28, the child whose
+  // parent set the account up) with the FIRST button's style, and the second's missing margin went unnoticed
+  // because it had until then been the last in the list. A per-button margin puts the spacing in the wrong
+  // place — it is a property of the GROUP — so the next person to insert one reintroduces exactly this. The
+  // gap now lives on the container and the buttons carry no margin at all, which makes that impossible.
+  const introChoice = { width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' };
+  const introChoiceTitle = { fontSize: 16, fontWeight: 700, color: 'var(--ink)' };
+  const introChoiceSub = { fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 };
   if (!open) return null;
   // ── Welcome: new person, or someone coming back? Asked BEFORE the create-an-account wizard, because the
   // wrong answer here is expensive: a returning member who is walked into making a new identity ends up as a
@@ -430,23 +474,25 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
               answers cost something: a returning member who misses this ends up as a stranger to their own
               church with a duplicate entry on the roster, while at a church rollout almost everyone is new.
               So ask plainly and say what each choice leads to, rather than steering. */}
-          <button onClick={() => setIntro(false)} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I’m new here</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Set up an account and follow your church</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button onClick={() => setIntro(false)} style={introChoice}>
+            <div style={introChoiceTitle}>I’m new here</div>
+            <div style={introChoiceSub}>Set up an account and follow your church</div>
           </button>
-          <button onClick={() => { setRestoring(true); setRErr(''); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I’ve used it before</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Bring my account back — new phone, or reinstalled</div>
+          <button onClick={() => { setRestoring(true); setRErr(''); }} style={introChoice}>
+            <div style={introChoiceTitle}>I’ve used it before</div>
+            <div style={introChoiceSub}>Bring my account back — new phone, or reinstalled</div>
           </button>
           {/* TOP-LEVEL, not tucked under "I've used it before". A child whose parent made their account has
               never used TrinityOne — asking them to claim they have is how a parent picks "I'm new here" and
               creates a SECOND account, leaving the real one (with its church and guardian link) orphaned on
               the parent's phone. The same wording fails a member the church re-seated onto a new key.
               Raised 2026-07-28: "they might not have used it before". AUDIT-2026-07-28. */}
-          <button onClick={() => { setRestoring(true); setRErr(''); setRMode('scan'); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>Someone set this up for me</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>A parent or leader — scan the code they’re showing you</div>
+          <button onClick={() => { setRestoring(true); setRErr(''); setRMode('scan'); }} style={introChoice}>
+            <div style={introChoiceTitle}>Someone set this up for me</div>
+            <div style={introChoiceSub}>A parent or leader — scan the code they’re showing you</div>
           </button>
+          </div>
         </div>
       </div>
       <div style={{ flexShrink: 0, padding: '10px 22px 26px', background: 'var(--paper)' }}>
@@ -894,9 +940,9 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
             The honest sentence already existed at app/identity-extras.jsx:283; this is it, on the screen with
             reach. Say what it does AND what it does not — not less. */}
         <p style={{ textAlign: 'center', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>It is not invisibility: someone who examines this phone properly can still tell you use TrinityOne, and which church you follow. What the PIN protects is your account and your messages.</p>
-        <input type="password" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} autoFocus placeholder="At least 6 — digits are fine"
+        <input type="password" aria-label="Choose a PIN" autoComplete="new-password" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} autoFocus placeholder="At least 6 — digits are fine"
           style={{ width: '100%', boxSizing: 'border-box', height: 52, marginBottom: 12, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
-        <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} placeholder="Type it again to confirm"
+        <input type="password" aria-label="Confirm your PIN" autoComplete="new-password" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} placeholder="Type it again to confirm"
           style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
         {pinErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '10px 2px 0', lineHeight: 1.4 }}>{pinErr}</div> : null}
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 2px 0' }}>You’ll enter this each time you open the app. It never leaves your phone, and no one — not even us — can reset it. {skippedWords ? 'If you forget it, your 12 words are the only way back — and you have not written those down yet.' : 'If you forget it, your 12 words will open this account again.'}</div>
@@ -935,7 +981,16 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
             <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1, accentColor: 'var(--clay)', flexShrink: 0 }} />
             <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
           </label>
-          <button onClick={() => setStep(2)} disabled={!ack} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ack ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
+          {wordsErr ? (
+            <div role="alert" style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)', padding: '11px 13px', borderRadius: 12, marginBottom: 12,
+              background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, var(--line))' }}>
+              <b style={{ color: 'var(--ink)' }}>This phone hasn’t produced your words yet.</b> Close and reopen the app and come
+              back to this screen. If it keeps happening, do not skip this step — your account cannot be
+              recovered without these words.
+              <button onClick={() => { setWordsErr(''); setWords([]); setWordsTry(n => n + 1); }} style={{ display: 'block', marginTop: 8, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 10, padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Try again</button>
+            </div>
+          ) : null}
+          <button onClick={() => setStep(2)} disabled={!ack || words.length < 12} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (ack && words.length >= 12) ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
           <button onClick={() => setConfirmSkip(true)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
         </React.Fragment>) : step === 2 ? (<React.Fragment>
           <button onClick={confirmWords} disabled={!canConfirm} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: canConfirm ? 'pointer' : 'default', marginBottom: 10, background: canConfirm ? 'var(--clay)' : 'var(--surface-2)', color: canConfirm ? '#fff' : 'var(--ink-3)', boxShadow: canConfirm ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
@@ -1072,7 +1127,7 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
       <div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)', marginBottom: 18 }}><Icon name="lock" size={28} /></div>
       <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, margin: '0 0 8px', textAlign: 'center' }}>Enter your PIN</h1>
       <p style={{ fontSize: 14.5, color: 'var(--ink-2)', textAlign: 'center', margin: '0 0 22px', maxWidth: 300, lineHeight: 1.5 }}>Your account is locked on this phone. Enter your PIN to open it.</p>
-      <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
+      <input type="password" aria-label="Your PIN" autoComplete="off" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
         placeholder="PIN" style={{ width: 'min(320px, 100%)', boxSizing: 'border-box', height: 54, textAlign: 'center', letterSpacing: '.3em', border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', fontSize: 20, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
       {/* The copy is half the feature. "Stay signed in" would describe the convenience and hide the trade, and
@@ -1385,7 +1440,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
             <button onClick={() => setEdit(false)} style={{ border: 'none', background: 'none', color: 'var(--ink-2)', fontWeight: 600, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Edit profile</span>
-            <button onClick={() => { if (needFull && !twoWords(name)) return; onSave({ name: name.trim(), avatar: av }); setEdit(false); ctx.toast('Profile saved'); }} disabled={needFull && !twoWords(name)} style={{
+            <button onClick={() => {
+              if (needFull && !twoWords(name)) return;
+              setEdit(false);
+              Promise.resolve(onSave({ name: name.trim(), avatar: av }))
+                .then((ok) => (ok ? ctx.toast('Profile saved') : ctx.toast('Couldn’t save your profile — your church still sees the old name. Try again.', { error: true })))
+                .catch(() => ctx.toast('Couldn’t save your profile — try again.', { error: true }));
+            }} disabled={needFull && !twoWords(name)} style={{
               border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '9px 16px', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (needFull && !twoWords(name)) ? 0.5 : 1 }}>Save</button>
           </div>
         </div>
@@ -1792,7 +1853,16 @@ function FamilySheet({ open, onClose, ctx }) {
                 </div>
               ))}
             </div>
-            <button onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(made.mnemonic).catch(() => {}); ctx.toast('Recovery words copied — store them safely'); }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '11px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', marginBottom: 22 }}>Copy the 12 words</button>
+            <button onClick={() => {
+              // "COPIED" MUST MEAN COPIED. Audit 2026-09-02 #13. This toasted the reassurance whether or not
+              // the write happened — and swallowed the failure — for the ONE screen that shows a child's
+              // twelve words once. A parent who reads "copied", closes the sheet and finds an empty
+              // clipboard has lost that account. Same shape as the working control at :879.
+              if (!navigator.clipboard) { ctx.toast('This phone won’t let the app copy — write the words down instead', { error: true }); return; }
+              navigator.clipboard.writeText(made.mnemonic)
+                .then(() => ctx.toast('Recovery words copied — store them safely'))
+                .catch(() => ctx.toast('Couldn’t copy — write the words down instead', { error: true }));
+            }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '11px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', marginBottom: 22 }}>Copy the 12 words</button>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '0 4px 10px' }}>HAND IT TO THE CHILD’S DEVICE</div>
             {/* "TrinityOne's camera" sent a parent hunting for an in-app scanner that does not exist and was
                 never meant to: a fresh install offers only the device-TRANSFER scanner, which expects a live

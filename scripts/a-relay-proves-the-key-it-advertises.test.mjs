@@ -43,7 +43,10 @@ import * as H from './relay-network-harness.mjs';
 function lift(file) {
   const src = readFileSync(new URL('../' + file, import.meta.url), 'utf8');
   const body = [
-    stmt(src, 'var RELAY_PROOF_WINDOW_SEC = ', 'RELAY_PROOF_WINDOW_SEC'),
+    // RELAY_PROOF_WINDOW_SEC is no longer sliced: verifyRelayIdentity stopped consulting a clock
+    // (audit 2026-09-02 #1 — a phone 5 min out could admit no relay at all), so esbuild tree-shakes
+    // the constant out of the bundles entirely. Slicing a name that is no longer there makes the
+    // lift THROW, and a test that dies prints no failure — it reads like a pass. See CLAUDE.md.
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
     fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
@@ -51,10 +54,13 @@ function lift(file) {
   ].join('\n');
   assert.match(body, /verifyEvent2?\(ev\)/,
     `${file}'s verifyRelayIdentity does not verify the event signature at all`);
-  assert.match(body, /RELAY_PROOF_WINDOW_SEC/,
-    `${file}'s verifyRelayIdentity does not apply the freshness window`);
+  // The freshness of this exchange is the NONCE, not a clock (see the note in relay-identity.src.js).
+  // Assert the lifted body still checks it — that is the line a regression would quietly drop.
+  // quote-agnostic: src is single-quoted, esbuild emits double
+  assert.match(body, /tag\(["']nonce["']\)/,
+    `${file}'s verifyRelayIdentity does not check the nonce, which is the only freshness it has`);
   const api = new Function('verifyEvent', 'verifyEvent2', 'fetch',
-    body + '\nreturn { verifyRelayIdentity, relayIdentityNonce, RELAY_PROOF_WINDOW_SEC };'
+    body + '\nreturn { verifyRelayIdentity, relayIdentityNonce };'
   )(verifyEvent, verifyEvent, globalThis.fetch);
   return api;
 }
@@ -191,17 +197,33 @@ test('a proof signed by a different key fails', async () => {
   }
   honest.stop();
 
-  // And a proof that is genuine in every way except its age. The window is the house ±5 minutes; a proof
-  // from six minutes ago is a captured one by another name.
-  const stale = await H.startImpostor({
-    name: 'stale',
-    handler: (req, res, u) => H.sendJson(res, { proof: proofClaiming(otherPub, other, u.searchParams.get('nonce') || '', 'http://stale.invalid', Math.floor(Date.now() / 1000) - 360) }),
+  // AN OLD CLOCK IS NOT A FAILED PROOF, and this block used to assert the opposite.
+  //
+  // Two things were wrong with the assertion that replaced it. The rule changed: verifyRelayIdentity no
+  // longer consults a clock at all, because requiring one meant a phone five minutes out could admit NO
+  // relay and every send failed telling the member to speak to a leader (audit 2026-09-02 #1).
+  //
+  // And it never tested what it was named for. The fixture signed the `relay` tag as 'http://stale.invalid'
+  // while the test dialled `stale.base`, so the proof was refused by the ADDRESS BINDING several lines
+  // earlier and never reached the freshness check. It would have passed with the window deleted. Dial the
+  // address the proof actually names, so the clock is the only thing left under test.
+  const skewed = await H.startImpostor({
+    name: 'skewed',
+    handler: (req, res, u) => H.sendJson(res, { proof: proofClaiming(otherPub, other, u.searchParams.get('nonce') || '', skewed.base, Math.floor(Date.now() / 1000) - 900) }),
+  });
+  const ahead = await H.startImpostor({
+    name: 'ahead',
+    handler: (req, res, u) => H.sendJson(res, { proof: proofClaiming(otherPub, other, u.searchParams.get('nonce') || '', ahead.base, Math.floor(Date.now() / 1000) + 900) }),
   });
   for (const [file, v] of verifiers) {
-    assert.equal(v.RELAY_PROOF_WINDOW_SEC, 300, `${file}: the freshness window is not the house ±5 minutes`);
-    assert.equal(await v.verifyRelayIdentity(stale.base), null, `${file}: a proof older than the window was accepted`);
+    const behind = await v.verifyRelayIdentity(skewed.base);
+    assert.ok(behind, `${file}: a proof 15 minutes BEHIND was refused — a phone with a slow clock can admit no relay`);
+    assert.equal(behind.relayPub, otherPub);
+    const fwd = await v.verifyRelayIdentity(ahead.base);
+    assert.ok(fwd, `${file}: a proof 15 minutes AHEAD was refused — the same lockout with the sign flipped`);
+    assert.equal(fwd.relayPub, otherPub);
   }
-  stale.stop();
+  skewed.stop(); ahead.stop();
 });
 
 // ── 4. THE WHOLE ATTACK, STAGED ─────────────────────────────────────────────────────────────────────────

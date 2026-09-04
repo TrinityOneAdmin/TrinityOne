@@ -79,7 +79,15 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
   const [noteDraft, setNoteDraft] = React.useState({});
   const [savedFlash, setSavedFlash] = React.useState({});
   const myNoteFor = (iso) => { const f = fillsFor(iso).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()); return f ? (f.note || '') : ''; };
-  const saveNote = (iso) => { const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso); (care.setNote || care.fill)(need.id, iso, (cur || '').trim()); setSavedFlash(f => ({ ...f, [iso]: true })); };
+  // "✓ Saved" WAS DRAWN BEFORE THE ANSWER CAME BACK. The note ("bringing a lasagne, no nuts") is the one
+  // field here that other people act on, and the flash fired synchronously whatever happened — so the batch
+  // that added a failure toast on 2026-09-04 put a green tick beside its own error message. Audit same day.
+  const saveNote = (iso) => {
+    const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso);
+    Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim()))
+      .then(ok => { if (ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
+      .catch(() => {});
+  };
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden', background: 'var(--surface)' }}>
       <button onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '12px 13px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
@@ -247,6 +255,10 @@ const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No r
 // cleared. Naming the care team tells them their words reached a group they did not choose to tell.
 function MyRequestRow({ r, onCancel, onMessage, isMinor }) {
   const [busy, setBusy] = React.useState(false);
+  // A WITHDRAWAL THAT DID NOT LAND MUST NOT LOOK LIKE ONE. The dialog closed either way and the row stayed
+  // put, which reads as "the app is slow" — so the member believes they have withdrawn, stops expecting
+  // anyone, and the care team still has an open request they will act on. 2026-09-04 sweep.
+  const [failed, setFailed] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);   // Withdraw deletes the request AND its care-team thread — ask first
   const label = careTypeLabel(r);
   const st = r.status || 'open';
@@ -271,6 +283,7 @@ function MyRequestRow({ r, onCancel, onMessage, isMinor }) {
       <div style={{ flex: '1 1 150px', minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>You asked for help{r.type ? ' · ' + label : ''}{!r.forSelf && r.forName ? ' · for ' + r.forName : ''}</div>
         <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{sub}</div>
+        {failed ? <div role="alert" style={{ fontSize: 12, color: 'var(--clay-deep, #b4462f)', marginTop: 3, lineHeight: 1.45 }}>That didn’t reach your church — this request is still open. Try again in a moment.</div> : null}
       </div>
       <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginLeft: 'auto' }}>
         {onMessage ? <button onClick={onMessage} title={isMinor ? 'Message the person helping you about this' : 'Message the care team about this'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="chat" size={13} color="currentColor" /> Message</button> : null}
@@ -290,7 +303,7 @@ function MyRequestRow({ r, onCancel, onMessage, isMinor }) {
             <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 18px' }}>If you just don’t need help right now, that’s fine — nobody is troubled by a request you close.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setConfirming(false)} style={{ flex: 1.2, padding: 12, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Keep it</button>
-              <button onClick={async () => { setConfirming(false); setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Withdraw</button>
+              <button onClick={async () => { setConfirming(false); setBusy(true); setFailed(false); let ok = null; try { ok = await onCancel(); } catch (e) {} setFailed(!ok); setBusy(false); }} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Withdraw</button>
             </div>
           </div>
         </div>
@@ -303,6 +316,10 @@ function MyRequestRow({ r, onCancel, onMessage, isMinor }) {
 // Message the person, or Decline. Visible only to a member on the care-team roster.
 function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMessage }) {
   const [busy, setBusy] = React.useState('');
+  // Closing somebody's request for help is the one action here that cannot be seen to have worked: the card
+  // stays until the relay echoes the change back. Silence therefore reads as success. The console's copy of
+  // this card was given the same line on 2026-09-02; this one — the member-app care team — had not been.
+  const [failed, setFailed] = React.useState(false);
   const who = r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone');
   const when = ({ once: 'Just once', ongoing: 'For a while', unsure: 'Not sure yet' })[r.when] || '';
   const urg = ({ soon: 'This week', month: 'Soon', norush: 'No rush' })[r.urgency] || '';
@@ -325,8 +342,9 @@ function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMe
             future edit that forgets one of the two still does not publish a child's words. */}
         {!r.sealed && !child ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
         {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
-        <button onClick={async () => { setBusy('d'); try { await onDecline(); } catch (e) {} setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Close — not needed'}</button>
+        <button onClick={async () => { setBusy('d'); setFailed(false); let ok = null; try { ok = await onDecline(); } catch (e) {} setFailed(!ok); setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Close — not needed'}</button>
       </div>
+      {failed ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginTop: 9, lineHeight: 1.45 }}>That didn’t reach the church — this request is still open, and the person who asked has not been told anything.</div> : null}
     </div>
   );
 }
@@ -357,7 +375,10 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
     let ok = null;
     try { ok = await window.Fellowship.approveCareRequest(req, { dates, notes }); } catch (e2) { setErr((e2 && e2.message) || 'Couldn’t set up the need.'); setBusy(false); return; }
     setBusy(false);
-    if (ok) onDone(); else setErr('Couldn’t set up the need — try again.');
+    if (!ok) { setErr('Couldn’t set up the need — try again.'); return; }
+    // Two publishes; the second can fail alone. Saying only "Opened as a need" would leave the asker still
+    // reading "your care team will be in touch" with no idea it had been set up.
+    onDone(ok);
   };
   const fld = { width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' };
   const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 8px' };
@@ -500,9 +521,25 @@ function CareRequests({ ctx }) {
   // under "FROM A YOUNG PERSON · CONFIDENTIAL" with the safeguarding explainer — and row() passes
   // onApprove = null for anything marked as a child, so it could not be actioned from the only screen that
   // shows it. Audit, 2026-08-29.
+  // FAIL CLOSED WHILE WE DO NOT YET KNOW WHO THE CHILDREN ARE. Audit 2026-09-04.
+  //
+  // This asked `_kids` a question it could not yet answer. The lists arrive over a subscription, so for the
+  // first moments of every launch `_kids` is EMPTY — and an empty set answers "no, not a child" exactly as
+  // confidently as a loaded one does. A request arriving in that window was filed with the adults, under
+  // "Set up help", and that button publishes a NEED the whole congregation reads and signs up to. That is a
+  // young person's private disclosure turned into a notice-board item with their name on it, and nothing on
+  // the screen looked wrong.
+  //
+  // The console's copy of this triage was fixed on 2026-09-03 and this one — the same job, done by a care
+  // admin on their PHONE — was left. `minorsKnown` and not "is the list non-empty": a church that has never
+  // marked a child never publishes the document, so gating on the list itself would hold every request in the
+  // confidential queue for ever in exactly those churches, which is the care module silently switched off.
+  // See subscribeChurchSafeguard.
+  const _minorsKnown = !!(ctx.safeguard && ctx.safeguard.minorsKnown);
   const fromChild = (r) => {
     if (String(r.from || '').toLowerCase() === myPub) return false;
-    return isCareAdmin ? _kids.has(String(r.from || '').toLowerCase()) : true;
+    if (!isCareAdmin) return true;
+    return _minorsKnown ? _kids.has(String(r.from || '').toLowerCase()) : true;
   };
   const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
   const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
@@ -510,9 +547,11 @@ function CareRequests({ ctx }) {
     <div style={{ marginBottom: 18 }}>
       {childReqs.length ? (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 8px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="shield" size={15} color="var(--clay)" /> FROM A YOUNG PERSON · {childReqs.length} · CONFIDENTIAL</div>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 8px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="shield" size={15} color="var(--clay)" /> {_minorsKnown ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px', padding: '9px 12px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
-            You are seeing this because your church has cleared you to work with young people. Reply privately below. There is no “set up help” here on purpose — that publishes a need the whole church reads and signs up to. Follow your church’s safeguarding policy.
+            {_minorsKnown
+              ? 'You are seeing this because your church has cleared you to work with young people. Reply privately below. There is no “set up help” here on purpose — that publishes a need the whole church reads and signs up to. Follow your church’s safeguarding policy.'
+              : 'Still checking which of these came from a young person, so all of them are being held here for now. Reply privately below. “Set up help” is not offered until we know — it publishes a need the whole church reads.'}
           </div>
           {childReqs.map(r => row(r, true))}
         </div>
@@ -523,7 +562,9 @@ function CareRequests({ ctx }) {
       {adultReqs.map(r => row(r, false))}
         </React.Fragment>
       ) : null}
-      {approving ? <ApproveNeedSheet req={approving} ctx={ctx} onClose={() => setApproving(null)} onDone={() => { setApproving(null); ctx.toast && ctx.toast('Opened as a need'); }} /> : null}
+      {approving ? <ApproveNeedSheet req={approving} ctx={ctx} onClose={() => setApproving(null)} onDone={(res) => { setApproving(null); ctx.toast && (res && res.stillOpen
+        ? ctx.toast('Opened as a need — but we couldn’t close the request, so it still shows as open. Close it once you’re back online.', { error: true })
+        : ctx.toast('Opened as a need')); }} /> : null}
       {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
     </div>
   );
@@ -856,8 +897,24 @@ function CareAvailability({ ctx, part }) {
   const toggleTag = (id) => setTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
   const [custom, setCustom] = React.useState('');
   const addCustom = () => { const v = custom.trim().slice(0, 24); if (v && !tags.includes(v)) setTags(t => [...t, v]); setCustom(''); };
-  const save = () => { if (care.setAvail) care.setAvail(tags, note); setOpt(true); setEditing(false); };
-  const turnOff = () => { if (care.clearAvail) care.clearAvail(); setOpt(false); setEditing(false); setTags([]); setNote(''); };
+  // DO NOT LIST SOMEBODY WHO WAS NEVER LISTED. Audit 2026-09-02 #18. This flipped the card to "you're
+  // listed" before knowing, so a member who volunteered to help and was never recorded believes their
+  // church can call on them. `setAvail` already returns the engine's answer (app.jsx:1795).
+  const save = () => {
+    setEditing(false);
+    Promise.resolve(care.setAvail ? care.setAvail(tags, note) : null)
+      .then((ok) => { if (ok) setOpt(true); else { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true }); } })
+      .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.', { error: true }); });
+  };
+  // COMING OFF THE LIST IS THE SAME PROMISE IN REVERSE, and only the "on" direction was fixed. A member who
+  // believes they withdrew, and did not, is still being counted on by everyone reading the list — and this
+  // is the control someone uses when they can no longer help. Audit 2026-09-04.
+  const turnOff = () => {
+    setEditing(false);
+    Promise.resolve(care.clearAvail ? care.clearAvail() : null)
+      .then((ok) => { if (ok) { setOpt(false); setTags([]); setNote(''); } else { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told, so people can still see you as ready to help. Try again when you have signal.', { error: true }); } })
+      .catch(() => { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told.', { error: true }); });
+  };
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;
   const box = { padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 14 };
   const chipStyle = (on) => ({ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 16%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' });

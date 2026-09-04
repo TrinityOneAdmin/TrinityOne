@@ -3672,7 +3672,6 @@
   var verifyEvent2 = i2.verifyEvent;
 
   // src/relay-identity.src.js
-  var RELAY_PROOF_WINDOW_SEC = 300;
   function relayIdentityNonce() {
     try {
       const c = typeof globalThis !== "undefined" && globalThis.crypto || null;
@@ -3741,8 +3740,6 @@
       };
       if (tag("nonce").toLowerCase() !== nonce) return null;
       if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
-      if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
       return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
     } catch {
       return null;
@@ -6548,17 +6545,48 @@
     const clean3 = [...new Set(readers.map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))];
     return { readers: clean3, narrowed: !Array.isArray(group) };
   }
+  async function _fetchStewardsWithCap(cp, cap) {
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": ["trinityone/stewards:" + cp] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (e.pubkey !== cp) continue;
+        if (!best || e.created_at > best.created_at) best = e;
+      }
+      if (!best) return [];
+      const o = JSON.parse(best.content);
+      const pks = Array.isArray(o.pubkeys) ? o.pubkeys.filter(Boolean) : [];
+      const caps = o.caps && typeof o.caps === "object" ? o.caps : null;
+      const want = String(cap || "").toLowerCase();
+      return pks.filter((pk) => {
+        if (!caps) return true;
+        const c = caps[pk];
+        if (!Array.isArray(c)) return true;
+        return c.some((x) => String(x || "").toLowerCase() === want);
+      }).map((x) => String(x).toLowerCase());
+    } catch (e) {
+      return null;
+    }
+  }
   async function _fetchCareTeam(cp) {
     try {
       const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CARETEAM_D + cp] }]);
-      let best = null;
+      const careStewards = await _fetchStewardsWithCap(cp, "care");
+      if (careStewards === null) return null;
+      const allowed = /* @__PURE__ */ new Set([String(cp).toLowerCase(), ...careStewards]);
+      let best = null, refused = 0;
       for (const e of evs || []) {
+        if (!allowed.has(String(e.pubkey || "").toLowerCase())) {
+          refused++;
+          continue;
+        }
         if (!best || e.created_at > best.created_at) best = e;
       }
       if (best) {
         const o = JSON.parse(best.content);
         if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean);
       }
+      if (refused) return null;
     } catch (e) {
       return null;
     }
@@ -7008,7 +7036,34 @@
   var sk = null;
   var pub = null;
   var _needAuth = true;
+  var _lastStampF = /* @__PURE__ */ new Map();
+  function _monotonicF(tmpl) {
+    const d = ((tmpl.tags || []).find((t) => t[0] === "d") || [])[1] || "kind:" + tmpl.kind;
+    const nowS = Math.floor(Date.now() / 1e3);
+    const want = tmpl.created_at || nowS;
+    const last = _lastStampF.get(d) || 0;
+    let at = want > last ? want : last + 1;
+    if (at > nowS + 600) at = want;
+    _lastStampF.set(d, at);
+    return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
+  }
   var _relayAuthedAt = 0;
+  var _relayAuthOkAt = 0;
+  function _noteAuthAccepted(url) {
+    Promise.resolve().then(() => {
+      let r = null;
+      try {
+        r = pool.relays.get(normalizeURL2(url));
+      } catch (e) {
+      }
+      const p = r && r.authPromise;
+      if (!p || typeof p.then !== "function") return;
+      p.then(() => {
+        _relayAuthOkAt = Date.now();
+      }, () => {
+      });
+    });
+  }
   var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
   var SG_ASSUME_KEY = "trinityone.sgassume.";
   var _mePub = () => window.Fellowship && window.Fellowship.myPubkey || pub || "";
@@ -7058,7 +7113,7 @@
     }
     return "";
   }
-  pool.automaticallyAuth = () => async (authEvent) => {
+  pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
     if (!sk) {
       try {
@@ -7069,6 +7124,7 @@
     if (!sk) throw new Error("no key");
     _relayAuthedAt = Date.now();
     _armAuthRefetch();
+    _noteAuthAccepted(url);
     return finalizeEvent2(authEvent, sk);
   };
   var _authRefetchArmed = false;
@@ -8226,6 +8282,7 @@
   function reconnectAll() {
     _authRefetchArmed = false;
     _relayAuthedAt = 0;
+    _relayAuthOkAt = 0;
     for (const hub of _docsHubs.values()) {
       hub.familyRebuilt = false;
       const c = hub.closer;
@@ -8500,8 +8557,9 @@
     // a real relay the question by hand. `relayPub` from /status or NIP-11 remains an unproven claim; this is
     // the provable form.
     verifyRelayIdentity,
-    // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-    // the URL, the app's own serving origin, or this church's own signed trinityone/relay-net document. C4
+    // C3. "Is this relay one of ours?" — the C2 proof, which is what admits it. The canonical pin, the app's
+    // own serving origin and this church's signed trinityone/relay-net document are still computed and still
+    // reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md, 2026-09-02). C4
     // consumes it: the answer, cached, IS the publish set — see _netRelays and the gate above.
     isNetworkRelay: isNetworkRelay2,
     // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
@@ -8863,6 +8921,22 @@
         return false;
       }
     },
+    // PROVE THESE ADDRESSES NOW, AND WAIT FOR THE ANSWER. Audit 2026-09-02 #10.
+    //
+    // `relayVerified` above only reports what the gate ALREADY knows; it starts nothing. So a caller that had
+    // just added a relay and immediately read over the gated set saw nothing from it — the proof had not been
+    // asked for yet. That is the "my church runs its own relay" recovery: it adds the address, reads, finds
+    // no church, and tells the member "No church found" while the relay it was handed is sitting there
+    // unproved. On a slow link all three of its passes can land inside that window.
+    //
+    // Returns the subset that proved. Never throws: a recovery screen must not die because a relay was down.
+    proveRelays(urls) {
+      try {
+        return Promise.resolve(_gate.refresh(urls || [], window.Fellowship.churchPub)).catch(() => []);
+      } catch (e) {
+        return Promise.resolve([]);
+      }
+    },
     // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
     // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
     // serving/rota caches and the care module's cached needs, slots, skips and settings. Called on lock and at
@@ -8965,7 +9039,7 @@
       }, sk);
       const dup = _outbox.some((o) => o && o.evt && o.evt.id === evt.id);
       if (!dup) {
-        _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+        _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
         _outboxSave();
       }
       let ok = false;
@@ -8993,7 +9067,8 @@
       }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },
@@ -9441,15 +9516,17 @@
       if (p.av) wire.av = p.av;
       if (p.hidden) wire.hidden = true;
       const body = JSON.stringify(wire);
-      if (_profilePubFor === pub && _profilePubBody === body) return null;
-      let evt = null, sent = false;
-      if (known) {
+      const wireUnchanged = _profilePubFor === pub && _profilePubBody === body;
+      let evt = null, sent = false, lost = false;
+      if (wireUnchanged) {
+      } else if (known) {
         evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
         sent = true;
         try {
           await _publishAny(window.Fellowship.relays, evt);
         } catch (e) {
           sent = false;
+          lost = true;
           console.warn("[fellowship] profile publish failed", e);
           if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
             let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
@@ -9464,6 +9541,7 @@
       } else {
         console.warn("[fellowship] profile publish withheld \u2014 our own kind-0 has not arrived, publishing now would blank it");
         if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+          lost = true;
           try {
             if (window.trinityToast) window.trinityToast("Your photo and profile details aren\u2019t saved yet \u2014 this phone is still connecting to your church\u2019s relay. Try again in a moment.");
           } catch (x) {
@@ -9487,7 +9565,8 @@
       } catch {
       }
       window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
-      return evt;
+      if (lost) return null;
+      return evt || true;
     },
     // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
     requestProfiles(pubkeys) {
@@ -10001,14 +10080,16 @@
       }
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
-      const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
+      const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
           const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
           if (!_groupEventTrusted(cp, gid, e.pubkey)) return;
-          hidden.set(d.slice(HIDE_D.length), !(e.tags.some((t) => t[0] === "deleted") || !e.content));
+          const _mid = d.slice(HIDE_D.length), _at = Number(e.created_at) || 0, _prev = hidden.get(_mid);
+          if (_prev && _prev.at > _at) return;
+          hidden.set(_mid, { at: _at, hidden: !(e.tags.some((t) => t[0] === "deleted") || !e.content) });
           emit();
         },
         oneose() {
@@ -10041,7 +10122,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !groupId || !msg || !msg.id) return null;
       const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
@@ -10054,7 +10135,7 @@
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !groupId) return null;
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
@@ -10069,7 +10150,7 @@
       if (!cp || !msgId) return null;
       const tags = [["d", "trinityone/hidden:" + msgId], ["t", NET], ["p", cp]];
       if (groupId) tags.push(["t", groupId]);
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
@@ -10084,7 +10165,7 @@
       if (!cp || !msgId) return null;
       const tags = [["d", "trinityone/hidden:" + msgId], ["t", NET], ["p", cp], ["deleted", "1"]];
       if (groupId) tags.push(["t", groupId]);
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
@@ -10222,13 +10303,16 @@
       const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
       let clr = null;
       let _clrTs = 0, _clrId = "";
+      let sawMinors = false;
+      const _sgHub = _docsHub(pubk);
       const emit = () => {
         _noPhoto = pubSet(nophoto);
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice() : me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : [];
         _sgSelf = { cp: pubk, me: me || "", isMinor, known: !!clr };
-        onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+        const minorsKnown = sawMinors || !!(_sgHub && _sgHub.eosedAt && _relayAuthOkAt && _sgHub.eosedAt >= _relayAuthOkAt);
+        onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, minorsKnown, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
@@ -10238,6 +10322,7 @@
           if (d === "trinityone/minors:" + pubk) {
             if (_ts < _sgTs.minors) return;
             _sgTs.minors = _ts;
+            sawMinors = true;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -11055,6 +11140,8 @@
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
+        console.warn("[fellowship] cancel request publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11075,6 +11162,8 @@
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
+        console.warn("[fellowship] care request status publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11108,8 +11197,8 @@
         console.warn("[fellowship] approve\u2192need publish failed", e);
         return null;
       }
-      await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
-      return { id };
+      const st = await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
+      return { id, stillOpen: !st };
     },
     // MAY THIS PERSON OPEN A PUBLIC NEED? One rule, asked at two doors — the engine below, and the sheet that
     // fronts it. The sheet used to restate it as `!ctx.safeguard.isMinor`, and that is not the same question:
@@ -11304,6 +11393,7 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care slot publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11319,7 +11409,9 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-      } catch {
+      } catch (e) {
+        console.warn("[fellowship] clear care slot publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11454,7 +11546,9 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-      } catch {
+      } catch (e) {
+        console.warn("[fellowship] clear care skip publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11520,6 +11614,7 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care avail publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11535,7 +11630,8 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },
@@ -11725,7 +11821,8 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]], content }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },
@@ -11769,7 +11866,8 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
-      } catch {
+      } catch (e) {
+        return null;
       }
       return evt;
     },

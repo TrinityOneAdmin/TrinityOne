@@ -203,7 +203,18 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
       }
     }
     const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
-    return { id, ...rec, ts: e && e.created_at };
+    // A REFUSED PUBLISH IS NOT A SAVED NEED, and this is where the 2026-09-04 fix to approveCareRequest was
+    // built on sand. `publish()` in steward.src.js returns **false** at BOTH failure exits (no proven relay;
+    // every relay rejected) — but this wrapped it as `{ id, ...rec, ts: false }`, which is truthy AND carries
+    // an id. So `if (!saved || !saved.id)` never fired, the console said help was set up, and the asker's
+    // request was marked approved pointing at a need that exists nowhere.
+    //
+    // Three different failure contracts live in this codebase and the wrapper is the trap: `publish()`
+    // returns false, `_publishAny` in fellowship THROWS, and this used to return a truthy object around
+    // either. Callers below: approveCareRequest here, and MealsNeedModal.save in app/stew-meals.jsx (both
+    // handle null).
+    if (!e) return null;
+    return { id, ...rec, ts: e.created_at };
   }
   // Open a need read off the relay. v1 docs (pre-2026-07-20) carry the fields in the clear and are read
   // as-is — a church mid-pilot must not lose its open needs. `_sealed` marks one we could not open, so the
@@ -379,8 +390,12 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     const f = fields || {};
     const dates = [...new Set((Array.isArray(f.dates) ? f.dates : []).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
     const saved = await publishNeed({ type: req.type || 'other', displayLabel: req.forSelf ? (f.who || 'A member') : (req.forName || 'A member'), recipient: req.forSelf ? req.from : '', notes: String(f.notes != null ? f.notes : (req.note || '')).trim(), dates, dietary: [], meals: [] });
-    if (saved && saved.id) await setCareRequestStatus(req.id, req.from, { status: 'approved', needId: saved.id });
-    return saved;
+    // TWO PUBLISHES, AND THE SECOND CAN FAIL ON ITS OWN. The need goes up, then the request is marked
+    // approved. If only the first lands, help IS set up but the request still reads "open" — the team works
+    // it twice and the asker is never told. Report which half, rather than reporting the need alone.
+    if (!saved || !saved.id) return saved;
+    const st = await setCareRequestStatus(req.id, req.from, { status: 'approved', needId: saved.id });
+    return { ...saved, stillOpen: !st };
   }
   function subscribeCareChat(reqId, cb) {
     if (!S() || !S().subscribeMany || !S().churchPub || !reqId) { cb([]); return () => {}; }

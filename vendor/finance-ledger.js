@@ -33,6 +33,7 @@ var FinanceLedger = (() => {
     check: () => check,
     createBook: () => createBook,
     docFor: () => docFor,
+    dropFrom: () => dropFrom,
     fmtMoney: () => fmtMoney,
     fundBalances: () => fundBalances,
     guessColumns: () => guessColumns,
@@ -114,6 +115,13 @@ var FinanceLedger = (() => {
     const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey };
     book.journal.push(entry);
     return entry;
+  }
+  function dropFrom(book, seq) {
+    if (!Number.isSafeInteger(seq)) throw new Error("dropFrom needs an integer seq");
+    const before = book.journal.length;
+    book.journal = book.journal.filter((e) => e.seq < seq);
+    book._seq = book.journal.length ? Math.max(...book.journal.map((e) => e.seq)) : seq - 1;
+    return before - book.journal.length;
   }
   function applyEntry(book, entry) {
     if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error("entry needs an integer seq");

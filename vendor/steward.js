@@ -6439,7 +6439,6 @@
   var verifyEvent2 = i2.verifyEvent;
 
   // src/relay-identity.src.js
-  var RELAY_PROOF_WINDOW_SEC = 300;
   function relayIdentityNonce() {
     try {
       const c = typeof globalThis !== "undefined" && globalThis.crypto || null;
@@ -6508,8 +6507,6 @@
       };
       if (tag("nonce").toLowerCase() !== nonce) return null;
       if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      const age = Math.abs(Math.floor(Date.now() / 1e3) - (Number(ev.created_at) || 0));
-      if (!(age <= RELAY_PROOF_WINDOW_SEC)) return null;
       return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
     } catch {
       return null;
@@ -16784,8 +16781,9 @@ zoo`.split("\n");
     // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console
     // reads for the redundancy count stays an unproven claim — it was never a gate and must not look like one.
     verifyRelayIdentity,
-    // C3. "Is this relay one of ours?" — the C2 proof plus one of three roots: the canonical pin baked beside
-    // the URL, this console's own serving origin, or this church's own signed trinityone/relay-net document.
+    // C3. "Is this relay one of ours?" — the C2 proof, which is what admits it. The canonical pin, this
+    // console's own serving origin and this church's signed trinityone/relay-net document are still computed
+    // and still reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md).
     // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
     isNetworkRelay: isNetworkRelay2,
     // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
@@ -17062,7 +17060,13 @@ zoo`.split("\n");
           s = await (await fetch(base + "/status", { cache: "no-store" })).json();
         } catch {
         }
-        out.push({ url: u, base, pubkey: s && s.relayPub || "", name: "", online: !!s });
+        let proof = null;
+        try {
+          proof = await verifyRelayIdentity(u);
+        } catch (e) {
+          proof = null;
+        }
+        out.push({ url: u, base, pubkey: proof && proof.relayPub || "", name: "", online: !!s });
       }
       return out;
     },
@@ -17078,7 +17082,8 @@ zoo`.split("\n");
       }
       const trusted = [...byBox.values()];
       if (trusted.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 add another the church runs.");
-      await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }, sk));
+      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }, sk));
+      if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
       return { relays: trusted.length };
     },
     // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
@@ -17117,7 +17122,8 @@ zoo`.split("\n");
     // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
     async syncDisable() {
       if (!sk || !pub) throw new Error("No church key on this device");
-      await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }, sk));
+      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }, sk));
+      if (!ev) throw new Error("Sync could not be switched off \u2014 no relay accepted the change, so your relays are STILL mirroring each other. Try again.");
       return { relays: 0 };
     },
     // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
@@ -18733,6 +18739,7 @@ zoo`.split("\n");
       let cleared = {};
       const isLoaded = () => sawMinors && sawEose;
       const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed();
+      const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed();
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -18747,7 +18754,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -18761,7 +18768,7 @@ zoo`.split("\n");
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -18772,7 +18779,7 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === GUARDIANS_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
@@ -18782,7 +18789,7 @@ zoo`.split("\n");
             } catch {
               guardians = {};
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -18793,7 +18800,7 @@ zoo`.split("\n");
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
           sawEose = true;
-          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown() });
+          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
         }
       });
       return () => {
@@ -20057,13 +20064,16 @@ zoo`.split("\n");
     // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
     subscribeHidden(cb) {
       const hidden = /* @__PURE__ */ new Map();
-      const emit = () => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id)));
+      const emit = () => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#p": [pub] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
           const msgId = d.slice(HIDE_D.length);
-          hidden.set(msgId, !(e.tags.some((t) => t[0] === "deleted") || !e.content));
+          const at = Number(e.created_at) || 0;
+          const prev = hidden.get(msgId);
+          if (prev && prev.at > at) return;
+          hidden.set(msgId, { at, hidden: !(e.tags.some((t) => t[0] === "deleted") || !e.content) });
           emit();
         },
         oneose() {

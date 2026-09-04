@@ -105,8 +105,11 @@ function svServiceRoster(ctx, serviceId) {
 //
 // So: route every response through here. If nothing was sent, respondServing has already explained why, and
 // we neither claim success nor close the sheet the member may want to try again from.
-function svRespond(ctx, item, verdict, swapTo, okLabel, onSent) {
-  const sent = ctx.respondServing(item, verdict, swapTo);
+// AWAIT IT. respondServing became async when it started reading whether the relay actually took the reply
+// (audit 2026-09-02 #6), and a Promise is truthy — so `sent === false` was never true again and this
+// helper would have gone back to toasting over every failure, which is the exact bug it was written for.
+async function svRespond(ctx, item, verdict, swapTo, okLabel, onSent) {
+  const sent = await ctx.respondServing(item, verdict, swapTo);
   if (sent === false) return false;
   if (okLabel) ctx.toast(okLabel);
   if (onSent) onSent();
