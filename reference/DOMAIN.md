@@ -122,6 +122,35 @@ and which of your instincts about it are wrong.
   *"This computer keeps your church's records at the same time"* — but there is no literal always-on
   question that I could find. Check with the owner before treating one as existing.
 
+- **A relay must not hold a church's NAME. It gets a petname derived from the key instead.**
+  `DECIDED 2026-09-04.` Owner, when shown that a church can rename itself on somebody else's relay and asked
+  who should be allowed to: *"Tbh, I don't even think church names on relays should be that easily
+  identifiable.....why have them at all? Do we need them?"*
+
+  **Measured the same day, and it is a hole in the entry below this one.** `relay/church.json` stores church
+  names in PLAINTEXT next to the npub — `{"npub":"npub1uumze…","name":"St Editha's, Marchwood","by":"operator"}`.
+  The seizure measurement below covered member names and kind-0 profiles and concluded "a seizure yields the
+  social graph in public keys, never in names". It never looked at `church.json`. On a box hosting several
+  congregations that file is a readable list of exactly which ones.
+
+  **The name does no protocol work.** Nothing gates, routes or renders on it; `CHURCH_NAMES` is read only by
+  the operator's own admin endpoints (`/config`, `/stats`, the removeChurch dry run — all admin-gated) and as
+  a push notification title. (The push case is not the exposure: `webpush` encrypts the payload to the
+  subscriber, so the push provider sees ciphertext.) The disk is the exposure.
+
+  **It exists for one reason**, recorded in the H4 comment in `scripts/gateway.mjs`: an operator faced with
+  37 rows of bare npubs cannot tell which church to remove, and removing the wrong one de-provisions a real
+  congregation. That need is real and must survive.
+
+  **The decision: a petname derived from the church's npub** — the wordlist at `scripts/gateway.mjs:928`
+  (`olive, cedar, dove, anchor, lamp, vine, shepherd, harbor…`) already does this for a relay's own memorable
+  name. Applied to a church key it gives the operator a stable, distinguishable label ("Quiet Harbor 42")
+  that needs nothing from the church and means nothing to whoever holds the disk.
+
+  Consequences for whoever builds it: the relay must stop STORING a church-supplied name, not merely stop
+  displaying it — and per the backwards-compatibility rule, add the derived label rather than repurposing the
+  `name` field, then stop writing `name`. Existing rows already carry real names and want clearing.
+
 - **What a seized relay actually yields — MEASURED 2026-09-02, do not re-derive by guessing.**
   Read off a live relay's sqlite, not reasoned from the code. **Encrypted at rest:** group messages (kind 1),
   DMs (kind 4), journal, notes, prayer, bookmarks, highlights, `clearance:`, `guardnotice:`. **Names are
