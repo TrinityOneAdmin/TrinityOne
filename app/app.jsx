@@ -1794,12 +1794,12 @@ function App() {
       })(),
       skips: careSkips,
       myPub: (window.Fellowship && window.Fellowship.myPubkey) || '',
-      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
-      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
+      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
+      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
-      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note),
+      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (!r) toast('That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
       skip: (careId, iso, reason, skipEnc, author) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc, author),
-      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
+      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (!r) toast('That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,
       setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r) toast('You’re listed — thank you for being ready to help'); return r; }),

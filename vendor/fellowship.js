@@ -11103,6 +11103,8 @@
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
+        console.warn("[fellowship] cancel request publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11123,6 +11125,8 @@
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
+        console.warn("[fellowship] care request status publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11156,8 +11160,8 @@
         console.warn("[fellowship] approve\u2192need publish failed", e);
         return null;
       }
-      await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
-      return { id };
+      const st = await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
+      return { id, stillOpen: !st };
     },
     // MAY THIS PERSON OPEN A PUBLIC NEED? One rule, asked at two doors — the engine below, and the sheet that
     // fronts it. The sheet used to restate it as `!ctx.safeguard.isMinor`, and that is not the same question:
@@ -11352,6 +11356,7 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care slot publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11367,7 +11372,9 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-      } catch {
+      } catch (e) {
+        console.warn("[fellowship] clear care slot publish failed", e);
+        return null;
       }
       return evt;
     },
@@ -11502,7 +11509,9 @@
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-      } catch {
+      } catch (e) {
+        console.warn("[fellowship] clear care skip publish failed", e);
+        return null;
       }
       return evt;
     },

@@ -4710,7 +4710,10 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk || !cp || !id) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) {}
+    // A WITHDRAWAL THAT LANDED NOWHERE IS NOT A WITHDRAWAL. The request stays open on the care team's screen
+    // and the member is told it is gone — so they neither expect help nor ask again. Same shape as the
+    // serving reply and the RSVP; found in the 2026-09-04 sweep of every publish whose failure was swallowed.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] cancel request publish failed', e); return null; }
     return evt;
   },
   // ── care-team actions (careAdmin/steward): resolve a request, or approve it INTO a care need ──
@@ -4722,7 +4725,10 @@ window.Fellowship = {
     const tags = [['d', CAREREQSTATUS_D + reqId], ['t', NET], ['t', 'carereqstatus'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);   // so the asker can read their resolution
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ status: String(o.status || 'handled'), needId: String(o.needId || ''), by: pub, at: Math.floor(Date.now() / 1000) }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) {}
+    // …and neither is closing somebody's request. The asker reads this doc to learn what happened to them:
+    // if it never lands they sit on "your care team will be in touch" for ever, and the team sees the request
+    // still open and may work it twice.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request status publish failed', e); return null; }
     return evt;
   },
   async declineCareRequest(req) {
@@ -4745,8 +4751,8 @@ window.Fellowship = {
     const body = { id, type: req.type || 'other', dates, startDate: dates[0] || '', endDate: dates[dates.length - 1] || '', meals: (req.type === 'meals' ? ['dinner'] : []), dayMeals: {}, enc };
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']], content: JSON.stringify(body) }, sk);
     try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
-    await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
-    return { id };
+    const st = await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
+    return { id, stillOpen: !st };
   },
   // MAY THIS PERSON OPEN A PUBLIC NEED? One rule, asked at two doors — the engine below, and the sheet that
   // fronts it. The sheet used to restate it as `!ctx.safeguard.isMinor`, and that is not the same question:
@@ -4884,7 +4890,9 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care slot publish failed', e); }
+    // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
+    // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care slot publish failed', e); return null; }
     return evt;
   },
   async clearCareSlot(careId, iso) {
@@ -4892,7 +4900,9 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch {}
+    // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
+    // still the only name against that day.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care slot publish failed', e); return null; }
     return evt;
   },
   // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
@@ -5004,7 +5014,10 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch {}
+    // Undoing a skip is the recipient saying "actually, yes please" — if it lands nowhere the day stays
+    // crossed out and nobody brings anything. markCareSkip above already reports through `_delivered`;
+    // this direction reported nothing at all.
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return null; }
     return evt;
   },
   // ── "I'm here to help" availability — a member signals they're willing to help, so people who need

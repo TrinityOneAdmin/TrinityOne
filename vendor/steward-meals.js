@@ -413,8 +413,9 @@
       const f = fields || {};
       const dates = [...new Set((Array.isArray(f.dates) ? f.dates : []).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
       const saved = await publishNeed({ type: req.type || "other", displayLabel: req.forSelf ? f.who || "A member" : req.forName || "A member", recipient: req.forSelf ? req.from : "", notes: String(f.notes != null ? f.notes : req.note || "").trim(), dates, dietary: [], meals: [] });
-      if (saved && saved.id) await setCareRequestStatus(req.id, req.from, { status: "approved", needId: saved.id });
-      return saved;
+      if (!saved || !saved.id) return saved;
+      const st = await setCareRequestStatus(req.id, req.from, { status: "approved", needId: saved.id });
+      return { ...saved, stillOpen: !st };
     }
     function subscribeCareChat(reqId, cb) {
       if (!S() || !S().subscribeMany || !S().churchPub || !reqId) {

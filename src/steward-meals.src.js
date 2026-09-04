@@ -379,8 +379,12 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     const f = fields || {};
     const dates = [...new Set((Array.isArray(f.dates) ? f.dates : []).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
     const saved = await publishNeed({ type: req.type || 'other', displayLabel: req.forSelf ? (f.who || 'A member') : (req.forName || 'A member'), recipient: req.forSelf ? req.from : '', notes: String(f.notes != null ? f.notes : (req.note || '')).trim(), dates, dietary: [], meals: [] });
-    if (saved && saved.id) await setCareRequestStatus(req.id, req.from, { status: 'approved', needId: saved.id });
-    return saved;
+    // TWO PUBLISHES, AND THE SECOND CAN FAIL ON ITS OWN. The need goes up, then the request is marked
+    // approved. If only the first lands, help IS set up but the request still reads "open" — the team works
+    // it twice and the asker is never told. Report which half, rather than reporting the need alone.
+    if (!saved || !saved.id) return saved;
+    const st = await setCareRequestStatus(req.id, req.from, { status: 'approved', needId: saved.id });
+    return { ...saved, stillOpen: !st };
   }
   function subscribeCareChat(reqId, cb) {
     if (!S() || !S().subscribeMany || !S().churchPub || !reqId) { cb([]); return () => {}; }

@@ -470,6 +470,7 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
   const [end, setEnd] = React.useState('');
   const [notes, setNotes] = React.useState(req.note || '');
   const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
   // A NEED WITH NO DAYS CANNOT BE SIGNED UP FOR, so this sheet must not be able to open one. dayRange()
   // returns [] for a blank or unparseable start date — "".split('-') gives NaN, Date.UTC(NaN…) is NaN, and
   // `NaN <= end` is false, so the loop never runs and the catch never fires. The button was disabled only
@@ -484,9 +485,11 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
     // has to be chosen it is the thing that catches an empty one. Nothing new is needed here, and a second
     // message would only say the same thing twice.
     if (!dates.length) return;
-    setBusy(true);
+    setBusy(true); setErr('');
     let ok = null; try { ok = await window.StewardMeals.approveCareRequest(req, { dates, notes, who }); } catch (x) {}
-    setBusy(false); if (ok) onDone();
+    setBusy(false);
+    if (!ok) { setErr('Couldn’t set this up — it didn’t reach the church, so nothing has changed. Try again in a moment.'); return; }
+    onDone(ok);
   };
   const fld = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14 };
   return (
@@ -495,6 +498,7 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Set up help</div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', margin: '6px 0 14px', lineHeight: 1.5 }}>Opens a need the church can sign up for. Pick the dates.</p>
         {!dates.length ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', margin: '0 0 10px', lineHeight: 1.45 }}>Pick the days first — a need with no days is one nobody can sign up to.</div> : null}
+        {err ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', margin: '0 0 10px', lineHeight: 1.45 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input aria-label="From" type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
           <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input aria-label="To" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
@@ -517,6 +521,10 @@ function StewCareRequests() {
   const [approving, setApproving] = React.useState(null);
   const [closing, setClosing] = React.useState(null);    // request id awaiting "yes, close it"
   const [closeErr, setCloseErr] = React.useState('');
+  // "The need went up, the request did not close" is neither a success nor a failure, and it is the ONLY
+  // state in which a steward must go back and do something. It gets its own line rather than the per-row
+  // closeErr, which renders on every row at once.
+  const [halfDone, setHalfDone] = React.useState('');
   const [chatting, setChatting] = React.useState(null);
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub]);
   // A YOUNG PERSON'S REQUEST IS NOT ORDINARY CARE, AND MUST NOT SIT IN THE SAME LIST.
@@ -581,6 +589,7 @@ function StewCareRequests() {
       );
   return (
     <div style={{ marginBottom: 16 }}>
+      {halfDone ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', lineHeight: 1.5, margin: '0 0 10px', padding: '9px 12px', borderRadius: 12, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>{halfDone}</div> : null}
       {childReqs.length ? (
         <div style={{ marginBottom: 14 }}>
           <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>{_minorsKnown ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
@@ -596,7 +605,7 @@ function StewCareRequests() {
           {adultReqs.map(r => renderRow(r, false))}
         </div>
       ) : null}
-      {approving ? <StewApproveSheet req={approving} who={approving.forSelf ? (nameOf(approving.from) || 'A member') : (approving.forName || 'A member')} onClose={() => setApproving(null)} onDone={() => setApproving(null)} /> : null}
+      {approving ? <StewApproveSheet req={approving} who={approving.forSelf ? (nameOf(approving.from) || 'A member') : (approving.forName || 'A member')} onClose={() => setApproving(null)} onDone={(res) => { setApproving(null); setHalfDone(res && res.stillOpen ? 'Help is set up — but we couldn’t mark that request as dealt with, so it still shows below. Close it yourself once you’re back online.' : ''); }} /> : null}
       {chatting ? <StewCareChat reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
     </div>
   );
