@@ -3984,9 +3984,43 @@ function serveStatic(req, res) {
             const hex = toHexPub(String(parsed.addChurch.npub || '').trim());
             if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub' })); return; }
             if (!isAdmin) {
-              // invite-only: the operator has locked the relay — only the admin token may add churches, so a
-              // signed self-registration is refused outright (no matter how valid the proof).
-              if (SETTINGS.inviteOnly) { res.writeHead(403, H); res.end(JSON.stringify({ error: 'this relay is invite-only — ask the operator to add your church' })); return; }
+              // PROVE FIRST, THEN DECIDE — every policy answer below depends on whether we already host
+              // this church, so answering any of them to an unproven caller says which congregations live
+              // on this box. GET /config is admin-only precisely so that question cannot be asked; these
+              // refusals must not answer it by their status code instead.
+              //
+              // This block used to sit BELOW the policy checks, and the differential was real either way:
+              // on a private relay `!community && CHURCH_PUBS.size && !alreadyRegistered` already returned
+              // 403 to an unsigned request for a stranger's key while a hosted key fell through. Moving
+              // the proof up closes that, and stops the invite-only fix below from opening a second one.
+              // Now an unproven caller gets exactly one answer — 401 — whoever they name.
+              const a = parsed.auth;
+              const sigOk = a && typeof a === 'object' && a.kind === 27235 && verifyEvent(a);
+              const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
+              const ownsKey = sigOk && a.pubkey === hex;   // the signer IS the church being registered
+              const uTag = sigOk && (a.tags.find(t => t[0] === 'u') || [])[1];
+              let uOk = false;
+              try { const uu = new URL(String(uTag)); uOk = /\/config\/?$/.test(uu.pathname) && uu.host === (req.headers.host || '').split(',')[0].trim(); } catch {}   // L1: bind the proof to THIS relay's host + path (not just any /config) — anti-replay across relays
+              if (!(sigOk && fresh && ownsKey && uOk)) { res.writeHead(401, H); res.end(JSON.stringify({ error: 'unauthorized: register with the admin token, or sign a fresh proof with this church key' })); return; }
+              // invite-only: the operator has locked the relay — only the admin token may add a NEW church,
+              // so a signed self-registration for one is refused outright (no matter how valid the proof).
+              //
+              // A church that is ALREADY REGISTERED HERE is not adding anything, and must not be refused.
+              // This branch used to fire for it too, which made "invite-only" and "your church is not
+              // accepted" indistinguishable to the console: it raised a permanent, prominent
+              // "This relay has not accepted your church, so nothing you set up will save" on every tab of
+              // a console whose writes were landing perfectly, and a 403 is deliberately never marked done,
+              // so it re-alarmed on every load for ever. Measured 2026-09-04 on a relay with the church
+              // registered by the operator: group, group key, care key, name key and profile all reached
+              // relay.sqlite while the banner claimed nothing would save.
+              //
+              // Falling through is safe, and is the same case the H4 comment below already contemplates
+              // ("an existing church re-announcing itself is fine"): the proof check still has to pass, so
+              // only the holder of that church key learns it is registered — and it already knew. The
+              // no-op guard further down means a re-announce with no new name rewrites nothing.
+              // The membership of this relay is NOT leaked: an unsigned or wrongly-signed request has
+              // already failed the 401 ABOVE, and GET /config remains admin-only.
+              if (SETTINGS.inviteOnly && !CHURCH_PUBS.has(hex)) { res.writeHead(403, H); res.end(JSON.stringify({ error: 'this relay is invite-only — ask the operator to add your church' })); return; }
               // RELAY-AUDIT-2026-07-20 H4 — BOOTSTRAP-ONLY self-registration on a PRIVATE relay.
               // Self-registration exists so the setup flow is effortless: install the relay, open your
               // Steward console, and it registers itself. On a private (single-church) relay that is needed
@@ -4012,14 +4046,6 @@ function serveStatic(req, res) {
                 res.end(JSON.stringify({ error: 'set your church’s name in the Steward console before connecting it to a relay' }));
                 return;
               }
-              const a = parsed.auth;
-              const sigOk = a && typeof a === 'object' && a.kind === 27235 && verifyEvent(a);
-              const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
-              const ownsKey = sigOk && a.pubkey === hex;   // the signer IS the church being registered
-              const uTag = sigOk && (a.tags.find(t => t[0] === 'u') || [])[1];
-              let uOk = false;
-              try { const uu = new URL(String(uTag)); uOk = /\/config\/?$/.test(uu.pathname) && uu.host === (req.headers.host || '').split(',')[0].trim(); } catch {}   // L1: bind the proof to THIS relay's host + path (not just any /config) — anti-replay across relays
-              if (!(sigOk && fresh && ownsKey && uOk)) { res.writeHead(401, H); res.end(JSON.stringify({ error: 'unauthorized: register with the admin token, or sign a fresh proof with this church key' })); return; }
             }
             const list = curChurches();
             const name = String(parsed.addChurch.name || '').slice(0, 80);

@@ -1,24 +1,31 @@
-// A BRAND-NEW CHURCH MUST NOT BE PERMANENTLY POINTED AWAY FROM THE BOX THAT MADE IT.
+// A CHURCH MUST NEVER BE PERMANENTLY POINTED AWAY FROM THE BOX THAT SERVES IT.
 // Run: node --test scripts/a-new-church-is-not-orphaned-from-its-own-box.test.mjs
 //
 // Measured 2026-09-04, staging a church on a self-hosted console (SESSION-2026-09-04-END-TO-END.md, F3).
-// The console published NOTHING for its whole setup — no name, no groups, no meetings — because it had
-// already decided its own box was not its relay.
+// The whole setup wizard published NOTHING — no name, no groups, no meetings — while reporting success.
 //
-// THE SEQUENCE, and every step of it is deliberate on its own:
+// THE MECHANISM, and every step of it was deliberate on its own:
 //   1. "Start a new church" calls createKey() -> setKey(), and setKey fires _refreshBoxHostsUs() at once.
-//   2. Registration is deliberately deferred until the church has a NAME: a nameless self-registration is
-//      refused on purpose (gateway H4 — one box collected 37 anonymous rows).
-//   3. So the probe asks "does this box host us?" about a church that exists on no relay anywhere, gets an
-//      honest "no", and writes it down.
-//   4. `_boxHostsUs === false` makes ownRelay() return CANONICAL_RELAY, which makes _refreshBoxHostsUs
-//      return early at its own first line — so the question can never be asked again. Permanent.
+//   2. Registration is deliberately deferred until the church has a NAME (a nameless self-registration is
+//      refused on purpose — gateway H4, after one box collected 37 anonymous rows).
+//   3. So the probe asked "does this box host us?" about a church registered nowhere, got an honest "no",
+//      and cached it.
+//   4. `_boxHostsUs === false` makes ownRelay() return CANONICAL_RELAY — and the guard at the top of
+//      _refreshBoxHostsUs consulted ownRelay(), so it then refused to run. The answer could never be
+//      revisited. I registered the church on the box for real and the console STILL refused it; only
+//      clearing localStorage recovered it.
 //
-// Nothing in the product rewrites that key. I proved the trap by registering the church on the box for
-// real and watching the console still refuse it; only clearing localStorage by hand recovered it.
+// THE FIX is step 4, not step 3: the guard reads `_ownOrigin()` — straight off location — so the question
+// stays askable on every unlock. This is what the file's own deadlock rule already prescribes for the
+// enrolment census: "READ STRAIGHT OFF location. NOT ownRelay(), which consults _boxHostsUs."
 //
-// This drives the SHIPPED console bundle (vendor/steward.js), and it lifts the REAL _everSelfRegistered —
-// stubbing that would be stubbing the decision this test is named after.
+// A FIRST ATTEMPT AT THIS SUPPRESSED THE CACHING INSTEAD, guarded on "has this church ever registered
+// anywhere". An audit refuted it: that record is per-browser-profile, so a church restored from its phrase,
+// or one the operator added by hand, could never record a legitimate "no" again — which disabled the only
+// check that spots a box serving the console without holding the church. The test below therefore asserts
+// that a real "no" IS still recorded, which is what killed that version.
+//
+// This drives the SHIPPED console bundle (vendor/steward.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -44,73 +51,70 @@ function lift(anchor, name, stubs) {
 
 const CANON = 'wss://app.trinityone.church/relay';
 
-// One scope shared by both lifted functions, so _refreshBoxHostsUs calls the REAL _everSelfRegistered
-// against the REAL store — the point of this test is which of those two decides.
-function harness({ selfreg, hostedChurches }) {
+function harness({ cached = null, hostedChurches = [], origin = 'http://127.0.0.1:8000' } = {}) {
   const store = new Map();
-  if (selfreg) store.set('sr', JSON.stringify(selfreg));
+  const fetches = [];
   const stubs = {
     pub: 'PUB',
-    SELFREG_KEY: 'sr',
-    _boxHostsUs: null,
+    _boxHostsUs: cached,
     lsGet: (k) => (store.has(k) ? store.get(k) : null),
     lsSet: (k, v) => store.set(k, v),
     _boxHostsKey: () => 'bh',
     CANONICAL_RELAY: CANON,
-    ownRelay: () => 'ws://127.0.0.1:8000/relay',   // the console IS served by a relay
+    // Faithful to the real ownRelay(): a cached `false` sends it to the community pool. If the guard under
+    // test consults this, a poisoned console can never re-ask — which is the whole bug.
+    ownRelay: () => (stubs._boxHostsUs === false ? CANON : 'ws://127.0.0.1:8000/relay'),
+    _ownOrigin: () => origin,
     localAdminToken: async () => 'tok',
     _authHdr: () => ({}),
     npubEncode: (p) => 'npub_' + p,
-    fetch: async () => ({ ok: true, json: async () => ({ churches: hostedChurches }) }),
+    fetch: async (u) => { fetches.push(u); return { ok: true, json: async () => ({ churches: hostedChurches }) }; },
   };
-  // Lift the REAL _everSelfRegistered when the bundle has it — stubbing it would stub the decision this
-  // test is named after. When it is ABSENT (i.e. the pre-fix bundle) fall back to an inert stub, because
-  // the old code never calls it: that lets the BEHAVIOUR assertion below fire instead of the harness
-  // exploding on a missing anchor, which is the difference between proving a regression and proving a
-  // rename. Verified both ways on 2026-09-04.
-  stubs._everSelfRegistered = VENDOR.includes('function _everSelfRegistered()')
-    ? lift('function _everSelfRegistered() {', '_everSelfRegistered', stubs)
-    : () => false;
   const refresh = lift('async function _refreshBoxHostsUs() {', '_refreshBoxHostsUs', stubs);
-  return { store, stubs, refresh };
+  return { store, stubs, fetches, refresh };
 }
 
-test('THE REGRESSION: a church that exists on no relay yet is left UNKNOWN, not written off', async () => {
-  const h = harness({ selfreg: null, hostedChurches: [] });   // never registered anywhere; box says "not mine"
+test('THE REGRESSION: a cached "no" does not stop the console asking again', async () => {
+  // The exact poisoned state: the box was asked too early, said no, and that was written down.
+  const h = harness({ cached: false, hostedChurches: [{ npub: 'npub_PUB' }] });
   await h.refresh();
-  assert.equal(h.store.get('bh'), undefined,
-    'the console cached "this box is not ours" about a church that is seconds old and registered nowhere. ' +
-    'That answer is permanent: it makes ownRelay() return the community pool, which makes this very ' +
-    'function return early for ever, so a self-hosting church can never be pointed back at its own box.');
-  assert.equal(h.stubs._boxHostsUs, null,
-    'left as a verdict in memory rather than "not yet" — ownRelay() consults this on the next call');
+  assert.equal(h.fetches.length, 1,
+    'the console did not even ask. A cached "no" makes ownRelay() return the community pool, and the guard ' +
+    'consulted ownRelay(), so it refused to run — the answer was unrevisitable and a self-hosting church ' +
+    'was pointed at the shared pool for ever. Registering the church on the box does not cure this; only ' +
+    'clearing localStorage does, and nothing in the product does that.');
+  assert.equal(h.store.get('bh'), '1', 'it asked, was told yes, and did not write the answer down');
+  assert.equal(h.stubs._boxHostsUs, true);
 });
 
-test('CONTROL: a church that HAS registered somewhere still gets a real "no" recorded', async () => {
-  const h = harness({ selfreg: { 'PUB@https://elsewhere.example': 1 }, hostedChurches: [] });
+test('CONTROL: a real "no" is still recorded — the box that serves you may not hold your church', async () => {
+  const h = harness({ cached: null, hostedChurches: [] });
   await h.refresh();
   assert.equal(h.store.get('bh'), '0',
-    'the fix must not blind the probe permanently — once the church exists on a relay, a box saying ' +
-    '"not mine" is a real answer and must still be believed');
+    'the probe stopped recording a negative answer. That is the only check that spots a box which serves ' +
+    'this console but does not hold this church — the case whereChurchLives() exists for. An earlier ' +
+    'version of this fix broke exactly this, for every church restored from a phrase or added by an operator.');
   assert.equal(h.stubs._boxHostsUs, false);
 });
 
-test('CONTROL: a box that DOES host the church records yes, registered or not', async () => {
-  const h = harness({ selfreg: null, hostedChurches: [{ npub: 'npub_PUB' }] });
+test('CONTROL: a box that DOES host the church records yes', async () => {
+  const h = harness({ cached: null, hostedChurches: [{ npub: 'npub_PUB' }] });
   await h.refresh();
   assert.equal(h.store.get('bh'), '1');
   assert.equal(h.stubs._boxHostsUs, true);
 });
 
-// FIX B, the other end of the same bug: a successful registration is new information about where this
-// church lives, so the cached answer must be dropped and re-asked. Asserted against the BUNDLE, where
-// esbuild strips dead code — so a match here means the line is reachable, not merely present.
-test('a successful self-registration re-asks whether this box holds the church', () => {
-  const body = fnBody(VENDOR, 'async selfRegister(name, opts) {', 'selfRegister');
-  assert.ok(body.length > 400, 'selfRegister sliced to a stub — re-anchor rather than widening');
-  assert.match(body, /if\s*\(accepted\)\s*\{[\s\S]{0,240}removeItem\(\s*_boxHostsKey\(\)\s*\)/,
-    'selfRegister succeeded and left the stale "this box is not ours" answer in place. Nothing else ever ' +
-    'rewrites that key, and ownRelay() cannot revisit it once it is false.');
-  assert.match(body, /if\s*\(accepted\)\s*\{[\s\S]{0,320}_refreshBoxHostsUs\(\)/,
-    'the answer was dropped but never re-asked, so the box stays out of the list until the next reload');
+test('CONTROL: a console served by nothing relay-shaped does not ask at all', async () => {
+  // _ownOrigin() returns '' inside a Capacitor APK and on a static CDN host — there is no box to ask.
+  const h = harness({ cached: null, hostedChurches: [], origin: '' });
+  await h.refresh();
+  assert.equal(h.fetches.length, 0, 'the console probed /config on an origin that cannot be a relay');
+  assert.equal(h.store.get('bh'), undefined, 'and wrote down an answer it never received');
+});
+
+test('CONTROL: it never asks without knowing which church is asking', async () => {
+  const h = harness({ cached: null });
+  h.stubs.pub = '';
+  await h.refresh();
+  assert.equal(h.fetches.length, 0, 'asked "do you host us?" without a church to name');
 });

@@ -585,22 +585,29 @@ function _boxHostsKey() { return 'trinityone.steward.boxhosts.' + (pub || ''); }
 function _loadBoxHosts() {
   try { const c = lsGet(_boxHostsKey()); _boxHostsUs = (c === '0') ? false : (c === '1') ? true : null; } catch (e) { _boxHostsUs = null; }
 }
-// Has this church ever been ACCEPTED by any relay? selfRegister records `<pub>@<base>` on a real
-// acceptance and deliberately records nothing on a refusal, so an empty answer here means "this church
-// does not exist on any relay yet" — which is exactly the state a church is in for its first minute.
-function _everSelfRegistered() {
-  try {
-    const d = JSON.parse(lsGet(SELFREG_KEY) || '{}') || {};
-    return Object.keys(d).some(k => k.indexOf((pub || '\u0000') + '@') === 0);
-  } catch (e) { return false; }
-}
 async function _refreshBoxHostsUs() {
   try {
     // NOT just loopback. A self-hosted church is very often reached through a tunnel, so its own relay has a
     // public address and is not 127.0.0.1 at all — the first version of this asked only on loopback and so
     // told a tunnelled church that it lived on the community relays, which was flatly untrue. The real
     // question is "is the relay on this origin something other than the community pool?".
-    if (!pub || ownRelay() === CANONICAL_RELAY) return;
+    // NEVER ownRelay() — THIS is what made a cached "no" permanent. ownRelay() returns CANONICAL_RELAY the
+    // moment `_boxHostsUs === false`, so this function's own guard then refused to run, so the answer could
+    // never be revisited. A church created on a self-hosted box asked before it was registered (registration
+    // is deferred until a NAME exists — gateway H4), got an honest "no", and was pointed at the community
+    // pool for ever. Measured 2026-09-04: registering the church on the box for real did not recover it;
+    // only clearing localStorage did.
+    //
+    // src/steward.src.js's own deadlock rule (above the enrolment census) already says the remedy in as many
+    // words: READ STRAIGHT OFF location, never ownRelay(), never the _boxHostsUs cache. _ownOrigin() answers
+    // "was this console served by something that could be a relay?" without consulting either, so the
+    // question stays askable on every unlock and a wrong answer costs one round trip instead of a church.
+    //
+    // My first attempt guarded on "has this church ever registered anywhere" instead. An audit refuted it:
+    // that record is per-BROWSER-PROFILE, so a church restored from its phrase, or one the operator added by
+    // hand, could never record a legitimate "no" again — which disabled the one check that spots a box
+    // serving the console without holding the church. Worse than the bug it fixed.
+    if (!pub || !_ownOrigin()) return;
     const tok = await localAdminToken(); if (!tok) return;
     const r = await fetch('/config', { cache: 'no-store', headers: _authHdr(tok) });
     if (!r.ok) return;                                  // cannot tell → leave the box in the list
@@ -608,15 +615,8 @@ async function _refreshBoxHostsUs() {
     const list = (j && (j.churches || j.current || [])) || [];
     const mine = npubEncode(pub);
     const hosted = list.some(c => c && (c.npub === mine || String(c.npub || '') === mine));
-    // A "no" about a church that has never been registered ANYWHERE is a not-yet, never a verdict, and
-    // caching it is permanent. Creating a church calls setKey() -> _refreshBoxHostsUs() straight away, while
-    // registration is deliberately deferred until the church has a NAME (a nameless self-registration is
-    // refused on purpose — steward-root.jsx and gateway H4). So this probe always asks before the answer
-    // CAN be yes; caching that "no" makes ownRelay() return CANONICAL_RELAY, which makes the guard at the
-    // top of this function return early, so the question can never be asked again. A self-hosting church
-    // was pointed at the community pool from the moment it was created and could not be pointed back.
-    // Leaving it UNKNOWN keeps the box in the list, which is what ownRelay()'s own comment asks for.
-    if (!hosted && !_everSelfRegistered()) { _boxHostsUs = null; return; }
+    // Caching a "no" is safe again now the question is re-askable: the next setKey (every unlock, every
+    // reload) asks afresh, so a church registered after this ran is picked up rather than locked out.
     _boxHostsUs = hosted;
     try { lsSet(_boxHostsKey(), hosted ? '1' : '0'); } catch (e) {}
   } catch (e) { /* unreachable, or not a Suite box → leave the box in the list */ }
@@ -4033,8 +4033,19 @@ window.Steward = {
     const names = new Map();   // pubkey -> display name, resolved from kind-0 (else the console shows everyone as "Anonymous")
     const seen = new Set();    // authors already queried
     const nameSubs = []; let pending = [], batchTimer = null;
-    let hidden = new Set();   // message ids the steward/leaders removed → withheld from the view
-    const attach = () => [...byId.values()].filter(m => !hidden.has(m.id)).sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
+    let hidden = new Set();   // message ids the steward/leaders removed
+    // A REMOVED MESSAGE IS MARKED, NOT DROPPED — for the CONSOLE only. Removal is reversible (it publishes
+    // a `hidden:` doc; unhideMessage republishes it empty and the kind-1 was never deleted), but the only
+    // way to reverse it was an Undo on a banner that clears itself after 9 seconds — so a steward who
+    // paused to re-read the message could not put it back at all, and `unhideMessage` had no other caller.
+    // Measured 2026-09-04: the Undo vanished between one command and the next.
+    //
+    // The MEMBER app is unchanged and still filters these out completely — fellowship.src.js has its own
+    // subscribeHidden and screens-chat.jsx drops them. This is a moderator's view of their own decision,
+    // and it must never become a way for a congregation to read what a steward removed.
+    const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
+      // ONE pass: a second .map that re-read `rx` would put the reactions back on a removed message.
+      if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || '', removed: true, text: '', reactions: [], myReaction: '' };
       const r = rx.get(m.id); return { ...m, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
     });
     const emit = () => onMsgs(attach());
@@ -6893,7 +6904,19 @@ window.Steward = {
     if (!churchSk || !churchPub) return;
     const np = npubEncode(churchPub);
     const force = !!(opts && opts.force);
-    const bases = new Set([window.Steward.configBase()]);
+    // ENROLMENT ENUMERATES RAW SOURCES, NEVER ownRelay(). configBase() derives from ownRelay(), which
+    // consults the _boxHostsUs cache — so on a console that once answered "this box is not ours" the box
+    // was not even in the list it tried to register with, and registering was the one thing that could
+    // have changed that answer. That is the deadlock rule written above the enrolment census, reached by
+    // a third route. Measured 2026-09-04 on a clean Suite box: with the cache set, saveName's registration
+    // went to the community pool and the box never learned the church existed.
+    //
+    // _ownOrigin() reads location directly and returns '' for a Capacitor APK or a static CDN host, so
+    // there is nothing to add when the console was not served by something that could be a relay.
+    const bases = new Set();
+    const rawOrigin = _ownOrigin();
+    if (rawOrigin) bases.add(rawOrigin);
+    bases.add(window.Steward.configBase());
     for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, ''));
     let done = {};
     try { done = JSON.parse(localStorage.getItem(SELFREG_KEY) || '{}') || {}; } catch (e) {}
@@ -6904,7 +6927,11 @@ window.Steward = {
       const url = base + '/config';
       try {
         const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
-        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }) });
+        // A TIMEOUT, like every other fetch in this file (:667, :773, :778, :853). saveName now awaits this
+        // before publishing, and Continue is disabled while it runs — so without one a captive portal or a
+        // thin pipe leaves the wizard's first step hanging with no cancel and nothing on screen but a
+        // half-faded button. Raised by the 2026-09-04 audit of that change.
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }), signal: AbortSignal.timeout(6000) });
         // Only remember a real acceptance. A 400 ("name your church first") or 403 (invite-only / already set
         // up) must stay un-marked so a later, correct attempt is still made.
         if (r && r.ok) { done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; _markRegOk(); }
@@ -6930,7 +6957,9 @@ window.Steward = {
     // `accepted` was then true, and the steward was told nothing, while every subsequent write to their own
     // relay was rejected. Measured 2026-08-17: ok:true alongside a 403 from the relay the church was actually
     // pointed at, and 17 lost setup writes.
-    const ownBase = window.Steward.configBase();
+    // "Our" relay for the purpose of that warning is the box that served this console when there is one —
+    // configBase() can be pointing at the pool for the very reason described above.
+    const ownBase = rawOrigin || window.Steward.configBase();
     const ownRefused = refused.find(x => x.base === ownBase) || unreachable.includes(ownBase);
     if (ownRefused) {
       const why = (refused.find(x => x.base === ownBase) || {}).why;
@@ -6940,14 +6969,6 @@ window.Steward = {
             ? ('This relay has not accepted your church, so nothing you set up will save: “' + why + '”')
             : 'This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings — your church key is safe on this device.' } }));
       } catch (e) {}
-    }
-    // A SUCCESSFUL REGISTRATION IS NEW INFORMATION ABOUT WHERE THIS CHURCH LIVES. The box-hosts answer may
-    // have been cached as "no" while this church existed on no relay at all; nothing else ever rewrites it,
-    // and ownRelay() cannot revisit it once it is false. Drop it and ask again now that the answer can differ.
-    if (accepted) {
-      try { localStorage.removeItem(_boxHostsKey()); } catch (e) {}
-      _boxHostsUs = null;
-      try { _refreshBoxHostsUs(); } catch (e) {}
     }
     return { ok: accepted, refused, unreachable };
     } finally {

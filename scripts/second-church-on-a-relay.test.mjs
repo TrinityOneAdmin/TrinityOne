@@ -76,8 +76,17 @@ test('a refused registration reaches the steward, in the relay’s own words', (
   // self-hosted or local relay can be refused THERE and still get an acceptance from a canonical one.
   // Measured 2026-08-17: selfRegister returned ok:true alongside a 403 from the relay the church was actually
   // pointed at, and seventeen setup writes were lost in silence.
-  assert.match(fn, /const ownBase = window\.Steward\.configBase\(\)/,
+  // ownBase gained a `rawOrigin ||` prefix on 2026-09-04 and the INTENT is unchanged — it is still one
+  // named relay, still this church's own, never "anybody". It got stronger: configBase() derives from
+  // ownRelay(), which consults the _boxHostsUs cache, so on a console that once answered "this box is not
+  // ours" configBase() points at the community pool — and the refusal that mattered, from the box the
+  // steward is actually sitting at, was then judged against the wrong base. rawOrigin reads location
+  // directly. What this test forbids is judging on whether ANY relay accepted; that is still forbidden.
+  assert.match(fn, /const ownBase = rawOrigin \|\| window\.Steward\.configBase\(\)/,
     'the question is whether THIS church\'s relay took it, not whether anybody did');
+  assert.match(fn, /const rawOrigin = _ownOrigin\(\)/,
+    'rawOrigin must come from location, not from ownRelay() — a cached verdict is exactly what it exists ' +
+    'to route around');
   assert.match(fn, /if \(ownRefused\)/,
     'an acceptance from a canonical relay must not mask a refusal from the one the church will actually use');
   assert.match(fn, /return \{ ok: accepted/, 'callers should be able to act on it too');

@@ -15196,17 +15196,9 @@ zoo`.split("\n");
       _boxHostsUs = null;
     }
   }
-  function _everSelfRegistered() {
-    try {
-      const d = JSON.parse(lsGet(SELFREG_KEY) || "{}") || {};
-      return Object.keys(d).some((k) => k.indexOf((pub || "\0") + "@") === 0);
-    } catch (e) {
-      return false;
-    }
-  }
   async function _refreshBoxHostsUs() {
     try {
-      if (!pub || ownRelay() === CANONICAL_RELAY) return;
+      if (!pub || !_ownOrigin()) return;
       const tok = await localAdminToken();
       if (!tok) return;
       const r = await fetch("/config", { cache: "no-store", headers: _authHdr(tok) });
@@ -15215,10 +15207,6 @@ zoo`.split("\n");
       const list = j && (j.churches || j.current || []) || [];
       const mine = npubEncode(pub);
       const hosted = list.some((c) => c && (c.npub === mine || String(c.npub || "") === mine));
-      if (!hosted && !_everSelfRegistered()) {
-        _boxHostsUs = null;
-        return;
-      }
       _boxHostsUs = hosted;
       try {
         lsSet(_boxHostsKey(), hosted ? "1" : "0");
@@ -18218,7 +18206,8 @@ zoo`.split("\n");
       const nameSubs = [];
       let pending = [], batchTimer = null;
       let hidden = /* @__PURE__ */ new Set();
-      const attach = () => [...byId.values()].filter((m) => !hidden.has(m.id)).sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
+      const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
+        if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", reactions: [], myReaction: "" };
         const r = rx.get(m.id);
         return { ...m, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
       });
@@ -21366,7 +21355,10 @@ zoo`.split("\n");
         if (!churchSk || !churchPub) return;
         const np = npubEncode(churchPub);
         const force = !!(opts && opts.force);
-        const bases = /* @__PURE__ */ new Set([window.Steward.configBase()]);
+        const bases = /* @__PURE__ */ new Set();
+        const rawOrigin = _ownOrigin();
+        if (rawOrigin) bases.add(rawOrigin);
+        bases.add(window.Steward.configBase());
         for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, ""));
         let done = {};
         try {
@@ -21381,7 +21373,7 @@ zoo`.split("\n");
           const url = base + "/config";
           try {
             const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
-            const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }) });
+            const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }), signal: AbortSignal.timeout(6e3) });
             if (r && r.ok) {
               done[mark] = 1;
               try {
@@ -21403,7 +21395,7 @@ zoo`.split("\n");
             unreachable.push(base);
           }
         }
-        const ownBase = window.Steward.configBase();
+        const ownBase = rawOrigin || window.Steward.configBase();
         const ownRefused = refused.find((x) => x.base === ownBase) || unreachable.includes(ownBase);
         if (ownRefused) {
           const why = (refused.find((x) => x.base === ownBase) || {}).why;
@@ -21412,17 +21404,6 @@ zoo`.split("\n");
               what: "church registration",
               message: why ? "This relay has not accepted your church, so nothing you set up will save: \u201C" + why + "\u201D" : "This relay did not answer, so nothing you set up will save yet. Check the relay address in Settings \u2014 your church key is safe on this device."
             } }));
-          } catch (e) {
-          }
-        }
-        if (accepted) {
-          try {
-            localStorage.removeItem(_boxHostsKey());
-          } catch (e) {
-          }
-          _boxHostsUs = null;
-          try {
-            _refreshBoxHostsUs();
           } catch (e) {
           }
         }

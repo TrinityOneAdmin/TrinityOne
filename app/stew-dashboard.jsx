@@ -2620,6 +2620,16 @@ function GroupChatModal({ group, onClose }) {
       });
     }).catch(() => showMod('Couldn’t remove that message — the relay could not be reached.'));
   };
+  // Put a removed message back from the row itself, so the reverse action outlives the 9-second banner.
+  // Routes through the same showMod as doRemove, and reports a refusal rather than painting it restored:
+  // unhideMessage returns falsy when no relay accepted, and a message that is still hidden on the relay
+  // that polices this church is still hidden for every member.
+  const doUnremove = (m) => {
+    setMenuFor('');
+    Promise.resolve(window.Steward.unhideMessage(group.id, m.id))
+      .then((u) => showMod(u ? 'Message put back' : 'Couldn’t put it back — the relay didn’t accept it, so it is still removed.'))
+      .catch(() => showMod('Couldn’t put it back — the relay could not be reached, so it is still removed.'));
+  };
   const msgText = (m) => {   // render polls gracefully (members vote in the member app); avoids showing raw JSON
     if (m.kind === 'poll') { try { const p = JSON.parse(m.text); return '📊 ' + (p.question || 'Poll') + ' — ' + (p.options || []).join(' · '); } catch { return '📊 Poll'; } }
     return (m.kind === 'prayer' ? '🙏 ' : '') + m.text;
@@ -2694,7 +2704,19 @@ function GroupChatModal({ group, onClose }) {
         ) : null}
         <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
-          {msgs.map(m => (
+          {msgs.map(m => (m.removed ? (
+            /* A REMOVED MESSAGE STAYS REACHABLE TO THE STEWARD WHO REMOVED IT. Removal is reversible —
+               it publishes a `hidden:` doc and the message itself is never deleted — but the only way
+               back was an Undo on a banner that clears after 9 seconds, and unhideMessage had no other
+               caller, so pausing to think meant losing the message for good. The text is NOT shown: this
+               says a message was removed and offers to put it back, it does not reprint what was said.
+               Members never see this row — the member app filters removed messages out entirely. */
+            <div key={m.id} style={{ alignSelf: 'center', maxWidth: '86%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
+              <Icon name="trash" size={13} color="var(--ink-3)" />
+              <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Message from {nameFor(m.by) || 'a member'} removed</span>
+              <button onClick={() => doUnremove(m)} aria-label={'Put back the removed message from ' + (nameFor(m.by) || 'a member')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', padding: '4px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Put back</button>
+            </div>
+          ) : (
             <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
               {!m.mine ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, paddingLeft: 2 }}>
                 <SkBadge initials={initialsFor(m.by)} av={avFor(m.by)} pubkey={m.by} size={20} radius={7} accent="var(--sage)" />
@@ -2727,7 +2749,7 @@ function GroupChatModal({ group, onClose }) {
                 </div>
               ) : null}
             </div>
-          ))}
+          )))}
         </div>
         <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderTop: '1px solid var(--line)' }}>
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
