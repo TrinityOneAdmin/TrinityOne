@@ -6924,18 +6924,25 @@ window.Steward = {
     if (!churchSk || !churchPub) return;
     const np = npubEncode(churchPub);
     const force = !!(opts && opts.force);
-    // ENROLMENT ENUMERATES RAW SOURCES, NEVER ownRelay(). configBase() derives from ownRelay(), which
-    // consults the _boxHostsUs cache — so on a console that once answered "this box is not ours" the box
-    // was not even in the list it tried to register with, and registering was the one thing that could
-    // have changed that answer. That is the deadlock rule written above the enrolment census, reached by
-    // a third route. Measured 2026-09-04 on a clean Suite box: with the cache set, saveName's registration
-    // went to the community pool and the box never learned the church existed.
+    // THE SERVING BOX IS A REGISTRATION TARGET ONLY WHEN A STEWARD IS DELIBERATELY CREATING A CHURCH ON IT.
+    // Owner's decision, 2026-09-04. `createHere` is passed by exactly one caller — the setup wizard's name
+    // step (app/stew-dashboard.jsx saveName) — and never by the boot-time selfRegister('') calls in
+    // app/steward-root.jsx or the name-resolved effect in stew-dashboard.
+    //
+    // Why it is an opt-in and not the default. The previous cut seeded `bases` from _ownOrigin()
+    // unconditionally, so that a console whose cache said "this box is not ours" could still reach the box
+    // that served it (configBase() follows ownRelay(), which follows the cache — the deadlock rule reached by
+    // a third route). But on a COMMUNITY box that accepts self-registration, an unsolicited row from a boot
+    // call makes _refreshBoxHostsUs answer "yes" at the next unlock, and the console starts PUBLISHING to a
+    // box nobody chose — which defeats the serves-but-does-not-hold check that _refreshBoxHostsUs exists
+    // for. A church is put on a box by a person, at the moment they create it there.
     //
     // _ownOrigin() reads location directly and returns '' for a Capacitor APK or a static CDN host, so
     // there is nothing to add when the console was not served by something that could be a relay.
+    const createHere = !!(opts && opts.createHere);
     const bases = new Set();
     const rawOrigin = _ownOrigin();
-    if (rawOrigin) bases.add(rawOrigin);
+    if (createHere && rawOrigin) bases.add(rawOrigin);
     bases.add(window.Steward.configBase());
     for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, ''));
     let done = {};
@@ -6954,7 +6961,30 @@ window.Steward = {
         const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }), signal: AbortSignal.timeout(6000) });
         // Only remember a real acceptance. A 400 ("name your church first") or 403 (invite-only / already set
         // up) must stay un-marked so a later, correct attempt is still made.
-        if (r && r.ok) { done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; _markRegOk(); }
+        if (r && r.ok) {
+          done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; _markRegOk();
+          // AN ACCEPTANCE FROM THE BOX THAT SERVED THIS CONSOLE IS THE ANSWER TO "DOES THIS BOX HOLD US".
+          // It is a stronger answer than the /config probe's: the probe reads a list, this is the box
+          // writing the church INTO that list, signed by the church key it just verified. Without this,
+          // the session that CREATES a church published nothing to its own box: setKey's probe had asked
+          // about a church seconds old and registered nowhere, honestly cached "0", and relaysRaw() then
+          // built the publish set from ownRelay(), which follows that cache. Measured 2026-09-04 on
+          // 42f8080, driving the real console: church.json gained the row (`by: "self"`), boxhosts stayed
+          // "0", ownRelay() was the community pool, and the relay held ZERO events until a reload + unlock
+          // re-asked the probe. Only the serving origin counts — a canonical or pool acceptance says
+          // nothing about THIS box, and _refreshBoxHostsUs keeps recording a genuine "no" from a box that
+          // serves the console but does not hold the church.
+          if (rawOrigin && base === rawOrigin && _boxHostsUs !== true) {
+            _boxHostsUs = true;
+            try { lsSet(_boxHostsKey(), '1'); } catch (e) {}
+            // ownRelay() names the box again, so re-prove the assembled list and tell the surfaces that
+            // read it: `steward-relays` repaints the Relays card, `steward-relay-returned` is the advisory
+            // re-subscribe/flush signal — the same pair the gate's own onChange fires.
+            try { _gate.refresh(relaysRaw(), pub); } catch (e) {}
+            try { window.dispatchEvent(new CustomEvent('steward-relays')); } catch (e) {}
+            try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url: '' } })); } catch (e) {}
+          }
+        }
         else if (r) { let why = ''; try { why = ((await r.json()) || {}).error || ''; } catch (e) {} refused.push({ base, status: r.status, why });
           // "set your church's name … before connecting it to a relay" is not a verdict, it is a not-yet: the
           // wizard's first field is the name, and naming it re-registers. Keep the publish gate SHUT for that

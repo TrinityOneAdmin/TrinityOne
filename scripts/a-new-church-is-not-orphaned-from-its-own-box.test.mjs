@@ -147,6 +147,11 @@ test('CONTROL: it never asks without knowing which church is asking', async () =
 // Measured 2026-09-04: with `bases.add(rawOrigin)` removed, a fresh church on a clean Suite box does not
 // register at all (no church.json) and nothing it publishes is accepted. An audit of f0ceb92 deleted that
 // line and the ENTIRE SUITE stayed green — this test is the gap it found.
+//
+// SINCE THEN THE SEED BECAME AN OPT-IN. Owner's decision, 2026-09-04: the serving box is a registration
+// target only when a steward is deliberately creating a church on it — the wizard passes `createHere`,
+// the boot-time calls do not (see only-the-wizard-puts-a-church-on-the-serving-box.test.mjs for the other
+// half). This test is the wizard's call, so it passes the flag.
 test('registration is aimed at the box that served the console, not only at where ownRelay points', async () => {
   const posts = [];
   const scope = {
@@ -159,8 +164,13 @@ test('registration is aimed at the box that served the console, not only at wher
     now: () => 1788500000,
     // The poisoned state: the box said "not ours", so ownRelay()/configBase() name the community pool.
     _ownOrigin: () => 'http://127.0.0.1:8000',
-    window: { Steward: { configBase: () => 'https://app.trinityone.church' } },
+    window: { Steward: { configBase: () => 'https://app.trinityone.church' }, dispatchEvent: () => true },
     localStorage: { getItem: () => '{}', setItem: () => {} },
+    // What an acceptance from the box now writes down (the other half of this fix, tested in
+    // an-accepted-registration-tells-the-console-its-box-holds-it.test.mjs). Present so the lifted function
+    // runs clean: a missing stub throws inside the fetch's own try/catch and is counted as "unreachable".
+    _boxHostsUs: false, pub: 'PUB', lsSet: () => {}, _boxHostsKey: () => 'bh',
+    _gate: { refresh: () => Promise.resolve([]) }, relaysRaw: () => [],
     AbortSignal: { timeout: () => undefined },
     fetch: async (u) => { posts.push(String(u)); return { ok: true, json: async () => ({}) }; },
   };
@@ -179,7 +189,7 @@ test('registration is aimed at the box that served the console, not only at wher
   // fnBody hands back object-method shorthand (`async selfRegister(name, opts) {…}`), which is not a valid
   // expression on its own — put it back in an object literal and take the method off it.
   const fn = new Function('scope', `with (scope) { return ({ ${body} }).selfRegister; }`)(proxy);
-  await fn.call({}, 'St Hilda of the Test');
+  await fn.call({}, 'St Hilda of the Test', { createHere: true });
 
   assert.ok(posts.some(u => u.indexOf('http://127.0.0.1:8000/config') === 0),
     'the console never tried to register with the box that served it. `bases` came from configBase(), ' +
