@@ -402,3 +402,42 @@ arrived in that hidden mount, and since the 2026-09-03 fix an unknown answer hol
 CONFIDENTIAL section, where that button is absent on purpose. The fail-closed gate was working. The probe
 was corrected to say the lists had arrived; the gate was not touched.
 
+## The 2026-09-04 audit fixes — both APKs on the Oppo, from `3f3b6a6`
+
+Every check drove SHIPPED code in the live WebView. The loaded build was read off the phone, never assumed:
+
+    member  — safeguarding stream reports minorsKnown            true
+            — …and asks the second question (_relayAuthedAt)     true
+            — setProfile answers "did my change save?"           true
+            — undo outranks the thing it undoes (_monotonicF)    true
+    console — publishNeed refuses a failed publish               true
+            — approve reports which half landed                  true
+            — "sync off" is checked                              true
+            — the ledger can discard what was refused            true
+
+**The safeguarding one, on the phone:**
+
+    lists not yet arrived: no "Set up help" anywhere       true
+    …and the screen says it is still checking              true
+    CONTROL: lists arrived, adult's request keeps it       true
+
+**The console, with a publishSigned that fails the way the real `publish()` does (returns `false`):**
+
+    a refused need is not a saved need                     true
+    CONTROL: an accepted need still comes back             true
+    need accepted + status refused -> stillOpen            true
+    nothing accepted -> total failure, not "half done"     true
+    the need sheet does not close as saved                 true, and says why
+    CONTROL: a clean save still finishes                   true
+    dropFrom discarded 2 refused entries, book contiguous  true
+
+**The first run of the console probe could not reach the line under test**, and the reason is worth keeping:
+this console holds no care key, so `publishNeed` refuses at its own guard before ever publishing — correct
+behaviour, and it means a probe must lend it a seal to exercise the publish path at all. A probe that stops
+at an earlier guard and reports nothing looks exactly like a probe that passed.
+
+**Not driven on the device:** the bank-statement import retry. It needs a real church, a real relay and a
+real CSV, so it is covered instead by `a-retried-import-does-not-post-twice.test.mjs`, which runs the SHIPPED
+ledger and the SHIPPED importStatement against a relay enforcing the real exact-next-seq rule. Worth a human
+pass with a real statement before this reaches a church.
+
