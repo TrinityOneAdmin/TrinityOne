@@ -1563,7 +1563,7 @@ function TodayScreen({ ctx }) {
               </React.Fragment>
             );
           })()}
-          <button onClick={ctx.toggleDark} style={{
+          <button onClick={ctx.toggleDark} aria-label={ctx.dark ? 'Switch to light mode' : 'Switch to dark mode'} style={{
             width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
             background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',

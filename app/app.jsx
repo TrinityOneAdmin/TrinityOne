@@ -208,9 +208,10 @@ function DevotionalView({ open, onClose, ctx }) {
         <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color="#fff" /></div>
         <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
+            <button onClick={onClose} aria-label="Close this devotional" style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
               color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={20} color="#fff" /></button>
             <button onClick={() => ctx.openShareSheet({ type: 'devotional', title: d.title, ref: d.ref, series: d.series, excerpt: (d.body && d.body[0]) || '' })}
+              aria-label="Share this devotional"
               style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
               color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="share" size={18} color="#fff" /></button>
           </div>

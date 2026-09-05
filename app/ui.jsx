@@ -382,6 +382,12 @@ const ICON_LABELS = {
   share: 'Share', trash: 'Delete', pen: 'Edit', check: 'Confirm', search: 'Search', bell: 'Notifications',
   qr: 'Show QR code', link: 'Copy link', chat: 'Message', send: 'Send', settings: 'Settings', user: 'Profile',
   refresh: 'Refresh', download: 'Download', play: 'Play', pause: 'Pause', heart: 'Care', calendar: 'Calendar',
+  // Added 2026-09-05. These five were in use with no entry here and no `title` at the call site, so IconBtn
+  // rendered aria-label={undefined} and a screen reader announced them as "button" — five 40x40 targets with
+  // no name, in the Bible reader, the book reader and a chat room's privacy note. The test
+  // every-icon-button-has-a-name.test.mjs now fails when a sixth appears.
+  bookmark: 'Bookmark', compare: 'Compare translations', headphones: 'Listen', shield: 'Who can see this room',
+  sliders: 'Reading settings',
 };
 function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, title, ...rest }) {
   const _name = title || ICON_LABELS[name] || undefined;

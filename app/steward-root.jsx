@@ -419,7 +419,7 @@ function StewardWelcome() {
       <div style={card}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginBottom: 18, textAlign: 'center' }}>
           <Halo size={40} color="var(--ink)" spark="var(--clay)" />
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, letterSpacing: '-.3px' }}>Steward console</div>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, letterSpacing: '-.3px', margin: 0 }}>Steward console</h1>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>{mode === 'choose' ? 'Set up a new church, take over an existing one, or help run one.' : (mode === 'steward' || mode === 'steward-pin') ? 'Becoming a steward of an existing church.' : 'Restore a church from another steward.'}</div>
         </div>
 
@@ -568,7 +568,7 @@ function StewardForcedPin() {
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
       <div style={{ width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
         <Halo size={40} color="var(--ink)" spark="var(--clay)" />
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Set a console PIN</div>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Set a console PIN</h1>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 18, textAlign: 'left' }}>
           Your church key signs as the <b>whole church</b> — if it leaks, an attacker can impersonate
           the church to every member. This encrypts the key on this device, so a stolen phone or
@@ -657,7 +657,7 @@ function StewardUnlock() {
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
       <div style={{ width: 'min(380px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
         <Halo size={40} color="var(--ink)" spark="var(--clay)" />
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Console locked</div>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Console locked</h1>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 18 }}>Enter the PIN to unlock this church on this device.</div>
         <input type="password" aria-label="Your console PIN or passphrase" value={pin} autoFocus disabled={blocked} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && !blocked) submit(); }}
           placeholder="Your PIN or passphrase" autoComplete="off"

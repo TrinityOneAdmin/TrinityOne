@@ -3,6 +3,45 @@
 (Care-partners roadmap idea moved to `reference/SPINE.md` → Phase 2, beside "Church-adjacent charities".)
 
 
+## Decided NOT to do — relay tag index (2026-09-05)
+
+Finding 4 of the re-verification audit was "the relay has no tag index, so queries degrade as a church
+accumulates history". True, deliberate, and **the decision is to leave it alone.** Recorded here so the next
+round does not rediscover it and "fix" it.
+
+**What the relay actually does.** `scripts/event-store.mjs` indexes `(kind, created_at)`, `(pubkey,
+created_at)`, `(church, created_at)`, `dtag` and `repl`. `#d` and `#church` are columns. Any OTHER `#tag`
+filter streams the indexed set newest-first, `JSON.parse`s each row and post-matches, capped at 200,000 rows
+per filter with a per-connection allowance of 300,000 rows/s authed and 25,000 anon.
+
+**It was tried and reverted** (`540fc9e` added it, `0c3c88b` reverted, 2026-07-14). The index ordered by
+`e.created_at` rather than the tag table's, so `LIMIT` never early-terminated and it materialised every
+match — measured *worse* than the scan at ~123 ms per filter. And compound single-letter filters (`#p` +
+`#t`, which is the shape this product actually sends) limited on one tag and post-filtered the other,
+**silently truncating results**. Two reviewers and `EXPLAIN QUERY PLAN` at the time. Do not re-apply that
+design.
+
+**Measured 2026-09-05** against the real store at 200,000 synthetic rows: one doc by `#d` 0.3 ms; a quiet
+group `#t`+`#g` limit 50, 9.4 ms; a group with NO messages (scans to the cap) 807 ms; 32 crafted no-match
+filters against the authed budget, 1.2 s. The live relay holds **265 events**. `MAX_EVENTS` is 20,000 per
+church for ephemeral kinds, so three pilot churches sharing a box is ≤ 60k chat rows — a no-match scan of
+roughly 240 ms of single-thread time. Today it is microseconds.
+
+Note the finding's framing was backwards: the cost is **relay CPU**, not bytes on the wire, so it is not
+worse on a thin pipe.
+
+**Revisit when either is true:**
+1. A box exceeds ~50,000 rows of a single kind. Then build `event_tags(tag, val, created_at DESC,
+   event_id)` as a covering index, and the test must assert the query PLAN via `EXPLAIN` at 200k rows **with
+   a compound `#p`+`#t` filter in the fixture** — the two things the reverted attempt lacked.
+2. Sooner and cheaper, if relay CPU shows up at all: **scope member REQs by `church`** on the relay for
+   authed members. The column and its index already exist, and it bounds every scan to one church's rows.
+   Exempt the console, which authenticates as the church key and reads across churches for networks. Every
+   REQ path is a caller, including the post-AUTH replay.
+
+Also still open from the 2026-07-14 network sims and unchanged by this: A3 tag-scan truncation and E1
+crafted-REQ DoS, both scale-gated.
+
 ## Watch (likely already resolved)
 - **Care card hiding / blinking out on the member APK.** Earlier the Today "Practical care" card seemed to
   hide under visibility = "whole church" and vanish/reappear on reload. Both trace to the same root —
