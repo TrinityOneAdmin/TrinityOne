@@ -502,7 +502,11 @@ function CareRequests({ ctx }) {
     // else" on the form, and they can always open their own request, so the flag is readable here.
     try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' && !(String(r.from || '').toLowerCase() === myPub && r.forSelf !== false))), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
-  }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub]);
+    // …and on ctx.connTick. Without it a socket that dropped and returned left this list frozen: the console's
+    // twin showed a care request as still needing "Set up help" while the need made from it already existed
+    // (measured 2026-09-04), and a care admin reading that sets the same help up twice. screens-chat.jsx
+    // carries the same dep for the same reason.
+  }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub, ctx.connTick]);
   if (!(isCareAdmin || isCleared) || !reqs.length) return null;
   // WHICH OF THESE CAME FROM A YOUNG PERSON. A care admin is served the church's list of children and can
   // simply look. A cleared adult who is NOT a care admin is not served that list — and does not need it: the
@@ -813,7 +817,7 @@ function AskForHelp({ ctx, linkOnly }) {
     let unsub = null;
     try { unsub = window.Fellowship.subscribeCareRequests(list => setMine((list || []).filter(r => (r.from || '').toLowerCase() === myPub)), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
-  }, [ctx.church && ctx.church.npub, myPub]);
+  }, [ctx.church && ctx.church.npub, myPub, ctx.connTick]);   // re-subscribe after a reconnect — see the note above
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>

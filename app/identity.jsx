@@ -921,8 +921,11 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
         <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 20px', maxWidth: 360, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Just to be sure you’ve got them — type these three words from your written copy.</p>
         {checkIdx.map((idx, i) => (
           <div key={idx} style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' }}>WORD #{idx + 1}</label>
-            <input value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoFocus={i === 0} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="type it here" style={{ width: '100%', height: 50, boxSizing: 'border-box', border: '1px solid ' + (checkErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 16, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
+            {/* htmlFor, or this associates with nothing. All three boxes also share the placeholder
+                "type it here", so without this a screen reader announces the same name three times and
+                cannot say which word is wanted. Measured on the shipping APK, 2026-09-04. */}
+            <label htmlFor={'recovery-word-' + idx} style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' }}>WORD #{idx + 1}</label>
+            <input id={'recovery-word-' + idx} value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoFocus={i === 0} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="type it here" style={{ width: '100%', height: 50, boxSizing: 'border-box', border: '1px solid ' + (checkErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 16, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
           </div>
         ))}
         {checkErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '2px 2px 8px', lineHeight: 1.4 }}>{checkErr}</div> : null}
