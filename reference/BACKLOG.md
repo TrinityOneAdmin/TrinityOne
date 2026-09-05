@@ -3,6 +3,46 @@
 (Care-partners roadmap idea moved to `reference/SPINE.md` → Phase 2, beside "Church-adjacent charities".)
 
 
+## Idea, owner 2026-09-05 — a door-only way to run kids check-in
+
+**A note for later. Not decided, not scoped, not started.**
+
+Raised after watching kids check-in driven end to end for the first time (round 2026-09-05). Two shapes were
+floated: **a standalone safeguarding app** for check-in/checkout, or **a narrower set of steward permissions**
+covering only safeguarding work.
+
+### What already exists, so the note is not re-proposing it
+`STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content']` (`src/steward.src.js:352`), and the
+Check-in tab is already gated on the `safeguarding` capability — `stewCapState('safeguarding').allowed`
+(`app/stew-dashboard.jsx`). Capability KEYS are per-capability, so granting Finance no longer hands over the
+children's register. That part is done.
+
+### The gap the idea is actually pointing at
+The person on the door on a Sunday morning is usually a volunteer, not a steward. Today, to check a child in
+they need:
+- the **steward console app** installed on their device (it is a separate APK from the member app), and
+- the **safeguarding capability**, which is the whole children's register — every child, every guardian
+  link, every clearance — not "check the children in front of me in and out today".
+
+So the smallest thing a door volunteer can be given is considerably more than the job needs. On the pilot's
+threat model that matters: the register is one of the highest-value things in the system, and it would sit on
+a volunteer's phone in a church hall.
+
+### Things to think about when this is picked up
+- Check-in records are already sealed to their OWN key (`checkinkey`), separate from the church name key —
+  verified this round: a child's name, her guardian and her pickup code are all ciphertext on the relay. So
+  the cryptographic separation for a door-only role largely exists already.
+- Checkout needs the pickup code and the child's row; it does not need the guardian list, the clearance list,
+  or any other child's record.
+- A standalone app is a third APK to sign, ship and keep current — see the two-APK note; that cost is real.
+- A narrower capability (e.g. `checkin` distinct from `safeguarding`) is cheaper, but "add, never repurpose"
+  applies: an older console meeting a new capability name must degrade safely.
+- Whatever shape it takes, the door device is the one most likely to be lost or shared. Worth deciding what
+  it holds when it is.
+
+### Do not act on this without the owner
+Explicitly parked. Recorded so it is not lost.
+
 ## Decided NOT to do — relay tag index (2026-09-05)
 
 Finding 4 of the re-verification audit was "the relay has no tag index, so queries degrade as a church
