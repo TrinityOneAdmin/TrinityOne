@@ -289,8 +289,11 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
     // The PIN is the ONLY secret protecting the at-rest encrypted seed blob (offline-brute-forceable if the
     // device is imaged), so a 4-digit PIN (~13 bits) is too weak. Require 6+ chars, and 8+ if all-numeric.
     // (audit 2026-07-06 #5)
-    if ((pin || '').length < 6) { setErr('Choose a PIN of at least 6 characters. Adding letters makes it much harder to guess.'); return; }
-    if (/^\d+$/.test(pin) && pin.length < 8) { setErr('An all-number PIN is easy to guess — use 8+ digits, or add letters.'); return; }
+    // Was 6+ chars and 8+ if all-numeric, unconditionally. The all-numeric floor is now applied only where
+    // it is earned — web/desktop, where the encrypted seed sits in localStorage and can be guessed offline.
+    // On a phone the blob is in the hardware store; see pinRuleError in src/identity.src.js.
+    const ruleErr = (ID && ID.pinRuleError) ? ID.pinRuleError(pin) : '';
+    if (ruleErr) { setErr(ruleErr); return; }
     if (pin !== pin2) { setErr('The two PINs don’t match.'); return; }
     setBusy(true); setErr('');
     const ok = await ID.setPin(pin); setBusy(false);
@@ -335,7 +338,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
       ) : !hasPin ? (
         <React.Fragment>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 8px' }}>
-            Lock your identity with a PIN. Your key is encrypted on this device, so without the PIN nobody can open your church, read your messages, or post as you — and the screen shows only the Bible.</p>
+            Lock your identity with a PIN. Your key is encrypted on this device, so without the PIN nobody can open your church or post as you, and the screen shows only the Bible. What your church has already sent this phone is cleared when it locks.</p>
           <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55, margin: '8px 0 0' }}>Be aware of what it does <b>not</b> do: someone who inspects this phone properly can still tell that you use TrinityOne and which church you belong to. The PIN protects what is <i>inside</i> your church, not the fact that you are in one.</p>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 16px' }}>
             If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>

@@ -12166,6 +12166,17 @@ zoo`.split("\n"));
     const c = window.Capacitor;
     return !!(c && typeof c.isNativePlatform === "function" && c.isNativePlatform());
   }
+  var PIN_MIN = 6;
+  var PIN_MIN_NUMERIC_SOFT = 8;
+  function pinRuleError(pin, native) {
+    const p = String(pin || "");
+    if (p.length < PIN_MIN) return "Choose a PIN of at least " + PIN_MIN + " characters. Adding letters makes it much harder to guess.";
+    const onDevice = typeof native === "boolean" ? native : isNative();
+    if (!onDevice && /^\d+$/.test(p) && p.length < PIN_MIN_NUMERIC_SOFT) {
+      return "On a computer an all-number PIN is easy to guess \u2014 use " + PIN_MIN_NUMERIC_SOFT + "+ digits, or add letters.";
+    }
+    return "";
+  }
   function isEphemeral() {
     return !isNative() && !webPersisted;
   }
@@ -12289,6 +12300,8 @@ zoo`.split("\n"));
     window.dispatchEvent(new CustomEvent("trinity-identity", { detail: null }));
   }
   window.TrinityIdentity = {
+    pinRuleError,
+    // one rule, shared by the wizard and the settings sheet — see the block above
     current: null,
     ephemeral: false,
     locked: false,
