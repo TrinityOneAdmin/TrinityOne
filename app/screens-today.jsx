@@ -1693,7 +1693,24 @@ function TodayScreen({ ctx }) {
           "sent", and "you don't need to do anything else" is the opposite of the truth for it — retrying is the
           only thing that can help. Rather than restate that here and drift, this banner stays quiet for the
           failed and queued cases and points at the page that handles them properly. */}
-      {ctx.joinState && ctx.joinState.isPending && !ctx.joinState.removed && !ctx.joinFailed && !ctx.joinQueued ? (
+      {/* A FOURTH GUARD: we must have been ABLE to ask. `isPending` is `approval && !isAdmitted`, and the
+          admitted list is a GATED read — if the relay refused our NIP-42 proof it comes back EMPTY, which is
+          identical to "not admitted yet". Measured on a phone 2026-09-04: with the clock 15 minutes out, a
+          member the church admitted weeks earlier was told her request had been sent and a steward would let
+          her in within a day, with a "Check again" that could never succeed. The card below is for someone
+          genuinely waiting; the one above it is for someone we could not check. */}
+      {ctx.joinState && ctx.joinState.authFailed && !ctx.joinState.isAdmitted ? (
+        <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Can’t check with your church right now</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+            {ctx.clockSkewMins
+              ? <React.Fragment>This phone’s clock is about <b>{ctx.clockSkewMins} minutes</b> {ctx.clockSkewAhead ? 'ahead of' : 'behind'} your church’s. Set the date and time to update automatically, and this will sort itself out.</React.Fragment>
+              : <React.Fragment>Your church’s relay wouldn’t accept this phone just now. This is usually the phone’s clock being wrong — check that the date and time are set to update automatically.</React.Fragment>}
+            {' '}Nothing is lost; anything you post will send once it reconnects.
+          </div>
+        </div>
+      ) : null}
+      {ctx.joinState && ctx.joinState.isPending && !ctx.joinState.removed && !ctx.joinFailed && !ctx.joinQueued && !ctx.joinState.authFailed ? (
         <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Waiting to be let in</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>

@@ -7049,6 +7049,9 @@
   }
   var _relayAuthedAt = 0;
   var _relayAuthOkAt = 0;
+  var _relayAuthFailedAt = 0;
+  var _relayAuthFailReason = "";
+  var _relaySkewSec = 0;
   function _noteAuthAccepted(url) {
     Promise.resolve().then(() => {
       let r = null;
@@ -7058,11 +7061,42 @@
       }
       const p = r && r.authPromise;
       if (!p || typeof p.then !== "function") return;
-      p.then(() => {
-        _relayAuthOkAt = Date.now();
-      }, () => {
-      });
+      p.then(
+        () => {
+          _relayAuthOkAt = Date.now();
+          _relayAuthFailedAt = 0;
+          _relayAuthFailReason = "";
+        },
+        (err) => {
+          _relayAuthFailedAt = Date.now();
+          _relayAuthFailReason = String(err && err.message || err || "refused").slice(0, 120);
+        }
+      );
     });
+  }
+  function authState() {
+    return {
+      okAt: _relayAuthOkAt,
+      failedAt: _relayAuthFailedAt,
+      reason: _relayAuthFailReason,
+      failed: !!_relayAuthFailedAt && _relayAuthFailedAt > _relayAuthOkAt,
+      skewSec: _relaySkewSec
+    };
+  }
+  async function measureRelaySkew() {
+    const url = (window.Fellowship.relays || [])[0] || "";
+    const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
+    if (!/^https?:\/\/.+/i.test(base)) return 0;
+    try {
+      const r = await fetch(base + "/status", { cache: "no-store", signal: AbortSignal.timeout(6e3) });
+      if (!r.ok) return 0;
+      const j = await r.json();
+      if (!j || typeof j.now !== "number") return 0;
+      _relaySkewSec = Math.round(Date.now() / 1e3 - j.now);
+      return _relaySkewSec;
+    } catch (e) {
+      return 0;
+    }
   }
   var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
   var SG_ASSUME_KEY = "trinityone.sgassume.";
@@ -8283,6 +8317,8 @@
     _authRefetchArmed = false;
     _relayAuthedAt = 0;
     _relayAuthOkAt = 0;
+    _relayAuthFailedAt = 0;
+    _relayAuthFailReason = "";
     for (const hub of _docsHubs.values()) {
       hub.familyRebuilt = false;
       const c = hub.closer;
@@ -8551,6 +8587,15 @@
   }
   window.Fellowship = {
     relays: loadRelays(),
+    // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
+    // would otherwise tell a member they are "waiting to be let in" can ask instead whether we were ever able
+    // to check. See authState(); measureRelaySkew() is best-effort and returns 0 when it cannot tell.
+    authState,
+    measureRelaySkew,
+    // Force fresh, authenticated sockets. Already used on the keyless->keyed transition; exposed because it is
+    // ALSO the only way out of a refused AUTH — nostr-tools caches relay.authPromise, so nothing re-signs on a
+    // socket that has already been refused, and correcting the clock alone changes nothing.
+    reconnectAll,
     // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
     // CONSUMED BY THE C4 GATE, which is what makes it more than a diagnostic: the gate proves every candidate
     // address through this before that address can receive anything. Still exposed so a device session can ask
@@ -10493,7 +10538,7 @@
       const me = window.Fellowship.myPubkey || pub;
       const emit = () => {
         const isAdmitted = !!(me && admitted.includes(me));
-        onState({ approval, isAdmitted, isPending: approval && !isAdmitted });
+        onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {

@@ -1074,6 +1074,9 @@ let _relayAuthedAt = 0;
 // "the relay agreed" asks for it explicitly. Reset with it in reconnectAll: a new connection has proved
 // nothing yet.
 let _relayAuthOkAt = 0;
+let _relayAuthFailedAt = 0;      // the relay REFUSED our proof (socket still up) — see authState()
+let _relayAuthFailReason = '';
+let _relaySkewSec = 0;           // this device's clock minus the relay's, seconds; 0 = unknown/never measured
 // Observe the relay's OK for our AUTH without waiting on it here. nostr-tools resolves `relay.authPromise`
 // from that OK — and it can only resolve AFTER this signer returns the event, so awaiting it inside the
 // signer would deadlock the auth we are trying to complete. Hand it to a microtask instead.
@@ -1084,8 +1087,44 @@ function _noteAuthAccepted(url) {
     try { r = pool.relays.get(normalizeURL(url)); } catch (e) {}
     const p = r && r.authPromise;
     if (!p || typeof p.then !== 'function') return;
-    p.then(() => { _relayAuthOkAt = Date.now(); }, () => {});   // a refusal leaves it where it was: unproved
+    // RECORD THE REFUSAL, do not just decline to record the acceptance. This used to be `() => {}`, so a
+    // rejected AUTH was indistinguishable from one still in flight — and the consequence was measured on a
+    // phone on 2026-09-04: with the clock 15 minutes out the relay refuses the AUTH (its window is 600s),
+    // the socket STAYS OPEN, `relaysHealthy()` keeps reporting true, and every gated read returns empty. The
+    // member is then shown "Waiting to be let in" though the church admitted them weeks ago.
+    //
+    // It does not self-heal, and that is the half nobody had measured: nostr-tools caches `relay.authPromise`,
+    // so once it has settled the client NEVER SIGNS AGAIN on that socket. Correcting the clock changes
+    // nothing; new subscriptions ride the same poisoned connection. I soaked it for eleven minutes at zero
+    // drift across eleven polls and it never recovered; only closing the socket did.
+    p.then(() => { _relayAuthOkAt = Date.now(); _relayAuthFailedAt = 0; _relayAuthFailReason = ''; },
+           (err) => { _relayAuthFailedAt = Date.now(); _relayAuthFailReason = String((err && err.message) || err || 'refused').slice(0, 120); });
   });
+}
+// WHAT THE RELAY ACTUALLY SAID, so a screen can stop guessing. `failed` means the relay REFUSED our proof —
+// not that we are offline (the socket is up) and not that the church has not admitted us (it may have).
+// Deliberately NOT wired into the four gates that read `_relayAuthedAt`: they fail closed, and a read gate
+// that wrongly refuses is this codebase's worst failure class. This is for telling a person what happened.
+function authState() {
+  return { okAt: _relayAuthOkAt, failedAt: _relayAuthFailedAt, reason: _relayAuthFailReason,
+           failed: !!_relayAuthFailedAt && _relayAuthFailedAt > _relayAuthOkAt, skewSec: _relaySkewSec };
+}
+// Best-effort measurement of THIS DEVICE's clock against the relay's, so the app can name the cause instead
+// of implying one. The HTTP `Date` header is not CORS-safelisted, so a phone cannot read it cross-origin;
+// the relay reports its own seconds in /status instead. An older relay has no `now`, and then we say nothing
+// about clocks rather than guessing. Never throws, never blocks anything.
+async function measureRelaySkew() {
+  const url = (window.Fellowship.relays || [])[0] || '';
+  const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
+  if (!/^https?:\/\/.+/i.test(base)) return 0;
+  try {
+    const r = await fetch(base + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return 0;
+    const j = await r.json();
+    if (!j || typeof j.now !== 'number') return 0;   // relay too old to say — do not guess
+    _relaySkewSec = Math.round(Date.now() / 1000 - j.now);
+    return _relaySkewSec;
+  } catch (e) { return 0; }
 }
 let _sgSelf = { cp: '', me: '', isMinor: false, known: false };
 // ONE PHONE IS NOT ONE PERSON. The remembered safeguarding answer is keyed by church AND member, and the
@@ -2285,6 +2324,7 @@ function reconnectAll() {
   _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
   _relayAuthedAt = 0;          // F12: and it has proved nothing yet, so no gated read is authoritative until it does
   _relayAuthOkAt = 0;          // …and neither has any relay agreed on this connection
+  _relayAuthFailedAt = 0; _relayAuthFailReason = '';   // a fresh socket has not been refused either
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
   for (const hub of _docsHubs.values()) { hub.familyRebuilt = false; const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }   // F11: re-arm the family rebuild for the new socket
   // Shared subscriptions ride the same sockets, so they die with them. Drop the registry too, or the next
@@ -2582,6 +2622,14 @@ if (typeof window !== 'undefined') {
 
 window.Fellowship = {
   relays: loadRelays(),
+  // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
+  // would otherwise tell a member they are "waiting to be let in" can ask instead whether we were ever able
+  // to check. See authState(); measureRelaySkew() is best-effort and returns 0 when it cannot tell.
+  authState, measureRelaySkew,
+  // Force fresh, authenticated sockets. Already used on the keyless->keyed transition; exposed because it is
+  // ALSO the only way out of a refused AUTH — nostr-tools caches relay.authPromise, so nothing re-signs on a
+  // socket that has already been refused, and correcting the clock alone changes nothing.
+  reconnectAll,
   // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
   // CONSUMED BY THE C4 GATE, which is what makes it more than a diagnostic: the gate proves every candidate
   // address through this before that address can receive anything. Still exposed so a device session can ask
@@ -4294,7 +4342,12 @@ window.Fellowship = {
     if (!pubk) { onState({ approval: false, isAdmitted: true, isPending: false }); return () => {}; }
     let approval = false, admitted = [];
     const me = window.Fellowship.myPubkey || pub;
-    const emit = () => { const isAdmitted = !!(me && admitted.includes(me)); onState({ approval, isAdmitted, isPending: approval && !isAdmitted }); };
+    // CARRY WHETHER WE WERE ABLE TO ASK. `admitted` is a GATED read: if the relay refused our NIP-42 proof it
+    // comes back empty, which is indistinguishable from "the church has not admitted you". The screen that
+    // renders this then tells an admitted member their request is still waiting. Emit the raw signal and let
+    // the app decide what to say — this file must not own that copy.
+    const emit = () => { const isAdmitted = !!(me && admitted.includes(me));
+      onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed }); };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
         if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)

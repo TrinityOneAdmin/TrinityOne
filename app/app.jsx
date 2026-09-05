@@ -633,13 +633,35 @@ function App() {
     // socket. Now it only bumps when a relay we opened has actually DROPPED (relaysHealthy() === false) — the same
     // gate the steward console already uses. A real drop (e.g. a deploy restart) still re-subscribes to recover;
     // the foreground/online events above still fire immediately (those are real reconnect signals, not a blind timer).
+    // A REFUSED PROOF IS NOT AN UNHEALTHY SOCKET, and this beat's own health check is what hid it. Under a
+    // skewed clock the relay refuses the AUTH and LEAVES THE SOCKET OPEN, so relaysHealthy() is true and this
+    // returned immediately — for ever. nostr-tools caches relay.authPromise, so nothing re-signs on that
+    // connection: correcting the clock does not help, and neither does any amount of waiting. Measured on a
+    // phone 2026-09-04: eleven minutes at zero drift, eleven polls, still locked out; only closing the socket
+    // recovered it. reconnectAll() is exactly that close-and-re-challenge, so ask for it here — before the
+    // health check, and at most once a minute so a genuinely blocked key cannot make this a reconnect loop.
+    let lastAuthRetry = 0;
+    const retryIfRefused = () => {
+      const F = window.Fellowship;
+      if (!F || !F.authState || !F.reconnectAll) return false;
+      let st = null; try { st = F.authState(); } catch (e) { return false; }
+      if (!st || !st.failed) return false;
+      if (Date.now() - lastAuthRetry < 60000) return true;   // already asked recently; still refused
+      lastAuthRetry = Date.now();
+      try { F.measureRelaySkew && F.measureRelaySkew(); } catch (e) {}   // so the screen can name the cause
+      try { F.reconnectAll(); } catch (e) {}
+      return true;
+    };
+    window.addEventListener('focus', retryIfRefused);
+    window.addEventListener('online', retryIfRefused);
     const beat = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       const F = window.Fellowship;
+      if (retryIfRefused()) return;   // refused proof → re-challenge, whatever the socket looks like
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('focus', retryIfRefused); window.removeEventListener('online', retryIfRefused); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
@@ -1809,7 +1831,14 @@ function App() {
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
-    joinState,   // { approval, isAdmitted, isPending, offline, unknown } for the active church
+    joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed } for the active church
+    // How far this phone's clock is from the relay's, in whole minutes, when we have actually MEASURED it.
+    // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date
+    // header is not CORS-safelisted so a phone cannot read it cross-origin) — the screen then says the clock
+    // is the usual cause instead of asserting a number it does not have.
+    clockSkewMins: (() => { try { const sk = (window.Fellowship.authState && window.Fellowship.authState().skewSec) || 0;
+      return Math.abs(sk) >= 60 ? Math.round(Math.abs(sk) / 60) : undefined; } catch (e) { return undefined; } })(),
+    clockSkewAhead: (() => { try { return ((window.Fellowship.authState && window.Fellowship.authState().skewSec) || 0) > 0; } catch (e) { return false; } })(),
     // RE-ANNOUNCE, not just re-subscribe. "Check again" used to re-run the READ subscription only, so a member
     // whose join announce never landed could tap it for ever and remain invisible — the one action offered on
     // the one screen where they are stuck. Now it re-sends the thing that makes them visible, then re-reads.
