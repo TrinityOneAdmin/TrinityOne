@@ -7597,6 +7597,14 @@
     // admitted member until they restart the app.
     "trinityone/careavail:"
   ];
+  function _replayReseats(cp, hub) {
+    try {
+      for (const e of hub.buf.values()) {
+        if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
+      }
+    } catch (err) {
+    }
+  }
   function _replayChurchCalendar(cp, hub) {
     if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
     if (!hub.handlers || !hub.handlers.size) return;
@@ -7851,12 +7859,12 @@
       if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
     }
     for (const e of hub.buf.values()) {
-      if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
-    }
-    for (const e of hub.buf.values()) {
       if (_dtag(e) === "trinityone/namekey:" + cp) _ingestNameKey(cp, e);
     }
     _replayChurchCalendar(cp, hub);
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
+    }
     for (const e of hub.buf.values()) {
       const d0 = _dtag(e);
       if (d0 === "trinityone/name:" + cp) {
@@ -7919,6 +7927,7 @@
               _ingestNameKey(cp, e2);
               _replaySealedNames(cp, hub);
               _replayChurchCalendar(cp, hub);
+              _replayReseats(cp, hub);
             }
           }
           for (const h of [...hub.handlers]) {
@@ -8298,6 +8307,7 @@
           _ingestNameKey(hub.cp, e);
           _replaySealedNames(hub.cp, hub);
           _replayChurchCalendar(hub.cp, hub);
+          _replayReseats(hub.cp, hub);
         }
       }
     }

@@ -5395,7 +5395,7 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,name,at}] with hex pubkeys)
+  async setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,name,at}] with hex pubkeys)
     _requireTrustedView('re-seat map');
     if (!sk) return Promise.resolve(null);
     // `name` carries the member's DISPLAY NAME across with the seat. Without it a re-seat moved a pubkey and
@@ -5405,6 +5405,13 @@ window.Steward = {
     // name would come back. AUDIT-2026-07-26 CRITICAL 3. The member's app adopts it as their OWN kind-0 the
     // moment the doc arrives (fellowship.src.js _noteReseat), so this is a bootstrap value, not a permanent
     // override: if they rename themselves later, their own profile wins everywhere as it always did.
+    // WAIT FOR THE KEY ONCE, HERE. _sealChurchDoc is synchronous and returns null with an empty ring, so
+    // building the map first would silently drop the vouched name — and the vouched name is the entire
+    // purpose of a re-seat: it is how somebody who lost their 12 words gets their identity back, including
+    // a child whose guardian link depends on it (AUDIT-2026-07-26 CRITICAL 3). Waiting is cheap and happens
+    // once per call, not once per pair. If the key never comes, the pairs still publish with no name, and
+    // the member keeps the name they had rather than being renamed to nothing.
+    if (!_nameKeyRing[0] && (pairs || []).some(p => p && p.name)) await _sealChurchDocReady({});
     const clean = (pairs || [])
       .filter(p => p && /^[0-9a-f]{64}$/i.test(p.old || '') && /^[0-9a-f]{64}$/i.test(p.new || '') && p.old !== p.new)
       .map(p => {
@@ -5419,6 +5426,7 @@ window.Steward = {
         if (nm) {
           const sealedNm = _sealChurchDoc({ name: nm });
           if (sealedNm != null) out.n = JSON.parse(sealedNm).e;
+
         }
         return out;
       });
@@ -5680,10 +5688,14 @@ window.Steward = {
     //
     // Delegated stewards can open it: they are recipients of the name-key envelope via stewardPubs in
     // _ensureNameKeyLocked, which is the same key the roster and calendar use.
+    // DROP THE LABELS, NEVER THE EDIT. The first version of this returned false when the ring was empty,
+    // which meant a cosmetic label could block a REVOCATION: an owner restoring the church on a new laptop,
+    // or on a slow link before the envelope arrives, presses Remove on a compromised steward and nothing is
+    // written — no message, and that steward keeps their authority. This document is the authority list;
+    // the labels are a convenience on top of it. So a failure to seal costs the labels, not the change.
     if (Object.keys(nextNames).length) {
       const sealedNames = _sealChurchDoc(nextNames);
-      if (sealedNames == null) return Promise.resolve(false);   // no key: publish no names rather than plain ones
-      doc.n = JSON.parse(sealedNames).e;
+      if (sealedNames != null) doc.n = JSON.parse(sealedNames).e;
     }
 
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
@@ -6296,7 +6308,13 @@ window.Steward = {
     if (sealed == null) return null;   // no church key: NOT saved, and never with names in the clear
     const content = JSON.stringify({ pubs: people.map(p => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET]], content }))
-      .then(() => ({ id: teamId, roles, people, pods }));
+      // `publish()` RETURNS FALSE ON TOTAL FAILURE — it does not throw and it does not reject. Discarding it
+      // with `.then(() => ({...}))` handed every caller a truthy object over a document that reached no
+      // relay, which is why the whole "a refused save says so" work of 7a45d4d only ever covered the
+      // no-church-key case: with the relay simply unreachable — the ordinary failure on a thin pipe — the
+      // modal still closed and the rota still DM'd everyone assigned. Every caller already treats null as
+      // "not saved", so surfacing it here closes the common case with the guards that already exist.
+      .then((ok) => (ok ? { id: teamId, roles, people, pods } : null));
   },
   subscribeRosters(onRosters) { return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters); },
 
@@ -6309,7 +6327,13 @@ window.Steward = {
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERVICE_D + id], ['t', NET]], content }))
-      .then(() => ({ id, ...doc }));
+      // `publish()` RETURNS FALSE ON TOTAL FAILURE — it does not throw and it does not reject. Discarding it
+      // with `.then(() => ({...}))` handed every caller a truthy object over a document that reached no
+      // relay, which is why the whole "a refused save says so" work of 7a45d4d only ever covered the
+      // no-church-key case: with the relay simply unreachable — the ordinary failure on a thin pipe — the
+      // modal still closed and the rota still DM'd everyone assigned. Every caller already treats null as
+      // "not saved", so surfacing it here closes the common case with the guards that already exist.
+      .then((ok) => (ok ? { id, ...doc } : null));
   },
   removeService(id) {
     if (!sk) return Promise.resolve(null);
@@ -6416,7 +6440,7 @@ window.Steward = {
     const doc = { name: (room.name || 'Room').trim(), capacity: room.capacity || '', note: (room.note || '').trim() };
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content })).then(() => ({ id, ...doc }));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content })).then((ok) => (ok ? { id, ...doc } : null));   // false = reached no relay; see publishService
   },
   removeRoom(id) {
     if (!sk) return Promise.resolve(null);
@@ -6429,7 +6453,7 @@ window.Steward = {
     const doc = { roomId: b.roomId, date: b.date || '', start: b.start || '', end: b.end || '', title: (b.title || '').trim(), note: (b.note || '').trim() };
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content })).then(() => ({ id, ...doc }));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content })).then((ok) => (ok ? { id, ...doc } : null));   // false = reached no relay; see publishService
   },
   removeBooking(id) {
     if (!sk) return Promise.resolve(null);
@@ -6445,7 +6469,7 @@ window.Steward = {
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }))
-      .then(() => ({ id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} }));
+      .then((ok) => (ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : null));   // false = reached no relay; see publishService
   },
   removeRota(serviceId) {
     if (!sk) return Promise.resolve(null);
@@ -6695,7 +6719,12 @@ window.Steward = {
           for (const pr of ((JSON.parse(e.content) || {}).pairs || [])) {
             if (!pr || !pr.old || !pr.new || pr.old === pr.new) continue;
             next.add(String(pr.old).toLowerCase());
-            const nm = String(pr.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+            // SEALED SINCE 2026-09-05, and this is the console's own reader — the second one. The member
+            // app's _noteReseat was updated with that change and this was missed, so a reseat written by a
+            // current console showed the steward no vouched name at all in the Members list.
+            let raw = pr.name || '';
+            if (typeof pr.n === 'string' && pr.n) { const o = _openChurchDoc(JSON.stringify({ e: pr.n })); if (o && o.name) raw = o.name; }
+            const nm = String(raw).replace(/\s+/g, ' ').trim().slice(0, 40);
             if (nm) names.set(String(pr.new).toLowerCase(), nm);
           }
         } catch {}

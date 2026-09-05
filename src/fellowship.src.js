@@ -1784,6 +1784,21 @@ const CHURCH_SEALED_PFXS = ['trinityone/event:', 'trinityone/service:', 'trinity
 // The names path already solved this (_replaySealedNames), and so did the care key, which replays its needs
 // through onevent for exactly this reason. The calendar was simply never given the same treatment, because
 // the name key is thought of as "the key for names" — it seals the calendar too.
+// …AND THE SAME FOR RE-SEATS, which was missed when the vouched name was sealed (2026-09-05).
+//
+// _noteReseat opens the sealed name ONCE, when the document arrives, and returns with nothing if the church
+// name key is not held yet. On the phone that matters most — a brand-new install, because the whole re-seat
+// route exists for somebody who lost their 12 words — the reseat document ALWAYS arrives before the key: the
+// console publishes the vouch before setAdmitted, and the new key only becomes a name-key recipient once the
+// console's enrolment effect re-runs after admission echoes back. So the member sat as "Anonymous …2222" for
+// ever, on the one path whose entire purpose is giving them their name back, and which a child's guardian
+// link hangs off (AUDIT-2026-07-26 CRITICAL 3).
+//
+// `reseat:` is deliberately NOT in CHURCH_SEALED_PFXS: those are addressable documents replayed through
+// _subChurchAddr, and this one is handled by _noteReseat directly. Hence its own replay.
+function _replayReseats(cp, hub) {
+  try { for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); } } catch (err) {}
+}
 function _replayChurchCalendar(cp, hub) {
   if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
   // Nothing registered yet — the hub-hydration path runs before any feature subscribes, and _onChurchDocs
@@ -1997,8 +2012,11 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) { const dt = _dtag(e); _absorbRoster(cp, dt, e); _absorbVoice(cp, dt, e); }   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
-  for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
+
   for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); } _replayChurchCalendar(cp, hub);   // the key FIRST (no handlers yet, so the replay is a no-op — it holds the invariant)
+  // …THEN the re-seats. This pair used to run the other way round, so on a cold boot the vouched name was
+  // opened before the key that opens it and was lost — the comment above already said "the key FIRST".
+  for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) { _recoverOwnName(cp, e); _openSealedName(cp, e.pubkey, e.content); } }
   return hub;
 }
@@ -2046,7 +2064,7 @@ function _docsHubOpen(hub) {
         // The name key needs this too, and for exactly the L7 reason: _ingestNameKey requires the author to
         // be the church or a CURRENT roster steward, so an envelope that arrives before the roster does is
         // dropped and never retried. AUDIT-2026-07-27.
-        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); _replayChurchCalendar(cp, hub); } }
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); _replayChurchCalendar(cp, hub); _replayReseats(cp, hub); } }
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { _featureFailed('steward-roster refresh', d, err); } } return;
       }
       if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);   // just approved? re-announce + re-fetch once
@@ -2337,7 +2355,7 @@ async function deriveFromIdentity() {
   // a persisted since-cursor, and a name key is published once at church setup, so it does not re-arrive. On any
   // launch where the hub cache was warm and the signing key derived a moment late, the ring stayed empty for the
   // whole session and every member showed as anonymous. AUDIT-2026-07-27.
-  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); else if (d === NAMEKEY_D + hub.cp) { _ingestNameKey(hub.cp, e); _replaySealedNames(hub.cp, hub); _replayChurchCalendar(hub.cp, hub); } } }
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); else if (d === NAMEKEY_D + hub.cp) { _ingestNameKey(hub.cp, e); _replaySealedNames(hub.cp, hub); _replayChurchCalendar(hub.cp, hub); _replayReseats(hub.cp, hub); } } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}

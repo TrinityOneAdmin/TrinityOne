@@ -11,6 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -112,9 +113,10 @@ test('the steward console folds them out of its roster too', () => {
 test('the console publishes the re-seat with the church stamp a delegated steward needs', () => {
   // feChurch adds ['church',<cp>]; plain finalizeEvent does not. Without it a delegated steward's re-seat is
   // stored and gated correctly but matches NO member subscription, so no member ever sees it.
-  const at = STEWARD.indexOf('setReseats(');
-  assert.notEqual(at, -1, 'setReseats missing from the shipped console bundle');
-  const body = STEWARD.slice(at, at + 900);
+  // fnBody, not a fixed 900: setReseats grew when the vouched name was sealed (2026-09-05) and this window
+  // fell 9 characters short of the code it names — caught by scripts/test-windows.test.mjs, which exists for
+  // exactly this. A window that stops early reads a truncated slice and its assertion means nothing.
+  const body = fnBody(STEWARD, 'setReseats(', 'setReseats');
   assert.match(body, /feChurch\(/, 'setReseats must publish via feChurch, or a delegated steward’s re-seat reaches nobody');
 });
 
@@ -180,8 +182,7 @@ test('a pair with no name changes nothing', async () => {
 // and this fallback only covers the seconds in between.
 
 test('the console vouches the member’s name into the re-seat doc', () => {
-  const at = STEWARD.indexOf('setReseats(');
-  const body = STEWARD.slice(at, at + 1400);
+  const body = fnBody(STEWARD, 'setReseats(', 'setReseats');
   assert.match(body, /name/, 'setReseats no longer carries the member’s name — a re-seated member goes back as Anonymous');
   assert.match(body, /slice\(0,\s*40\)/, 'the vouched name must be length-capped before it is published');
 });

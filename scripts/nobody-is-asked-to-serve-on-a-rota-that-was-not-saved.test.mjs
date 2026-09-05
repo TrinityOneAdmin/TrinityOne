@@ -29,13 +29,17 @@ const h = (type, props, ...kids) => ({ type, props: { ...(props || {}), children
 const SERVICE = { id: 'svc1', date: '2026-09-13', time: '10:30', name: 'Sunday Gathering' };
 const ROSTER = { id: 't1', roles: [{ id: 'r1', name: 'Greeter' }], people: [{ id: 'p1', name: 'Ruth Bexley', pub: 'ab'.repeat(32) }], pods: [] };
 
-function mount({ publishRota, publishService } = {}) {
+function mount({ publishRota, publishService, preset = {} } = {}) {
   const sent = [];        // outward serving requests
   const published = [];   // rota publishes attempted
   const states = [];
   let idx = 0;
   const React = {
-    useState(init) { const i = idx++; if (states.length <= i) states.push(typeof init === 'function' ? init() : init); return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
+    useState(init) {
+      const i = idx++;
+      if (states.length <= i) states.push(Object.prototype.hasOwnProperty.call(preset, i) ? preset[i] : (typeof init === 'function' ? init() : init));
+      return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }];
+    },
     useEffect() {}, useRef: () => ({ current: null }), useMemo: (f) => f(), createElement: h,
   };
   const real = {
@@ -55,6 +59,7 @@ function mount({ publishRota, publishService } = {}) {
   };
   // Any other useStewardX the screen reaches for answers with an empty list. Stubbing THOSE cannot answer the
   // question here: what is under test is whether a refused publish still produces an outward message.
+  real.confirm = () => true;   // the bulk entries ask before acting; answering no would test nothing
   const win = new Proxy(real, {
     get(t, k) {
       if (k in t) return t[k];
@@ -106,4 +111,31 @@ test('a rota that DID save still asks the people on it', async () => {
   assert.ok(m.published.length >= 1, 'nothing was published on the happy path');
   assert.ok(m.sent.length >= 1,
     'a rota that saved asked nobody to serve — the guard is too strict and the feature is dead');
+});
+
+// THE BULK PATH (autoFillAhead, "Create + fill this quarter") IS NOT TESTED HERE, AND THAT IS DELIBERATE.
+//
+// It is the path the re-audit found unguarded, and its guard is now in place (app/stew-schedule.jsx: the
+// rota loop `continue`s on null before sendRequestsFor). But I could not write an HONEST test for it:
+//
+//   - The control failed. With every rota saving, this fixture's bulk run asks nobody to serve — fillAssign
+//     produces no assignment for the services it creates — so an assertion that a REFUSED run asks nobody
+//     passes whatever the code does. A first draft of that test was green against the audit's own sabotage.
+//   - Reaching the control at all means opening a menu, and presetting hook indices to find it corrupts
+//     sibling state (assignSlot/rosterTeam become `true` instead of objects) and throws in render.
+//
+// A test that passes trivially is worse than no test: it reports exactly what a blind test reports. So the
+// guard on that path is verified by reading it and on the device, and is recorded as unproven here rather
+// than covered by something that cannot fail. Anyone adding fixture scaffolding for fillAssign should start
+// by asserting the happy path DOES send.
+
+test('a relay refusal is a refusal too, not just a missing key', async () => {
+  // publish() returns FALSE on total failure — it does not throw. The publishers used to discard that with
+  // .then(() => ({...})), handing every caller a truthy object over a document that reached no relay, so all
+  // of this branch's guards covered the no-church-key case and none covered the ordinary one: the relay
+  // simply unreachable, which is the normal failure on the thin pipe this product is built for.
+  const m = mount({ publishRota: async () => null });   // the publisher's own null, however it arose
+  const btn = handlerNamed(m, 'publishRota');
+  await btn.props.onClick();
+  assert.deepEqual(m.sent, [], 'a rota the relay never accepted still asked people to serve');
 });

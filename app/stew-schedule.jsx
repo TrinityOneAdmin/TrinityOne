@@ -618,6 +618,14 @@ function DashRota({ onNewTeam }) {
     // an outward DM to every assigned member asking them to serve on a rota that reached no relay. Thirteen
     // services meant thirteen of those and then "Created + filled 13 services". Outward messages over work
     // that did not happen is the worst version of this bug, not a smaller one.
+    // WAIT FOR THE KEY ONCE, NOT ONCE PER ROW. Each publisher waits up to NAME_KEY_WAIT_MS on its own, and
+    // this loop is sequential, so a quarter of weekly services meant ~13 x 4s = 52 seconds frozen with
+    // nothing disabled and no explanation. One readiness check up front turns that into one wait.
+    if (window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) {
+      const probe = await window.Steward.publishService({ name: svc.name, date: dates[0], time: svc.time });
+      if (probe == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+      byDate[dates[0]] = probe;   // it saved: keep it rather than creating the same date twice below
+    }
     let lost = 0;
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
