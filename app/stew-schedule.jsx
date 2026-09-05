@@ -359,10 +359,16 @@ function SchAddServiceModal({ onClose }) {
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
   const [err, setErr] = useSch('');
+  // BUSY WHILE IT WAITS. Before the sealing fix these saves published fire-and-forget and closed at once; now
+  // they await up to NAME_KEY_WAIT_MS for a late church key, and the button stayed live for all of it — two
+  // presses meant two sets of documents with distinct ids, both landing. (Audit of 7a45d4d, finding 4.)
+  const [busy, setBusy] = useSch(false);
   const save = async () => {
-    if (!date) return;
+    if (!date || busy) return;
+    setBusy(true); setErr('');
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
     const out = await Promise.all(dates.map(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time })));
+    setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }   // stay open: nothing was written
     onClose();
   };
@@ -378,7 +384,7 @@ function SchAddServiceModal({ onClose }) {
       {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
+        <button onClick={save} disabled={!date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (date && !busy) ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
       </div>
       <SchNotSaved msg={err} />
     </SchModal>
@@ -394,8 +400,13 @@ function RunsheetModal({ service, sheet, onClose }) {
   const del = (i) => setItems(prev => prev.filter((_, j) => j !== i));
   const move = (i, dir) => setItems(prev => { const a = prev.slice(); const j = i + dir; if (j < 0 || j >= a.length) return prev; const t = a[i]; a[i] = a[j]; a[j] = t; return a; });
   const [err, setErr] = useSch('');
+  // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
+  const [busy, setBusy] = useSch(false);
   const save = async () => {
+    if (busy) return;
+    setBusy(true); setErr('');
     const r = await window.Steward.publishRunsheet(service.id, items.filter(it => (it.title || '').trim()));
+    setBusy(false);
     if (r == null) { setErr(SCH_NO_KEY); return; }   // the whole order of service is in this modal — never drop it
     onClose();
   };
@@ -424,7 +435,7 @@ function RunsheetModal({ service, sheet, onClose }) {
       <button onClick={add} className="sk-btn sk-btn--ghost" style={{ marginTop: 10, padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={14} color="currentColor" /> Add item</button>
       <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
-        <button onClick={save} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11 }}>Save run sheet</button>
+        <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: busy ? 0.55 : 1 }}>{busy ? 'Saving…' : 'Save run sheet'}</button>
       </div>
       <SchNotSaved msg={err} />
     </SchModal>
@@ -598,8 +609,25 @@ function DashRota({ onNewTeam }) {
     const dates = schGenDates(svc.date, 'weekly', until);
     const byDate = {}; sortedSvcs.forEach(s => { byDate[s.date] = s; });
     const ensured = [];
-    for (const dt of dates) { if (byDate[dt]) ensured.push(byDate[dt]); else { const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time }); if (ns) ensured.push(ns); } }
-    for (const s of ensured) { const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id); await window.Steward.publishRota({ service: s.id, published: true, assign: filled }); sendRequestsFor(s.id, s.date, s.time, s.name, filled); if (s.id === svcId) setAssign(filled); }
+    // THE BULK PATH, AND THE ONE THE FIRST PASS OF THIS FIX MISSED (audit of 7a45d4d, finding 1). It was
+    // left publishing a rota, ignoring the result, and calling sendRequestsFor unconditionally — which sends
+    // an outward DM to every assigned member asking them to serve on a rota that reached no relay. Thirteen
+    // services meant thirteen of those and then "Created + filled 13 services". Outward messages over work
+    // that did not happen is the worst version of this bug, not a smaller one.
+    let lost = 0;
+    for (const dt of dates) {
+      if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
+      const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time });
+      if (ns) ensured.push(ns); else lost++;
+    }
+    for (const s of ensured) {
+      const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id);
+      const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
+      if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
+      sendRequestsFor(s.id, s.date, s.time, s.name, filled);
+      if (s.id === svcId) setAssign(filled);
+    }
+    if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
     setFlash(`Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`); setTimeout(() => setFlash(''), 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
@@ -836,12 +864,16 @@ function SchEventModal({ day, onClose }) {
     r.readAsDataURL(file);
   };
   const [err, setErr] = useSch('');
+  // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
+  const [busy, setBusy] = useSch(false);
   const save = async () => {
-    if (!title.trim() || !date) return;
+    if (!title.trim() || !date || busy) return;
+    setBusy(true); setErr('');
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
+    setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
     onClose();
   };
@@ -912,7 +944,7 @@ function SchEventModal({ day, onClose }) {
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!title.trim() || !date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
+        <button onClick={save} disabled={!title.trim() || !date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
       </div>
       <SchNotSaved msg={err} />
     </SchModal>
@@ -1255,11 +1287,14 @@ function DashRooms() {
   const roomById = Object.fromEntries(rooms.map(r => [r.id, r]));
   const today = todayISO();
   const [roomErr, setRoomErr] = React.useState('');
+  const [roomBusy, setRoomBusy] = React.useState(false);
   const addRoom = async () => {
-    const n = newRoom.trim(); if (!n) return;
+    const n = newRoom.trim(); if (!n || roomBusy) return;
+    setRoomBusy(true); setRoomErr('');
     const r = await window.Steward.publishRoom({ name: n });
+    setRoomBusy(false);
     if (r == null) { setRoomErr(SCH_NO_KEY); return; }   // keep what they typed
-    setRoomErr(''); setNewRoom('');
+    setNewRoom('');
   };
   const sorted = [...bookings].filter(b => b.roomId && b.date).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
   const upcoming = sorted.filter(b => b.date >= today);
@@ -1278,7 +1313,7 @@ function DashRooms() {
       <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 8 }}>Spaces</div>
       <div style={{ display: 'flex', gap: 9, marginBottom: 10 }}>
         <input value={newRoom} onChange={e => setNewRoom(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRoom(); }} placeholder="Add a room — e.g. Main Hall, Room 2, Kitchen" style={roomFld} />
-        <button onClick={addRoom} className="sk-btn sk-btn--clay" style={{ padding: '0 15px', fontSize: 13 }}>Add</button>
+        <button onClick={addRoom} disabled={roomBusy} className="sk-btn sk-btn--clay" style={{ padding: '0 15px', fontSize: 13, opacity: roomBusy ? 0.55 : 1 }}>{roomBusy ? 'Adding…' : 'Add'}</button>
       </div>
       <SchNotSaved msg={roomErr} />
       {rooms.length ? (
@@ -1341,9 +1376,13 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
   const badTime = !!(start && end && end <= start);
   const canSave = roomId && date && start && end && !badTime && !clashes.length && title.trim();
   const [err, setErr] = React.useState('');
+  // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
+  const [busy, setBusy] = React.useState(false);
   const save = async () => {
-    if (!canSave) return;
+    if (!canSave || busy) return;
+    setBusy(true); setErr('');
     const r = await window.Steward.publishBooking({ id: bk.id, roomId, date, start, end, title, note });
+    setBusy(false);
     if (r == null) { setErr(SCH_NO_KEY); return; }
     onClose();
   };
@@ -1374,7 +1413,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
         {!title.trim() ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '0 24px 4px', lineHeight: 1.4 }}>Add what the room’s for above to book it.</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '14px 24px 20px' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>
-          <button onClick={save} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 12, opacity: canSave ? 1 : 0.5 }}>{bk.id ? 'Save' : 'Book it'}</button>
+          <button onClick={save} disabled={!canSave || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 12, opacity: (canSave && !busy) ? 1 : 0.5 }}>{busy ? 'Saving…' : (bk.id ? 'Save' : 'Book it')}</button>
         </div>
         <SchNotSaved msg={err} />
       </div>

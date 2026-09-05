@@ -72,6 +72,29 @@ test('on web, letters buy back the length', () => {
   ok('trinity', false);
 });
 
+test('the DEFAULT branch — the one both screens actually use — asks the platform', () => {
+  // THE GAP THE AUDIT OF bff954f FOUND. Both callers pass one argument: ID.pinRuleError(pin). So `native` is
+  // undefined in production and the real function falls through to isNative() — the exact branch every case
+  // above skipped by passing the platform explicitly. Sabotaging `: isNative()` to `: true` (giving web
+  // users the phone rule) left all five of those green. This drives the real isNative from the bundle.
+  const nat = stripComments(fnBody(VENDOR, 'function isNative()', 'isNative'));
+  const make = (capacitor) => new Function('window', 'PIN_MIN', 'PIN_MIN_NUMERIC_SOFT',
+    nat + '\n' + body + '\nreturn pinRuleError;')({ Capacitor: capacitor }, PIN_MIN, PIN_MIN_NUMERIC_SOFT);
+
+  const onPhone = make({ isNativePlatform: () => true });
+  assert.equal(onPhone('123456'), '', 'a phone refused six digits through the default branch');
+
+  const onWeb = make(undefined);   // no Capacitor at all: a browser
+  assert.notEqual(onWeb('123456'), '',
+    'THE DEFECT: with no platform argument a browser got the phone rule, so six digits guards a blob that ' +
+    'sits in localStorage and can be guessed offline');
+  assert.equal(onWeb('12345678'), '');
+
+  // Capacitor present but reporting web (the desktop build loads it and answers false).
+  const onDesktop = make({ isNativePlatform: () => false });
+  assert.notEqual(onDesktop('123456'), '', 'the desktop build got the phone rule');
+});
+
 test('the two screens no longer carry their own competing rules', () => {
   // app/*.jsx ships UNBUNDLED, so a text assertion there cannot prove behaviour (CLAUDE.md rule 3) — a
   // disabled branch keeps every word. What it CAN prove is absence: the old hard-coded literals are gone,

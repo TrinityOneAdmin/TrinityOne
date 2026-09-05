@@ -91,5 +91,13 @@ test('the console catches up on enrolment when it is unlocked', () => {
   assert.match(kd.slice(0, 4000), /nextTry\.current = \{\}; failCount\.current = \{\}/,
     'clear the backoff on unlock: those refusals were the lock, not the relay, and a returning steward must ' +
     'not wait out a penalty for an outage they caused by walking away');
-  assert.match(kd, /unlockTick\]\);/, 'and the enrolment effect must actually depend on it');
+  // Anchored on unlockTick being IN the dependency array rather than being the LAST thing in it. It was
+  // `/unlockTick\]\);/`, which broke the moment a second dependency was added after it (church.name, 2026-09-05,
+  // so that naming a church mints its name key) — a true assertion failing over punctuation, which is how a
+  // guard gets deleted rather than fixed. The claim is unchanged: this effect must re-run on unlock.
+  assert.match(kd, /unlockTick\s*[,\]]/, 'and the enrolment effect must actually depend on it');
+  assert.match(kd, /church\.name\]\);|church\.name\s*,/,
+    'naming a church must re-run the enrolment effect: it bails on !church.name and is the only thing that ' +
+    'mints the name key, so without this a new church has no key until some unrelated change fires — which ' +
+    'is the 8-minute window in which its calendar was written in the clear');
 });

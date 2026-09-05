@@ -535,7 +535,13 @@ function KeyDistributor() {
     // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
     // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
     // suspect keys weeks after a reconciliation. AUDIT-2026-07-27.
-  }, [groups, members, stewardRoster, blockedList, unlockTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
+  // `church.name` IS A DEPENDENCY, added 2026-09-05 (audit of 7a45d4d, finding 3). This effect bails above on
+  // !church.name and is the ONLY thing that mints the church name key — but the name was not in the deps, so
+  // on a brand-new church the mount-time run bailed (no name yet), naming the church did not re-run it, and
+  // the key waited for some unrelated change to groups or members. That is the 8-minute gap measured on the
+  // relay between the first calendar document and the namekey: envelope, and post-fix it is 8 minutes of the
+  // calendar refusing to save rather than 8 minutes of writing in the clear.
+  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
@@ -2677,12 +2683,20 @@ function GroupChatModal({ group, onClose }) {
   const [composeEvt, setComposeEvt] = React.useState(false);
   const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '' });
   const [evtBusy, setEvtBusy] = React.useState(false);
+  const [evtErr, setEvtErr] = React.useState('');
   const [evDetail, setEvDetail] = React.useState(null);   // a tapped event → full details
   const postEvent = async () => {
     if (!evt.title.trim() || !evt.date) return;
-    setEvtBusy(true);
-    try { await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) {}
-    setEvtBusy(false); setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
+    setEvtBusy(true); setEvtErr('');
+    // publishEvent returns null when the church's name key never arrived — the event is NOT saved and
+    // deliberately not written in the clear. This used to close the composer and wipe the fields regardless,
+    // so the steward's typing went and no event existed. (Audit of 7a45d4d, finding 2: this call site was
+    // named in that commit's caller list and then not changed.)
+    let r = null;
+    try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
+    setEvtBusy(false);
+    if (r == null) { setEvtErr('Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }
+    setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
   };
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
@@ -2723,6 +2737,7 @@ function GroupChatModal({ group, onClose }) {
             <input value={evt.where} onChange={e => setEvt(v => ({ ...v, where: e.target.value }))} placeholder="Where (optional)" style={{ boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             <div style={{ display: 'flex', gap: 7 }}>
               <button onClick={postEvent} disabled={!evt.title.trim() || !evt.date || evtBusy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '8px', fontSize: 13, opacity: (evt.title.trim() && evt.date && !evtBusy) ? 1 : 0.5 }}>{evtBusy ? 'Posting…' : 'Post event'}</button>
+              {evtErr ? <div role="alert" style={{ flexBasis: '100%', marginTop: 8, fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)' }}>{evtErr}</div> : null}
               <button onClick={() => setComposeEvt(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }}>Cancel</button>
             </div>
           </div>

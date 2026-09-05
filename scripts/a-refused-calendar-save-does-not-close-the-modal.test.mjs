@@ -48,14 +48,14 @@ function mount(componentName, props, { steward = {}, preset = {} } = {}) {
     window: { Steward: steward },
   };
   const names = Object.keys(scope);
-  const mod = new Function(...names, JS + `\nreturn { ${componentName} };`)(...names.map(n => scope[n]));
+  const mod = new Function(...names, JS + `\nreturn { ${componentName}, SchNotSaved };`)(...names.map(n => scope[n]));
   const render = () => { idx = 0; return mod[componentName](props); };
   const nodes = (n, out = []) => {
     if (!n || typeof n !== 'object') return out;
     if (Array.isArray(n)) { n.forEach(x => nodes(x, out)); return out; }
     out.push(n); nodes(n.props && n.props.children, out); return out;
   };
-  return { render, states, nodes: () => nodes(render()) };
+  return { render, states, nodes: () => nodes(render()), SchNotSaved: mod.SchNotSaved };
 }
 
 // A steward has typed a service in and pressed Add. The relay refuses because the church key has not
@@ -102,4 +102,19 @@ test('a refused run sheet keeps the whole order of service on screen', async () 
   await btn.props.onClick();
   assert.equal(closed, false, 'the run sheet modal closed over a save that never landed');
   assert.ok(m.states.includes(NO_KEY), 'the run sheet was refused and the screen said nothing');
+});
+
+test('the alert component actually renders the message it is given', () => {
+  // THE GAP THE AUDIT OF 7a45d4d FOUND in this very file: the tests above assert SchNotSaved RECEIVES the
+  // message, never that it shows it. Making SchNotSaved `return null` left every one of them green — a
+  // silent screen with a fully wired save path behind it, which is the failure this file exists to catch.
+  const { SchNotSaved } = mount('SchAddServiceModal', { onClose() {} }, { steward: {} });
+  const empty = SchNotSaved({ msg: '' });
+  assert.equal(empty, null, 'the alert renders something when there is nothing to say');
+
+  const shown = SchNotSaved({ msg: NO_KEY });
+  assert.ok(shown && shown.props, 'the alert rendered nothing for a real message — the screen is silent');
+  assert.equal(shown.props.role, 'alert', 'the refusal is not announced to a screen reader');
+  const text = JSON.stringify(shown).includes(NO_KEY.slice(0, 24));
+  assert.ok(text, 'the alert element does not contain the message text anywhere in its output');
 });
