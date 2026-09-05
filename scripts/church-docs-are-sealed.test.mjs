@@ -78,7 +78,7 @@ for (const pfx of prefixes) {
       const at = u.index;
       const head = STW.lastIndexOf('\n  publish', at);
       const body = STW.slice(head === -1 ? Math.max(0, at - 800) : head, at + 200);
-      assert.match(body, /_sealChurchDoc\(|encPublish\(/,
+      assert.match(body, /_sealChurchDocReady\(|_sealChurchDoc\(|encPublish\(/,
         `${pfx} is in CHURCH_SEALED_PFXS but its publisher writes cleartext — a bare JSON.stringify here ` +
         `puts this document on the relay's disk in the clear, readable by anyone who holds it. ` +
         `Route it through _sealChurchDoc(); both readers already try cleartext first, so existing ` +

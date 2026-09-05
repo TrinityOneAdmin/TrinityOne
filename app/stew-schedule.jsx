@@ -25,6 +25,25 @@ function memDisplay(m) { return (m && m.name && m.name.trim()) || ('Anon · ' + 
 function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x] && o[x].name)).sort().map(x => x + '=' + o[x].name + '/' + (o[x].pub || '')).join('|'); return k(a) === k(b); }
 
 // small date block used across the board
+// EVERY CALENDAR PUBLISHER CAN NOW REFUSE, AND A REFUSAL MUST REACH THE STEWARD.
+//
+// Until 2026-09-05 a console with no church name key wrote the document in CLEARTEXT and returned success.
+// Measured on the relay that day: 25 of 25 calendar documents in the clear, one rota carrying a real name
+// beside a real pubkey. The publishers now refuse instead — but eight of the ten call sites in this file
+// dropped the result on the floor, so refusing ALONE would have turned a silent privacy failure into a
+// silent data-loss failure: "Published — everyone assigned has been asked" over a rota that was never saved.
+// That is the same defect wearing different clothes, and it is the one this codebase repeats most.
+//
+// So each save below checks. A modal that failed stays OPEN with its content intact, because the steward's
+// typing is the thing that would otherwise be lost.
+const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.';
+function SchNotSaved({ msg }) {
+  if (!msg) return null;
+  return (
+    <div role="alert" style={{ margin: '10px 0 0', padding: '9px 12px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, var(--line))', color: 'var(--ink)', fontSize: 13, lineHeight: 1.45 }}>{msg}</div>
+  );
+}
+
 function SchDateBlock({ dateStr, accent = 'var(--clay)' }) {
   const p = schParts(dateStr);
   return (
@@ -339,10 +358,12 @@ function SchAddServiceModal({ onClose }) {
   const [time, setTime] = useSch('10:30');
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
-  const save = () => {
+  const [err, setErr] = useSch('');
+  const save = async () => {
     if (!date) return;
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
-    dates.forEach(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time }));
+    const out = await Promise.all(dates.map(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time })));
+    if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }   // stay open: nothing was written
     onClose();
   };
   return (
@@ -359,6 +380,7 @@ function SchAddServiceModal({ onClose }) {
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
         <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
       </div>
+      <SchNotSaved msg={err} />
     </SchModal>
   );
 }
@@ -371,7 +393,12 @@ function RunsheetModal({ service, sheet, onClose }) {
   const add = () => setItems(prev => [...prev, { title: '', time: '', who: '', ccli: '' }]);
   const del = (i) => setItems(prev => prev.filter((_, j) => j !== i));
   const move = (i, dir) => setItems(prev => { const a = prev.slice(); const j = i + dir; if (j < 0 || j >= a.length) return prev; const t = a[i]; a[i] = a[j]; a[j] = t; return a; });
-  const save = () => { window.Steward.publishRunsheet(service.id, items.filter(it => (it.title || '').trim())); onClose(); };
+  const [err, setErr] = useSch('');
+  const save = async () => {
+    const r = await window.Steward.publishRunsheet(service.id, items.filter(it => (it.title || '').trim()));
+    if (r == null) { setErr(SCH_NO_KEY); return; }   // the whole order of service is in this modal — never drop it
+    onClose();
+  };
   return (
     <SchModal title={'Run sheet · ' + (service.name || 'Service')} onClose={onClose} width={560}>
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 12px', lineHeight: 1.45 }}>The order of service — items, who's leading each, and songs (add a CCLI #). Anyone serving sees it from their “you’re serving” card.</div>
@@ -399,6 +426,7 @@ function RunsheetModal({ service, sheet, onClose }) {
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
         <button onClick={save} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11 }}>Save run sheet</button>
       </div>
+      <SchNotSaved msg={err} />
     </SchModal>
   );
 }
@@ -491,6 +519,7 @@ function DashRota({ onNewTeam }) {
     const r = rosterFor(team.id); const pods = r.pods || []; if (!pods.length) return 0;
     const today = todayISO();
     const upcoming = (services || []).filter(s => (s.date || '') >= today).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const saves = [];
     upcoming.forEach((s, i) => {
       const pod = pods[i % pods.length];
       const next = { ...(assignFor(s.id) || {}) };   // keep other teams' people
@@ -500,11 +529,15 @@ function DashRota({ onNewTeam }) {
         if (person) next[team.id + '::' + role.id] = { id: person.id, name: person.name, pub: person.pub || '' };
       });
       if (s.id === svcId) setAssign(next);
-      window.Steward.publishRota({ service: s.id, published: true, assign: next });
-      sendRequestsFor(s.id, s.date, s.time, s.name, next);
+      saves.push(window.Steward.publishRota({ service: s.id, published: true, assign: next })
+        .then(r => { if (r != null) sendRequestsFor(s.id, s.date, s.time, s.name, next); return r; }));
     });
-    setFlash('Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's'));
-    setTimeout(() => setFlash(''), 2600);
+    Promise.all(saves).then(out => {
+      const lost = out.filter(r => r == null).length;
+      if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+      setFlash('Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's'));
+      setTimeout(() => setFlash(''), 2600);
+    });
     return upcoming.length;
   };
   // already asked this person for this exact slot? (don't re-send on every publish)
@@ -577,7 +610,14 @@ function DashRota({ onNewTeam }) {
     if (!src) { setFlash('No earlier rota with people to copy'); setTimeout(() => setFlash(''), 2400); return; }
     setAssign({ ...assignFor(src.id) }); setFlash(`Copied ${schParts(src.date).day} ${schParts(src.date).mon}`); setTimeout(() => setFlash(''), 2200);
   };
-  const publish = () => { window.Steward.publishRota({ service: svcId, published: true, assign }); sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign); setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400); };
+  const publish = async () => {
+    const r = await window.Steward.publishRota({ service: svcId, published: true, assign });
+    // Do NOT ask people to serve on a rota that was not saved: they would get the request and the rota would
+    // not exist. sendRequestsFor is the outward-facing half, so it waits on the publish landing.
+    if (r == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+    sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
+    setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
+  };
 
   if (teams.length === 0) {
     return (
@@ -795,12 +835,14 @@ function SchEventModal({ day, onClose }) {
     }; img.src = r.result; };
     r.readAsDataURL(file);
   };
-  const save = () => {
+  const [err, setErr] = useSch('');
+  const save = async () => {
     if (!title.trim() || !date) return;
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
-    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub));
+    const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
+    if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
     onClose();
   };
   return (
@@ -872,6 +914,7 @@ function SchEventModal({ day, onClose }) {
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
         <button onClick={save} disabled={!title.trim() || !date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
       </div>
+      <SchNotSaved msg={err} />
     </SchModal>
   );
 }
@@ -1211,7 +1254,13 @@ function DashRooms() {
   const [showPast, setShowPast] = React.useState(false);
   const roomById = Object.fromEntries(rooms.map(r => [r.id, r]));
   const today = todayISO();
-  const addRoom = () => { const n = newRoom.trim(); if (n) { window.Steward.publishRoom({ name: n }); setNewRoom(''); } };
+  const [roomErr, setRoomErr] = React.useState('');
+  const addRoom = async () => {
+    const n = newRoom.trim(); if (!n) return;
+    const r = await window.Steward.publishRoom({ name: n });
+    if (r == null) { setRoomErr(SCH_NO_KEY); return; }   // keep what they typed
+    setRoomErr(''); setNewRoom('');
+  };
   const sorted = [...bookings].filter(b => b.roomId && b.date).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
   const upcoming = sorted.filter(b => b.date >= today);
   const past = sorted.filter(b => b.date < today);
@@ -1231,6 +1280,7 @@ function DashRooms() {
         <input value={newRoom} onChange={e => setNewRoom(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRoom(); }} placeholder="Add a room — e.g. Main Hall, Room 2, Kitchen" style={roomFld} />
         <button onClick={addRoom} className="sk-btn sk-btn--clay" style={{ padding: '0 15px', fontSize: 13 }}>Add</button>
       </div>
+      <SchNotSaved msg={roomErr} />
       {rooms.length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 16 }}>
           {rooms.map(r => (
@@ -1290,7 +1340,13 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
   const clashes = (bookings || []).filter(x => x.id !== bk.id && bkOverlap(cand, x));
   const badTime = !!(start && end && end <= start);
   const canSave = roomId && date && start && end && !badTime && !clashes.length && title.trim();
-  const save = () => { if (!canSave) return; window.Steward.publishBooking({ id: bk.id, roomId, date, start, end, title, note }); onClose(); };
+  const [err, setErr] = React.useState('');
+  const save = async () => {
+    if (!canSave) return;
+    const r = await window.Steward.publishBooking({ id: bk.id, roomId, date, start, end, title, note });
+    if (r == null) { setErr(SCH_NO_KEY); return; }
+    onClose();
+  };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -1320,6 +1376,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>
           <button onClick={save} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 12, opacity: canSave ? 1 : 0.5 }}>{bk.id ? 'Save' : 'Book it'}</button>
         </div>
+        <SchNotSaved msg={err} />
       </div>
     </div>
   );

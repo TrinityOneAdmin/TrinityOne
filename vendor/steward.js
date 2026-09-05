@@ -14870,15 +14870,24 @@ zoo`.split("\n");
   function _sealChurchDoc(obj) {
     const body = JSON.stringify(obj);
     const k = _nameKeyRing[0];
-    if (!k) {
-      console.warn("[steward] no church name key yet \u2014 writing this document in cleartext");
-      return body;
-    }
+    if (!k) return null;
     try {
       return JSON.stringify({ e: encrypt3(body, _unhex(k)) });
     } catch (e) {
-      return body;
+      return null;
     }
+  }
+  var NAME_KEY_WAIT_MS = 4e3;
+  function _sealChurchDocReady(obj) {
+    if (_nameKeyRing[0]) return Promise.resolve(_sealChurchDoc(obj));
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = () => {
+        if (_nameKeyRing[0] || Date.now() - t0 >= NAME_KEY_WAIT_MS) return resolve(_sealChurchDoc(obj));
+        setTimeout(tick, 120);
+      };
+      setTimeout(tick, 120);
+    });
   }
   function _openChurchDoc(content) {
     try {
@@ -20351,11 +20360,12 @@ zoo`.split("\n");
     },
     // ---- services: a dated gathering people serve at ----
     // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
-    publishService(svc) {
-      if (!sk) return Promise.resolve(null);
+    async publishService(svc) {
+      if (!sk) return null;
       const id = svc.id || "svc" + Date.now();
       const doc = { date: svc.date || "", time: svc.time || "10:30", name: svc.name || "Sunday Gathering" };
-      const content = _sealChurchDoc(doc);
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
     },
     removeService(id) {
@@ -20366,9 +20376,10 @@ zoo`.split("\n");
       return this._subAddr(SERVICE_D, (c) => ({ date: c.date, time: c.time, name: c.name }), onServices);
     },
     // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
-    publishRunsheet(serviceId, items) {
+    async publishRunsheet(serviceId, items) {
       if (!sk || !serviceId) return Promise.resolve(null);
-      const content = _sealChurchDoc({ items: Array.isArray(items) ? items : [] });
+      const content = await _sealChurchDocReady({ items: Array.isArray(items) ? items : [] });
+      if (content == null) return null;
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }));
     },
     subscribeRunsheets(onSheets) {
@@ -20477,11 +20488,12 @@ zoo`.split("\n");
     },
     // ---- rooms & bookings: a shared room calendar (steward-booked) ----
     // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }
-    publishRoom(room) {
-      if (!sk) return Promise.resolve(null);
+    async publishRoom(room) {
+      if (!sk) return null;
       const id = room.id || "room" + Date.now();
       const doc = { name: (room.name || "Room").trim(), capacity: room.capacity || "", note: (room.note || "").trim() };
-      const content = _sealChurchDoc(doc);
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
     },
     removeRoom(id) {
@@ -20491,11 +20503,12 @@ zoo`.split("\n");
     subscribeRooms(cb) {
       return this._subAddr(ROOM_D, (c) => ({ name: c.name, capacity: c.capacity, note: c.note }), cb);
     },
-    publishBooking(b) {
+    async publishBooking(b) {
       if (!sk || !b || !b.roomId) return Promise.resolve(null);
       const id = b.id || "bk" + Date.now();
       const doc = { roomId: b.roomId, date: b.date || "", start: b.start || "", end: b.end || "", title: (b.title || "").trim(), note: (b.note || "").trim() };
-      const content = _sealChurchDoc(doc);
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
     },
     removeBooking(id) {
@@ -20507,10 +20520,11 @@ zoo`.split("\n");
     },
     // ---- rota: assignments for one service (latest wins; published flag) ----
     // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
-    publishRota(rota) {
+    async publishRota(rota) {
       if (!sk || !rota || !rota.service) return Promise.resolve(null);
       const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
-      const content = _sealChurchDoc(doc);
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content })).then(() => ({ id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} }));
     },
     removeRota(serviceId) {
@@ -20547,13 +20561,14 @@ zoo`.split("\n");
     // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
     // event = { id?, date, time, title, where, blurb, accent }
     // asPub (optional) publishes the event AS an owned network instead of the church — network-wide event.
-    publishEvent(ev, asPub) {
+    async publishEvent(ev, asPub) {
       const signer = skFor(asPub);
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
       const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null };
-      const content = _sealChurchDoc(doc);
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
       if (groupId) tags.push(["t", groupId]);
       if (actingChurch) tags.push(["p", actingChurch]);

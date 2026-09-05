@@ -42,7 +42,7 @@ test('every name-key-sealed document type is on the replay list', () => {
   const sealed = new Set();
   const D_TO_PFX = { EVENT_D: 'event', SERVICE_D: 'service', ROOM_D: 'room', BOOKING_D: 'booking',
     ROTA_D: 'rota', RUNSHEET_D: 'runsheet', ROSTER_D: 'roster' };
-  for (const mm of STEW.matchAll(/_sealChurchDoc\(/g)) {
+  for (const mm of STEW.matchAll(/_sealChurchDocReady\(/g)) {   // renamed 2026-09-05 when sealing began to refuse rather than fall back to cleartext
     const after = STEW.slice(mm.index, mm.index + 900);
     const dm = after.match(/\['d',\s*([A-Z_]+_D)\s*\+/);
     if (dm && D_TO_PFX[dm[1]]) sealed.add(D_TO_PFX[dm[1]]);
