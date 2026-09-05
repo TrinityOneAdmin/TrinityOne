@@ -471,7 +471,12 @@ function churchPetName(hex) {
   if (!/^[0-9a-f]{64}$/i.test(h)) return '';
   let x = 0; for (let i = 0; i < h.length; i++) x = (x * 31 + h.charCodeAt(i)) >>> 0;
   const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
-  return cap(_PET_ADJ[x % 16]) + ' ' + cap(_PET_NOUN[(x >>> 4) % 16]) + ' ' + (10 + (x >>> 9) % 90);
+  // FOUR DIGITS, not two. The relay's own slug uses 10-90 because it is a directory HANDLE people type;
+  // this label is only ever read, so it can afford the entropy. 16x16x90 = 23,040 buckets collides for ~20%
+  // of relays at 100 churches and 97% at 400 (measured by the audit); 16x16x9000 = 2.3M brings 400 churches
+  // to about 3%. A collision is cosmetic — nothing routes or gates on the label and the npub is shown beside
+  // it — but two identical rows are exactly the confusion this label exists to prevent.
+  return cap(_PET_ADJ[x % 16]) + ' ' + cap(_PET_NOUN[(x >>> 4) % 16]) + ' ' + (1000 + (x >>> 9) % 9000);
 }
 // hex pub -> { by: 'operator' | 'self', at: unix-seconds } — PROVENANCE. Nothing recorded how a church came
 // to be on a relay, so an operator faced with rows they never added had no way to tell which were theirs,
@@ -508,17 +513,25 @@ function loadChurches() {
   try {
     const cj = JSON.parse(readFileSync(CHURCH_FILE, 'utf8'));
     if (cj) { if (cj.npub) addChurch(cj.npub, cj.name, cj.media === true); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name, !!(c && c.media === true), c && { by: c.by, at: c.at })); }
-    // ONE-TIME CLEARING OF NAMES AN OLDER BUILD STORED. addChurch ignores the name now, so a stale one would
-    // otherwise sit on disk untouched until the operator happened to change something — and the whole point
-    // of the decision is that it is not on the disk. Rewrite only when there is something to remove, so an
-    // already-clean file is never churned (writeChurches ends in a whole-corpus rehydrate).
-    const stale = cj && Array.isArray(cj.churches) && cj.churches.some(c => c && typeof c.name === 'string' && c.name);
-    if (stale) {
-      const cleaned = cj.churches.map(c => { const o = { ...c }; delete o.name; return o; });
-      const tmp = CHURCH_FILE + '.tmp';
-      writeFileSync(tmp, JSON.stringify({ ...cj, churches: cleaned, envMigrated: true }, null, 2) + '\n');
-      renameSync(tmp, CHURCH_FILE);
-      console.log('[relay] cleared ' + cj.churches.filter(c => c && c.name).length + ' stored church name(s) from church.json — the operator label is now derived from the key');
+    // ONE-TIME CLEARING OF NAMES AN OLDER BUILD STORED, written through persistChurches — the SAME canonical
+    // writer the rest of the file uses — and never by mapping the rows we just read.
+    //
+    // The first version mapped `cj.churches` and stamped `envMigrated`, and an audit reproduced three faults
+    // in that, one of them silent data loss:
+    //   · a CHURCH_NPUB-seeded church is in CHURCH_PUBS but NOT in cj.churches, so the rewrite dropped it —
+    //     and stamping envMigrated then stopped the env var being folded in again, so on the second boot the
+    //     congregation was simply gone and every write of theirs refused;
+    //   · `{...c}` over a STRING row (a documented shape) spread it into {"0":"n","1":"p",…}, which the next
+    //     boot could not read, dropping that church too;
+    //   · the top-level `{npub, name}` shape was never cleared at all.
+    // Writing from CHURCH_PUBS + CHURCH_META fixes all three, because that is the state every shape has
+    // already been folded into by the lines above.
+    const staleRow = cj && Array.isArray(cj.churches) && cj.churches.some(c => c && typeof c.name === 'string' && c.name);
+    const staleTop = !!(cj && typeof cj.name === 'string' && cj.name);
+    if ((staleRow || staleTop) && CHURCH_PUBS.size) {
+      const n = (staleRow ? cj.churches.filter(c => c && c.name).length : 0) + (staleTop ? 1 : 0);
+      persistChurches();
+      console.log('[relay] cleared ' + n + ' stored church name(s) from church.json — the operator label is now derived from the key');
     }
   } catch {}
 }
@@ -1866,7 +1879,12 @@ function persistChurches() { try {
   // loadChurches() re-folds CHURCH_NPUB on the next boot — so a church the operator deliberately removed
   // (which stamped envMigrated) is RESURRECTED the moment an /import clone rewrites church.json here, undoing
   // the C2 removal. Dropping by/at also leaves rows the operator can't place and so can't safely remove.
-  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), name: churchPetName(h), ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
+  // NO `name`. This wrote `name: churchPetName(h)`, which made "nothing stores a name" false and made the
+  // one-time migration below fire on the SECOND boot of a brand-new box — logging that an "older build"
+  // had stored a name when this build had just stored it itself. Found by the audit of 7f5eed0.
+  // `media` is carried because MEDIA_HOSTS is rebuilt from this file: dropping it silently revoked a
+  // media grant on the first rewrite.
+  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), ...(MEDIA_HOSTS.has(h) ? { media: true } : {}), ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
   const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
 } catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
@@ -3435,6 +3453,11 @@ function serveStatic(req, res) {
     // nothing, and every dashboard stays green. AUDIT 2026-08-02.
     res.end(JSON.stringify({
       ok: !STORE_DEGRADED, port: PORT, uptimeMs: Date.now() - STARTED_AT,
+      // THE RELAY'S OWN CLOCK, in seconds. A client whose NIP-42 proof was refused cannot otherwise tell a
+      // wrong clock from a refusal: the HTTP `Date` header is not CORS-safelisted, so a phone reading a
+      // cross-origin relay cannot see it. Additive and unauthenticated — it says nothing about the church,
+      // and this window (600s) is already visible to anyone who tries an AUTH.
+      now: Math.floor(Date.now() / 1000),
       ...(STORE_DEGRADED ? { degraded: { since: STORE_DEGRADED.at, reason: STORE_DEGRADED.why, what: 'storage' } } : {}),
       // FREE SPACE, because the retention cull cannot prevent a full disk. That budget counts EPHEMERAL
       // EVENTS per church — it never touches members, rosters, groups, care, safeguarding or finance (kept
