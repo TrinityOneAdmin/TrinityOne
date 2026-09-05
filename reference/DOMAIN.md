@@ -177,6 +177,29 @@ and which of your instincts about it are wrong.
   **Cleartext on disk:** `member:<key>` (this key belongs to this church, and when it joined), **`minors:`
   (which keys are children)**, `roster:` (care structure), `group:`, `rsvp:`, `careavail:`/`unavail:`,
   `joinpolicy:`, `event:`, `financekey:`.
+  **CORRECTED 2026-09-05 — THE "NEVER IN NAMES" CLAIM IS FALSE, AND WAS WHEN IT WAS WRITTEN.** A whole-system
+  review found it and I re-measured it myself on the live box, read out of `relay/relay.sqlite`:
+
+      trinityone/roster:    {"people":[{"name":"Margaret Hoyle","pub":"44a2d349…"}]}
+      trinityone/stewards:  {"names":{"9501ad2f…":"Ruth Bexley"}}
+
+  Four real names on that disk, each paired with its public key. `trinityone/voice:` and
+  `trinityone/stewardreq:` carry a name the same way (none present on this box yet). The 2026-09-02
+  measurement below looked at member `name:` docs and kind-0 profiles — which ARE sealed — and did not look
+  at the roster or the steward list.
+
+  **Why this is the worst version of the mistake.** Combined with `minors:` (which keys are children) and
+  `guardians:` (which key is each child's guardian), both cleartext and both already listed below, a seized
+  disk gives: the care team and the stewards BY NAME with their keys, which members are children, and which
+  named adult is responsible for each of them. Those are precisely the people a compelled authority asks
+  about, and pseudonymity was the entire protection.
+
+  NOT FIXED as of 2026-09-05 — recorded so nobody plans on the old claim. The repo half-knew: the roster
+  case is a TODO in `scripts/church-docs-are-sealed.test.mjs` ("sealing this blinds the relay's careAdmin()
+  grant"); the `stewards.names` case is on no list. Sealing roster names means moving the relay-facing pub
+  list to its own field first, so it is a two-document change with a migration, not a one-liner.
+
+  The original claim, kept so the correction is legible:
   So a seizure yields **the social graph in public keys, never in names** — the shape of a congregation, its
   groups, its rota, and which members are children, but not who they are absent a separate link (a seized
   phone, network correlation — see the deanon red-team note that pubkey↔IP is open and inherent).
