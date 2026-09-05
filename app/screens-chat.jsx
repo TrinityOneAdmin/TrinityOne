@@ -1646,7 +1646,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       </div>
 
       <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
-        {(ctx.joinState && ctx.joinState.isPending) ? (
+        {(ctx.joinState && ctx.joinState.isPending && !ctx.joinState.authFailed) ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center', lineHeight: 1.45 }}>
             <Icon name="shield" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} /> Waiting for a steward to approve you — you’ll be able to post once you’re in.
           </div>

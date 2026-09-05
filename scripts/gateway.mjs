@@ -1884,7 +1884,12 @@ function persistChurches() { try {
   // had stored a name when this build had just stored it itself. Found by the audit of 7f5eed0.
   // `media` is carried because MEDIA_HOSTS is rebuilt from this file: dropping it silently revoked a
   // media grant on the first rewrite.
-  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), ...(MEDIA_HOSTS.has(h) ? { media: true } : {}), ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
+  // MEDIA_HOSTS holds BOTH grants written in church.json and grants seeded by RELAY_MEDIA_CHURCHES. Writing
+  // the union back would turn an env grant into a permanent on-disk one — removing the variable would then
+  // no longer revoke it, which is not what an operator setting an env var expects. Persist only what came
+  // from the file. (Found by audit, 2026-09-05; before 52ceada the opposite bug lost file grants entirely.)
+  const envMedia = new Set((process.env.RELAY_MEDIA_CHURCHES || '').split(',').map(x => toHexPub(x.trim())).filter(Boolean));
+  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), ...(MEDIA_HOSTS.has(h) && !envMedia.has(h) ? { media: true } : {}), ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
   const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
 } catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events

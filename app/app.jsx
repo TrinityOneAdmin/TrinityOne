@@ -646,9 +646,25 @@ function App() {
       if (!F || !F.authState || !F.reconnectAll) return false;
       let st = null; try { st = F.authState(); } catch (e) { return false; }
       if (!st || !st.failed) return false;
-      if (Date.now() - lastAuthRetry < 60000) return true;   // already asked recently; still refused
-      lastAuthRetry = Date.now();
-      try { F.measureRelaySkew && F.measureRelaySkew(); } catch (e) {}   // so the screen can name the cause
+      // MEASURE BEFORE RECONNECTING, because the relay will not tell us why it refused. A wrong clock and a
+      // BLOCKED key produce byte-identical refusals with the socket left open (gateway.mjs:5382 — one
+      // condition, one else-branch; proved against the real gateway 2026-09-05). Re-challenging cures the
+      // first and is useless for the second, so doing it blind turns every phone a church has removed into
+      // a permanent ninety-second teardown loop against the relay that removed them — and reconnectAll()
+      // closes every socket and re-runs nine subscriptions, which is the storm app.jsx warns about above.
+      if (!st.skewAt) { try { F.measureRelaySkew && F.measureRelaySkew(); } catch (e) {} return true; }
+      if (!(F.clockLooksWrong && F.clockLooksWrong())) return true;   // refused, but not by the clock — say so, do not loop
+      // A MONOTONIC CLOCK, because the fault we are recovering from IS the wall clock. Date.now() put
+      // `lastAuthRetry` fifteen minutes in the future while the phone was skewed; the moment the clock was
+      // corrected BACKWARDS the difference went negative and stayed under the cooldown, so the retry was
+      // suppressed for exactly as long as the original skew — the recovery could not fire during the only
+      // window it was needed. Measured on the Oppo 2026-09-05: forcing the same two calls by hand recovered
+      // the connection immediately, while the timer sat blocked. performance.now() does not move when the
+      // system clock is set.
+      const mono = () => { try { return performance.now(); } catch (e) { return Date.now(); } };
+      if (mono() - lastAuthRetry < 60000) return true;
+      lastAuthRetry = mono();
+      try { F.measureRelaySkew && F.measureRelaySkew(); } catch (e) {}   // re-measure: the clock may have been put right
       try { F.reconnectAll(); } catch (e) {}
       return true;
     };
@@ -1179,11 +1195,18 @@ function App() {
       // applicant never saw isAdmitted true.
       let wasAdmitted = false; try { wasAdmitted = lsGet(WAS_KEY) === '1'; } catch (e) {}
       if (s.isAdmitted) { wasAdmitted = true; try { lsSet(WAS_KEY, '1'); } catch (e) {} }
-      const removed = !!(wasAdmitted && s.approval && !s.isAdmitted);
+      // NOT WHEN WE COULD NOT ASK. `admitted` is a gated read, so a refused NIP-42 proof empties it — and
+      // every term here is then true for exactly the member this is supposed to protect: one this phone HAS
+      // seen admitted. Under a skewed clock that made Chat announce "You're no longer in this church — your
+      // access has been removed", which is worse than the "waiting to be let in" the Today card was fixed
+      // for, and it was being cached to localStorage as the offline answer. Found by audit, 2026-09-05.
+      const removed = !!(wasAdmitted && s.approval && !s.isAdmitted && !s.authFailed);
       setJoinState({ ...s, removed, loaded: true });
       // Cache this church's LAST-KNOWN real join state, so an offline reopen can show the TRUTH (pending stays
       // pending, admitted stays admitted) instead of a hardcoded "you're in".
-      lsSet('trinityone.joinstate.' + activeChurch, { approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending, removed });
+      // Cache only what we were ABLE to establish. Caching an unreachable read makes the wrong answer
+      // survive the reconnect that would have corrected it.
+      if (!s.authFailed) lsSet('trinityone.joinstate.' + activeChurch, { approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending, removed });
     });
     // OFFLINE FALLBACK: if the relay never answers (offline / hostile network / relay down), don't spin forever —
     // and DON'T pretend the member is admitted (the old fallback hardcoded isAdmitted:true, so a brand-new member
@@ -1836,6 +1859,9 @@ function App() {
     // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date
     // header is not CORS-safelisted so a phone cannot read it cross-origin) — the screen then says the clock
     // is the usual cause instead of asserting a number it does not have.
+    // clockIsWrong is the MEASURED verdict, not an inference from the refusal — see the note in
+    // fellowship.src.js above clockLooksWrong(). Without it the screen blames the clock for a ban.
+    clockIsWrong: (() => { try { return !!(window.Fellowship.clockLooksWrong && window.Fellowship.clockLooksWrong()); } catch (e) { return false; } })(),
     clockSkewMins: (() => { try { const sk = (window.Fellowship.authState && window.Fellowship.authState().skewSec) || 0;
       return Math.abs(sk) >= 60 ? Math.round(Math.abs(sk) / 60) : undefined; } catch (e) { return undefined; } })(),
     clockSkewAhead: (() => { try { return ((window.Fellowship.authState && window.Fellowship.authState().skewSec) || 0) > 0; } catch (e) { return false; } })(),

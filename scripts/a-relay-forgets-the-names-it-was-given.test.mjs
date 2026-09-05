@@ -117,3 +117,28 @@ test('the operator label is DERIVED FROM THE KEY — different churches, differe
     assert.deepEqual(again.churches.map(c => c.name).sort(), labels.slice().sort(), 'the label moved between boots');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('a media grant from the FILE survives the rewrite; one from the ENV does not become permanent', async () => {
+  // 52ceada made persistChurches carry `media`, because MEDIA_HOSTS is rebuilt from this file and dropping
+  // it silently revoked a grant. But MEDIA_HOSTS also holds RELAY_MEDIA_CHURCHES grants, so the union was
+  // written back — turning an env grant into a permanent on-disk one, after which removing the variable no
+  // longer revoked it. Both directions matter, so both are asserted. Found by audit, 2026-09-05.
+  const dirA = mkdtempSync(join(tmpdir(), 'trin-media-a-'));
+  const dirB = mkdtempSync(join(tmpdir(), 'trin-media-b-'));
+  try {
+    const c = npubEncode(getPublicKey(generateSecretKey()));
+    const legacy = (extra) => JSON.stringify({ churches: [{ npub: c, name: 'Legacy', by: 'operator', at: 1700000000, ...extra }] }, null, 2);
+
+    writeFileSync(join(dirA, 'church.json'), legacy({ media: true }));
+    const a = await boot(dirA);
+    assert.equal(a.disk.churches[0].media, true,
+      'a media grant written in church.json was dropped by the rewrite, silently revoking it — MEDIA_HOSTS ' +
+      'is rebuilt from this file, so what is not written is not granted');
+
+    writeFileSync(join(dirB, 'church.json'), legacy({}));
+    const b = await boot(dirB, { RELAY_MEDIA_CHURCHES: c });
+    assert.equal(b.disk.churches[0].media, undefined,
+      'a grant that came from RELAY_MEDIA_CHURCHES was written to disk, so removing the variable no longer ' +
+      'revokes it — an operator setting an env var does not expect it to become permanent');
+  } finally { rmSync(dirA, { recursive: true, force: true }); rmSync(dirB, { recursive: true, force: true }); }
+});

@@ -7049,9 +7049,9 @@
   }
   var _relayAuthedAt = 0;
   var _relayAuthOkAt = 0;
-  var _relayAuthFailedAt = 0;
-  var _relayAuthFailReason = "";
+  var _relayAuth = /* @__PURE__ */ new Map();
   var _relaySkewSec = 0;
+  var _skewMeasuredAt = 0;
   function _noteAuthAccepted(url) {
     Promise.resolve().then(() => {
       let r = null;
@@ -7061,42 +7061,61 @@
       }
       const p = r && r.authPromise;
       if (!p || typeof p.then !== "function") return;
+      const key = normalizeURL2(url);
       p.then(
         () => {
           _relayAuthOkAt = Date.now();
-          _relayAuthFailedAt = 0;
-          _relayAuthFailReason = "";
+          _relayAuth.set(key, { okAt: Date.now(), failedAt: 0, reason: "" });
         },
         (err) => {
-          _relayAuthFailedAt = Date.now();
-          _relayAuthFailReason = String(err && err.message || err || "refused").slice(0, 120);
+          _relayAuth.set(key, { okAt: 0, failedAt: Date.now(), reason: String(err && err.message || err || "refused").slice(0, 120) });
         }
       );
     });
   }
   function authState() {
-    return {
-      okAt: _relayAuthOkAt,
-      failedAt: _relayAuthFailedAt,
-      reason: _relayAuthFailReason,
-      failed: !!_relayAuthFailedAt && _relayAuthFailedAt > _relayAuthOkAt,
-      skewSec: _relaySkewSec
-    };
-  }
-  async function measureRelaySkew() {
-    const url = (window.Fellowship.relays || [])[0] || "";
-    const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
-    if (!/^https?:\/\/.+/i.test(base)) return 0;
-    try {
-      const r = await fetch(base + "/status", { cache: "no-store", signal: AbortSignal.timeout(6e3) });
-      if (!r.ok) return 0;
-      const j = await r.json();
-      if (!j || typeof j.now !== "number") return 0;
-      _relaySkewSec = Math.round(Date.now() / 1e3 - j.now);
-      return _relaySkewSec;
-    } catch (e) {
-      return 0;
+    let okAt = 0, failedAt = 0, reason = "";
+    for (const v of _relayAuth.values()) {
+      if (v.okAt > okAt) okAt = v.okAt;
+      if (v.failedAt > failedAt) {
+        failedAt = v.failedAt;
+        reason = v.reason;
+      }
     }
+    return { okAt, failedAt, reason, failed: !!failedAt && !okAt, skewSec: _relaySkewSec, skewAt: _skewMeasuredAt };
+  }
+  var CLOCK_FAULT_SEC = 300;
+  function clockLooksWrong() {
+    return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC;
+  }
+  async function measureRelaySkew(preferUrl) {
+    const cands = [];
+    const add2 = (u) => {
+      const v = String(u || "");
+      if (v && !cands.includes(v)) cands.push(v);
+    };
+    add2(preferUrl);
+    for (const [k, v] of _relayAuth) if (v.failedAt && !v.okAt) add2(k);
+    try {
+      (churchRelays() || []).forEach(add2);
+    } catch (e) {
+    }
+    (window.Fellowship.relays || []).forEach(add2);
+    for (const url of cands) {
+      const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
+      if (!/^https?:\/\/.+/i.test(base)) continue;
+      try {
+        const r = await fetch(base + "/status", { cache: "no-store", signal: AbortSignal.timeout(6e3) });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (!j || typeof j.now !== "number") continue;
+        _relaySkewSec = Math.round(Date.now() / 1e3 - j.now);
+        _skewMeasuredAt = Date.now();
+        return _relaySkewSec;
+      } catch (e) {
+      }
+    }
+    return 0;
   }
   var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
   var SG_ASSUME_KEY = "trinityone.sgassume.";
@@ -8317,8 +8336,7 @@
     _authRefetchArmed = false;
     _relayAuthedAt = 0;
     _relayAuthOkAt = 0;
-    _relayAuthFailedAt = 0;
-    _relayAuthFailReason = "";
+    _relayAuth.clear();
     for (const hub of _docsHubs.values()) {
       hub.familyRebuilt = false;
       const c = hub.closer;
@@ -8592,6 +8610,7 @@
     // to check. See authState(); measureRelaySkew() is best-effort and returns 0 when it cannot tell.
     authState,
     measureRelaySkew,
+    clockLooksWrong,
     // Force fresh, authenticated sockets. Already used on the keyless->keyed transition; exposed because it is
     // ALSO the only way out of a refused AUTH — nostr-tools caches relay.authPromise, so nothing re-signs on a
     // socket that has already been refused, and correcting the clock alone changes nothing.

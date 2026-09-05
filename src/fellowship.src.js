@@ -1074,9 +1074,9 @@ let _relayAuthedAt = 0;
 // "the relay agreed" asks for it explicitly. Reset with it in reconnectAll: a new connection has proved
 // nothing yet.
 let _relayAuthOkAt = 0;
-let _relayAuthFailedAt = 0;      // the relay REFUSED our proof (socket still up) — see authState()
-let _relayAuthFailReason = '';
+const _relayAuth = new Map();    // url -> { okAt, failedAt, reason } — per relay, see authState()
 let _relaySkewSec = 0;           // this device's clock minus the relay's, seconds; 0 = unknown/never measured
+let _skewMeasuredAt = 0;
 // Observe the relay's OK for our AUTH without waiting on it here. nostr-tools resolves `relay.authPromise`
 // from that OK — and it can only resolve AFTER this signer returns the event, so awaiting it inside the
 // signer would deadlock the auth we are trying to complete. Hand it to a microtask instead.
@@ -1097,8 +1097,12 @@ function _noteAuthAccepted(url) {
     // so once it has settled the client NEVER SIGNS AGAIN on that socket. Correcting the clock changes
     // nothing; new subscriptions ride the same poisoned connection. I soaked it for eleven minutes at zero
     // drift across eleven polls and it never recovered; only closing the socket did.
-    p.then(() => { _relayAuthOkAt = Date.now(); _relayAuthFailedAt = 0; _relayAuthFailReason = ''; },
-           (err) => { _relayAuthFailedAt = Date.now(); _relayAuthFailReason = String((err && err.message) || err || 'refused').slice(0, 120); });
+    // PER RELAY. These were two module scalars, so with one relay accepting and another refusing the answer
+    // depended on which settled LAST — a member of two churches, banned by one, saw the ban's relay decide
+    // for both, or not, by arrival order. Keyed by url, and `failed` below means "no relay will have us".
+    const key = normalizeURL(url);
+    p.then(() => { _relayAuthOkAt = Date.now(); _relayAuth.set(key, { okAt: Date.now(), failedAt: 0, reason: '' }); },
+           (err) => { _relayAuth.set(key, { okAt: 0, failedAt: Date.now(), reason: String((err && err.message) || err || 'refused').slice(0, 120) }); });
   });
 }
 // WHAT THE RELAY ACTUALLY SAID, so a screen can stop guessing. `failed` means the relay REFUSED our proof —
@@ -1106,25 +1110,62 @@ function _noteAuthAccepted(url) {
 // Deliberately NOT wired into the four gates that read `_relayAuthedAt`: they fail closed, and a read gate
 // that wrongly refuses is this codebase's worst failure class. This is for telling a person what happened.
 function authState() {
-  return { okAt: _relayAuthOkAt, failedAt: _relayAuthFailedAt, reason: _relayAuthFailReason,
-           failed: !!_relayAuthFailedAt && _relayAuthFailedAt > _relayAuthOkAt, skewSec: _relaySkewSec };
+  let okAt = 0, failedAt = 0, reason = '';
+  for (const v of _relayAuth.values()) {
+    if (v.okAt > okAt) okAt = v.okAt;
+    if (v.failedAt > failedAt) { failedAt = v.failedAt; reason = v.reason; }
+  }
+  // `failed` = SOMETHING refused us and NOTHING has accepted us. One refusing relay beside a working one is
+  // not a failure the member should be told about, and must never tear down the connection that works.
+  return { okAt, failedAt, reason, failed: !!failedAt && !okAt, skewSec: _relaySkewSec, skewAt: _skewMeasuredAt };
 }
+// THE RELAY CANNOT TELL US WHY, so we have to find out. gateway.mjs:5382 makes "your clock is outside the
+// window" and "this church has BLOCKED you" one condition with one else-branch — byte-identical refusals,
+// socket left open in both cases. Proved against the real gateway 2026-09-05.
+//
+// That matters because the two want opposite handling. A wrong clock is fixed by re-challenging, and stops
+// as soon as the clock is right. A ban is permanent, and re-challenging it every ninety seconds turns every
+// blocked phone into a standing load on the relay that removed them — while telling them their clock is
+// wrong and that their posts will send once it reconnects, neither of which is true.
+//
+// The measured skew is the only honest discriminator we have. Half the relay's window (600s) is the
+// threshold: comfortably outside normal drift, comfortably inside "this clock cannot authenticate".
+const CLOCK_FAULT_SEC = 300;
+function clockLooksWrong() { return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC; }
 // Best-effort measurement of THIS DEVICE's clock against the relay's, so the app can name the cause instead
 // of implying one. The HTTP `Date` header is not CORS-safelisted, so a phone cannot read it cross-origin;
 // the relay reports its own seconds in /status instead. An older relay has no `now`, and then we say nothing
 // about clocks rather than guessing. Never throws, never blocks anything.
-async function measureRelaySkew() {
-  const url = (window.Fellowship.relays || [])[0] || '';
-  const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
-  if (!/^https?:\/\/.+/i.test(base)) return 0;
-  try {
-    const r = await fetch(base + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
-    if (!r.ok) return 0;
-    const j = await r.json();
-    if (!j || typeof j.now !== 'number') return 0;   // relay too old to say — do not guess
-    _relaySkewSec = Math.round(Date.now() / 1000 - j.now);
-    return _relaySkewSec;
-  } catch (e) { return 0; }
+async function measureRelaySkew(preferUrl) {
+  // NOT relays[0]. That is the first relay this phone ever added — whichever church it belonged to — and a
+  // box there could hand back any `now` it liked, which was then rendered to the member as fact. Prefer the
+  // relay that actually refused us, then the church's own gated set, and only then the raw list.
+  // TRY EVERY CANDIDATE, not just the first. The first version asked ONE relay and gave up if it could not
+  // answer — and `now` is new, so ANY relay on an older build returns nothing. Measured on the Oppo
+  // 2026-09-05: the skew stayed 0 for three minutes with the clock a quarter-hour out, because the relay the
+  // resolution happened to pick was on build 7a292ca. Passing the url by hand returned 900 immediately.
+  // The consequence was not cosmetic: no measurement means clockLooksWrong() stays false, which means the
+  // recovery never fires — the fix silently did nothing for the case it exists for.
+  const cands = [];
+  const add = (u) => { const v = String(u || ''); if (v && !cands.includes(v)) cands.push(v); };
+  add(preferUrl);
+  for (const [k, v] of _relayAuth) if (v.failedAt && !v.okAt) add(k);   // the ones that actually refused us
+  try { (churchRelays() || []).forEach(add); } catch (e) {}
+  (window.Fellowship.relays || []).forEach(add);
+  for (const url of cands) {
+    const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
+    if (!/^https?:\/\/.+/i.test(base)) continue;
+    try {
+      const r = await fetch(base + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (!j || typeof j.now !== 'number') continue;   // that relay is too old to say — ask the next
+      _relaySkewSec = Math.round(Date.now() / 1000 - j.now);
+      _skewMeasuredAt = Date.now();
+      return _relaySkewSec;
+    } catch (e) { /* unreachable or not JSON — try the next */ }
+  }
+  return 0;   // nobody could tell us: say nothing about clocks rather than guess
 }
 let _sgSelf = { cp: '', me: '', isMinor: false, known: false };
 // ONE PHONE IS NOT ONE PERSON. The remembered safeguarding answer is keyed by church AND member, and the
@@ -2324,7 +2365,11 @@ function reconnectAll() {
   _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
   _relayAuthedAt = 0;          // F12: and it has proved nothing yet, so no gated read is authoritative until it does
   _relayAuthOkAt = 0;          // …and neither has any relay agreed on this connection
-  _relayAuthFailedAt = 0; _relayAuthFailReason = '';   // a fresh socket has not been refused either
+  _relayAuth.clear();          // a fresh socket has neither been accepted nor refused
+  // The SKEW is deliberately kept. It measures this DEVICE's clock against the relay's, and reconnecting
+  // does not change either — clearing it made the card flicker between "your clock is about 15 minutes
+  // ahead" and the generic wording on every retry, roughly every ninety seconds. Measured on the Oppo,
+  // 2026-09-05. It is re-measured on the next retry anyway, so a genuinely stale value cannot persist.
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
   for (const hub of _docsHubs.values()) { hub.familyRebuilt = false; const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }   // F11: re-arm the family rebuild for the new socket
   // Shared subscriptions ride the same sockets, so they die with them. Drop the registry too, or the next
@@ -2625,7 +2670,7 @@ window.Fellowship = {
   // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
   // would otherwise tell a member they are "waiting to be let in" can ask instead whether we were ever able
   // to check. See authState(); measureRelaySkew() is best-effort and returns 0 when it cannot tell.
-  authState, measureRelaySkew,
+  authState, measureRelaySkew, clockLooksWrong,
   // Force fresh, authenticated sockets. Already used on the keyless->keyed transition; exposed because it is
   // ALSO the only way out of a refused AUTH — nostr-tools caches relay.authPromise, so nothing re-signs on a
   // socket that has already been refused, and correcting the clock alone changes nothing.

@@ -1707,10 +1707,13 @@ function TodayScreen({ ctx }) {
         <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Can’t check with your church right now</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
-            {ctx.clockSkewMins
-              ? <React.Fragment>This phone’s clock is about <b>{ctx.clockSkewMins} minutes</b> {ctx.clockSkewAhead ? 'ahead of' : 'behind'} your church’s. Set the date and time to update automatically, and this will sort itself out.</React.Fragment>
-              : <React.Fragment>Your church’s relay wouldn’t accept this phone just now. This is usually the phone’s clock being wrong — check that the date and time are set to update automatically.</React.Fragment>}
-            {' '}Nothing is lost; anything you post will send once it reconnects.
+            {/* ONLY BLAME THE CLOCK WHEN WE HAVE MEASURED IT. The relay's refusal is identical for a wrong
+                clock and for a member the church has BLOCKED, so the confident version of this text was
+                telling banned people to check their date settings and promising their posts would send —
+                they never will. The measured skew is the only thing that separates the two. */}
+            {ctx.clockIsWrong
+              ? <React.Fragment>This phone’s clock is about <b>{ctx.clockSkewMins} minutes</b> {ctx.clockSkewAhead ? 'ahead of' : 'behind'} your church’s. Set the date and time to update automatically and this will sort itself out — nothing is lost, and anything you post will send once it reconnects.</React.Fragment>
+              : <React.Fragment>Your church’s relay wouldn’t accept this phone. If it doesn’t clear on its own shortly, speak to whoever runs your church.</React.Fragment>}
           </div>
         </div>
       ) : null}
