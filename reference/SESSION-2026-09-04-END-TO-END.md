@@ -605,3 +605,62 @@ wording is misleading.
   ×2) and is running.
 - Keys, PINs and recovery phrases for the staged church and its three members were written to the session
   scratchpad only, never to the repo.
+
+---
+
+# WHAT WAS FIXED, 2026-09-04/05 — and what the audits cost
+
+Six commits on `fix/session-2026-09-04`. Suite 2665 -> 2731 (2730 pass, 0 fail, 1 todo). Nothing deployed.
+
+| | |
+|---|---|
+| `625bfdb` | a new church stops being orphaned from its own box; a Suite box auto-registers |
+| `f0ceb92` | the false "nothing you set up will save" banner; a durable "Put back"; repairs from audit #1 |
+| `42f8080` | the recovery worked by accident of boot timing, and its test stubbed the reason |
+| `7f5eed0` + `52ceada` | a relay holds a petname, not a church name; then the repairs that migration needed |
+| `dd22062` + `48df084` | a refused proof stops meaning "you are not admitted"; then the repairs THAT needed |
+| `22870fc` | the wizard stops advancing over rooms it never made; five controls named; care survives a reconnect |
+
+**Every one of the three fix batches needed repair after an audit, and two of the repairs needed repairing.**
+That is the headline. The audits were not a formality; they found defects I had shipped into the branch,
+including two that were WORSE than the bug being fixed:
+
+- a guard keyed on a per-BROWSER record, so a church restored from its phrase could never record a
+  legitimate "this box is not ours" again;
+- a clock fix that gave every member a church had BLOCKED a permanent 90-second reconnect loop against the
+  relay that removed them, and told them their clock was wrong.
+
+Three faults were found only by driving the phone, and could not have been found any other way: a skew
+measurement that asked one relay and gave up (so the recovery never fired at all); a retry cooldown measured
+on the very clock it was recovering from; and a card that flickered between two wordings every 90 seconds.
+
+## My own audit of items 2 and 3, since the agent for it was lost
+
+- **`publishGroup`'s failure contract, settled by reading the code rather than the comments.**
+  `_publishToRelays` returns the event ONLY when every target accepted (`accepted === targets.length ? evt
+  : false`), so `publishGroup` yields an object with a valid `ts`, or `null`. `saveGroups`' `if (!pub)` is
+  therefore complete for both partial and total failure.
+  **Stale comment, not fixed:** `app/stew-dashboard.jsx:2401` says "publishGroup resolves an object even
+  when every relay refused — `ts` is false in that case". That is not true of the current code. The
+  `!pub.ts` check beside it is harmless, but the comment will mislead whoever reads it next.
+
+- **164 controls in `app/*.jsx` have NO accessible name at all** — no `aria-label`, `aria-labelledby`, `id`,
+  placeholder or title. Comments stripped; file/checkbox/radio inputs excluded. Concentrated in
+  `stew-dashboard.jsx` (58), `screens-chat.jsx` (15), `stew-finance.jsx` (12), `screens-giving.jsx` (11),
+  `screens-today.jsx` (11), `stew-schedule.jsx` (11), `screens-library.jsx` (10).
+  This week fixed FIVE of them, chosen by consequence (the recovery-phrase quiz on both surfaces, the
+  moderation menu, the import column selects, the restore textarea). **The pattern is systemic and hand-
+  fixing it will not converge** — the existing sweep test only looks at `type="password"`. What is wanted
+  is a test that fails on any NEW unnamed control, plus a prioritised pass over the 164; that is its own
+  piece of work and is NOT started.
+
+## Still open
+
+- `removed` / "waiting for approval" is consumed correctly on Today and Chat only. Four other screens
+  (`screens-serving.jsx` x2, `screens-chat.jsx` elsewhere, the approved-toast) still assert a waiting state
+  under a refused proof. Additive, so nothing regressed — but "the screen stops guessing" is true of two
+  screens, not seven.
+- The relay's NIP-42 window is untouched, by the owner's standing decision. A phone more than 5 minutes out
+  still cannot authenticate; it now says so and recovers by itself once the clock is right.
+- A church's name is still in its kind-0 profile, in cleartext, and that is public by design — see DOMAIN.md.
+  The petname change did NOT close that and must not be described as if it did.
