@@ -2032,7 +2032,24 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const id = d.slice(ROSTER_D.length);
     { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e, id)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
-    const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
+    // READ `pubs` FIRST, FALL BACK TO `people`. From 2026-09-05 the console seals the roster's NAMES under
+    // the church name key and publishes the keys alongside in the clear, as `{ pubs: [...], e: "<sealed>" }`.
+    //
+    // Why the keys stay readable: six grants in this file hang off ROSTER_PEOPLE — careAdmin(), rota
+    // visibility, and four team-room audience checks (search ROSTER_PEOPLE). The relay cannot open a sealed
+    // document, so sealing the whole thing would turn every one of them into "nobody": a care team with no
+    // admin and a team room served to no one. The warning above this file's ROTA_VIS said exactly that.
+    // Splitting the document keeps the enforcement server-side and takes the NAMES off the disk, which is
+    // the half that matters under seizure — a rota held {"name":"Josh Adeyemi","pub":"415640527d0d…"}.
+    //
+    // Old rows keep working, which is what makes the rollout safe in this order: relays first, then consoles.
+    // A relay that has this and meets an OLD cleartext roster still reads `people`; and because the relay
+    // rehydrates all history on update, an updated relay re-reads every roster it already holds.
+    const set = new Set(); try {
+      const c = JSON.parse(e.content);
+      const src = Array.isArray(c.pubs) ? c.pubs : ((c.people || []).map(p => p && p.pub));
+      src.forEach(v => { const h = toHexPub(v); if (h) set.add(h); });
+    } catch {}
     ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard

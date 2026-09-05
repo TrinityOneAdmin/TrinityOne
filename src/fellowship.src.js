@@ -1522,7 +1522,14 @@ function _absorbRoster(cp, d, e) {
 // check — only the church key may say who speaks for the church.
 function _absorbVoice(cp, d, e) {
   if (d !== VOICE_D + cp || e.pubkey !== cp) return false;
-  try { const c = JSON.parse(e.content); _churchVoices.set(cp, { self: c.self || null, public: c.public || {} }); } catch {}
+  // SEALED SINCE 2026-09-05 under the church name key, which every member holds. _openChurchDoc returns the
+  // inner object for a sealed document and the object itself for a cleartext one, so documents written
+  // before that date keep working unchanged. A document we cannot open yet leaves the by-line absent, and an
+  // absent by-line is handled everywhere already — the member is named the ordinary way.
+  try {
+    const c = _openChurchDoc(cp, e.content);
+    if (c) _churchVoices.set(cp, { self: c.self || null, public: c.public || {} });
+  } catch {}
   _fireTrust();
   return true;
 }
@@ -1853,7 +1860,16 @@ function _noteReseat(cp, e) {
     for (const p of ((JSON.parse(e.content) || {}).pairs || [])) {
       if (!p || !p.old || !p.new || p.old === p.new) continue;
       s.add(String(p.old).toLowerCase());
-      if (pub && String(p.new).toLowerCase() === pub) mine = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      // `n` is the sealed name (2026-09-05); `name` is the cleartext form still on relays. Prefer the sealed
+      // one, fall back to the plain one. If neither opens, `mine` stays empty and the member keeps whatever
+      // name they already had — the re-seat itself (the key change) still applies, because that is what the
+      // relay follows and it was never sealed.
+      if (pub && String(p.new).toLowerCase() === pub) {
+        let nm = '';
+        if (typeof p.n === 'string' && p.n) { const o = _openChurchDoc(cp, JSON.stringify({ e: p.n })); if (o && o.name) nm = o.name; }
+        if (!nm) nm = p.name || '';
+        mine = String(nm).replace(/\s+/g, ' ').trim().slice(0, 40);
+      }
     }
   } catch (x) {}
   _reseatOld.set(cp, s);

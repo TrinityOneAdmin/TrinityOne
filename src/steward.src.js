@@ -3414,7 +3414,15 @@ window.Steward = {
     const cp = window.Steward.parseStewardInvite(payload);
     if (!cp) return Promise.resolve({ ok: false, error: 'That doesn’t look like a church invite.' });
     if (cp === churchPub) return Promise.resolve({ ok: false, error: 'That’s your own church.' });
-    const content = JSON.stringify({ name: (lastProfile && lastProfile.name) || '' });
+    // SEALED TO THE CHURCH KEY, not the name key. Only the owner's console reads this document, and a
+    // would-be steward may not yet hold the church name key — so this one is sealed to the church itself.
+    // It named the requester in the clear: a list of people asking for authority in a congregation, which
+    // under seizure identifies the leadership-in-waiting as precisely as the steward list identifies the
+    // leadership. If sealing is impossible we publish the request WITHOUT a name rather than with one; the
+    // owner still sees the request and can identify it by key.
+    let content;
+    try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: (lastProfile && lastProfile.name) || '' }), nip44ck(sk, cp)) }); }
+    catch (e) { content = JSON.stringify({ n: '' }); }
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }, sk))
       .then(() => ({ ok: true, church: cp, npub: npubEncode(cp) }));
   },
@@ -3429,7 +3437,16 @@ window.Steward = {
         if (d === STEWARDS_D + pub) { try { roster = new Set((JSON.parse(e.content).pubkeys) || []); } catch {} emit(); return; }
         if (d !== STEWARDREQ_D + pub || e.pubkey === pub) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byPub.delete(e.pubkey); emit(); return; }
-        let name = ''; try { name = (JSON.parse(e.content).name) || ''; } catch {}
+        // `n` is the sealed form (2026-09-05), sealed by the requester to THIS church's key; `name` is what
+        // was written before that and is still on relays. Read both. A request whose name will not open is
+        // still shown — the owner sees the npub and can approve or refuse it — because dropping the request
+        // would be worse than showing it unnamed.
+        let name = '';
+        try {
+          const c = JSON.parse(e.content);
+          if (typeof c.n === 'string' && c.n) { try { name = (JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}).name || ''; } catch {} }
+          if (!name) name = c.name || '';
+        } catch {}
         byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
         emit();
       },
@@ -5393,7 +5410,16 @@ window.Steward = {
       .map(p => {
         const nm = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
         const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1000) };
-        if (nm) out.name = nm;
+        // THE NAME IS SEALED, THE KEYS ARE NOT. The relay parses `old`/`new` (gateway.mjs, the RESEAT_D
+        // branch) to follow a member across a key change, so those must stay readable. `name` did not: it
+        // bound a display name to TWO keys at once, which is strictly more identifying than either the
+        // roster or the steward list — it says "this person, before and after". Written to `n` rather than
+        // over `name` (add, never repurpose), so an older member app still reads the cleartext form on the
+        // documents that already carry it.
+        if (nm) {
+          const sealedNm = _sealChurchDoc({ name: nm });
+          if (sealedNm != null) out.n = JSON.parse(sealedNm).e;
+        }
         return out;
       });
     // feChurch, NOT finalizeEvent: a DELEGATED steward signs with their own key, and only the ['church',<cp>]
@@ -5577,7 +5603,15 @@ window.Steward = {
             // edit — otherwise adding or removing ONE steward would republish a roster with no capabilities
             // at all and silently restore full authority to everyone the church had scoped.
             _stewardCaps = (doc.caps && typeof doc.caps === 'object') ? doc.caps : {};
+            // `n` is the sealed form (2026-09-05); `names` is what consoles wrote before that and is still
+            // on every relay, so both are read and cleartext stays supported for history. A document whose
+            // names we cannot open yet leaves the map empty and the UI falls back to stewardNameFor()
+            // petnames — a worse label, never a wrong one.
             _stewardNames = (doc.names && typeof doc.names === 'object') ? doc.names : {};
+            if (typeof doc.n === 'string') {
+              const opened = _openChurchDoc(JSON.stringify({ e: doc.n }));
+              if (opened && typeof opened === 'object') _stewardNames = opened;
+            }
             _stewardSince = (doc.at && typeof doc.at === 'object') ? doc.at : {};
           } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardSince = {}; }
         }
@@ -5633,8 +5667,24 @@ window.Steward = {
     for (const p of list) nextAt[p] = _stewardSince[p] || nowS;
     const doc = { pubkeys: list };
     if (Object.keys(next).length) doc.caps = next;
-    if (Object.keys(nextNames).length) doc.names = nextNames;
     if (Object.keys(nextAt).length) doc.at = nextAt;
+    // NAMES SEALED, KEYS AND CAPS IN THE CLEAR. Measured 2026-09-05 on relay/relay.sqlite: this document
+    // held {"names":{"9501ad2f…":"Ruth Bexley"}} in plain text — the church's officers, by name, beside the
+    // keys that identify them and the list of what each is trusted with. That is the first page anyone
+    // reading a seized disk would want.
+    //
+    // The relay parses `pubkeys` and `caps` ONLY (gateway.mjs, the STEWARDS_D branch) and has never looked at
+    // `names`, so sealing this half costs the relay nothing — unlike the roster, where the keys are
+    // load-bearing. Written to a NEW field rather than over the old one (backwards compatibility: add, never
+    // repurpose), so an older console falls back to its own petnames instead of showing nothing.
+    //
+    // Delegated stewards can open it: they are recipients of the name-key envelope via stewardPubs in
+    // _ensureNameKeyLocked, which is the same key the roster and calendar use.
+    if (Object.keys(nextNames).length) {
+      const sealedNames = _sealChurchDoc(nextNames);
+      if (sealedNames == null) return Promise.resolve(false);   // no key: publish no names rather than plain ones
+      doc.n = JSON.parse(sealedNames).e;
+    }
 
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
   },
@@ -5655,7 +5705,13 @@ window.Steward = {
   _voiceSave() {
     if (!sk) return Promise.resolve(null);
     const doc = { self: (_selfVoice && _selfVoice.name) ? { ..._selfVoice, churchName: lastProfile.name || '' } : null, public: { ..._publicVoices } };
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
+    // SEALED (2026-09-05). This is a list of who speaks for the church, by name and office, beside their
+    // keys — "Rev. Margaret Hoyle, Vicar" against a pubkey. The relay never reads it; only members do, and
+    // every member holds the church name key, so sealing costs nothing and takes another named list off the
+    // disk. The church's OWN name stays public in its kind-0 profile, as it must be to be findable at all.
+    const sealedVoice = _sealChurchDoc(doc);
+    if (sealedVoice == null) return Promise.resolve(false);
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: sealedVoice }, sk));
   },
   setVoice(name, office) {
     _selfVoice = (name && String(name).trim()) ? { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) } : null;
@@ -6208,13 +6264,37 @@ window.Steward = {
   // so it SHOULD be sealed, and church-docs-are-sealed.test.mjs tracks that as a deferred todo. Sealing it
   // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
   // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
-  publishRoster(teamId, roster) {
-    if (!sk || !teamId) return Promise.resolve(null);
+  async publishRoster(teamId, roster) {
+    if (!sk || !teamId) return null;
     const roles = (roster.roles || []).map(r => ({ id: r.id || ('r' + Math.random().toString(36).slice(2, 7)), name: r.name || 'Role' }));
     const people = (roster.people || []).map(p => ({ id: p.id || ('p' + Math.random().toString(36).slice(2, 7)), name: p.name || '', pub: p.pub || '' }));
     // serving pods: a named set of role->person mappings, applied to a service in one tap. fills = { roleId: personId }
     const pods = (roster.pods || []).map(p => ({ id: p.id || ('pod' + Math.random().toString(36).slice(2, 7)), name: p.name || 'Pod', fills: (p.fills && typeof p.fills === 'object') ? p.fills : {} }));
-    const content = JSON.stringify({ roles, people, pods });
+    // A MIXED DOCUMENT: the KEYS in the clear for the relay, the NAMES sealed under the church name key.
+    //
+    // Measured 2026-09-05 on relay/relay.sqlite — this document held
+    // {"people":[{"name":"Margaret Hoyle","pub":"44a2d349…"}]} in plain text. Put beside `minors:` and
+    // `guardians:` (cleartext by design, pubkeys only), a seized disk yielded the serving and care teams BY
+    // NAME with their keys, which keys are children, and which named adult answers for each. Pseudonymity
+    // was the whole at-rest protection and these entries defeated it for exactly the people a compelled
+    // authority asks about.
+    //
+    // Why not seal the whole thing — this is the trap, and gateway.mjs carries the same note. SIX grants in
+    // the relay hang off the roster's pubkeys: careAdmin(), team-scoped rota visibility, and four team-room
+    // audience checks. The relay cannot open a sealed document, so sealing `people` outright turns all six
+    // into "nobody": a care team with no admin, and team rooms served to no one. That is why
+    // church-docs-are-sealed.test.mjs carried `roster:` as a deferred `todo` rather than just doing it.
+    //
+    // Readers need no change. _openChurchDoc (console) and CHURCH_SEALED_PFXS (member app, which already
+    // lists roster:) both return the INNER object when `e` is a string, so subscribeRosters below and every
+    // screen keep seeing roles/people/pods exactly as before. Documents written before today are plain JSON
+    // and both readers try cleartext first, so history keeps opening.
+    //
+    // ROLLOUT ORDER IS NOT OPTIONAL: relays before consoles. A new-shape roster on an OLD relay has no
+    // `people` to parse, so its ROSTER_PEOPLE set is empty and those six grants fail closed.
+    const sealed = await _sealChurchDocReady({ roles, people, pods });
+    if (sealed == null) return null;   // no church key: NOT saved, and never with names in the clear
+    const content = JSON.stringify({ pubs: people.map(p => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET]], content }))
       .then(() => ({ id: teamId, roles, people, pods }));
   },

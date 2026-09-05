@@ -7406,8 +7406,8 @@
   function _absorbVoice(cp, d, e) {
     if (d !== VOICE_D + cp || e.pubkey !== cp) return false;
     try {
-      const c = JSON.parse(e.content);
-      _churchVoices.set(cp, { self: c.self || null, public: c.public || {} });
+      const c = _openChurchDoc(cp, e.content);
+      if (c) _churchVoices.set(cp, { self: c.self || null, public: c.public || {} });
     } catch {
     }
     _fireTrust();
@@ -7696,7 +7696,15 @@
       for (const p of (JSON.parse(e.content) || {}).pairs || []) {
         if (!p || !p.old || !p.new || p.old === p.new) continue;
         s.add(String(p.old).toLowerCase());
-        if (pub && String(p.new).toLowerCase() === pub) mine = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+        if (pub && String(p.new).toLowerCase() === pub) {
+          let nm = "";
+          if (typeof p.n === "string" && p.n) {
+            const o = _openChurchDoc(cp, JSON.stringify({ e: p.n }));
+            if (o && o.name) nm = o.name;
+          }
+          if (!nm) nm = p.name || "";
+          mine = String(nm).replace(/\s+/g, " ").trim().slice(0, 40);
+        }
       }
     } catch (x) {
     }

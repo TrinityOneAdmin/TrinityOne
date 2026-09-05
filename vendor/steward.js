@@ -17335,7 +17335,12 @@ zoo`.split("\n");
       const cp = window.Steward.parseStewardInvite(payload);
       if (!cp) return Promise.resolve({ ok: false, error: "That doesn\u2019t look like a church invite." });
       if (cp === churchPub) return Promise.resolve({ ok: false, error: "That\u2019s your own church." });
-      const content = JSON.stringify({ name: lastProfile && lastProfile.name || "" });
+      let content;
+      try {
+        content = JSON.stringify({ n: encrypt3(JSON.stringify({ name: lastProfile && lastProfile.name || "" }), getConversationKey(sk, cp)) });
+      } catch (e) {
+        content = JSON.stringify({ n: "" });
+      }
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }, sk)).then(() => ({ ok: true, church: cp, npub: npubEncode(cp) }));
     },
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
@@ -17362,7 +17367,14 @@ zoo`.split("\n");
           }
           let name = "";
           try {
-            name = JSON.parse(e.content).name || "";
+            const c = JSON.parse(e.content);
+            if (typeof c.n === "string" && c.n) {
+              try {
+                name = (JSON.parse(decrypt3(c.n, getConversationKey(sk, e.pubkey))) || {}).name || "";
+              } catch {
+              }
+            }
+            if (!name) name = c.name || "";
           } catch {
           }
           byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
@@ -19468,7 +19480,10 @@ zoo`.split("\n");
       const clean4 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
         const nm = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
         const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) };
-        if (nm) out.name = nm;
+        if (nm) {
+          const sealedNm = _sealChurchDoc({ name: nm });
+          if (sealedNm != null) out.n = JSON.parse(sealedNm).e;
+        }
         return out;
       });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean4 }) }));
@@ -19613,6 +19628,10 @@ zoo`.split("\n");
               cur = doc.pubkeys || [];
               _stewardCaps = doc.caps && typeof doc.caps === "object" ? doc.caps : {};
               _stewardNames = doc.names && typeof doc.names === "object" ? doc.names : {};
+              if (typeof doc.n === "string") {
+                const opened = _openChurchDoc(JSON.stringify({ e: doc.n }));
+                if (opened && typeof opened === "object") _stewardNames = opened;
+              }
               _stewardSince = doc.at && typeof doc.at === "object" ? doc.at : {};
             } catch {
               cur = [];
@@ -19659,8 +19678,12 @@ zoo`.split("\n");
       for (const p of list) nextAt[p] = _stewardSince[p] || nowS;
       const doc = { pubkeys: list };
       if (Object.keys(next).length) doc.caps = next;
-      if (Object.keys(nextNames).length) doc.names = nextNames;
       if (Object.keys(nextAt).length) doc.at = nextAt;
+      if (Object.keys(nextNames).length) {
+        const sealedNames = _sealChurchDoc(nextNames);
+        if (sealedNames == null) return Promise.resolve(false);
+        doc.n = JSON.parse(sealedNames).e;
+      }
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
@@ -19687,7 +19710,9 @@ zoo`.split("\n");
     _voiceSave() {
       if (!sk) return Promise.resolve(null);
       const doc = { self: _selfVoice && _selfVoice.name ? { ..._selfVoice, churchName: lastProfile.name || "" } : null, public: { ..._publicVoices } };
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
+      const sealedVoice = _sealChurchDoc(doc);
+      if (sealedVoice == null) return Promise.resolve(false);
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: sealedVoice }, sk));
     },
     setVoice(name, office) {
       _selfVoice = name && String(name).trim() ? { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) } : null;
@@ -20347,12 +20372,14 @@ zoo`.split("\n");
     // so it SHOULD be sealed, and church-docs-are-sealed.test.mjs tracks that as a deferred todo. Sealing it
     // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
     // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
-    publishRoster(teamId, roster) {
-      if (!sk || !teamId) return Promise.resolve(null);
+    async publishRoster(teamId, roster) {
+      if (!sk || !teamId) return null;
       const roles = (roster.roles || []).map((r) => ({ id: r.id || "r" + Math.random().toString(36).slice(2, 7), name: r.name || "Role" }));
       const people = (roster.people || []).map((p) => ({ id: p.id || "p" + Math.random().toString(36).slice(2, 7), name: p.name || "", pub: p.pub || "" }));
       const pods = (roster.pods || []).map((p) => ({ id: p.id || "pod" + Math.random().toString(36).slice(2, 7), name: p.name || "Pod", fills: p.fills && typeof p.fills === "object" ? p.fills : {} }));
-      const content = JSON.stringify({ roles, people, pods });
+      const sealed = await _sealChurchDocReady({ roles, people, pods });
+      if (sealed == null) return null;
+      const content = JSON.stringify({ pubs: people.map((p) => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content })).then(() => ({ id: teamId, roles, people, pods }));
     },
     subscribeRosters(onRosters) {

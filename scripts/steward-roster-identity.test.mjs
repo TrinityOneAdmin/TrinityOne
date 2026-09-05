@@ -20,7 +20,18 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fnBody, stripComments } from './test-slice.mjs';
 
+import { v2 as nip44v2 } from 'nostr-tools/nip44';
+
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+
+// THE NAMES ARE SEALED SINCE 2026-09-05 (finding 1). This document held {"names":{"<pub>":"Ruth Bexley"}}
+// in plain text on the relay — the church's officers, by name, beside the keys that identify them. The
+// claims below are unchanged (the owner's own label is stored, and survives an unrelated edit); what
+// changed is that they now have to be read out of the sealed half. Using the REAL _sealChurchDoc rather
+// than a stub matters: a stub would answer the very question the sealing raises.
+const RING_KEY = 'cd'.repeat(32);
+const unhexKey = (h) => Uint8Array.from(h.match(/.{2}/g).map(x => parseInt(x, 16)));
+
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 
 function lift(anchor, name, stubs) {
@@ -49,16 +60,34 @@ function loadSetStewards(existingCaps, existingNames) {
     // these cases assert that the owner's PRIVATE labels are stored and carried forward, and a church that has
     // named nobody publicly must still write exactly the shape it always did.
     STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
+    _sealChurchDoc: realSeal,
     finalizeEvent: (t) => t, publish: (e) => { published.push(e); return Promise.resolve(e); },
   });
   return { fn, published };
 }
+// Lifted through this file's own lift(), NOT a bare new Function: esbuild renames the nip44 imports, so the
+// shipped body calls `encrypt3`, not `nip44e`. lift()'s proxy strips the numeric suffix and finds `encrypt`.
+// A hand-rolled scope silently supplied nothing, the try/catch swallowed the ReferenceError, and the sealer
+// returned null for every input — which looks exactly like "no church key" rather than a broken harness.
+const realSeal = lift('function _sealChurchDoc(obj)', '_sealChurchDoc', {
+  _nameKeyRing: [RING_KEY], _unhex: unhexKey,
+  encrypt: (plain, k) => nip44v2.encrypt(plain, k),
+  decrypt: (ct, k) => nip44v2.decrypt(ct, k),
+});
+
 const docOf = (evt) => JSON.parse(evt.content);
+// Open the sealed half back into the names map. Also asserts, on every use, that no name reached the wire.
+const namesOf = (evt) => {
+  const doc = docOf(evt);
+  assert.equal(doc.names, undefined, 'a cleartext names map is back on the wire');
+  if (typeof doc.n !== 'string') return {};
+  return JSON.parse(nip44v2.decrypt(doc.n, unhexKey(RING_KEY)));
+};
 
 test('the owner\'s own name for a steward is what gets stored', async () => {
   const { fn, published } = loadSetStewards({}, {});
   await fn([TOM], undefined, { [TOM]: 'Tom Ferris' });
-  assert.deepEqual(docOf(published[0]).names, { [TOM]: 'Tom Ferris' },
+  assert.deepEqual(namesOf(published[0]), { [TOM]: 'Tom Ferris' },
     'the roster keeps no record of what the owner calls this person, so every screen falls back to a name ' +
     'the app invented and the owner cannot tell one steward from another');
 });
@@ -66,7 +95,7 @@ test('the owner\'s own name for a steward is what gets stored', async () => {
 test('and it survives an unrelated edit, like removing somebody else', async () => {
   const { fn, published } = loadSetStewards({}, { [TOM]: 'Tom Ferris', [GRACE]: 'Grace Okoro' });
   await fn([TOM]);                       // the shape every existing caller uses: list only
-  assert.deepEqual(docOf(published[0]).names, { [TOM]: 'Tom Ferris' },
+  assert.deepEqual(namesOf(published[0]), { [TOM]: 'Tom Ferris' },
     'removing one steward wiped the names of the others — so pressing Remove on one person puts the invented ' +
     'names back for everybody');
 });

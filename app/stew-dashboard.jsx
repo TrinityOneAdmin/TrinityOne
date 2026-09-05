@@ -2546,8 +2546,10 @@ function EditGroupMembersModal({ group, onClose }) {
         const removed = before.filter(pk => !newM.includes(pk));
         if (!added.length && !removed.length) return;
         const people = teamPeopleForAllowlist(r.people, added, removed, members);
+        // Do not write the care team from a roster that did not save: publishCareTeamFor would then name a
+        // team the relay has no roster for, and careAdmin() resolves through ROSTER_PEOPLE.
         Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
-          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .then((ok) => { if (ok != null) return publishCareTeamFor(group.id, careTeamId, people); })
           .catch(() => {});
       } catch (e) {}
     };

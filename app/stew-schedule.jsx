@@ -184,7 +184,11 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
     let t = team;
     try {
       if (!t.id && onCreate) { t = await onCreate(); if (!t || !t.id) { setSaving(false); onClose(); return; } }   // new team: create it only now, on Save
-      await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
+      // publishRoster returns null when the church name key never arrived: the roster is NOT saved, and
+      // deliberately not written with everyone's name in the clear. Losing this silently would be worse than
+      // the leak — the whole team, its roles and its pods are typed into this modal.
+      const rosterSaved = await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
+      if (rosterSaved == null) { setSaving(false); setSaveErr('Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }
       // …and keep the OTHER list in step, so the team the steward just built is also the team that can read
       // its own room. Only invite-only teams have an allowlist, and only the DELTA is applied — see the note
       // above teamPeopleForAllowlist for what a wholesale rewrite here cost.
