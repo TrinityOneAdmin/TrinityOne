@@ -621,10 +621,16 @@ function DashRota({ onNewTeam }) {
     // WAIT FOR THE KEY ONCE, NOT ONCE PER ROW. Each publisher waits up to NAME_KEY_WAIT_MS on its own, and
     // this loop is sequential, so a quarter of weekly services meant ~13 x 4s = 52 seconds frozen with
     // nothing disabled and no explanation. One readiness check up front turns that into one wait.
+    // PROBE BY REWRITING THE SERVICE THAT IS ALREADY ON SCREEN, passing its own id.
+    //
+    // The first version published a NEW service for dates[0] — and schGenDates returns [startIso, …], so
+    // dates[0] IS svc.date, the service the steward is looking at. That created a second "Sunday Gathering"
+    // on the same day with a fresh id, the loop then wrote the rota to the duplicate, and every member saw
+    // the service twice. Passing svc.id makes this a replaceable rewrite of the same document: it costs one
+    // publish, tells us whether the key is there, and changes nothing.
     if (window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) {
-      const probe = await window.Steward.publishService({ name: svc.name, date: dates[0], time: svc.time });
+      const probe = await window.Steward.publishService({ id: svc.id, name: svc.name, date: svc.date, time: svc.time });
       if (probe == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
-      byDate[dates[0]] = probe;   // it saved: keep it rather than creating the same date twice below
     }
     let lost = 0;
     for (const dt of dates) {

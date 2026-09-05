@@ -45,7 +45,7 @@ const ROTA = {
 // Drive the REAL publisher: the real seal pair, the real wait, the real publishRota body. `publish` is the
 // only stub, and it is a SPY rather than a stand-in for the decision — the thing under test is whether it is
 // called at all, so stubbing it cannot answer the question for us.
-function rig({ ring = [], waitMs = 250, keyArrivesAfterMs = 0 } = {}) {
+function rig({ ring = [], waitMs = 250, keyArrivesAfterMs = 0, relayAccepts = true } = {}) {
   const sent = [];
   const scope = {
     sk: new Uint8Array(32),
@@ -58,7 +58,7 @@ function rig({ ring = [], waitMs = 250, keyArrivesAfterMs = 0 } = {}) {
     NET: 'trinityone',
     now: () => 1788573385,
     feChurch: (e) => e,
-    publish: (e) => { sent.push(e); return Promise.resolve(true); },
+    publish: (e) => { sent.push(e); return Promise.resolve(relayAccepts); },   // publish() resolves FALSE on total failure — it does not throw
   };
   if (keyArrivesAfterMs) setTimeout(() => { scope._nameKeyRing.push(KEY); }, keyArrivesAfterMs);
   // fnBody returns the whole declaration, signature included. The two helpers drop straight in; publishRota
@@ -129,4 +129,27 @@ test('every calendar publisher refuses, not just the one driven above', () => {
     assert.match(body, /if \(content == null\) return null;/,
       `${sig} seals but does not bail when the key never arrived — it will publish content=null`);
   }
+});
+
+test('a rota no relay accepted resolves null, not a success object', async () => {
+  // THE GAP THE THIRD AUDIT FOUND. publish() returns FALSE when every relay rejected — the ordinary failure
+  // on a thin pipe, and the one this whole branch's guards were supposed to cover. The publishers used to
+  // discard it with `.then(() => ({...}))`, so every caller got a truthy object over a document that
+  // reached nobody: the modal closed, and DashRota DM'd everyone assigned to serve.
+  //
+  // Reverting that one `.then` inside publishRota left 27 tests across five files green, because every
+  // existing case stubs publish() as TRUE and only ever exercises the no-church-key path. This is the case
+  // that tells them apart.
+  const r = rig({ ring: [KEY], relayAccepts: false });
+  const out = await r.publishRota(ROTA);
+  assert.equal(r.sent.length, 1, 'the publish was never attempted — this case is not exercising the path');
+  assert.equal(out, null,
+    'THE DEFECT: a rota that reached NO relay resolved a success object. Every guard on this branch keys ' +
+    'on null, so all of them were blind to the commonest failure there is — the relay being unreachable.');
+});
+
+test('…and the same rota DOES resolve an object when a relay accepts it', async () => {
+  // The control. Without it, making publishRota always return null would pass the case above.
+  const out = await rig({ ring: [KEY], relayAccepts: true }).publishRota(ROTA);
+  assert.ok(out && out.service, 'a rota the relay accepted reported failure — the guard is inverted');
 });

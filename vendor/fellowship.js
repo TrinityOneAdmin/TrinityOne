@@ -7863,8 +7863,9 @@
     }
     _replayChurchCalendar(cp, hub);
     for (const e of hub.buf.values()) {
-      if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
+      if (_dtag(e) === VOICE_D + cp) _absorbVoice(cp, _dtag(e), e);
     }
+    _replayReseats(cp, hub);
     for (const e of hub.buf.values()) {
       const d0 = _dtag(e);
       if (d0 === "trinityone/name:" + cp) {
@@ -7903,6 +7904,10 @@
             if (_dtag(e2) === "trinityone/name:" + cp) _openSealedName(cp, e2.pubkey, e2.content);
           }
           _replayChurchCalendar(cp, hub);
+          _replayReseats(cp, hub);
+          for (const e2 of hub.buf.values()) {
+            if (_dtag(e2) === VOICE_D + cp) _absorbVoice(cp, _dtag(e2), e2);
+          }
           try {
             window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
           } catch (x) {

@@ -40,7 +40,8 @@ function loadSetStewards(caps, names, since, clock = 1787200000) {
   const published = [];
   const fn = lift('setStewards(pubkeys, caps, names) {', 'setStewards', {
     _requireTrustedView: () => {}, sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
-    _stewardCaps: caps, _stewardNames: names, _stewardSince: since,
+    _stewardCaps: caps, _stewardNamesCt: '',   // sealed labels held but not yet openable — see subscribeStewards
+    _stewardNames: names, _stewardSince: since,
     now: () => clock, STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
     // The by-line the console signs with rides this same roster (2026-08-26). Stubbed empty here on purpose:
     // these tests are about WHO is on the roster and what they may do, and a church that has named nobody must

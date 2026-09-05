@@ -51,11 +51,11 @@ function lift(anchor, name, stubs) {
 }
 
 const TOM = 'a'.repeat(64), GRACE = 'b'.repeat(64);
-function loadSetStewards(existingCaps, existingNames) {
+function loadSetStewards(existingCaps, existingNames, existingCt = '') {
   const published = [];
   const fn = lift('setStewards(pubkeys, caps, names) {', 'setStewards', {
     _requireTrustedView: () => {}, sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
-    _stewardCaps: existingCaps, _stewardNames: existingNames, _stewardSince: {},
+    _stewardCaps: existingCaps, _stewardNames: existingNames, _stewardNamesCt: existingCt, _stewardSince: {},
     now: () => 1787150000, _selfVoice: null, _publicVoices: {}, lastProfile: {},   // the console's public by-line rides this same roster (2026-08-26). Empty here deliberately:
     // these cases assert that the owner's PRIVATE labels are stored and carried forward, and a church that has
     // named nobody publicly must still write exactly the shape it always did.
@@ -141,4 +141,26 @@ test('a refusal of our OWN superseded write does not alarm the steward', () => {
   assert.ok(at > 0 && fire > 0 && at < fire,
     'the check runs after the alarm is already raised, so the steward still sees "could not be saved" for a ' +
     'change that is saved');
+});
+
+test('labels we hold but cannot open are carried forward, never wiped', async () => {
+  // THE RACE THE THIRD AUDIT FOUND, and it is a data-loss bug the SEALING introduced.
+  //
+  // This document is read once, on subscribe. The church name key arrives on a DIFFERENT subscription. So on
+  // any boot where the stewards doc wins that race — ordinary, not just a slow link — the labels cannot be
+  // opened and _stewardNames is {} for the whole session. The next Add or Remove then republished a document
+  // with no `n` at all, and because these are newest-wins addressable documents, every label the owner had
+  // typed was gone for every steward, permanently, with no way back.
+  //
+  // Before 192da7a the labels were cleartext and this could not happen.
+  const ct = JSON.parse(realSeal({ [TOM]: 'Tom Ferris' })).e;
+  const { fn, published } = loadSetStewards({}, {}, ct);   // labels held as ciphertext, never opened
+  await fn([TOM, GRACE]);                                   // an ordinary edit: add somebody
+  const doc = docOf(published[0]);
+  assert.equal(doc.n, ct,
+    'THE DEFECT: an edit made while the labels were unreadable republished the roster without them. Every ' +
+    'name the owner typed for every steward is deleted, and nothing can recover it.');
+  assert.equal(doc.names, undefined, 'a cleartext names map is back on the wire');
+  assert.deepEqual(nip44v2.decrypt(doc.n, unhexKey(RING_KEY)), JSON.stringify({ [TOM]: 'Tom Ferris' }),
+    'the carried-forward ciphertext no longer decrypts to the owner\'s labels');
 });

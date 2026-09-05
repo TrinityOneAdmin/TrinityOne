@@ -14973,6 +14973,7 @@ zoo`.split("\n");
   var RESEAT_D = "trinityone/reseat:";
   var _stewardCaps = {};
   var _stewardNames = {};
+  var _stewardNamesCt = "";
   var _stewardSince = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
   var CAP_KEYS = {
@@ -15815,6 +15816,7 @@ zoo`.split("\n");
     _careRosterSeen = false;
     _stewardCaps = {};
     _stewardNames = {};
+    _stewardNamesCt = "";
     _stewardSince = {};
     _nameKeyRing = [];
     _nameKeyDocKeys = null;
@@ -17341,7 +17343,7 @@ zoo`.split("\n");
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }, sk)).then(() => ({ ok: true, church: cp, npub: npubEncode(cp) }));
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }, sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
     },
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
     subscribeStewardRequests(onReqs) {
@@ -19622,6 +19624,7 @@ zoo`.split("\n");
             cur = [];
             _stewardCaps = {};
             _stewardNames = {};
+            _stewardNamesCt = "";
             _stewardSince = {};
           } else {
             try {
@@ -19629,15 +19632,20 @@ zoo`.split("\n");
               cur = doc.pubkeys || [];
               _stewardCaps = doc.caps && typeof doc.caps === "object" ? doc.caps : {};
               _stewardNames = doc.names && typeof doc.names === "object" ? doc.names : {};
-              if (typeof doc.n === "string") {
-                const opened = _openChurchDoc(JSON.stringify({ e: doc.n }));
-                if (opened && typeof opened === "object") _stewardNames = opened;
+              _stewardNamesCt = typeof doc.n === "string" && doc.n ? doc.n : "";
+              if (_stewardNamesCt) {
+                const opened = _openChurchDoc(JSON.stringify({ e: _stewardNamesCt }));
+                if (opened && typeof opened === "object") {
+                  _stewardNames = opened;
+                  _stewardNamesCt = "";
+                }
               }
               _stewardSince = doc.at && typeof doc.at === "object" ? doc.at : {};
             } catch {
               cur = [];
               _stewardCaps = {};
               _stewardNames = {};
+              _stewardNamesCt = "";
               _stewardSince = {};
             }
           }
@@ -19683,6 +19691,9 @@ zoo`.split("\n");
       if (Object.keys(nextNames).length) {
         const sealedNames = _sealChurchDoc(nextNames);
         if (sealedNames != null) doc.n = JSON.parse(sealedNames).e;
+        else if (_stewardNamesCt) doc.n = _stewardNamesCt;
+      } else if (_stewardNamesCt) {
+        doc.n = _stewardNamesCt;
       }
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
@@ -20574,7 +20585,7 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const v = visibility === "team" || visibility === "stewards" ? visibility : "church";
       const content = JSON.stringify({ visibility: v, updated: now() });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_SETTINGS_D], ["t", NET]], content })).then(() => ({ visibility: v }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_SETTINGS_D], ["t", NET]], content })).then((ok) => ok ? { visibility: v } : null);
     },
     // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
     // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
@@ -20657,7 +20668,7 @@ zoo`.split("\n");
       if (!sk || !req || !req.memberPub) return Promise.resolve(null);
       const id = req.id || "req" + Date.now();
       const content = JSON.stringify({ serviceId: req.serviceId || "", teamId: req.teamId || "", roleId: req.roleId || "", role: req.role || "", teamName: req.teamName || "", icon: req.icon || "hand", accent: req.accent || "var(--clay)", date: req.date || "", time: req.time || "", service: req.service || "", from: req.from || "Your church", note: req.note || "" });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then(() => ({ id, ...JSON.parse(content), memberPub: req.memberPub }));
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then((ok) => ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null);
     },
     // the church's own "can you serve?" request docs (so the board can join replies to a slot)
     subscribeRequests(onRequests) {
@@ -21009,7 +21020,7 @@ zoo`.split("\n");
       const np = toPubHex(input);
       if (!np) return Promise.resolve(null);
       const content = JSON.stringify({ joined: true });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }, sk)).then(() => ({ networkPub: np, npub: npubEncode(np) }));
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }, sk)).then((ok) => ok ? { networkPub: np, npub: npubEncode(np) } : null);
     },
     leaveNetwork(networkPub) {
       if (!sk) return Promise.resolve(null);
@@ -21119,6 +21130,7 @@ zoo`.split("\n");
       _careRosterSeen = false;
       _stewardCaps = {};
       _stewardNames = {};
+      _stewardNamesCt = "";
       _stewardSince = {};
       _nameKeyRing = [];
       _nameKeyDocKeys = null;

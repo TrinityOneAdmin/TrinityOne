@@ -2013,10 +2013,12 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
 
-  for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); } _replayChurchCalendar(cp, hub);   // the key FIRST (no handlers yet, so the replay is a no-op — it holds the invariant)
+  for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); } _replayChurchCalendar(cp, hub);
+  // Voice is sealed too, and _absorbVoice ran above this line — before the key existed. Re-absorb now.
+  for (const e of hub.buf.values()) { if (_dtag(e) === VOICE_D + cp) _absorbVoice(cp, _dtag(e), e); }   // the key FIRST (no handlers yet, so the replay is a no-op — it holds the invariant)
   // …THEN the re-seats. This pair used to run the other way round, so on a cold boot the vouched name was
   // opened before the key that opens it and was lost — the comment above already said "the key FIRST".
-  for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
+  _replayReseats(cp, hub);   // re-seats recorded while the app was closed — the same helper every other key-arrival path uses
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) { _recoverOwnName(cp, e); _openSealedName(cp, e.pubkey, e.content); } }
   return hub;
 }
@@ -2050,6 +2052,14 @@ function _docsHubOpen(hub) {
         // …and the CALENDAR, which is sealed under this same key. Without this a newly admitted member's
         // events/services/rotas stay padlocked until they restart the app — see _replayChurchCalendar.
         _replayChurchCalendar(cp, hub);
+        // …AND THE RE-SEATS. This is the path the reseat replay was written for and the one it missed: a new
+        // phone gets the vouched name doc first, then the console re-publishes the envelope with the new key
+        // as a recipient and it lands HERE, live. The first fix wired the cold boot and two replay paths and
+        // not this one, so the name came back only on the next restart. Four call sites, three wired.
+        _replayReseats(cp, hub);
+        // …and the by-line, sealed under the same key (192da7a). Cold boot absorbs voice BEFORE the key, so
+        // without this a church's "Rev. — Vicar" by-line stays absent for the whole session.
+        for (const e2 of hub.buf.values()) { if (_dtag(e2) === VOICE_D + cp) _absorbVoice(cp, _dtag(e2), e2); }
         try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {}
       } else if (d === 'trinityone/name:' + cp) {
         _recoverOwnName(cp, e);   // our own doc carries the copy that restores us after a locked boot

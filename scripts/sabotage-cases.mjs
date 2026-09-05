@@ -659,7 +659,7 @@ export const CASES = [
     // the pre-fix behaviour exactly: publish the allowlist, leave the team's roster where it was. This is the
     // St Brigid's shape — group members 2, roster people 0, care team empty and nothing said so.
     find: `        Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
-          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .then((ok) => { if (ok != null) return publishCareTeamFor(group.id, careTeamId, people); })
           .catch(() => {});`,
     replace: `        return;`,
     test: 'scripts/care-team-membership.test.mjs',

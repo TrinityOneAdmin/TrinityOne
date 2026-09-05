@@ -344,6 +344,7 @@ let _stewardCaps = {};
 // own words, 2026-08-19: "a mis-pasted code is a stranger with everything and I'd never spot it." So the
 // roster carries the owner's own label for each key, and the row leads with it.
 let _stewardNames = {};
+let _stewardNamesCt = '';   // the sealed labels we hold but could not open yet — see subscribeStewards
 // WHEN each steward was given access. "Nothing records what I did" was the owner's complaint after handing
 // three people the run of a church, and they were right: the roster said who, never when. Same terms as the
 // rest — carried forward through unrelated edits, pruned with the steward it belongs to.
@@ -1437,7 +1438,7 @@ function _resetChurchScopedState() {
   // `_stewardNames` and `_stewardSince` belong to the same document and leak the same way: setStewards()
   // CARRIES THEM FORWARD on every edit, so adding one steward in church B would have published church A's
   // labels and join dates into B's roster. AUDIT-2026-08-30.
-  _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
+  _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {};
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
   // church A's blocks must not suppress church B's members from B's envelopes (item B)
   _localBlocked = new Set();
@@ -3424,7 +3425,11 @@ window.Steward = {
     try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: (lastProfile && lastProfile.name) || '' }), nip44ck(sk, cp)) }); }
     catch (e) { content = JSON.stringify({ n: '' }); }
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }, sk))
-      .then(() => ({ ok: true, church: cp, npub: npubEncode(cp) }));
+      // A REQUEST NOBODY RECEIVED MUST NOT SAY "sent". The screen shows "✓ Request sent — the church's
+      // owner will approve you" on a truthy result, so discarding publish()'s false left someone waiting
+      // indefinitely for an approval that was never asked for. (Audit 2026-09-05, the sweep around the
+      // six calendar publishers: these four siblings had the same shape and were missed.)
+      .then((ok) => (ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null));
   },
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
@@ -5602,7 +5607,7 @@ window.Steward = {
         if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY (this IS the roster; only the church key edits it)
         // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
         if (e.created_at < latest) return; latest = e.created_at;
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardSince = {}; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {}; }
         else {
           try {
             const doc = JSON.parse(e.content) || {};
@@ -5616,12 +5621,20 @@ window.Steward = {
             // names we cannot open yet leaves the map empty and the UI falls back to stewardNameFor()
             // petnames — a worse label, never a wrong one.
             _stewardNames = (doc.names && typeof doc.names === 'object') ? doc.names : {};
-            if (typeof doc.n === 'string') {
-              const opened = _openChurchDoc(JSON.stringify({ e: doc.n }));
-              if (opened && typeof opened === 'object') _stewardNames = opened;
+            // KEEP THE CIPHERTEXT EVEN WHEN WE CANNOT OPEN IT. This document is read once, on subscribe, and
+            // the name key arrives on a DIFFERENT subscription — so on any boot where the stewards doc wins
+            // the race (ordinary, not just a slow link) the labels are unreadable for the whole session.
+            // Before the labels were sealed that could not happen; with `_stewardNames = {}` the next
+            // Add/Remove republished a document with no `n` at all, and because these are newest-wins
+            // addressable documents, every label the owner had typed was gone for everyone, permanently.
+            // setStewards carries this forward verbatim rather than dropping it.
+            _stewardNamesCt = (typeof doc.n === 'string' && doc.n) ? doc.n : '';
+            if (_stewardNamesCt) {
+              const opened = _openChurchDoc(JSON.stringify({ e: _stewardNamesCt }));
+              if (opened && typeof opened === 'object') { _stewardNames = opened; _stewardNamesCt = ''; }
             }
             _stewardSince = (doc.at && typeof doc.at === 'object') ? doc.at : {};
-          } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardSince = {}; }
+          } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {}; }
         }
         // Adopt it HERE, not only via the UI's setCareRoster round-trip. The safeguarding back-fill needs to
         // know who the member honours, and it does not wait for React: the roster hook starts at [] and only
@@ -5696,6 +5709,11 @@ window.Steward = {
     if (Object.keys(nextNames).length) {
       const sealedNames = _sealChurchDoc(nextNames);
       if (sealedNames != null) doc.n = JSON.parse(sealedNames).e;
+      else if (_stewardNamesCt) doc.n = _stewardNamesCt;   // could not seal: keep what was already there
+    } else if (_stewardNamesCt) {
+      // We hold sealed labels we have never been able to open. Republishing without them would delete every
+      // label the owner typed, for every steward, with no way back. Carry the ciphertext across untouched.
+      doc.n = _stewardNamesCt;
     }
 
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
@@ -6490,7 +6508,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const v = (visibility === 'team' || visibility === 'stewards') ? visibility : 'church';
     const content = JSON.stringify({ visibility: v, updated: now() });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_SETTINGS_D], ['t', NET]], content })).then(() => ({ visibility: v }));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_SETTINGS_D], ['t', NET]], content })).then((ok) => (ok ? { visibility: v } : null));   // publish() returns FALSE when no relay accepted
   },
   // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
   // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
@@ -6569,7 +6587,7 @@ window.Steward = {
     const id = req.id || ('req' + Date.now());
     const content = JSON.stringify({ serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
-      .then(() => ({ id, ...JSON.parse(content), memberPub: req.memberPub }));
+      .then((ok) => (ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null));   // publish() returns FALSE when no relay accepted; see publishService
   },
   // the church's own "can you serve?" request docs (so the board can join replies to a slot)
   subscribeRequests(onRequests) {
@@ -6755,7 +6773,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const np = toPubHex(input); if (!np) return Promise.resolve(null);
     const content = JSON.stringify({ joined: true });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }, sk)).then(() => ({ networkPub: np, npub: npubEncode(np) }));
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }, sk)).then((ok) => (ok ? { networkPub: np, npub: npubEncode(np) } : null));   // publish() returns FALSE when no relay accepted
   },
   leaveNetwork(networkPub) {
     if (!sk) return Promise.resolve(null);
@@ -6859,7 +6877,7 @@ window.Steward = {
     // will paint (an A-delegate scoped to nothing hides everything they authored in B, and the filtered list
     // is written back to localStorage), and setStewards() would publish A's labels and dates into B's
     // roster on the next edit. Same family as the roster note above. AUDIT-2026-08-30.
-    _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
+    _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {};
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name
