@@ -373,3 +373,35 @@ non-custodial by design and switched off (`givingOn = false`). Anything Lightnin
 including the wallet backup path that currently has no button — is out of scope until the owner says
 otherwise. Do not "tidy" it, delete it, or fix its copy.
 
+
+---
+
+## Owner decisions, 2026-09-05
+
+**A member's PIN does not have to be 8 digits on a phone. Six is enough.** The 8-digit rule exists to resist
+*offline* guessing, and offline guessing needs a copy of the encrypted seed. On Android it does not have one:
+`setPin` (`src/identity.src.js:594`) puts the ciphertext in the hardware-backed store and leaves only a
+non-secret marker in `localStorage`, so an attacker must first run code as the app on that device. The
+defence that actually applies there is the typing lockout, not the digit count. On web/desktop there is no
+secure store and the whole blob sits in `localStorage` (`:606`) — a million tries is minutes — so the
+stricter rule is earned there and only there.
+
+So the rule follows **where the blob lands**, not which screen the member came through:
+
+| Surface | Rule |
+|---|---|
+| Member app on a phone | 6+ characters, all digits fine |
+| Member app on web/desktop | 8+ if all digits, or nudge toward a passphrase |
+| Steward console | Stricter regardless — it guards the church key, the highest-value target in the system |
+
+The defect this replaces was never the number: the setup wizard (`app/identity.jsx:855`) and the settings
+sheet (`app/identity-extras.jsx:292-293`) disagreed, so which rule a member got depended on which door they
+came through — and the screen with the most reach had the weaker one.
+
+**Provisional until the pilot.** The owner expects to revisit this after the pilot phase of September 2026.
+Treat it as a decision to work to, not a permanent constant — but do not tighten the phone rule without
+asking, and do not "fix" it back to 8 as an inconsistency.
+
+*Why this is a domain entry and not a code comment:* a longer PIN entered several times a day is the kind of
+friction that makes people turn protection off altogether, which is strictly worse than a 6-digit PIN behind
+a hardware store. That trade is a judgement about how members behave, and it is not derivable from the code.
