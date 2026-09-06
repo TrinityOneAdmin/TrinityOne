@@ -1885,6 +1885,9 @@ function App() {
     // above both false the screen said "has been sent" — over a join that was never attempted (the phone was
     // PIN-locked when it followed). An empty queue is not evidence of sending; only this is.
     joinSent: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinSent && window.Fellowship.joinSent(np)); } catch (e) { return false; } })(),
+    // …and the promise a locked phone made: the join is asked for and will go the moment the PIN is entered.
+    // Shown as exactly that — never as "sent", never silently as "not sent".
+    joinIntent: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinIntent && window.Fellowship.joinIntent(np)); } catch (e) { return false; } })(),
     // SAY THAT IT TRIED. This did the work — re-announce, re-subscribe — and showed nothing at all, so the
     // one control on the waiting-for-approval screen looked broken while working perfectly. Reported
     // independently by a member of the pilot and by a simulated 71-year-old on the same afternoon, in almost

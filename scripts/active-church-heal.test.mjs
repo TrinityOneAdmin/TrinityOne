@@ -101,8 +101,9 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // shows nothing, and the heal below puts it right on the same pass as everything else.
   // 34 → 35 on 2026-09-06: ctx.joinSent, the fourth state of the join question ("did a relay accept it?").
   // Identical in shape to joinQueued/joinFailed directly above it; an ordinary active-church read.
-  assert.equal(sites.length, 35,
-    `the active-church resolution sites changed (${sites.length} vs 35) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 35 → 36 on 2026-09-06: ctx.joinIntent, the join a locked phone promised to make once unlocked. Same shape.
+  assert.equal(sites.length, 36,
+    `the active-church resolution sites changed (${sites.length} vs 36) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

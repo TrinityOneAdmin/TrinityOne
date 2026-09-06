@@ -1725,6 +1725,8 @@ function TodayScreen({ ctx }) {
                 This card is what a PIN-locked phone showed while nothing had been sent at all. 2026-09-06. */}
             {ctx.joinSent
               ? <React.Fragment>Your request has been sent{ctx.church && ctx.church.name ? ' to ' + ctx.church.name : ''}. A steward usually lets people in within a day — you don’t need to do anything else.</React.Fragment>
+              : ctx.joinIntent
+              ? <React.Fragment>You’ll ask to join {(ctx.church && ctx.church.name) || 'this church'} <b>when you unlock</b> this phone — nobody at the church can see the request until then.</React.Fragment>
               : <React.Fragment>Your request to join{ctx.church && ctx.church.name ? ' ' + ctx.church.name : ''} <b>hasn’t been sent yet</b> — nobody at the church can see it. Tap <b>Check again</b> to send it.</React.Fragment>}
           </div>
           <button onClick={() => ctx.go && ctx.go('chat')} style={{ marginTop: 10, padding: '7px 12px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>

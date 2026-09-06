@@ -175,6 +175,10 @@ test('the sequence from the phone: set a PIN, boot locked, follow a church, unlo
     assert.equal(memberDocs(me).length, 0, 'a locked phone published a join — with what key?');
     let t = await b.text();
     assert.doesNotMatch(t, /has been sent/, 'the screen says the request has been sent while the phone is locked and nothing left it');
+    // …and says what is actually true: it will be asked for when the PIN goes in. Neither "sent" nor a bare
+    // "not sent" (which reads as a fault, with a Check again that cannot help while locked).
+    assert.match(t, /when you unlock/, 'a locked phone with a queued join does not tell the person it will be sent when they unlock');
+    assert.doesNotMatch(t, /hasn’t been sent yet/, 'the locked phone reads its own promise as a fault');
     // …unlock, through the real lock screen
     await unlockViaScreen(b);
     t = await b.waitText(/has been sent/, 30000, '"has been sent" after unlocking');
