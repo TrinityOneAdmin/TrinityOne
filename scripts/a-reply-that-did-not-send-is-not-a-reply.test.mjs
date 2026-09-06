@@ -51,8 +51,10 @@ function runner(name, { publishFails }) {
   };
   const toPub = (x) => String(x || '').replace(/^npub/, '') || null;
   const window = { Fellowship: { relays: ['wss://r.example/relay'], ready: Promise.resolve() } };
-  const obj = new Function('finalizeEvent2', '_publishAny', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math',
-    'return ' + src)(finalizeEvent2, _publishAny, toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math);
+  // 2026-09-06: leaveMembership now clears the "sent" stamp and any queued join intent after the tombstone
+  // lands (fix/join-while-locked). Stubbed here so the happy-path control still reaches its return.
+  const obj = new Function('finalizeEvent2', '_publishAny', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent',
+    'return ' + src)(finalizeEvent2, _publishAny, toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {});
   return { fn: obj[name], calls };
 }
 

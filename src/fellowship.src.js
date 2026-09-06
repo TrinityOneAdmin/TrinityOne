@@ -2481,10 +2481,10 @@ let _flushing = false;
 // was never attempted; the two were indistinguishable, and the screen chose the reassuring one.
 //
 // So "sent" is recorded POSITIVELY, at the one place it is known: when the relay accepted the announce.
-// Keyed by church INSIDE the value, under an id-free key name, deliberately — clearCommunityCache wipes
-// any trinityone.* key whose NAME carries a church or member id (hb:<npub> goes on every lock, which is why
-// hb cannot serve as this evidence on a PIN phone), and the value names no more than followedChurches,
-// which is KEPT, already does. The stamp carries the pubkey that sent it, and reads false for any other
+// Keyed by church INSIDE the value, under an id-free key name, deliberately — the locked-boot wipe (the
+// community-cache clear, below) removes any trinityone.* key whose NAME carries a church or member id
+// (hb:<npub> goes on every lock, which is why hb cannot serve as this evidence on a PIN phone), and the
+// value names no more than followedChurches, which is KEPT, already does. The stamp carries the pubkey that sent it, and reads false for any other
 // identity on this device — a restore or a fresh identity must not inherit "sent" from the previous one.
 const JOINSENT_KEY = 'trinityone.joinsent';   // { [churchPub]: { id, at, pub } }
 let _joinSent = {};
@@ -3113,16 +3113,17 @@ window.Fellowship = {
     // them is data loss, not hygiene. mydata/notes/journal/highlights: the member's OWN writing, not the
     // church's. The Bible, reader and settings caches keep the offline reader working, which is the whole
     // point of the lock screen.
+    // joinsent: the fact that a relay accepted this identity's join. Wiping it would make every locked boot
+    // tell a pending member their request was never sent. Its key names nobody; its value names only the
+    // church followedChurches (kept) already names, plus this device's own pubkey. joinintent: a join asked
+    // for while locked, bound to the locked identity — it exists precisely to survive this boot, and wiping
+    // it here is the bug it fixes. Both as literals, not JOINSENT_KEY/JOININTENT_KEY: two tests lift this
+    // function alone into a scope of their own. And these notes sit ABOVE the literal, not inside it:
+    // esbuild keeps comments inside an array literal, and name-key-integrity slices a fixed window of the
+    // bundle from this function's first mention — prose inside the Set pushed `_k0Seen.clear()` out of it.
     const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
       'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc',
-      // joinsent: the fact that a relay accepted this identity's join. Wiping it would make every locked boot
-      // tell a pending member their request was never sent. Its key names nobody; its value names only the
-      // church followedChurches (kept) already names, plus this device's own pubkey. The literal, not
-      // JOINSENT_KEY: two tests lift this function alone into a scope of their own.
-      'trinityone.joinsent',
-      // joinintent: a join asked for while locked, bound to the locked identity. It exists precisely to
-      // survive the locked boot — wiping it here is the bug it fixes.
-      'trinityone.joinintent']);
+      'trinityone.joinsent', 'trinityone.joinintent']);
     // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
     // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
     // no forensic gain.

@@ -9170,13 +9170,7 @@
         "trinityone.outbox",
         "trinityone.outbox.failed",
         "trinityone.nostr.mnemonic.enc",
-        // joinsent: the fact that a relay accepted this identity's join. Wiping it would make every locked boot
-        // tell a pending member their request was never sent. Its key names nobody; its value names only the
-        // church followedChurches (kept) already names, plus this device's own pubkey. The literal, not
-        // JOINSENT_KEY: two tests lift this function alone into a scope of their own.
         "trinityone.joinsent",
-        // joinintent: a join asked for while locked, bound to the locked identity. It exists precisely to
-        // survive the locked boot — wiping it here is the bug it fixes.
         "trinityone.joinintent"
       ]);
       const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
