@@ -1945,6 +1945,10 @@ function _noteAdmitted(cp, content) {
     // exactly why it looked fixed. Reset the cursor so this one refetch is a FULL sync.
     const hub = _docsHubs.get(cp);
     if (hub) { hub.since = 0; hub.fullAt = 0; }
+    // _admittedDone was claimed above, BEFORE this call, so it fires exactly once — which meant that on a
+    // PIN-locked boot (the hub is open, this doc can land, there is no key) the announce returned nothing and
+    // was never retried. Now a keyless announce records a join intent bound to the locked identity and the
+    // unlock keeps it (JOININTENT_KEY); the one-shot claim is safe to leave as it is. 2026-09-06.
     try { window.Fellowship.announceMembership(cp); } catch (e) {}
     try { refetchChurchDocs(); } catch (e) {}
     // AND PUSH OUR OWN DATA UP. accept() refuses a member's personal documents — journal, prayers, notes,
@@ -2377,6 +2381,9 @@ async function deriveFromIdentity() {
   // Debounced: unlock fires BOTH 'trinity-identity' and 'trinity-identity-lock', and on native (async key read)
   // the two can each capture wasKeyless=true before either sets sk — guard so we reconnect at most once per window.
   if (wasKeyless && sk && !_reconnectGuard) { for (const hub of _docsHubs.values()) { if (hub.closer) { _reconnectGuard = true; setTimeout(() => { _reconnectGuard = false; }, 1500); try { reconnectAll(); } catch (e) {} break; } } }
+  // …and keep the promise a locked phone made: any join asked for without a key, for THIS identity, is
+  // announced now (a mismatched one is refused here, never carried on). See JOININTENT_KEY.
+  try { _consumeJoinIntents(); } catch (e) {}
 }
 let _reconnectGuard = false;
 async function init() {
@@ -2467,6 +2474,94 @@ function _outboxSave() {
 }
 _outboxLoad();
 let _flushing = false;
+// A JOIN THAT LANDED IS A FACT, NOT THE ABSENCE OF A QUEUE ENTRY. Device pass 2026-09-06 (AUTH-DIAGNOSIS.md):
+// a PIN-locked phone opened a follow link, announceMembership returned before queueing anything (no key),
+// and the pending screen — which read "sent" from `!joinQueued && !joinFailed` — told the person their
+// request had been sent. Nothing had. An empty queue is what you get when a join landed AND when a join
+// was never attempted; the two were indistinguishable, and the screen chose the reassuring one.
+//
+// So "sent" is recorded POSITIVELY, at the one place it is known: when the relay accepted the announce.
+// Keyed by church INSIDE the value, under an id-free key name, deliberately — the locked-boot wipe (the
+// community-cache clear, below) removes any trinityone.* key whose NAME carries a church or member id
+// (hb:<npub> goes on every lock, which is why hb cannot serve as this evidence on a PIN phone), and the
+// value names no more than followedChurches, which is KEPT, already does. The stamp carries the pubkey that sent it, and reads false for any other
+// identity on this device — a restore or a fresh identity must not inherit "sent" from the previous one.
+const JOINSENT_KEY = 'trinityone.joinsent';   // { [churchPub]: { id, at, pub } }
+let _joinSent = {};
+function _joinSentLoad() {
+  try { _joinSent = JSON.parse(localStorage.getItem(JOINSENT_KEY) || '{}'); } catch (e) { _joinSent = {}; }
+  if (!_joinSent || typeof _joinSent !== 'object' || Array.isArray(_joinSent)) _joinSent = {};
+}
+function _joinSentSave() {
+  try { localStorage.setItem(JOINSENT_KEY, JSON.stringify(_joinSent)); } catch (e) {}
+  // the screens compute their copy at render; tell the app something it renders from has changed
+  try { window.dispatchEvent(new CustomEvent('trinity-join-state')); } catch (e) {}
+}
+function _markJoinSent(cp, evt) { _joinSent[cp] = { id: evt.id, at: evt.created_at, pub: evt.pubkey }; _joinSentSave(); }
+function _clearJoinSent(cp) { if (_joinSent[cp]) { delete _joinSent[cp]; _joinSentSave(); } }
+// Has THIS identity's announce for this church been accepted by a relay? No other evidence is admitted:
+// the app's 12-hour heartbeat mark (`trinityone.hb:<npub>`) looked usable, but it is keyed by church, not
+// by identity, so a restore would inherit "sent" from the previous person — the hole this stamp exists to
+// close. A member pending from before this stamp existed reads "not sent yet" until their next announce
+// (the heartbeat, or Check again) lands, which is honest and costs one tap.
+function _joinSentFor(cp) {
+  const s = _joinSent[cp];
+  return !!(s && s.pub && pub && s.pub === pub);
+}
+_joinSentLoad();
+// A JOIN ASKED FOR WITH NO KEY IS AN INTENT, NOT AN EVENT — and it does not go in the outbox. The outbox
+// holds finalized, signed events; nine readers dereference `o.evt.id`. A locked phone cannot sign, so what it
+// can record is only "this person wants to join this church", and that lives here, beside the outbox.
+//
+// BOUND TO AN IDENTITY AT QUEUE TIME. TrinityIdentity.lockedNpub() answers who this device's locked identity
+// is without the PIN (the encrypted blob carries its own owner). The intent records that pubkey as `forPub`,
+// and _consumeJoinIntents acts on it ONLY when the key that arrives is that pubkey. Without this, a join
+// queued under one identity would be signed by whoever unlocked next — a restore, a re-seat, a fresh
+// identity — which is wrong in a way nobody on either end would notice.
+//
+// Consumed in deriveFromIdentity's keyed branch: the intent calls announceMembership again, which now has a
+// key and takes the ordinary queue-first path, so from there on it is a signed outbox entry like any other.
+// Id-free key name, like joinsent, for the same reason; the value names the church followedChurches already
+// names and the pubkey the locked blob already carries.
+const JOININTENT_KEY = 'trinityone.joinintent';   // [{ cp, forPub, at }]
+let _joinIntents = [];
+function _joinIntentLoad() {
+  try { _joinIntents = JSON.parse(localStorage.getItem(JOININTENT_KEY) || '[]'); } catch (e) { _joinIntents = []; }
+  if (!Array.isArray(_joinIntents)) _joinIntents = [];
+  _joinIntents = _joinIntents.filter(i => i && typeof i.cp === 'string' && typeof i.forPub === 'string');
+}
+function _joinIntentSave() {
+  try { localStorage.setItem(JOININTENT_KEY, JSON.stringify(_joinIntents)); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('trinity-join-state')); } catch (e) {}
+}
+// who this device's locked identity is, as hex — '' when there is no locked identity to promise for
+function _lockedPubHex() {
+  try { const n = window.TrinityIdentity && window.TrinityIdentity.lockedNpub && window.TrinityIdentity.lockedNpub(); return (n && toPub(n)) || ''; } catch (e) { return ''; }
+}
+function _queueJoinIntent(cp) {
+  const forPub = _lockedPubHex();
+  if (!forPub) return false;   // no identity on this device can ever sign it: nothing to promise
+  if (!_joinIntents.some(i => i.cp === cp && i.forPub === forPub)) { _joinIntents.push({ cp, forPub, at: Math.floor(Date.now() / 1000) }); _joinIntentSave(); }
+  return true;
+}
+function _dropJoinIntent(cp) {
+  const n = _joinIntents.length;
+  _joinIntents = _joinIntents.filter(i => i.cp !== cp);
+  if (_joinIntents.length !== n) _joinIntentSave();
+}
+// The key has arrived. Act on the intents that were made for THIS identity; refuse — and drop — every other.
+// Cleared before acting either way: a refused intent must never be carried forward to the next key.
+function _consumeJoinIntents() {
+  if (!sk || !pub || !_joinIntents.length) return;
+  const mine = _joinIntents.filter(i => i.forPub === pub), theirs = _joinIntents.filter(i => i.forPub !== pub);
+  _joinIntents = []; _joinIntentSave();
+  for (const i of theirs) {
+    try { console.warn('[fellowship] refusing a queued join made for a different identity', i.cp.slice(0, 8), i.forPub.slice(0, 8)); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent('trinity-join-intent-refused', { detail: { cp: i.cp, forPub: i.forPub } })); } catch (e) {}
+  }
+  for (const i of mine) { try { Promise.resolve(window.Fellowship.announceMembership(i.cp)).catch(() => {}); } catch (e) {} }
+}
+_joinIntentLoad();
 // One attempt at one relay set, bounded in time. Offline publishes do NOT fail fast — a socket that never
 // opens leaves Promise.any pending indefinitely — so without this the composer would sit on "sending" for
 // minutes and a flush would never finish. Verified on-device in airplane mode.
@@ -3018,8 +3113,17 @@ window.Fellowship = {
     // them is data loss, not hygiene. mydata/notes/journal/highlights: the member's OWN writing, not the
     // church's. The Bible, reader and settings caches keep the offline reader working, which is the whole
     // point of the lock screen.
+    // joinsent: the fact that a relay accepted this identity's join. Wiping it would make every locked boot
+    // tell a pending member their request was never sent. Its key names nobody; its value names only the
+    // church followedChurches (kept) already names, plus this device's own pubkey. joinintent: a join asked
+    // for while locked, bound to the locked identity — it exists precisely to survive this boot, and wiping
+    // it here is the bug it fixes. Both as literals, not JOINSENT_KEY/JOININTENT_KEY: two tests lift this
+    // function alone into a scope of their own. And these notes sit ABOVE the literal, not inside it:
+    // esbuild keeps comments inside an array literal, and name-key-integrity slices a fixed window of the
+    // bundle from this function's first mention — prose inside the Set pushed `_k0Seen.clear()` out of it.
     const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
-      'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc']);
+      'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc',
+      'trinityone.joinsent', 'trinityone.joinintent']);
     // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
     // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
     // no forensic gain.
@@ -3077,8 +3181,13 @@ window.Fellowship = {
   // This makes the member's pseudonymous npub visible as a member of this church.
   async announceMembership(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return;
-    if (!sk) { try { await window.Fellowship.ready; } catch { return; } }
-    if (!sk) return;
+    if (!sk) { try { await window.Fellowship.ready; } catch { /* fall through: still keyless */ } }
+    // NO KEY: RECORD THE INTENT, RETURN NOTHING. This used to be a bare `return`, before the queue below —
+    // so a PIN-locked phone that opened a follow link queued nothing, sent nothing, retried nothing, and its
+    // screen said "sent" (device pass 2026-09-06). The intent is bound to the locked identity and consumed
+    // when its key arrives (see JOININTENT_KEY). The return stays falsy on purpose: the heartbeat stamps its
+    // 12-hour mark only on a truthy result, and an intent is not a landed announce.
+    if (!sk) { _queueJoinIntent(cp); return; }
     const evt = finalizeEvent({
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
@@ -3110,6 +3219,7 @@ window.Fellowship = {
     try {
       await _publishAny(window.Fellowship.relays, evt);
       ok = true;
+      _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
       // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
       // does exactly this the moment its publish resolves; this function did not, so the entry sat in the
       // outbox for ever after a publish that WORKED. joinQueued() reads that queue, so the pending screen
@@ -3125,7 +3235,13 @@ window.Fellowship = {
   // have posted). Wired for when an unfollow action exists.
   async leaveMembership(npubOrHex) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(npubOrHex); if (!cp || !sk) return;
+    const cp = toPub(npubOrHex); if (!cp) return;
+    if (!sk) {
+      // Locked: nothing can be tombstoned. But if all this device ever held for this church was an unsent
+      // intent, there is nothing at the church to leave — drop the promise and let the unfollow go through.
+      if (!_joinSent[cp] && _joinIntents.some(i => i.cp === cp)) { _dropJoinIntent(cp); return { local: true }; }
+      return;
+    }
     const evt = finalizeEvent({
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
@@ -3134,6 +3250,8 @@ window.Fellowship = {
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
+    _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
+    _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
     return evt;
   },
 
@@ -3738,6 +3856,13 @@ window.Fellowship = {
   // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
   // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
   joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp)); },
+  // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
+  // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
+  // a join that was never attempted looks like. See JOINSENT_KEY.
+  joinSent(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _joinSentFor(cp)); },
+  // …and whether a join was asked for while this phone could not sign — a promise waiting on the PIN. Not the
+  // same as joinQueued: nothing is in the outbox yet, and nothing will be until the right key arrives.
+  joinIntent(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _joinIntents.some(i => i.cp === cp)); },
   // Try a refused join again, at the member's request — the announce is the only thing that makes them
   // visible, so "we stopped trying" must come with a way to start again.
   //

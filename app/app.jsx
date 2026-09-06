@@ -462,12 +462,13 @@ function App() {
     window.addEventListener('trinity-identity', h);
     window.addEventListener('trinity-identity-lock', h);
     window.addEventListener('trinity-profiles', h);
+    window.addEventListener('trinity-join-state', h);   // a join was accepted / queued / dropped — ctx.joinSent & co are read at render
     // …and re-check for the first few seconds regardless of whether any of those events fire. The events are
     // the fast path; this is the one that catches a module that finished loading after we first looked, which
     // is exactly the case that shipped the app open with no identity. Bounded, then it stops.
     let n = 0;
     const t = setInterval(() => { refreshLock(); if (++n >= 20) clearInterval(t); }, 400);
-    return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); };
+    return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); window.removeEventListener('trinity-join-state', h); };
   }, []);
   // forensic hygiene: at a locked boot, wipe any community caches left on disk from a previous session.
   //
@@ -810,6 +811,12 @@ function App() {
     if (!np || !(F && F.announceMembership)) return;
     let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
     if (Date.now() - last < 12 * 3600 * 1000) return;
+    // ON A PIN-LOCKED BOOT THIS FIRES WITH NO KEY, every time: the lock wiped hb:<npub>, so the 12-hour check
+    // above passes, and announceMembership has nothing to sign with. It used to return quietly and nothing
+    // ever re-ran (this effect is keyed on activeChurch, which does not change on unlock). It now records a
+    // join intent bound to the locked identity, which the unlock keeps — see JOININTENT_KEY in
+    // fellowship.src.js. The falsy return below keeps the stamp unwritten, so the next launch tries again
+    // until one lands. 2026-09-06.
     // MARK DONE ON SUCCESS, NOT ON ATTEMPT. announceMembership is async and used to be called un-awaited, with
     // the 12-hour heartbeat stamp written regardless — so a failed announce set the clock anyway and the member
     // stayed invisible to their church for half a day. It is now queued in the outbox as well, so a failure is
@@ -1874,6 +1881,13 @@ function App() {
     // …and whether we stopped trying. Distinct from joinQueued: "still trying" is patience, "we gave up" is
     // an action the member has to take. Both used to render as "has been sent, sit tight".
     joinFailed: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinFailed && window.Fellowship.joinFailed(np)); } catch (e) { return false; } })(),
+    // …and the POSITIVE fact: a relay accepted this identity's announce. Device pass 2026-09-06: with the two
+    // above both false the screen said "has been sent" — over a join that was never attempted (the phone was
+    // PIN-locked when it followed). An empty queue is not evidence of sending; only this is.
+    joinSent: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinSent && window.Fellowship.joinSent(np)); } catch (e) { return false; } })(),
+    // …and the promise a locked phone made: the join is asked for and will go the moment the PIN is entered.
+    // Shown as exactly that — never as "sent", never silently as "not sent".
+    joinIntent: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinIntent && window.Fellowship.joinIntent(np)); } catch (e) { return false; } })(),
     // SAY THAT IT TRIED. This did the work — re-announce, re-subscribe — and showed nothing at all, so the
     // one control on the waiting-for-approval screen looked broken while working perfectly. Reported
     // independently by a member of the pilot and by a simulated 71-year-old on the same afternoon, in almost

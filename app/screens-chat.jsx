@@ -597,11 +597,21 @@ function ChatScreen({ ctx }) {
             ? <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> <b>could not be sent</b>, and your phone has stopped trying. Nobody at the church can see it. Tap <b>Try again</b> below — if it keeps failing, ask whoever invited you for a fresh invite link.</React.Fragment>
             : ctx.joinQueued
             ? <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> is <b>still waiting to send</b> — your phone will keep trying. Stay on a connection if you can; nobody at the church can see the request until it arrives.</React.Fragment>
+            : ctx.joinIntent
+            /* Asked for while the phone was locked: nothing could be signed, so nothing has gone — and it will,
+               the moment the PIN is entered. Say that, rather than "sent" (a lie) or "not sent" (true, but
+               it reads as a fault and invites a tap that cannot help while locked). 2026-09-06. */
+            ? <React.Fragment>You’ll ask to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> <b>when you unlock</b> this phone — nobody at the church can see the request until then.</React.Fragment>
+            : !ctx.joinSent
+            /* Four states, not three (2026-09-06). "Has been sent" used to be the fall-through when nothing was
+               queued and nothing had failed — which is also exactly what a join that was NEVER ATTEMPTED looks
+               like. It is now said only when a relay has accepted the announce (ctx.joinSent). */
+            ? <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> <b>hasn’t been sent yet</b>, so nobody at the church can see it. Tap <b>Try again</b> below to send it.</React.Fragment>
             : <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward usually lets people in within a day. <b>Leave this open and you’ll see it happen</b> — or check back here later.</React.Fragment>}</p>
           {/* The badge asserts a state the church is in. If the request never reached them, no steward has
               anything pending — saying so is the same false claim as the copy above, in one line. */}
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 20, padding: '10px 16px', borderRadius: 999, background: ctx.joinFailed ? 'color-mix(in oklab, var(--danger, #c0392b) 12%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: ctx.joinFailed ? '1px solid color-mix(in oklab, var(--danger, #c0392b) 30%, transparent)' : '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', color: ctx.joinFailed ? 'var(--danger, #c0392b)' : '#8a6717', fontWeight: 700, fontSize: 13.5 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: ctx.joinFailed ? 'currentColor' : '#c2913a' }} /> {ctx.joinFailed ? 'Not sent — the church hasn’t seen this' : 'Pending steward approval'}
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: ctx.joinFailed ? 'currentColor' : '#c2913a' }} /> {ctx.joinFailed ? 'Not sent — the church hasn’t seen this' : (ctx.joinQueued || ctx.joinSent) ? 'Pending steward approval' : ctx.joinIntent ? 'Will be sent when you unlock' : 'Not sent yet — the church hasn’t seen this'}
           </div>
           {ctx.joinState && ctx.joinState.offline ? (
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 14, lineHeight: 1.5 }}>You’re offline right now — this is your last saved status.</div>
