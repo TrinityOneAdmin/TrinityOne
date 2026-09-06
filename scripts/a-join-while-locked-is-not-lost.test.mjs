@@ -23,7 +23,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const PORT = 8897, CDP = 9357;
+const PORT = 8941, CDP = 9381;   // unique across scripts/*.mjs — 8897 was relay-clearance's, and the two collided in the suite
 const ROOT = new URL('..', import.meta.url).pathname;
 const RELAY = `ws://127.0.0.1:${PORT}/relay`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
