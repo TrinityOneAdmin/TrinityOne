@@ -8436,6 +8436,41 @@
   }
   _outboxLoad();
   var _flushing = false;
+  var JOINSENT_KEY = "trinityone.joinsent";
+  var _joinSent = {};
+  function _joinSentLoad() {
+    try {
+      _joinSent = JSON.parse(localStorage.getItem(JOINSENT_KEY) || "{}");
+    } catch (e) {
+      _joinSent = {};
+    }
+    if (!_joinSent || typeof _joinSent !== "object" || Array.isArray(_joinSent)) _joinSent = {};
+  }
+  function _joinSentSave() {
+    try {
+      localStorage.setItem(JOINSENT_KEY, JSON.stringify(_joinSent));
+    } catch (e) {
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-join-state"));
+    } catch (e) {
+    }
+  }
+  function _markJoinSent(cp, evt) {
+    _joinSent[cp] = { id: evt.id, at: evt.created_at, pub: evt.pubkey };
+    _joinSentSave();
+  }
+  function _clearJoinSent(cp) {
+    if (_joinSent[cp]) {
+      delete _joinSent[cp];
+      _joinSentSave();
+    }
+  }
+  function _joinSentFor(cp) {
+    const s = _joinSent[cp];
+    return !!(s && s.pub && pub && s.pub === pub);
+  }
+  _joinSentLoad();
   var PUBLISH_TIMEOUT_MS = 12e3;
   var _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
   var _wedge = /* @__PURE__ */ new Map();
@@ -9063,7 +9098,12 @@
         "trinityone.activeChurch",
         "trinityone.outbox",
         "trinityone.outbox.failed",
-        "trinityone.nostr.mnemonic.enc"
+        "trinityone.nostr.mnemonic.enc",
+        // joinsent: the fact that a relay accepted this identity's join. Wiping it would make every locked boot
+        // tell a pending member their request was never sent. Its key names nobody; its value names only the
+        // church followedChurches (kept) already names, plus this device's own pubkey. The literal, not
+        // JOINSENT_KEY: two tests lift this function alone into a scope of their own.
+        "trinityone.joinsent"
       ]);
       const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
       const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && (FORCE_WIPE.has(k) || !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k)));
@@ -9133,6 +9173,7 @@
       try {
         await _publishAny(window.Fellowship.relays, evt);
         ok = true;
+        _markJoinSent(cp, evt);
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _outboxSave();
       } catch (e) {
@@ -9157,6 +9198,7 @@
       } catch (e) {
         return null;
       }
+      _clearJoinSent(cp);
       return evt;
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)
@@ -9714,6 +9756,13 @@
     joinFailed(npubOrHex) {
       const cp = toPub(npubOrHex);
       return !!(cp && _outboxFailed.some((o) => o && o.join === cp));
+    },
+    // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
+    // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
+    // a join that was never attempted looks like. See JOINSENT_KEY.
+    joinSent(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _joinSentFor(cp));
     },
     // Try a refused join again, at the member's request — the announce is the only thing that makes them
     // visible, so "we stopped trying" must come with a way to start again.

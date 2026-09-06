@@ -2467,6 +2467,41 @@ function _outboxSave() {
 }
 _outboxLoad();
 let _flushing = false;
+// A JOIN THAT LANDED IS A FACT, NOT THE ABSENCE OF A QUEUE ENTRY. Device pass 2026-09-06 (AUTH-DIAGNOSIS.md):
+// a PIN-locked phone opened a follow link, announceMembership returned before queueing anything (no key),
+// and the pending screen — which read "sent" from `!joinQueued && !joinFailed` — told the person their
+// request had been sent. Nothing had. An empty queue is what you get when a join landed AND when a join
+// was never attempted; the two were indistinguishable, and the screen chose the reassuring one.
+//
+// So "sent" is recorded POSITIVELY, at the one place it is known: when the relay accepted the announce.
+// Keyed by church INSIDE the value, under an id-free key name, deliberately — clearCommunityCache wipes
+// any trinityone.* key whose NAME carries a church or member id (hb:<npub> goes on every lock, which is why
+// hb cannot serve as this evidence on a PIN phone), and the value names no more than followedChurches,
+// which is KEPT, already does. The stamp carries the pubkey that sent it, and reads false for any other
+// identity on this device — a restore or a fresh identity must not inherit "sent" from the previous one.
+const JOINSENT_KEY = 'trinityone.joinsent';   // { [churchPub]: { id, at, pub } }
+let _joinSent = {};
+function _joinSentLoad() {
+  try { _joinSent = JSON.parse(localStorage.getItem(JOINSENT_KEY) || '{}'); } catch (e) { _joinSent = {}; }
+  if (!_joinSent || typeof _joinSent !== 'object' || Array.isArray(_joinSent)) _joinSent = {};
+}
+function _joinSentSave() {
+  try { localStorage.setItem(JOINSENT_KEY, JSON.stringify(_joinSent)); } catch (e) {}
+  // the screens compute their copy at render; tell the app something it renders from has changed
+  try { window.dispatchEvent(new CustomEvent('trinity-join-state')); } catch (e) {}
+}
+function _markJoinSent(cp, evt) { _joinSent[cp] = { id: evt.id, at: evt.created_at, pub: evt.pubkey }; _joinSentSave(); }
+function _clearJoinSent(cp) { if (_joinSent[cp]) { delete _joinSent[cp]; _joinSentSave(); } }
+// Has THIS identity's announce for this church been accepted by a relay? No other evidence is admitted:
+// the app's 12-hour heartbeat mark (`trinityone.hb:<npub>`) looked usable, but it is keyed by church, not
+// by identity, so a restore would inherit "sent" from the previous person — the hole this stamp exists to
+// close. A member pending from before this stamp existed reads "not sent yet" until their next announce
+// (the heartbeat, or Check again) lands, which is honest and costs one tap.
+function _joinSentFor(cp) {
+  const s = _joinSent[cp];
+  return !!(s && s.pub && pub && s.pub === pub);
+}
+_joinSentLoad();
 // One attempt at one relay set, bounded in time. Offline publishes do NOT fail fast — a socket that never
 // opens leaves Promise.any pending indefinitely — so without this the composer would sit on "sending" for
 // minutes and a flush would never finish. Verified on-device in airplane mode.
@@ -3019,7 +3054,12 @@ window.Fellowship = {
     // church's. The Bible, reader and settings caches keep the offline reader working, which is the whole
     // point of the lock screen.
     const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
-      'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc']);
+      'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc',
+      // joinsent: the fact that a relay accepted this identity's join. Wiping it would make every locked boot
+      // tell a pending member their request was never sent. Its key names nobody; its value names only the
+      // church followedChurches (kept) already names, plus this device's own pubkey. The literal, not
+      // JOINSENT_KEY: two tests lift this function alone into a scope of their own.
+      'trinityone.joinsent']);
     // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
     // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
     // no forensic gain.
@@ -3110,6 +3150,7 @@ window.Fellowship = {
     try {
       await _publishAny(window.Fellowship.relays, evt);
       ok = true;
+      _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
       // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
       // does exactly this the moment its publish resolves; this function did not, so the entry sat in the
       // outbox for ever after a publish that WORKED. joinQueued() reads that queue, so the pending screen
@@ -3134,6 +3175,7 @@ window.Fellowship = {
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
+    _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
     return evt;
   },
 
@@ -3738,6 +3780,10 @@ window.Fellowship = {
   // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
   // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
   joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp)); },
+  // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
+  // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
+  // a join that was never attempted looks like. See JOINSENT_KEY.
+  joinSent(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _joinSentFor(cp)); },
   // Try a refused join again, at the member's request — the announce is the only thing that makes them
   // visible, so "we stopped trying" must come with a way to start again.
   //

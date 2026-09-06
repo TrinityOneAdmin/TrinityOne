@@ -462,12 +462,13 @@ function App() {
     window.addEventListener('trinity-identity', h);
     window.addEventListener('trinity-identity-lock', h);
     window.addEventListener('trinity-profiles', h);
+    window.addEventListener('trinity-join-state', h);   // a join was accepted / queued / dropped — ctx.joinSent & co are read at render
     // …and re-check for the first few seconds regardless of whether any of those events fire. The events are
     // the fast path; this is the one that catches a module that finished loading after we first looked, which
     // is exactly the case that shipped the app open with no identity. Bounded, then it stops.
     let n = 0;
     const t = setInterval(() => { refreshLock(); if (++n >= 20) clearInterval(t); }, 400);
-    return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); };
+    return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); window.removeEventListener('trinity-join-state', h); };
   }, []);
   // forensic hygiene: at a locked boot, wipe any community caches left on disk from a previous session.
   //
@@ -1874,6 +1875,10 @@ function App() {
     // …and whether we stopped trying. Distinct from joinQueued: "still trying" is patience, "we gave up" is
     // an action the member has to take. Both used to render as "has been sent, sit tight".
     joinFailed: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinFailed && window.Fellowship.joinFailed(np)); } catch (e) { return false; } })(),
+    // …and the POSITIVE fact: a relay accepted this identity's announce. Device pass 2026-09-06: with the two
+    // above both false the screen said "has been sent" — over a join that was never attempted (the phone was
+    // PIN-locked when it followed). An empty queue is not evidence of sending; only this is.
+    joinSent: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinSent && window.Fellowship.joinSent(np)); } catch (e) { return false; } })(),
     // SAY THAT IT TRIED. This did the work — re-announce, re-subscribe — and showed nothing at all, so the
     // one control on the waiting-for-approval screen looked broken while working perfectly. Reported
     // independently by a member of the pilot and by a simulated 71-year-old on the same afternoon, in almost

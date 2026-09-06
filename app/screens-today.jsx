@@ -1721,7 +1721,11 @@ function TodayScreen({ ctx }) {
         <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Waiting to be let in</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
-            Your request has been sent{ctx.church && ctx.church.name ? ' to ' + ctx.church.name : ''}. A steward usually lets people in within a day — you don’t need to do anything else.
+            {/* "Has been sent" only when a relay accepted it (ctx.joinSent) — see the pending screen's note.
+                This card is what a PIN-locked phone showed while nothing had been sent at all. 2026-09-06. */}
+            {ctx.joinSent
+              ? <React.Fragment>Your request has been sent{ctx.church && ctx.church.name ? ' to ' + ctx.church.name : ''}. A steward usually lets people in within a day — you don’t need to do anything else.</React.Fragment>
+              : <React.Fragment>Your request to join{ctx.church && ctx.church.name ? ' ' + ctx.church.name : ''} <b>hasn’t been sent yet</b> — nobody at the church can see it. Tap <b>Check again</b> to send it.</React.Fragment>}
           </div>
           <button onClick={() => ctx.go && ctx.go('chat')} style={{ marginTop: 10, padding: '7px 12px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>
             Check again

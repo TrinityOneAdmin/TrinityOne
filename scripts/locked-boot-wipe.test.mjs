@@ -73,6 +73,7 @@ const DEVICE_KEYS = [
   // must SURVIVE
   'trinityone.followedChurches', 'trinityone.activeChurch',
   'trinityone.outbox', 'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes',
+  'trinityone.joinsent',   // the fact that a relay accepted this identity's join — id-free key on purpose
   'trinityone.readerScale', 'trinityone.settings', 'trinityone.nostr.mnemonic.enc',
   'trinityone.backedup.' + NPUB,   // names the MEMBER, not the church — see the test below
   'trinityone.bible.translation', 'trinityone.reading.position',
@@ -100,7 +101,10 @@ test('the Bible, the member’s own writing and their unsent messages all surviv
   const left = runWipe(DEVICE_KEYS);
   for (const k of ['trinityone.bible.translation', 'trinityone.reading.position', 'trinityone.readerScale',
     'trinityone.settings', 'trinityone.nostr.mnemonic.enc', 'trinityone.outbox',
-    'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes']) {
+    'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes',
+    // 2026-09-06: the "a relay accepted my join" stamp. Wiped, every locked boot would tell a pending member
+    // their request was never sent. Its key names nobody; see JOINSENT_KEY in fellowship.src.js.
+    'trinityone.joinsent']) {
     assert.ok(left.includes(k), 'the wipe destroyed ' + k);
   }
 });
