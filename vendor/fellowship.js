@@ -8335,6 +8335,10 @@
         }
       }
     }
+    try {
+      _consumeJoinIntents();
+    } catch (e) {
+    }
   }
   var _reconnectGuard = false;
   async function init() {
@@ -8471,6 +8475,73 @@
     return !!(s && s.pub && pub && s.pub === pub);
   }
   _joinSentLoad();
+  var JOININTENT_KEY = "trinityone.joinintent";
+  var _joinIntents = [];
+  function _joinIntentLoad() {
+    try {
+      _joinIntents = JSON.parse(localStorage.getItem(JOININTENT_KEY) || "[]");
+    } catch (e) {
+      _joinIntents = [];
+    }
+    if (!Array.isArray(_joinIntents)) _joinIntents = [];
+    _joinIntents = _joinIntents.filter((i3) => i3 && typeof i3.cp === "string" && typeof i3.forPub === "string");
+  }
+  function _joinIntentSave() {
+    try {
+      localStorage.setItem(JOININTENT_KEY, JSON.stringify(_joinIntents));
+    } catch (e) {
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-join-state"));
+    } catch (e) {
+    }
+  }
+  function _lockedPubHex() {
+    try {
+      const n = window.TrinityIdentity && window.TrinityIdentity.lockedNpub && window.TrinityIdentity.lockedNpub();
+      return n && toPub(n) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+  function _queueJoinIntent(cp) {
+    const forPub = _lockedPubHex();
+    if (!forPub) return false;
+    if (!_joinIntents.some((i3) => i3.cp === cp && i3.forPub === forPub)) {
+      _joinIntents.push({ cp, forPub, at: Math.floor(Date.now() / 1e3) });
+      _joinIntentSave();
+    }
+    return true;
+  }
+  function _dropJoinIntent(cp) {
+    const n = _joinIntents.length;
+    _joinIntents = _joinIntents.filter((i3) => i3.cp !== cp);
+    if (_joinIntents.length !== n) _joinIntentSave();
+  }
+  function _consumeJoinIntents() {
+    if (!sk || !pub || !_joinIntents.length) return;
+    const mine = _joinIntents.filter((i3) => i3.forPub === pub), theirs = _joinIntents.filter((i3) => i3.forPub !== pub);
+    _joinIntents = [];
+    _joinIntentSave();
+    for (const i3 of theirs) {
+      try {
+        console.warn("[fellowship] refusing a queued join made for a different identity", i3.cp.slice(0, 8), i3.forPub.slice(0, 8));
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-join-intent-refused", { detail: { cp: i3.cp, forPub: i3.forPub } }));
+      } catch (e) {
+      }
+    }
+    for (const i3 of mine) {
+      try {
+        Promise.resolve(window.Fellowship.announceMembership(i3.cp)).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
+  }
+  _joinIntentLoad();
   var PUBLISH_TIMEOUT_MS = 12e3;
   var _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
   var _wedge = /* @__PURE__ */ new Map();
@@ -9103,7 +9174,10 @@
         // tell a pending member their request was never sent. Its key names nobody; its value names only the
         // church followedChurches (kept) already names, plus this device's own pubkey. The literal, not
         // JOINSENT_KEY: two tests lift this function alone into a scope of their own.
-        "trinityone.joinsent"
+        "trinityone.joinsent",
+        // joinintent: a join asked for while locked, bound to the locked identity. It exists precisely to
+        // survive the locked boot — wiping it here is the bug it fixes.
+        "trinityone.joinintent"
       ]);
       const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
       const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && (FORCE_WIPE.has(k) || !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k)));
@@ -9154,10 +9228,12 @@
         try {
           await window.Fellowship.ready;
         } catch {
-          return;
         }
       }
-      if (!sk) return;
+      if (!sk) {
+        _queueJoinIntent(cp);
+        return;
+      }
       const evt = finalizeEvent2({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
@@ -9186,7 +9262,14 @@
     async leaveMembership(npubOrHex) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(npubOrHex);
-      if (!cp || !sk) return;
+      if (!cp) return;
+      if (!sk) {
+        if (!_joinSent[cp] && _joinIntents.some((i3) => i3.cp === cp)) {
+          _dropJoinIntent(cp);
+          return { local: true };
+        }
+        return;
+      }
       const evt = finalizeEvent2({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
@@ -9199,6 +9282,7 @@
         return null;
       }
       _clearJoinSent(cp);
+      _dropJoinIntent(cp);
       return evt;
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)
@@ -9763,6 +9847,12 @@
     joinSent(npubOrHex) {
       const cp = toPub(npubOrHex);
       return !!(cp && _joinSentFor(cp));
+    },
+    // …and whether a join was asked for while this phone could not sign — a promise waiting on the PIN. Not the
+    // same as joinQueued: nothing is in the outbox yet, and nothing will be until the right key arrives.
+    joinIntent(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _joinIntents.some((i3) => i3.cp === cp));
     },
     // Try a refused join again, at the member's request — the announce is the only thing that makes them
     // visible, so "we stopped trying" must come with a way to start again.

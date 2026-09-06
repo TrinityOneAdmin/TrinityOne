@@ -811,6 +811,12 @@ function App() {
     if (!np || !(F && F.announceMembership)) return;
     let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
     if (Date.now() - last < 12 * 3600 * 1000) return;
+    // ON A PIN-LOCKED BOOT THIS FIRES WITH NO KEY, every time: the lock wiped hb:<npub>, so the 12-hour check
+    // above passes, and announceMembership has nothing to sign with. It used to return quietly and nothing
+    // ever re-ran (this effect is keyed on activeChurch, which does not change on unlock). It now records a
+    // join intent bound to the locked identity, which the unlock keeps — see JOININTENT_KEY in
+    // fellowship.src.js. The falsy return below keeps the stamp unwritten, so the next launch tries again
+    // until one lands. 2026-09-06.
     // MARK DONE ON SUCCESS, NOT ON ATTEMPT. announceMembership is async and used to be called un-awaited, with
     // the 12-hour heartbeat stamp written regardless — so a failed announce set the clock anyway and the member
     // stayed invisible to their church for half a day. It is now queued in the outbox as well, so a failure is

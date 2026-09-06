@@ -145,3 +145,92 @@ test('a pending member is not told "your request has been sent" until a relay ha
     assert.deepEqual(b.errors, [], `the app threw:\n  ${b.errors.join('\n  ')}`);
   } finally { b.close(); }
 });
+
+// Enter the PIN through the real lock screen: the field, then the Unlock button.
+async function unlockViaScreen(b) {
+  await b.waitText(/Enter your PIN/, 30000, 'the PIN screen');
+  const typed = await b.ev(`(() => { const i = [...document.querySelectorAll('input')].find(i => /pin/i.test(i.placeholder || '') || i.type === 'password'); if (!i) return false; const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, '123456'); i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  assert.ok(typed, 'no PIN field on the lock screen');
+  await b.click('Unlock', 1000);
+}
+
+test('the sequence from the phone: set a PIN, boot locked, follow a church, unlock — the join lands, and the screen never says it was sent before it was', { skip: !CHROME ? 'no chromium' : false, timeout: 300000 }, async () => {
+  const b = await browser();
+  try {
+    await b.waitText(/TrinityOne/, 40000, 'the app to mount');
+    const me = await b.ev(SEED(true));
+    assert.match(me, /^[0-9f0-9a-f]{64}$/, 'no identity was created');
+    // NOTE on what this half can and cannot prove. A locked boot wipes hb:<npub> (clearCommunityCache), so
+    // the boot heartbeat ALWAYS fires keyless here and records the same intent the follow link's handler
+    // does: deleting either call alone leaves this green. That is real redundancy on a PIN phone, not a
+    // blind test — the heartbeat door is isolated in the second half, the follow-link door in the last test.
+    // the follow link, opened on a phone that boots PIN-locked (params are scrubbed on arrival, so this is the one chance)
+    await b.nav(`/index.html?follow=${NPUB}&relay=${encodeURIComponent(RELAY)}`, 1000);
+    await b.waitText(/Enter your PIN/, 40000, 'a locked boot');
+    await sleep(6000);   // long enough for the relay round-trips the old code used to make
+    assert.equal(await b.ev('window.TrinityIdentity.isLocked()'), true, 'the app did not boot locked');
+    let intents = JSON.parse(await b.ev(`localStorage.getItem('trinityone.joinintent')`) || '[]');
+    assert.deepEqual(intents.map(i => [i.cp, i.forPub]), [[CP, me]], 'no join intent was recorded for the locked identity');
+    assert.equal(await b.ev(`localStorage.getItem('trinityone.outbox')`) || '[]', '[]', 'something unsigned was queued in the outbox');
+    assert.equal(memberDocs(me).length, 0, 'a locked phone published a join — with what key?');
+    let t = await b.text();
+    assert.doesNotMatch(t, /has been sent/, 'the screen says the request has been sent while the phone is locked and nothing left it');
+    // …unlock, through the real lock screen
+    await unlockViaScreen(b);
+    t = await b.waitText(/has been sent/, 30000, '"has been sent" after unlocking');
+    assert.equal(memberDocs(me).length, 1, 'the screen says sent, and the relay does not hold the join');
+    const firstAt = memberDocs(me)[0].created_at;
+    intents = JSON.parse(await b.ev(`localStorage.getItem('trinityone.joinintent')`) || '[]');
+    assert.deepEqual(intents, [], 'the intent was kept after it was acted on');
+    // The boot heartbeat door: lock (which wipes hb:<npub>), relaunch locked, unlock. The heartbeat fires
+    // keyless at boot and used to bail silently; now it leaves an intent, and the unlock re-announces.
+    await b.ev(`(() => { window.TrinityIdentity.lock(); return true; })()`);
+    await sleep(1500);
+    await b.reload(1000);
+    await b.waitText(/Enter your PIN/, 40000, 'a locked relaunch');
+    await sleep(5000);
+    intents = JSON.parse(await b.ev(`localStorage.getItem('trinityone.joinintent')`) || '[]');
+    assert.deepEqual(intents.map(i => [i.cp, i.forPub]), [[CP, me]], 'the boot heartbeat ran keyless and left no intent behind');
+    await sleep(1500);   // the relay stores created_at in seconds; make the re-announce distinguishable
+    await unlockViaScreen(b);
+    await b.waitText(/has been sent/, 30000, '"has been sent" after the second unlock');
+    const t0 = Date.now(); let docs = memberDocs(me);
+    while (Date.now() - t0 < 15000 && !(docs.length && docs[docs.length - 1].created_at > firstAt)) { await sleep(500); docs = memberDocs(me); }
+    assert.ok(docs.length && docs[docs.length - 1].created_at > firstAt, 'the heartbeat door: unlocking after a locked boot did not re-announce the join');
+    assert.deepEqual(b.errors, [], `the app threw:\n  ${b.errors.join('\n  ')}`);
+  } finally { b.close(); }
+});
+
+test('an intent left by a different identity is refused when THIS key arrives — nobody joins on someone else\'s behalf', { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  const b = await browser();
+  try {
+    await b.waitText(/TrinityOne/, 40000, 'the app to mount');
+    const me = await b.ev(SEED(false));
+    const stranger = getPublicKey(generateSecretKey());
+    // a promise made on this device by a previous identity, for THIS church; hb held back so only the intent could announce
+    await b.ev(`localStorage.setItem('trinityone.joinintent', JSON.stringify([{ cp: ${JSON.stringify(CP)}, forPub: ${JSON.stringify(stranger)}, at: 1 }])); localStorage.setItem('trinityone.hb:' + ${JSON.stringify(NPUB)}, String(Date.now()))`);
+    await b.reload(2000);
+    await b.waitText(/Waiting to be let in/, 40000, 'the pending card');
+    await sleep(4000);
+    assert.equal(await b.ev(`localStorage.getItem('trinityone.joinintent')`), '[]', 'the stranger\'s intent was not dropped');
+    assert.equal(memberDocs(me).length, 0, 'this identity announced a join that another identity asked for');
+    assert.equal(memberDocs(stranger).length, 0);
+    assert.doesNotMatch(await b.text(), /has been sent/);
+    assert.deepEqual(b.errors, [], `the app threw:\n  ${b.errors.join('\n  ')}`);
+  } finally { b.close(); }
+});
+
+test('the follow link itself announces the join (unlocked; heartbeat held back so nothing else can)', { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  const b = await browser();
+  try {
+    await b.waitText(/TrinityOne/, 40000, 'the app to mount');
+    const me = await b.ev(SEED(false));
+    // an onboarded member with no church yet; hb for the church seeded so the heartbeat stays quiet on the next launch
+    await b.ev(`localStorage.setItem('trinityone.followedChurches', '[]'); localStorage.removeItem('trinityone.activeChurch'); localStorage.setItem('trinityone.hb:' + ${JSON.stringify(NPUB)}, String(Date.now()))`);
+    await b.nav(`/index.html?follow=${NPUB}&relay=${encodeURIComponent(RELAY)}`, 1000);
+    await b.waitText(/has been sent/, 40000, '"has been sent" after opening the follow link');
+    assert.equal(memberDocs(me).length, 1, 'the screen says sent, and the relay does not hold the join');
+    assert.equal(await b.ev(`localStorage.getItem('trinityone.joinintent')`) || '[]', '[]', 'an intent was recorded on a phone that had its key');
+    assert.deepEqual(b.errors, [], `the app threw:\n  ${b.errors.join('\n  ')}`);
+  } finally { b.close(); }
+});
