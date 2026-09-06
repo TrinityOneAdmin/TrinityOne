@@ -55,10 +55,15 @@ test('C2: the save response reports the SERVER state, and an env-seeded church c
   const body = JSON.stringify({ churches: [{ npub: npubEncode(aPub), name: 'Church A' }] });
   const saved = await (await api('/config', { method: 'POST', body })).json();
   assert.equal(saved.ok, true);
-  assert.deepEqual(saved.churches.map(c => c.name), ['Church A'], 'response must be the server state, not the request echo');
+  // BY NPUB, NOT BY NAME. The relay stopped storing a church-supplied name on 2026-09-05 (owner's decision:
+  // the operator's label is a petname derived from the key), so `name` is now derived and cannot distinguish
+  // a server echo from a request echo. The npub can, and that is what this test was always really asking.
+  assert.deepEqual(saved.churches.map(c => c.npub), [npubEncode(aPub)], 'response must be the server state, not the request echo');
+  assert.ok(saved.churches.every(c => /^[A-Z][a-z]+ [A-Z][a-z]+ \d+$/.test(c.name || '')),
+    'the operator row lost its derived label — a row with no label is one they cannot safely act on (H4)');
 
   const truth = await (await api('/config')).json();
-  assert.deepEqual(truth.churches.map(c => c.name), ['Church A'], 'the env church came back — removals do not stick');
+  assert.deepEqual(truth.churches.map(c => c.npub), [npubEncode(aPub)], 'the env church came back — removals do not stick');
 });
 
 test('C2: duplicates collapse and the response says so rather than echoing the request', async () => {
@@ -148,13 +153,13 @@ test('H3: a removed church’s data can be previewed and then purged', async () 
   assert.equal(dry.dryRun, true);
   assert.equal(dry.wouldDelete.events >= 3, true, `expected >=3 events, got ${dry.wouldDelete.events}`);
   const stillThere = await (await api('/config')).json();
-  assert.equal(stillThere.churches.some(c => c.name === 'Doomed'), true, 'a dry run must not remove the church');
+  assert.equal(stillThere.churches.some(c => c.npub === npubEncode(bPub)), true, 'a dry run must not remove the church');
 
   // the real thing
   const done = await (await api('/config', { method: 'POST', body: JSON.stringify({ removeChurch: { npub: npubEncode(bPub), purge: true } }) })).json();
   assert.equal(done.ok, true);
   assert.equal(done.purged.events >= 3, true, 'events were not deleted');
-  assert.equal(done.churches.some(c => c.name === 'Doomed'), false, 'the church is still configured after a purge');
+  assert.equal(done.churches.some(c => c.npub === npubEncode(bPub)), false, 'the church is still configured after a purge');
 
   const after = await (await api('/config', { method: 'POST', body: JSON.stringify({ removeChurch: { npub: npubEncode(bPub) } }) })).json();
   assert.equal(after.wouldDelete.events, 0, 'data survived the purge');

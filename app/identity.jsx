@@ -11,6 +11,41 @@ const { useState: useId, useEffect: useIdE } = React;
 function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, suggestedName }) {
   const D = window.TrinityData;
   const [step, setStep] = useId(0);   // 0 name, 1 back up the 12 words, 2 confirm a couple
+  // A11Y: THIS WIZARD COVERS THE WHOLE APP AND WAS JUST A STACK OF <div>s.
+  //
+  // Finding 6 of the 2026-09-05 audit. No role, no aria-modal, no focus management, and nothing made the
+  // app tree beneath it unreachable (app.jsx mounts it as a SIBLING of the running app). On first launch
+  // focus stayed on <body>, so a screen reader began reading the Today screen behind the wizard and could
+  // swipe into the tab bar and activate Chat — underneath a modal the member has not finished.
+  //
+  // useDialogA11y (app/ui.jsx) moves focus onto the panel, traps Tab inside it and restores focus after.
+  // NO onClose is passed on purpose: Escape must not skip this wizard, because the step it would skip is
+  // the 12 words, and skipping those loses the account for ever.
+  const dlgRef = React.useRef(null);
+  useDialogA11y(open, dlgRef, null);
+  // Spread onto every step's root. Only one step renders at a time, so one ref across all of them is right.
+  const DLG = { ref: dlgRef, role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Set up TrinityOne', tabIndex: -1 };
+  // …and make everything BEHIND it unreachable. aria-modal alone is a hint; it does not stop a screen
+  // reader's touch exploration or a Tab from landing on the tab bar underneath.
+  //
+  // Done from here rather than in app.jsx because the app content there is a React.Fragment, which cannot
+  // carry an attribute, and wrapping it in a new <div> would change the layout of every absolutely
+  // positioned screen inside it. The wizard's own node knows its siblings, so it marks them and puts them
+  // back — which also covers the SECOND mount (the restore route opened from settings) for free.
+  useIdE(() => {
+    if (!open || typeof document === 'undefined') return;
+    const el = dlgRef.current;
+    const parent = el && el.parentElement;
+    if (!parent) return;
+    const touched = [];
+    for (const sib of Array.from(parent.children)) {
+      if (sib === el || sib.hasAttribute('inert')) continue;
+      sib.setAttribute('inert', '');
+      sib.setAttribute('aria-hidden', 'true');   // older WebViews ignore inert; this one they honour
+      touched.push(sib);
+    }
+    return () => { for (const sib of touched) { sib.removeAttribute('inert'); sib.removeAttribute('aria-hidden'); } };
+  }, [open, step]);
   // PREFILLED FROM THE INVITE, so the person confirms the name their church already knows instead of being
   // asked as though nobody had said. An empty box here was written straight over the name the slip
   // carried (finish() sends `name: name.trim()`), so a named invite produced a member the steward sees
@@ -455,7 +490,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // wrong answer here is expensive: a returning member who is walked into making a new identity ends up as a
   // stranger to their own church, with a second entry on the roster and no way back to the first.
   if (intro && !restoring) return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', alignItems: 'center', padding: '32px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto', width: '100%' }}>
           {/* The FIRST thing anyone sees of TrinityOne, so it is the actual mark — the same halo the launcher
@@ -510,7 +545,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // Account back, church not found. A real and recoverable outcome — a church on its OWN relay is invisible to
   // a fresh install — so name what happened and give the action that always works, rather than a silent empty app.
   if (restoring && rNoChurch) return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '64px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="check" size={28} /></div></div>
@@ -554,7 +589,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // ── Coming back: which route? Typing 12 words is the fallback, not the default — most phone changes happen
   // with the old phone still in hand, and a transfer needs nothing written down.
   if (restoring && rMode === 'choose') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', alignItems: 'center', padding: '32px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto', width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="key" size={28} /></div></div>
@@ -609,7 +644,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // screen, with the error beside it. The old path used window.prompt — a system dialog showing the password
   // in clear, asked before the file had even been read — and reported failures as a toast that vanished.
   if (restoring && rMode === 'file') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="download" size={28} /></div></div>
@@ -683,7 +718,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     </div>
   );
   if (restoring && rMode === 'scan') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
           <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px' }}>Scan their code</h1>
@@ -702,7 +737,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   );
 
   if (restoring && rMode === 'lost') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
           <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>Ask your church</h1>
@@ -742,7 +777,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // ── Phone to phone. THIS phone shows a throwaway public key; the old phone encrypts the words to it. The
   // secret is never on screen, so the QR codes are safe to hold up in a room full of people.
   if (restoring && rMode === 'xfer') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
           <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>
@@ -816,7 +851,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // The restore pane replaces the whole wizard while it is open: a member restoring an existing account should
   // not also be walked through creating one. Mirrors the console's welcome-screen restore.
   if (restoring) return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '64px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="key" size={28} /></div></div>
@@ -852,7 +887,11 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   const markBackedUp = () => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; if (np) localStorage.setItem('trinityone.backedup.' + np, '1'); } catch (e) {} };
   const confirmWords = () => { const ok = checkIdx.length === 3 && checkIdx.every((idx, i) => (answers[i] || '').trim().toLowerCase() === (words[idx] || '').toLowerCase()); if (ok) { markBackedUp(); setStep(3); } else setCheckErr('That’s not quite right — check your written copy and try again.'); };
   const savePin = async () => {
-    if (pin.length < 6) { setPinErr('Use at least 6 digits.'); return; }
+    // ONE RULE, from the engine: 6+ on a phone (the blob is in the hardware store), stricter on web where
+    // it sits in localStorage. This screen used to require only 6 while the settings sheet refused
+    // all-numeric under 8 — two doors, two rules, and this is the door most members come through.
+    const ruleErr = (window.TrinityIdentity && window.TrinityIdentity.pinRuleError) ? window.TrinityIdentity.pinRuleError(pin) : (pin.length < 6 ? 'Use at least 6 characters.' : '');
+    if (ruleErr) { setPinErr(ruleErr); return; }
     if (pin !== pin2) { setPinErr('The two PINs don’t match.'); return; }
     setPinBusy(true); setPinErr('');
     try {
@@ -865,7 +904,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   };
 
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'var(--paper)', display: 'flex', flexDirection: 'column',
+    <div {...DLG} style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'var(--paper)', display: 'flex', flexDirection: 'column',
       animation: 'trinityFade .4s ease both' }}>
       {/* header + fields scroll together so the keyboard never traps the input; footer stays pinned */}
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
@@ -921,8 +960,11 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
         <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 20px', maxWidth: 360, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Just to be sure you’ve got them — type these three words from your written copy.</p>
         {checkIdx.map((idx, i) => (
           <div key={idx} style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' }}>WORD #{idx + 1}</label>
-            <input value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoFocus={i === 0} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="type it here" style={{ width: '100%', height: 50, boxSizing: 'border-box', border: '1px solid ' + (checkErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 16, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
+            {/* htmlFor, or this associates with nothing. All three boxes also share the placeholder
+                "type it here", so without this a screen reader announces the same name three times and
+                cannot say which word is wanted. Measured on the shipping APK, 2026-09-04. */}
+            <label htmlFor={'recovery-word-' + idx} style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' }}>WORD #{idx + 1}</label>
+            <input id={'recovery-word-' + idx} value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoFocus={i === 0} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="type it here" style={{ width: '100%', height: 50, boxSizing: 'border-box', border: '1px solid ' + (checkErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 16, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
           </div>
         ))}
         {checkErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '2px 2px 8px', lineHeight: 1.4 }}>{checkErr}</div> : null}
@@ -933,14 +975,14 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       <div style={{ padding: '60px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}><Icon name="shield" size={28} /></div></div>
         <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Lock this phone with a PIN</h1>
-        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Without a PIN, <b>anyone who picks up your phone can read your messages and act as you</b>. With one, your account can’t be opened and your messages can’t be read without it. <b>We strongly recommend setting one.</b></p>
+        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Without a PIN, <b>anyone who picks up your phone can read your messages and act as you</b>. With one, your account can’t be opened and the church side of the app is cleared from this phone when it locks. <b>We strongly recommend setting one.</b></p>
         {/* U5: this used to say a taken phone is "just a locked box". It is not — clearCommunityCache keeps the
             church list on purpose (wiping it strands the member), so someone examining the device can still tell
             which congregation you belong to. That matters under seizure, which is this product's threat model.
             The honest sentence already existed at app/identity-extras.jsx:283; this is it, on the screen with
             reach. Say what it does AND what it does not — not less. */}
-        <p style={{ textAlign: 'center', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>It is not invisibility: someone who examines this phone properly can still tell you use TrinityOne, and which church you follow. What the PIN protects is your account and your messages.</p>
-        <input type="password" aria-label="Choose a PIN" autoComplete="new-password" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} autoFocus placeholder="At least 6 — digits are fine"
+        <p style={{ textAlign: 'center', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>It is not invisibility: someone who examines this phone properly can still tell you use TrinityOne, and which church you follow. What the PIN protects is your account, and the church side of the app.</p>
+        <input type="password" aria-label="Choose a PIN" autoComplete="new-password" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} autoFocus placeholder={((window.TrinityIdentity && window.TrinityIdentity.pinRuleError) ? window.TrinityIdentity.pinRuleError('123456') : '') ? 'At least 6 — letters, or 8+ digits' : 'At least 6 — digits are fine'}
           style={{ width: '100%', boxSizing: 'border-box', height: 52, marginBottom: 12, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
         <input type="password" aria-label="Confirm your PIN" autoComplete="new-password" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} placeholder="Type it again to confirm"
           style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />

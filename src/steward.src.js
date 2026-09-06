@@ -169,15 +169,48 @@ const NAME_RING_MAX = 12;   // same bound as the care key: the ring is sealed PE
 // week to fix. The cost, stated: whatever exposes the name key exposes the timetable — but both are held by
 // the same set of people, so they were always going to fall together.
 //
-// FAIL OPEN, DELIBERATELY, AND ONLY HERE. With no ring the document is written in cleartext rather than
-// refused. A church whose key has not arrived must still be able to run its calendar, and unlike the chat
-// send there is no label promising otherwise — nothing here claims a protection it is not delivering. The
-// console warns so it is not silent.
+// IT USED TO FAIL OPEN, AND THAT IS WHY EVERY CALENDAR DOCUMENT ON THE DEV RELAY IS IN THE CLEAR.
+//
+// The old note here said a church whose key has not arrived must still be able to run its calendar, that
+// nothing claims a protection it is not delivering, and that "the console warns so it is not silent". All
+// three were wrong in the way that matters:
+//
+//   - The warning was `console.warn`, to the developer console. `nameKeyReady()` (below) has existed since
+//     this shipped and NO screen has ever called it. To a steward it was silent.
+//   - The product does claim it: PLAN-2026-08-15-CLEARTEXT.md, CHURCH_SEALED_PFXS and DOMAIN.md all record
+//     the calendar as sealed. The absence of a label on one screen is not the absence of a claim.
+//   - MEASURED 2026-09-05 on relay/relay.sqlite: 25 of 25 calendar documents cleartext — 15 event:, 5 rota:,
+//     5 service: — written 22:58:17, with the church's namekey: envelope not published until 23:06:29. One
+//     rota read {"name":"Josh Adeyemi","pub":"415640527d0d…"}: a name bound to a key, on disk, for ever.
+//     Nothing re-seals them, so the whole exposure is invisible from the moment it happens.
+//
+// So: REFUSE. But refusing outright would break the one true thing in the old note — the key really is often
+// merely LATE (it arrives over a subscription seconds after the console authenticates), and a steward typing
+// in Sunday's rota during those seconds must not be turned away. `_sealChurchDocReady` below waits briefly
+// for a late key and only then refuses, which is why the six publishers are async.
+//
+// Returns null, never cleartext. A caller MUST treat null as "not saved" — see the six publishers.
 function _sealChurchDoc(obj) {
   const body = JSON.stringify(obj);
   const k = _nameKeyRing[0];
-  if (!k) { console.warn('[steward] no church name key yet — writing this document in cleartext'); return body; }
-  try { return JSON.stringify({ e: nip44e(body, _unhex(k)) }); } catch (e) { return body; }
+  if (!k) return null;
+  try { return JSON.stringify({ e: nip44e(body, _unhex(k)) }); } catch (e) { return null; }
+}
+// How long to wait for a late name key before giving up. The key lands within a second or two of the console
+// authenticating on a healthy relay; this covers a thin pipe without parking a steward on a dead screen. It
+// is deliberately shorter than a human's patience: the caller shows "not saved", which is recoverable, and
+// the alternative it replaces — a silent cleartext write — is not.
+const NAME_KEY_WAIT_MS = 4000;
+function _sealChurchDocReady(obj) {
+  if (_nameKeyRing[0]) return Promise.resolve(_sealChurchDoc(obj));
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      if (_nameKeyRing[0] || Date.now() - t0 >= NAME_KEY_WAIT_MS) return resolve(_sealChurchDoc(obj));
+      setTimeout(tick, 120);
+    };
+    setTimeout(tick, 120);
+  });
 }
 // Cleartext first (every document written before this shipped), then every key in the ring so a rotation
 // never hides the church's own history. Returns null when it is sealed and we hold no key for it — the
@@ -311,6 +344,7 @@ let _stewardCaps = {};
 // own words, 2026-08-19: "a mis-pasted code is a stranger with everything and I'd never spot it." So the
 // roster carries the owner's own label for each key, and the row leads with it.
 let _stewardNames = {};
+let _stewardNamesCt = '';   // the sealed labels we hold but could not open yet — see subscribeStewards
 // WHEN each steward was given access. "Nothing records what I did" was the owner's complaint after handing
 // three people the run of a church, and they were right: the roster said who, never when. Same terms as the
 // rest — carried forward through unrelated edits, pruned with the steward it belongs to.
@@ -591,7 +625,23 @@ async function _refreshBoxHostsUs() {
     // public address and is not 127.0.0.1 at all — the first version of this asked only on loopback and so
     // told a tunnelled church that it lived on the community relays, which was flatly untrue. The real
     // question is "is the relay on this origin something other than the community pool?".
-    if (!pub || ownRelay() === CANONICAL_RELAY) return;
+    // NEVER ownRelay() — THIS is what made a cached "no" permanent. ownRelay() returns CANONICAL_RELAY the
+    // moment `_boxHostsUs === false`, so this function's own guard then refused to run, so the answer could
+    // never be revisited. A church created on a self-hosted box asked before it was registered (registration
+    // is deferred until a NAME exists — gateway H4), got an honest "no", and was pointed at the community
+    // pool for ever. Measured 2026-09-04: registering the church on the box for real did not recover it;
+    // only clearing localStorage did.
+    //
+    // src/steward.src.js's own deadlock rule (above the enrolment census) already says the remedy in as many
+    // words: READ STRAIGHT OFF location, never ownRelay(), never the _boxHostsUs cache. _ownOrigin() answers
+    // "was this console served by something that could be a relay?" without consulting either, so the
+    // question stays askable on every unlock and a wrong answer costs one round trip instead of a church.
+    //
+    // My first attempt guarded on "has this church ever registered anywhere" instead. An audit refuted it:
+    // that record is per-BROWSER-PROFILE, so a church restored from its phrase, or one the operator added by
+    // hand, could never record a legitimate "no" again — which disabled the one check that spots a box
+    // serving the console without holding the church. Worse than the bug it fixed.
+    if (!pub || !_ownOrigin()) return;
     const tok = await localAdminToken(); if (!tok) return;
     const r = await fetch('/config', { cache: 'no-store', headers: _authHdr(tok) });
     if (!r.ok) return;                                  // cannot tell → leave the box in the list
@@ -599,6 +649,8 @@ async function _refreshBoxHostsUs() {
     const list = (j && (j.churches || j.current || [])) || [];
     const mine = npubEncode(pub);
     const hosted = list.some(c => c && (c.npub === mine || String(c.npub || '') === mine));
+    // Caching a "no" is safe again now the question is re-askable: the next setKey (every unlock, every
+    // reload) asks afresh, so a church registered after this ran is picked up rather than locked out.
     _boxHostsUs = hosted;
     try { lsSet(_boxHostsKey(), hosted ? '1' : '0'); } catch (e) {}
   } catch (e) { /* unreachable, or not a Suite box → leave the box in the list */ }
@@ -742,9 +794,29 @@ const SELF_NAME_LS = 'trinityone.steward.self-relay-name';
 function selfRelayName() { try { return String(lsGet(SELF_NAME_LS) || '').trim(); } catch { return ''; } }
 function setSelfRelayName(n) { try { const v = String(n || '').trim().toLowerCase(); if (v !== selfRelayName()) lsSet(SELF_NAME_LS, v); } catch (e) {} }
 let _localToken = null;
+// IS THIS ORIGIN LOOPBACK? Read straight off location, never through ownRelay().
+//
+// localAdminToken() asks "can I reach the admin API of the box that served this page", which is a question
+// about the ORIGIN. It was asking ownIsLoopback(), which tests ownRelay(), which returns CANONICAL_RELAY
+// the moment `_boxHostsUs === false` — so a cached "this box is not ours" silently withdrew the token, and
+// _refreshBoxHostsUs (the one thing that could correct that cache) died on the missing token one line after
+// its own guard. The guard was moved off ownRelay() in f0ceb92 and this was the rest of the same chain.
+//
+// It appeared to work only by an accident of boot timing: while the console sits on its PIN screen `pub` is
+// empty, so the cache has not been read, so ownRelay() still names the box — and refreshSelfPublicRelay's
+// 1500ms timer warms `_localToken` in that window. By unlock the warmed token short-circuits the broken
+// guard. Measured 2026-09-04: recovery worked every time, and the PIN screen takes ~6s to paint so the warm
+// always wins. A recovery that depends on one timer firing before a human types a passphrase is not a
+// recovery. Raised by the audit of f0ceb92, whose headline said this path never runs at all — that was
+// wrong for the real app, and right about the fragility.
+function _originIsLoopback() {
+  const l = (typeof location !== 'undefined') ? location : null;
+  if (!l || !l.hostname) return false;
+  return /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ''));
+}
 async function localAdminToken() {
   if (_localToken) return _localToken;
-  if (!ownIsLoopback()) return '';
+  if (!_originIsLoopback()) return '';
   try { const r = await fetch('/local-token', { cache: 'no-store' }); if (!r.ok) return ''; const j = await r.json(); _localToken = (j && j.token) || ''; return _localToken; } catch (e) { return ''; }
 }
 function _authHdr(tok) { return tok ? { 'Authorization': 'Bearer ' + tok } : {}; }
@@ -1366,7 +1438,7 @@ function _resetChurchScopedState() {
   // `_stewardNames` and `_stewardSince` belong to the same document and leak the same way: setStewards()
   // CARRIES THEM FORWARD on every edit, so adding one steward in church B would have published church A's
   // labels and join dates into B's roster. AUDIT-2026-08-30.
-  _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
+  _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {};
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
   // church A's blocks must not suppress church B's members from B's envelopes (item B)
   _localBlocked = new Set();
@@ -3343,9 +3415,21 @@ window.Steward = {
     const cp = window.Steward.parseStewardInvite(payload);
     if (!cp) return Promise.resolve({ ok: false, error: 'That doesn’t look like a church invite.' });
     if (cp === churchPub) return Promise.resolve({ ok: false, error: 'That’s your own church.' });
-    const content = JSON.stringify({ name: (lastProfile && lastProfile.name) || '' });
+    // SEALED TO THE CHURCH KEY, not the name key. Only the owner's console reads this document, and a
+    // would-be steward may not yet hold the church name key — so this one is sealed to the church itself.
+    // It named the requester in the clear: a list of people asking for authority in a congregation, which
+    // under seizure identifies the leadership-in-waiting as precisely as the steward list identifies the
+    // leadership. If sealing is impossible we publish the request WITHOUT a name rather than with one; the
+    // owner still sees the request and can identify it by key.
+    let content;
+    try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: (lastProfile && lastProfile.name) || '' }), nip44ck(sk, cp)) }); }
+    catch (e) { content = JSON.stringify({ n: '' }); }
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }, sk))
-      .then(() => ({ ok: true, church: cp, npub: npubEncode(cp) }));
+      // A REQUEST NOBODY RECEIVED MUST NOT SAY "sent". The screen shows "✓ Request sent — the church's
+      // owner will approve you" on a truthy result, so discarding publish()'s false left someone waiting
+      // indefinitely for an approval that was never asked for. (Audit 2026-09-05, the sweep around the
+      // six calendar publishers: these four siblings had the same shape and were missed.)
+      .then((ok) => (ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null));
   },
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
@@ -3358,7 +3442,16 @@ window.Steward = {
         if (d === STEWARDS_D + pub) { try { roster = new Set((JSON.parse(e.content).pubkeys) || []); } catch {} emit(); return; }
         if (d !== STEWARDREQ_D + pub || e.pubkey === pub) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byPub.delete(e.pubkey); emit(); return; }
-        let name = ''; try { name = (JSON.parse(e.content).name) || ''; } catch {}
+        // `n` is the sealed form (2026-09-05), sealed by the requester to THIS church's key; `name` is what
+        // was written before that and is still on relays. Read both. A request whose name will not open is
+        // still shown — the owner sees the npub and can approve or refuse it — because dropping the request
+        // would be worse than showing it unnamed.
+        let name = '';
+        try {
+          const c = JSON.parse(e.content);
+          if (typeof c.n === 'string' && c.n) { try { name = (JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}).name || ''; } catch {} }
+          if (!name) name = c.name || '';
+        } catch {}
         byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
         emit();
       },
@@ -4015,8 +4108,19 @@ window.Steward = {
     const names = new Map();   // pubkey -> display name, resolved from kind-0 (else the console shows everyone as "Anonymous")
     const seen = new Set();    // authors already queried
     const nameSubs = []; let pending = [], batchTimer = null;
-    let hidden = new Set();   // message ids the steward/leaders removed → withheld from the view
-    const attach = () => [...byId.values()].filter(m => !hidden.has(m.id)).sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
+    let hidden = new Set();   // message ids the steward/leaders removed
+    // A REMOVED MESSAGE IS MARKED, NOT DROPPED — for the CONSOLE only. Removal is reversible (it publishes
+    // a `hidden:` doc; unhideMessage republishes it empty and the kind-1 was never deleted), but the only
+    // way to reverse it was an Undo on a banner that clears itself after 9 seconds — so a steward who
+    // paused to re-read the message could not put it back at all, and `unhideMessage` had no other caller.
+    // Measured 2026-09-04: the Undo vanished between one command and the next.
+    //
+    // The MEMBER app is unchanged and still filters these out completely — fellowship.src.js has its own
+    // subscribeHidden and screens-chat.jsx drops them. This is a moderator's view of their own decision,
+    // and it must never become a way for a congregation to read what a steward removed.
+    const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
+      // ONE pass: a second .map that re-read `rx` would put the reactions back on a removed message.
+      if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || '', removed: true, text: '', reactions: [], myReaction: '' };
       const r = rx.get(m.id); return { ...m, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
     });
     const emit = () => onMsgs(attach());
@@ -5296,7 +5400,7 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,name,at}] with hex pubkeys)
+  async setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,name,at}] with hex pubkeys)
     _requireTrustedView('re-seat map');
     if (!sk) return Promise.resolve(null);
     // `name` carries the member's DISPLAY NAME across with the seat. Without it a re-seat moved a pubkey and
@@ -5306,12 +5410,29 @@ window.Steward = {
     // name would come back. AUDIT-2026-07-26 CRITICAL 3. The member's app adopts it as their OWN kind-0 the
     // moment the doc arrives (fellowship.src.js _noteReseat), so this is a bootstrap value, not a permanent
     // override: if they rename themselves later, their own profile wins everywhere as it always did.
+    // WAIT FOR THE KEY ONCE, HERE. _sealChurchDoc is synchronous and returns null with an empty ring, so
+    // building the map first would silently drop the vouched name — and the vouched name is the entire
+    // purpose of a re-seat: it is how somebody who lost their 12 words gets their identity back, including
+    // a child whose guardian link depends on it (AUDIT-2026-07-26 CRITICAL 3). Waiting is cheap and happens
+    // once per call, not once per pair. If the key never comes, the pairs still publish with no name, and
+    // the member keeps the name they had rather than being renamed to nothing.
+    if (!_nameKeyRing[0] && (pairs || []).some(p => p && p.name)) await _sealChurchDocReady({});
     const clean = (pairs || [])
       .filter(p => p && /^[0-9a-f]{64}$/i.test(p.old || '') && /^[0-9a-f]{64}$/i.test(p.new || '') && p.old !== p.new)
       .map(p => {
         const nm = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
         const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1000) };
-        if (nm) out.name = nm;
+        // THE NAME IS SEALED, THE KEYS ARE NOT. The relay parses `old`/`new` (gateway.mjs, the RESEAT_D
+        // branch) to follow a member across a key change, so those must stay readable. `name` did not: it
+        // bound a display name to TWO keys at once, which is strictly more identifying than either the
+        // roster or the steward list — it says "this person, before and after". Written to `n` rather than
+        // over `name` (add, never repurpose), so an older member app still reads the cleartext form on the
+        // documents that already carry it.
+        if (nm) {
+          const sealedNm = _sealChurchDoc({ name: nm });
+          if (sealedNm != null) out.n = JSON.parse(sealedNm).e;
+
+        }
         return out;
       });
     // feChurch, NOT finalizeEvent: a DELEGATED steward signs with their own key, and only the ['church',<cp>]
@@ -5486,7 +5607,7 @@ window.Steward = {
         if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY (this IS the roster; only the church key edits it)
         // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
         if (e.created_at < latest) return; latest = e.created_at;
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardSince = {}; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {}; }
         else {
           try {
             const doc = JSON.parse(e.content) || {};
@@ -5495,9 +5616,25 @@ window.Steward = {
             // edit — otherwise adding or removing ONE steward would republish a roster with no capabilities
             // at all and silently restore full authority to everyone the church had scoped.
             _stewardCaps = (doc.caps && typeof doc.caps === 'object') ? doc.caps : {};
+            // `n` is the sealed form (2026-09-05); `names` is what consoles wrote before that and is still
+            // on every relay, so both are read and cleartext stays supported for history. A document whose
+            // names we cannot open yet leaves the map empty and the UI falls back to stewardNameFor()
+            // petnames — a worse label, never a wrong one.
             _stewardNames = (doc.names && typeof doc.names === 'object') ? doc.names : {};
+            // KEEP THE CIPHERTEXT EVEN WHEN WE CANNOT OPEN IT. This document is read once, on subscribe, and
+            // the name key arrives on a DIFFERENT subscription — so on any boot where the stewards doc wins
+            // the race (ordinary, not just a slow link) the labels are unreadable for the whole session.
+            // Before the labels were sealed that could not happen; with `_stewardNames = {}` the next
+            // Add/Remove republished a document with no `n` at all, and because these are newest-wins
+            // addressable documents, every label the owner had typed was gone for everyone, permanently.
+            // setStewards carries this forward verbatim rather than dropping it.
+            _stewardNamesCt = (typeof doc.n === 'string' && doc.n) ? doc.n : '';
+            if (_stewardNamesCt) {
+              const opened = _openChurchDoc(JSON.stringify({ e: _stewardNamesCt }));
+              if (opened && typeof opened === 'object') { _stewardNames = opened; _stewardNamesCt = ''; }
+            }
             _stewardSince = (doc.at && typeof doc.at === 'object') ? doc.at : {};
-          } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardSince = {}; }
+          } catch { cur = []; _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {}; }
         }
         // Adopt it HERE, not only via the UI's setCareRoster round-trip. The safeguarding back-fill needs to
         // know who the member honours, and it does not wait for React: the roster hook starts at [] and only
@@ -5551,8 +5688,33 @@ window.Steward = {
     for (const p of list) nextAt[p] = _stewardSince[p] || nowS;
     const doc = { pubkeys: list };
     if (Object.keys(next).length) doc.caps = next;
-    if (Object.keys(nextNames).length) doc.names = nextNames;
     if (Object.keys(nextAt).length) doc.at = nextAt;
+    // NAMES SEALED, KEYS AND CAPS IN THE CLEAR. Measured 2026-09-05 on relay/relay.sqlite: this document
+    // held {"names":{"9501ad2f…":"Ruth Bexley"}} in plain text — the church's officers, by name, beside the
+    // keys that identify them and the list of what each is trusted with. That is the first page anyone
+    // reading a seized disk would want.
+    //
+    // The relay parses `pubkeys` and `caps` ONLY (gateway.mjs, the STEWARDS_D branch) and has never looked at
+    // `names`, so sealing this half costs the relay nothing — unlike the roster, where the keys are
+    // load-bearing. Written to a NEW field rather than over the old one (backwards compatibility: add, never
+    // repurpose), so an older console falls back to its own petnames instead of showing nothing.
+    //
+    // Delegated stewards can open it: they are recipients of the name-key envelope via stewardPubs in
+    // _ensureNameKeyLocked, which is the same key the roster and calendar use.
+    // DROP THE LABELS, NEVER THE EDIT. The first version of this returned false when the ring was empty,
+    // which meant a cosmetic label could block a REVOCATION: an owner restoring the church on a new laptop,
+    // or on a slow link before the envelope arrives, presses Remove on a compromised steward and nothing is
+    // written — no message, and that steward keeps their authority. This document is the authority list;
+    // the labels are a convenience on top of it. So a failure to seal costs the labels, not the change.
+    if (Object.keys(nextNames).length) {
+      const sealedNames = _sealChurchDoc(nextNames);
+      if (sealedNames != null) doc.n = JSON.parse(sealedNames).e;
+      else if (_stewardNamesCt) doc.n = _stewardNamesCt;   // could not seal: keep what was already there
+    } else if (_stewardNamesCt) {
+      // We hold sealed labels we have never been able to open. Republishing without them would delete every
+      // label the owner typed, for every steward, with no way back. Carry the ciphertext across untouched.
+      doc.n = _stewardNamesCt;
+    }
 
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
   },
@@ -5573,7 +5735,13 @@ window.Steward = {
   _voiceSave() {
     if (!sk) return Promise.resolve(null);
     const doc = { self: (_selfVoice && _selfVoice.name) ? { ..._selfVoice, churchName: lastProfile.name || '' } : null, public: { ..._publicVoices } };
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
+    // SEALED (2026-09-05). This is a list of who speaks for the church, by name and office, beside their
+    // keys — "Rev. Margaret Hoyle, Vicar" against a pubkey. The relay never reads it; only members do, and
+    // every member holds the church name key, so sealing costs nothing and takes another named list off the
+    // disk. The church's OWN name stays public in its kind-0 profile, as it must be to be findable at all.
+    const sealedVoice = _sealChurchDoc(doc);
+    if (sealedVoice == null) return Promise.resolve(false);
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: sealedVoice }, sk));
   },
   setVoice(name, office) {
     _selfVoice = (name && String(name).trim()) ? { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) } : null;
@@ -6126,27 +6294,64 @@ window.Steward = {
   // so it SHOULD be sealed, and church-docs-are-sealed.test.mjs tracks that as a deferred todo. Sealing it
   // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
   // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
-  publishRoster(teamId, roster) {
-    if (!sk || !teamId) return Promise.resolve(null);
+  async publishRoster(teamId, roster) {
+    if (!sk || !teamId) return null;
     const roles = (roster.roles || []).map(r => ({ id: r.id || ('r' + Math.random().toString(36).slice(2, 7)), name: r.name || 'Role' }));
     const people = (roster.people || []).map(p => ({ id: p.id || ('p' + Math.random().toString(36).slice(2, 7)), name: p.name || '', pub: p.pub || '' }));
     // serving pods: a named set of role->person mappings, applied to a service in one tap. fills = { roleId: personId }
     const pods = (roster.pods || []).map(p => ({ id: p.id || ('pod' + Math.random().toString(36).slice(2, 7)), name: p.name || 'Pod', fills: (p.fills && typeof p.fills === 'object') ? p.fills : {} }));
-    const content = JSON.stringify({ roles, people, pods });
+    // A MIXED DOCUMENT: the KEYS in the clear for the relay, the NAMES sealed under the church name key.
+    //
+    // Measured 2026-09-05 on relay/relay.sqlite — this document held
+    // {"people":[{"name":"Margaret Hoyle","pub":"44a2d349…"}]} in plain text. Put beside `minors:` and
+    // `guardians:` (cleartext by design, pubkeys only), a seized disk yielded the serving and care teams BY
+    // NAME with their keys, which keys are children, and which named adult answers for each. Pseudonymity
+    // was the whole at-rest protection and these entries defeated it for exactly the people a compelled
+    // authority asks about.
+    //
+    // Why not seal the whole thing — this is the trap, and gateway.mjs carries the same note. SIX grants in
+    // the relay hang off the roster's pubkeys: careAdmin(), team-scoped rota visibility, and four team-room
+    // audience checks. The relay cannot open a sealed document, so sealing `people` outright turns all six
+    // into "nobody": a care team with no admin, and team rooms served to no one. That is why
+    // church-docs-are-sealed.test.mjs carried `roster:` as a deferred `todo` rather than just doing it.
+    //
+    // Readers need no change. _openChurchDoc (console) and CHURCH_SEALED_PFXS (member app, which already
+    // lists roster:) both return the INNER object when `e` is a string, so subscribeRosters below and every
+    // screen keep seeing roles/people/pods exactly as before. Documents written before today are plain JSON
+    // and both readers try cleartext first, so history keeps opening.
+    //
+    // ROLLOUT ORDER IS NOT OPTIONAL: relays before consoles. A new-shape roster on an OLD relay has no
+    // `people` to parse, so its ROSTER_PEOPLE set is empty and those six grants fail closed.
+    const sealed = await _sealChurchDocReady({ roles, people, pods });
+    if (sealed == null) return null;   // no church key: NOT saved, and never with names in the clear
+    const content = JSON.stringify({ pubs: people.map(p => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET]], content }))
-      .then(() => ({ id: teamId, roles, people, pods }));
+      // `publish()` RETURNS FALSE ON TOTAL FAILURE — it does not throw and it does not reject. Discarding it
+      // with `.then(() => ({...}))` handed every caller a truthy object over a document that reached no
+      // relay, which is why the whole "a refused save says so" work of 7a45d4d only ever covered the
+      // no-church-key case: with the relay simply unreachable — the ordinary failure on a thin pipe — the
+      // modal still closed and the rota still DM'd everyone assigned. Every caller already treats null as
+      // "not saved", so surfacing it here closes the common case with the guards that already exist.
+      .then((ok) => (ok ? { id: teamId, roles, people, pods } : null));
   },
   subscribeRosters(onRosters) { return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters); },
 
   // ---- services: a dated gathering people serve at ----
   // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
-  publishService(svc) {
-    if (!sk) return Promise.resolve(null);
+  async publishService(svc) {
+    if (!sk) return null;
     const id = svc.id || ('svc' + Date.now());
     const doc = { date: svc.date || '', time: svc.time || '10:30', name: svc.name || 'Sunday Gathering' };
-    const content = _sealChurchDoc(doc);
+    const content = await _sealChurchDocReady(doc);
+    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERVICE_D + id], ['t', NET]], content }))
-      .then(() => ({ id, ...doc }));
+      // `publish()` RETURNS FALSE ON TOTAL FAILURE — it does not throw and it does not reject. Discarding it
+      // with `.then(() => ({...}))` handed every caller a truthy object over a document that reached no
+      // relay, which is why the whole "a refused save says so" work of 7a45d4d only ever covered the
+      // no-church-key case: with the relay simply unreachable — the ordinary failure on a thin pipe — the
+      // modal still closed and the rota still DM'd everyone assigned. Every caller already treats null as
+      // "not saved", so surfacing it here closes the common case with the guards that already exist.
+      .then((ok) => (ok ? { id, ...doc } : null));
   },
   removeService(id) {
     if (!sk) return Promise.resolve(null);
@@ -6154,14 +6359,15 @@ window.Steward = {
   },
   subscribeServices(onServices) { return this._subAddr(SERVICE_D, (c) => ({ date: c.date, time: c.time, name: c.name }), onServices); },
   // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
-  publishRunsheet(serviceId, items) {
+  async publishRunsheet(serviceId, items) {
     if (!sk || !serviceId) return Promise.resolve(null);
     // SEALED, like every other calendar document. This wrote cleartext until 2026-08-18, so the relay held
     // the order of service — including the minister named against each item — readable by anyone with the
     // disk. Reads were already default-deny over the wire (a stranger gets zero events, measured), so the
     // exposure was at rest, which is the half that matters under seizure. Both readers try plaintext first
     // (_openChurchDoc here, CHURCH_SEALED_PFXS in the member app), so sheets written before this still open.
-    const content = _sealChurchDoc({ items: Array.isArray(items) ? items : [] });
+    const content = await _sealChurchDocReady({ items: Array.isArray(items) ? items : [] });
+    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RUNSHEET_D + serviceId], ['t', NET]], content }));
   },
   subscribeRunsheets(onSheets) { return this._subAddr(RUNSHEET_D, (c) => ({ items: Array.isArray(c.items) ? c.items : [] }), onSheets); },
@@ -6246,24 +6452,26 @@ window.Steward = {
 
   // ---- rooms & bookings: a shared room calendar (steward-booked) ----
   // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }
-  publishRoom(room) {
-    if (!sk) return Promise.resolve(null);
+  async publishRoom(room) {
+    if (!sk) return null;
     const id = room.id || ('room' + Date.now());
     const doc = { name: (room.name || 'Room').trim(), capacity: room.capacity || '', note: (room.note || '').trim() };
-    const content = _sealChurchDoc(doc);
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content })).then(() => ({ id, ...doc }));
+    const content = await _sealChurchDocReady(doc);
+    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content })).then((ok) => (ok ? { id, ...doc } : null));   // false = reached no relay; see publishService
   },
   removeRoom(id) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
   subscribeRooms(cb) { return this._subAddr(ROOM_D, (c) => ({ name: c.name, capacity: c.capacity, note: c.note }), cb); },
-  publishBooking(b) {
+  async publishBooking(b) {
     if (!sk || !b || !b.roomId) return Promise.resolve(null);
     const id = b.id || ('bk' + Date.now());
     const doc = { roomId: b.roomId, date: b.date || '', start: b.start || '', end: b.end || '', title: (b.title || '').trim(), note: (b.note || '').trim() };
-    const content = _sealChurchDoc(doc);
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content })).then(() => ({ id, ...doc }));
+    const content = await _sealChurchDocReady(doc);
+    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content })).then((ok) => (ok ? { id, ...doc } : null));   // false = reached no relay; see publishService
   },
   removeBooking(id) {
     if (!sk) return Promise.resolve(null);
@@ -6273,12 +6481,13 @@ window.Steward = {
 
   // ---- rota: assignments for one service (latest wins; published flag) ----
   // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
-  publishRota(rota) {
+  async publishRota(rota) {
     if (!sk || !rota || !rota.service) return Promise.resolve(null);
     const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
-    const content = _sealChurchDoc(doc);
+    const content = await _sealChurchDocReady(doc);
+    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }))
-      .then(() => ({ id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} }));
+      .then((ok) => (ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : null));   // false = reached no relay; see publishService
   },
   removeRota(serviceId) {
     if (!sk) return Promise.resolve(null);
@@ -6299,7 +6508,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const v = (visibility === 'team' || visibility === 'stewards') ? visibility : 'church';
     const content = JSON.stringify({ visibility: v, updated: now() });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_SETTINGS_D], ['t', NET]], content })).then(() => ({ visibility: v }));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_SETTINGS_D], ['t', NET]], content })).then((ok) => (ok ? { visibility: v } : null));   // publish() returns FALSE when no relay accepted
   },
   // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
   // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
@@ -6314,12 +6523,13 @@ window.Steward = {
   // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
   // event = { id?, date, time, title, where, blurb, accent }
   // asPub (optional) publishes the event AS an owned network instead of the church — network-wide event.
-  publishEvent(ev, asPub) {
+  async publishEvent(ev, asPub) {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
     const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null) };
-    const content = _sealChurchDoc(doc);
+    const content = await _sealChurchDocReady(doc);
+    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     const tags = [['d', EVENT_D + id], ['t', NET]];
     if (groupId) tags.push(['t', groupId]);   // lets a group's chat filter to its own events
     if (actingChurch) tags.push(['p', actingChurch]);   // delegated steward: p-tag the church so members' group view shows it
@@ -6377,7 +6587,7 @@ window.Steward = {
     const id = req.id || ('req' + Date.now());
     const content = JSON.stringify({ serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
-      .then(() => ({ id, ...JSON.parse(content), memberPub: req.memberPub }));
+      .then((ok) => (ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null));   // publish() returns FALSE when no relay accepted; see publishService
   },
   // the church's own "can you serve?" request docs (so the board can join replies to a slot)
   subscribeRequests(onRequests) {
@@ -6527,7 +6737,12 @@ window.Steward = {
           for (const pr of ((JSON.parse(e.content) || {}).pairs || [])) {
             if (!pr || !pr.old || !pr.new || pr.old === pr.new) continue;
             next.add(String(pr.old).toLowerCase());
-            const nm = String(pr.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+            // SEALED SINCE 2026-09-05, and this is the console's own reader — the second one. The member
+            // app's _noteReseat was updated with that change and this was missed, so a reseat written by a
+            // current console showed the steward no vouched name at all in the Members list.
+            let raw = pr.name || '';
+            if (typeof pr.n === 'string' && pr.n) { const o = _openChurchDoc(JSON.stringify({ e: pr.n })); if (o && o.name) raw = o.name; }
+            const nm = String(raw).replace(/\s+/g, ' ').trim().slice(0, 40);
             if (nm) names.set(String(pr.new).toLowerCase(), nm);
           }
         } catch {}
@@ -6558,7 +6773,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const np = toPubHex(input); if (!np) return Promise.resolve(null);
     const content = JSON.stringify({ joined: true });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }, sk)).then(() => ({ networkPub: np, npub: npubEncode(np) }));
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }, sk)).then((ok) => (ok ? { networkPub: np, npub: npubEncode(np) } : null));   // publish() returns FALSE when no relay accepted
   },
   leaveNetwork(networkPub) {
     if (!sk) return Promise.resolve(null);
@@ -6662,7 +6877,7 @@ window.Steward = {
     // will paint (an A-delegate scoped to nothing hides everything they authored in B, and the filtered list
     // is written back to localStorage), and setStewards() would publish A's labels and dates into B's
     // roster on the next edit. Same family as the roster note above. AUDIT-2026-08-30.
-    _stewardCaps = {}; _stewardNames = {}; _stewardSince = {};
+    _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {};
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name
@@ -6875,7 +7090,26 @@ window.Steward = {
     if (!churchSk || !churchPub) return;
     const np = npubEncode(churchPub);
     const force = !!(opts && opts.force);
-    const bases = new Set([window.Steward.configBase()]);
+    // THE SERVING BOX IS A REGISTRATION TARGET ONLY WHEN A STEWARD IS DELIBERATELY CREATING A CHURCH ON IT.
+    // Owner's decision, 2026-09-04. `createHere` is passed by exactly one caller — the setup wizard's name
+    // step (app/stew-dashboard.jsx saveName) — and never by the boot-time selfRegister('') calls in
+    // app/steward-root.jsx or the name-resolved effect in stew-dashboard.
+    //
+    // Why it is an opt-in and not the default. The previous cut seeded `bases` from _ownOrigin()
+    // unconditionally, so that a console whose cache said "this box is not ours" could still reach the box
+    // that served it (configBase() follows ownRelay(), which follows the cache — the deadlock rule reached by
+    // a third route). But on a COMMUNITY box that accepts self-registration, an unsolicited row from a boot
+    // call makes _refreshBoxHostsUs answer "yes" at the next unlock, and the console starts PUBLISHING to a
+    // box nobody chose — which defeats the serves-but-does-not-hold check that _refreshBoxHostsUs exists
+    // for. A church is put on a box by a person, at the moment they create it there.
+    //
+    // _ownOrigin() reads location directly and returns '' for a Capacitor APK or a static CDN host, so
+    // there is nothing to add when the console was not served by something that could be a relay.
+    const createHere = !!(opts && opts.createHere);
+    const bases = new Set();
+    const rawOrigin = _ownOrigin();
+    if (createHere && rawOrigin) bases.add(rawOrigin);
+    bases.add(window.Steward.configBase());
     for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, ''));
     let done = {};
     try { done = JSON.parse(localStorage.getItem(SELFREG_KEY) || '{}') || {}; } catch (e) {}
@@ -6886,10 +7120,37 @@ window.Steward = {
       const url = base + '/config';
       try {
         const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
-        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }) });
+        // A TIMEOUT, like every other fetch in this file (:667, :773, :778, :853). saveName now awaits this
+        // before publishing, and Continue is disabled while it runs — so without one a captive portal or a
+        // thin pipe leaves the wizard's first step hanging with no cancel and nothing on screen but a
+        // half-faded button. Raised by the 2026-09-04 audit of that change.
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }), signal: AbortSignal.timeout(6000) });
         // Only remember a real acceptance. A 400 ("name your church first") or 403 (invite-only / already set
         // up) must stay un-marked so a later, correct attempt is still made.
-        if (r && r.ok) { done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; _markRegOk(); }
+        if (r && r.ok) {
+          done[mark] = 1; try { localStorage.setItem(SELFREG_KEY, JSON.stringify(done)); } catch (e) {} accepted = true; _markRegOk();
+          // AN ACCEPTANCE FROM THE BOX THAT SERVED THIS CONSOLE IS THE ANSWER TO "DOES THIS BOX HOLD US".
+          // It is a stronger answer than the /config probe's: the probe reads a list, this is the box
+          // writing the church INTO that list, signed by the church key it just verified. Without this,
+          // the session that CREATES a church published nothing to its own box: setKey's probe had asked
+          // about a church seconds old and registered nowhere, honestly cached "0", and relaysRaw() then
+          // built the publish set from ownRelay(), which follows that cache. Measured 2026-09-04 on
+          // 42f8080, driving the real console: church.json gained the row (`by: "self"`), boxhosts stayed
+          // "0", ownRelay() was the community pool, and the relay held ZERO events until a reload + unlock
+          // re-asked the probe. Only the serving origin counts — a canonical or pool acceptance says
+          // nothing about THIS box, and _refreshBoxHostsUs keeps recording a genuine "no" from a box that
+          // serves the console but does not hold the church.
+          if (rawOrigin && base === rawOrigin && _boxHostsUs !== true) {
+            _boxHostsUs = true;
+            try { lsSet(_boxHostsKey(), '1'); } catch (e) {}
+            // ownRelay() names the box again, so re-prove the assembled list and tell the surfaces that
+            // read it: `steward-relays` repaints the Relays card, `steward-relay-returned` is the advisory
+            // re-subscribe/flush signal — the same pair the gate's own onChange fires.
+            try { _gate.refresh(relaysRaw(), pub); } catch (e) {}
+            try { window.dispatchEvent(new CustomEvent('steward-relays')); } catch (e) {}
+            try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url: '' } })); } catch (e) {}
+          }
+        }
         else if (r) { let why = ''; try { why = ((await r.json()) || {}).error || ''; } catch (e) {} refused.push({ base, status: r.status, why });
           // "set your church's name … before connecting it to a relay" is not a verdict, it is a not-yet: the
           // wizard's first field is the name, and naming it re-registers. Keep the publish gate SHUT for that
@@ -6912,7 +7173,9 @@ window.Steward = {
     // `accepted` was then true, and the steward was told nothing, while every subsequent write to their own
     // relay was rejected. Measured 2026-08-17: ok:true alongside a 403 from the relay the church was actually
     // pointed at, and 17 lost setup writes.
-    const ownBase = window.Steward.configBase();
+    // "Our" relay for the purpose of that warning is the box that served this console when there is one —
+    // configBase() can be pointing at the pool for the very reason described above.
+    const ownBase = rawOrigin || window.Steward.configBase();
     const ownRefused = refused.find(x => x.base === ownBase) || unreachable.includes(ownBase);
     if (ownRefused) {
       const why = (refused.find(x => x.base === ownBase) || {}).why;

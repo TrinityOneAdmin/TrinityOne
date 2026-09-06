@@ -443,7 +443,41 @@ function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
 const CHURCH_PUBS = new Set();
-const CHURCH_NAMES = new Map();   // hex pub -> display name (for the Relay app dashboard)
+// A CHURCH IS SHOWN TO ITS OPERATOR BY A PETNAME DERIVED FROM ITS KEY, NEVER BY A NAME IT SUPPLIED.
+// Owner's decision 2026-09-04: "I don't even think church names on relays should be that easily
+// identifiable.....why have them at all? Do we need them?"
+//
+// The name did no protocol work — nothing gates, routes or renders on it. It existed for one reason
+// (RELAY-AUDIT-2026-07-20 H4): an operator facing rows of bare npubs cannot tell which church to remove,
+// and removing the wrong one de-provisions a real congregation. A petname serves that need exactly, needs
+// nothing from the church, and is stable across restarts because it is a pure function of the key.
+//
+// SAY WHAT THIS DOES NOT BUY, because it would be easy to overclaim: the church's name is ALSO in its
+// kind-0 profile, in cleartext, and that is public BY DESIGN — a joiner must see which church a code
+// belongs to before joining. Measured on a live relay 2026-09-05. So this does NOT stop a seized box
+// yielding church names. What it does: removes one plaintext copy, stops the operator's config being a
+// compact index of exactly which congregations the box serves, and removes the church-supplied name that
+// a church could otherwise rename on somebody else's relay — the question that started this.
+// THESE MUST BE DECLARED ABOVE churchPetName, NOT beside relayPetSlug 480 lines further down. `const` is
+// hoisted but not initialised, so a call before that line throws a temporal-dead-zone ReferenceError — and
+// the startup path that stamps church.json wraps its work in `try {} catch {}`, so the throw was SILENT:
+// the relay came up knowing its church, wrote nothing to disk, and /relay-backup then tarred a data dir
+// with no church in it. Restore that archive and the box refuses every write while reporting itself
+// healthy. Caught by scripts/relay-durability.test.mjs, not by reading.
+const _PET_ADJ = ['quiet', 'bright', 'gentle', 'steady', 'faithful', 'humble', 'joyful', 'kind', 'patient', 'bold', 'gracious', 'calm', 'glad', 'warm', 'true', 'sure'];
+const _PET_NOUN = ['olive', 'cedar', 'dove', 'anchor', 'lamp', 'vine', 'shepherd', 'harbor', 'beacon', 'reed', 'sparrow', 'willow', 'spring', 'haven', 'ember', 'brook'];
+function churchPetName(hex) {
+  const h = String(hex || '');
+  if (!/^[0-9a-f]{64}$/i.test(h)) return '';
+  let x = 0; for (let i = 0; i < h.length; i++) x = (x * 31 + h.charCodeAt(i)) >>> 0;
+  const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
+  // FOUR DIGITS, not two. The relay's own slug uses 10-90 because it is a directory HANDLE people type;
+  // this label is only ever read, so it can afford the entropy. 16x16x90 = 23,040 buckets collides for ~20%
+  // of relays at 100 churches and 97% at 400 (measured by the audit); 16x16x9000 = 2.3M brings 400 churches
+  // to about 3%. A collision is cosmetic — nothing routes or gates on the label and the npub is shown beside
+  // it — but two identical rows are exactly the confusion this label exists to prevent.
+  return cap(_PET_ADJ[x % 16]) + ' ' + cap(_PET_NOUN[(x >>> 4) % 16]) + ' ' + (1000 + (x >>> 9) % 9000);
+}
 // hex pub -> { by: 'operator' | 'self', at: unix-seconds } — PROVENANCE. Nothing recorded how a church came
 // to be on a relay, so an operator faced with rows they never added had no way to tell which were theirs,
 // when the others arrived, or which were safe to remove. That is the state that made a bulk delete look
@@ -454,12 +488,12 @@ const CHURCH_META = new Map();
 // (the community-relay policy) — see the blob PUT gate. Grant via church.json ({churches:[{npub,media:true}]} or a
 // top-level {media:true}) or the RELAY_MEDIA_CHURCHES env (comma-separated npubs).
 const MEDIA_HOSTS = new Set();
-const addChurch = (s, name, media, meta) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); if (media) MEDIA_HOSTS.add(h);
+const addChurch = (s, name, media, meta) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (media) MEDIA_HOSTS.add(h);
   if (meta && (meta.by || meta.at)) CHURCH_META.set(h, { by: meta.by === 'self' ? 'self' : 'operator', at: meta.at | 0 }); } };
 const CHURCH_FILE = join(DATA_DIR,'church.json');
 // (re)load the write policy from env + church.json — called at startup and after a browser config save
 function loadChurches() {
-  CHURCH_PUBS.clear(); CHURCH_NAMES.clear(); MEDIA_HOSTS.clear(); CHURCH_META.clear();
+  CHURCH_PUBS.clear(); MEDIA_HOSTS.clear(); CHURCH_META.clear();
   // RELAY-AUDIT-2026-07-20 C2: CHURCH_NPUB used to be re-applied on EVERY reload, including the one that
   // runs immediately after the operator saves the church list. So a church supplied by env could never be
   // removed from the dashboard: the save wrote church.json without it, loadChurches() put it straight back,
@@ -479,6 +513,26 @@ function loadChurches() {
   try {
     const cj = JSON.parse(readFileSync(CHURCH_FILE, 'utf8'));
     if (cj) { if (cj.npub) addChurch(cj.npub, cj.name, cj.media === true); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name, !!(c && c.media === true), c && { by: c.by, at: c.at })); }
+    // ONE-TIME CLEARING OF NAMES AN OLDER BUILD STORED, written through persistChurches — the SAME canonical
+    // writer the rest of the file uses — and never by mapping the rows we just read.
+    //
+    // The first version mapped `cj.churches` and stamped `envMigrated`, and an audit reproduced three faults
+    // in that, one of them silent data loss:
+    //   · a CHURCH_NPUB-seeded church is in CHURCH_PUBS but NOT in cj.churches, so the rewrite dropped it —
+    //     and stamping envMigrated then stopped the env var being folded in again, so on the second boot the
+    //     congregation was simply gone and every write of theirs refused;
+    //   · `{...c}` over a STRING row (a documented shape) spread it into {"0":"n","1":"p",…}, which the next
+    //     boot could not read, dropping that church too;
+    //   · the top-level `{npub, name}` shape was never cleared at all.
+    // Writing from CHURCH_PUBS + CHURCH_META fixes all three, because that is the state every shape has
+    // already been folded into by the lines above.
+    const staleRow = cj && Array.isArray(cj.churches) && cj.churches.some(c => c && typeof c.name === 'string' && c.name);
+    const staleTop = !!(cj && typeof cj.name === 'string' && cj.name);
+    if ((staleRow || staleTop) && CHURCH_PUBS.size) {
+      const n = (staleRow ? cj.churches.filter(c => c && c.name).length : 0) + (staleTop ? 1 : 0);
+      persistChurches();
+      console.log('[relay] cleared ' + n + ' stored church name(s) from church.json — the operator label is now derived from the key');
+    }
   } catch {}
 }
 loadChurches();
@@ -924,8 +978,6 @@ async function gossipDirectory() {
 try { setTimeout(() => { gossipDirectory().catch(() => {}); }, 10000); setInterval(() => { gossipDirectory().catch(() => {}); }, 300000); } catch {}
 // the relay's pet-name as a directory handle slug (matches the client's stewardNameFor, lower-cased + hyphens),
 // so going public can auto-claim a memorable name with zero steps — e.g. "Quiet Dove 45" -> "quiet-dove-45".
-const _PET_ADJ = ['quiet', 'bright', 'gentle', 'steady', 'faithful', 'humble', 'joyful', 'kind', 'patient', 'bold', 'gracious', 'calm', 'glad', 'warm', 'true', 'sure'];
-const _PET_NOUN = ['olive', 'cedar', 'dove', 'anchor', 'lamp', 'vine', 'shepherd', 'harbor', 'beacon', 'reed', 'sparrow', 'willow', 'spring', 'haven', 'ember', 'brook'];
 function relayPetSlug() { const h = RELAY_PUB; if (!/^[0-9a-f]{64}$/i.test(h)) return ''; let x = 0; for (let i = 0; i < h.length; i++) x = (x * 31 + h.charCodeAt(i)) >>> 0; return _PET_ADJ[x % 16] + '-' + _PET_NOUN[(x >>> 4) % 16] + '-' + (10 + (x >>> 9) % 90); }
 function startCloudflared() {
   if (CF_CHILD && CF_URL) return Promise.resolve({ ok: true, url: CF_URL });   // already public — don't spawn again
@@ -1593,7 +1645,7 @@ function maybePushSermon(evt) {
     if (!s || !s.sha256) return;
     if (!evt.id || SERMON_PUSHED.has(evt.id)) return; SERMON_PUSHED.add(evt.id);   // dedup on the PIN EVENT, not the sermon id — so re-featuring (a fresh pin event) DOES re-notify, but the same event arriving twice (multi-relay) doesn't
     const isVideo = String(s.mime || '').startsWith('video');
-    const cname = CHURCH_NAMES.get(cp) || displayName(cp) || 'Your church';
+    const cname = displayName(cp) || 'Your church';   // the church's own public kind-0 name, never a stored one
     const body = (isVideo ? 'New video' : 'New audio clip') + (s.title ? ': ' + s.title : '');
     for (const m of MEMBERS) {
       if (m === cp || !memberIn(m, cp)) continue;
@@ -1672,7 +1724,7 @@ function maybePushSafety(evt) {
       let open = true; try { open = !!(JSON.parse(evt.content) || {}).open; } catch {}
       if (!open) return;                                                     // a check being CLOSED → no alert
       SAFETY_PUSHED.add(evt.id);
-      const cname = CHURCH_NAMES.get(cp) || displayName(cp) || 'Your church';
+      const cname = displayName(cp) || 'Your church';   // the church's own public kind-0 name, never a stored one
       for (const m of MEMBERS) { if (m === evt.pubkey || !memberIn(m, cp)) continue;
         pushTo(m, { title: cname, body: 'Are you safe? Tap to let your church know.', url: '/?safety=1', tag: 'safety-' + cp }, 'announce'); }
     } else if (d.startsWith(SAFE_D)) {
@@ -1734,7 +1786,7 @@ let _hydrating = false;
 // residue — note() only ever adds, so without this a de-provisioned church kept its members writable and its
 // safeguarding lists still governing its ex-minors' DMs until the process restarted (RELAY-AUDIT H1).
 // Derived-only: every one of these is rebuilt from stored events by the eachKind pass below, so clearing is
-// safe. Deliberately NOT cleared: CHURCH_PUBS/CHURCH_NAMES/MEDIA_HOSTS (owned by loadChurches) and anything
+// safe. Deliberately NOT cleared: CHURCH_PUBS/MEDIA_HOSTS (owned by loadChurches) and anything
 // read from disk rather than derived.
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
@@ -1827,7 +1879,17 @@ function persistChurches() { try {
   // loadChurches() re-folds CHURCH_NPUB on the next boot — so a church the operator deliberately removed
   // (which stamped envMigrated) is RESURRECTED the moment an /import clone rewrites church.json here, undoing
   // the C2 removal. Dropping by/at also leaves rows the operator can't place and so can't safely remove.
-  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '', ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
+  // NO `name`. This wrote `name: churchPetName(h)`, which made "nothing stores a name" false and made the
+  // one-time migration below fire on the SECOND boot of a brand-new box — logging that an "older build"
+  // had stored a name when this build had just stored it itself. Found by the audit of 7f5eed0.
+  // `media` is carried because MEDIA_HOSTS is rebuilt from this file: dropping it silently revoked a
+  // media grant on the first rewrite.
+  // MEDIA_HOSTS holds BOTH grants written in church.json and grants seeded by RELAY_MEDIA_CHURCHES. Writing
+  // the union back would turn an env grant into a permanent on-disk one — removing the variable would then
+  // no longer revoke it, which is not what an operator setting an env var expects. Persist only what came
+  // from the file. (Found by audit, 2026-09-05; before 52ceada the opposite bug lost file grants entirely.)
+  const envMedia = new Set((process.env.RELAY_MEDIA_CHURCHES || '').split(',').map(x => toHexPub(x.trim())).filter(Boolean));
+  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), ...(MEDIA_HOSTS.has(h) && !envMedia.has(h) ? { media: true } : {}), ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
   const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
 } catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
@@ -1970,7 +2032,24 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const id = d.slice(ROSTER_D.length);
     { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e, id)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
-    const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
+    // READ `pubs` FIRST, FALL BACK TO `people`. From 2026-09-05 the console seals the roster's NAMES under
+    // the church name key and publishes the keys alongside in the clear, as `{ pubs: [...], e: "<sealed>" }`.
+    //
+    // Why the keys stay readable: six grants in this file hang off ROSTER_PEOPLE — careAdmin(), rota
+    // visibility, and four team-room audience checks (search ROSTER_PEOPLE). The relay cannot open a sealed
+    // document, so sealing the whole thing would turn every one of them into "nobody": a care team with no
+    // admin and a team room served to no one. The warning above this file's ROTA_VIS said exactly that.
+    // Splitting the document keeps the enforcement server-side and takes the NAMES off the disk, which is
+    // the half that matters under seizure — a rota held {"name":"Josh Adeyemi","pub":"415640527d0d…"}.
+    //
+    // Old rows keep working, which is what makes the rollout safe in this order: relays first, then consoles.
+    // A relay that has this and meets an OLD cleartext roster still reads `people`; and because the relay
+    // rehydrates all history on update, an updated relay re-reads every roster it already holds.
+    const set = new Set(); try {
+      const c = JSON.parse(e.content);
+      const src = Array.isArray(c.pubs) ? c.pubs : ((c.people || []).map(p => p && p.pub));
+      src.forEach(v => { const h = toHexPub(v); if (h) set.add(h); });
+    } catch {}
     ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
@@ -3353,8 +3432,8 @@ function serveStatic(req, res) {
     res.end(JSON.stringify({
       ok: true, ...act,
       // resolve pubkeys to the names the operator configured — the console would otherwise print raw npubs.
-      // CHURCH_NAMES is the module-level map; curChurches() is scoped to the /config handler, not here.
-      churches: (act.churches || []).map(c => ({ ...c, name: CHURCH_NAMES.get(c.church) || '' })),
+      // churchPetName() derives from the key; curChurches() is scoped to the /config handler, not here.
+      churches: (act.churches || []).map(c => ({ ...c, name: churchPetName(c.church) })),
       media: { bytes: _mediaBytesTotal, capBytes: effMediaCap() },
       uptimeMs: Date.now() - STARTED_AT,
     }));
@@ -3396,6 +3475,11 @@ function serveStatic(req, res) {
     // nothing, and every dashboard stays green. AUDIT 2026-08-02.
     res.end(JSON.stringify({
       ok: !STORE_DEGRADED, port: PORT, uptimeMs: Date.now() - STARTED_AT,
+      // THE RELAY'S OWN CLOCK, in seconds. A client whose NIP-42 proof was refused cannot otherwise tell a
+      // wrong clock from a refusal: the HTTP `Date` header is not CORS-safelisted, so a phone reading a
+      // cross-origin relay cannot see it. Additive and unauthenticated — it says nothing about the church,
+      // and this window (600s) is already visible to anyone who tries an AUTH.
+      now: Math.floor(Date.now() / 1000),
       ...(STORE_DEGRADED ? { degraded: { since: STORE_DEGRADED.at, reason: STORE_DEGRADED.why, what: 'storage' } } : {}),
       // FREE SPACE, because the retention cull cannot prevent a full disk. That budget counts EPHEMERAL
       // EVENTS per church — it never touches members, rosters, groups, care, safeguarding or finance (kept
@@ -3932,8 +4016,8 @@ function serveStatic(req, res) {
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     const isAdmin = adminOK(req);
     const curChurches = () => [...CHURCH_PUBS].map(p => { const m = CHURCH_META.get(p) || {};
-      return { npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '', by: m.by || '', at: m.at || 0 }; });
-    // RELAY-AUDIT-2026-07-20 H1: loadChurches() rebuilds ONLY CHURCH_PUBS/CHURCH_NAMES/MEDIA_HOSTS. Every
+      return { npub: npubEncode(p), name: churchPetName(p), by: m.by || '', at: m.at || 0 }; });
+    // RELAY-AUDIT-2026-07-20 H1: loadChurches() rebuilds ONLY CHURCH_PUBS/MEDIA_HOSTS. Every
     // other map — MEMBER_DOCS, MEMBERS, GROUP_CHURCH, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
     // GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, REQUIRE_APPROVAL, MEALS_*, ROSTER_*, FINANCE_SEQ — is only
     // ever filled by note() on live writes or by hydrateMaps() at boot. So a config change left them stale
@@ -3948,8 +4032,11 @@ function serveStatic(req, res) {
     const writeChurches = (list) => {
       const tmp = CHURCH_FILE + '.tmp';
       // keep provenance on disk — a row the operator cannot place is a row they cannot safely remove
+      // NO `name` ON DISK. The operator's label is derived from the key (churchPetName), so there is nothing
+      // to store and nothing for a church to rename on somebody else's box. Any `name` an older build wrote
+      // is dropped here, so the first write after this upgrade clears the existing rows.
       const withMeta = list.map(c => { const h = toHexPub(c.npub) || ''; const m = CHURCH_META.get(h) || {};
-        return { npub: c.npub, name: c.name || '', ...(c.by || m.by ? { by: c.by || m.by } : {}), ...(c.at || m.at ? { at: c.at || m.at } : {}) }; });
+        return { npub: c.npub, ...(c.by || m.by ? { by: c.by || m.by } : {}), ...(c.at || m.at ? { at: c.at || m.at } : {}) }; });
       writeFileSync(tmp, JSON.stringify({ churches: withMeta, envMigrated: true }, null, 2) + '\n');
       renameSync(tmp, CHURCH_FILE);
       loadChurches();
@@ -3984,9 +4071,43 @@ function serveStatic(req, res) {
             const hex = toHexPub(String(parsed.addChurch.npub || '').trim());
             if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub' })); return; }
             if (!isAdmin) {
-              // invite-only: the operator has locked the relay — only the admin token may add churches, so a
-              // signed self-registration is refused outright (no matter how valid the proof).
-              if (SETTINGS.inviteOnly) { res.writeHead(403, H); res.end(JSON.stringify({ error: 'this relay is invite-only — ask the operator to add your church' })); return; }
+              // PROVE FIRST, THEN DECIDE — every policy answer below depends on whether we already host
+              // this church, so answering any of them to an unproven caller says which congregations live
+              // on this box. GET /config is admin-only precisely so that question cannot be asked; these
+              // refusals must not answer it by their status code instead.
+              //
+              // This block used to sit BELOW the policy checks, and the differential was real either way:
+              // on a private relay `!community && CHURCH_PUBS.size && !alreadyRegistered` already returned
+              // 403 to an unsigned request for a stranger's key while a hosted key fell through. Moving
+              // the proof up closes that, and stops the invite-only fix below from opening a second one.
+              // Now an unproven caller gets exactly one answer — 401 — whoever they name.
+              const a = parsed.auth;
+              const sigOk = a && typeof a === 'object' && a.kind === 27235 && verifyEvent(a);
+              const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
+              const ownsKey = sigOk && a.pubkey === hex;   // the signer IS the church being registered
+              const uTag = sigOk && (a.tags.find(t => t[0] === 'u') || [])[1];
+              let uOk = false;
+              try { const uu = new URL(String(uTag)); uOk = /\/config\/?$/.test(uu.pathname) && uu.host === (req.headers.host || '').split(',')[0].trim(); } catch {}   // L1: bind the proof to THIS relay's host + path (not just any /config) — anti-replay across relays
+              if (!(sigOk && fresh && ownsKey && uOk)) { res.writeHead(401, H); res.end(JSON.stringify({ error: 'unauthorized: register with the admin token, or sign a fresh proof with this church key' })); return; }
+              // invite-only: the operator has locked the relay — only the admin token may add a NEW church,
+              // so a signed self-registration for one is refused outright (no matter how valid the proof).
+              //
+              // A church that is ALREADY REGISTERED HERE is not adding anything, and must not be refused.
+              // This branch used to fire for it too, which made "invite-only" and "your church is not
+              // accepted" indistinguishable to the console: it raised a permanent, prominent
+              // "This relay has not accepted your church, so nothing you set up will save" on every tab of
+              // a console whose writes were landing perfectly, and a 403 is deliberately never marked done,
+              // so it re-alarmed on every load for ever. Measured 2026-09-04 on a relay with the church
+              // registered by the operator: group, group key, care key, name key and profile all reached
+              // relay.sqlite while the banner claimed nothing would save.
+              //
+              // Falling through is safe, and is the same case the H4 comment below already contemplates
+              // ("an existing church re-announcing itself is fine"): the proof check still has to pass, so
+              // only the holder of that church key learns it is registered — and it already knew. The
+              // no-op guard further down means a re-announce with no new name rewrites nothing.
+              // The membership of this relay is NOT leaked: an unsigned or wrongly-signed request has
+              // already failed the 401 ABOVE, and GET /config remains admin-only.
+              if (SETTINGS.inviteOnly && !CHURCH_PUBS.has(hex)) { res.writeHead(403, H); res.end(JSON.stringify({ error: 'this relay is invite-only — ask the operator to add your church' })); return; }
               // RELAY-AUDIT-2026-07-20 H4 — BOOTSTRAP-ONLY self-registration on a PRIVATE relay.
               // Self-registration exists so the setup flow is effortless: install the relay, open your
               // Steward console, and it registers itself. On a private (single-church) relay that is needed
@@ -4003,23 +4124,17 @@ function serveStatic(req, res) {
                 res.end(JSON.stringify({ error: 'this relay is already set up for its church. Ask the operator to add yours, or turn on “Offer to host other churches”.' }));
                 return;
               }
-              // H4: a nameless registration is unidentifiable in the dashboard forever — the root call sites
-              // pass name:'' and the server only overwrites a name when non-empty, which is why 37 of this
-              // box's 41 rows show a bare npub the operator cannot safely act on. Require one for a NEW
-              // self-registration (an existing church re-announcing itself is fine, and may update its name).
+              // H4, AND WHY IT SURVIVES THE PETNAME CHANGE. Its original reason is gone: a row is no longer
+              // unidentifiable without a name, because the operator sees a petname derived from the key. But
+              // the check earns its place for a second reason it always had — the root call sites pass
+              // name:'' precisely when the console has no church set up yet, so this is what stops a
+              // half-configured console bootstrapping itself onto a relay. The name is still REQUIRED and
+              // still never STORED; it is a readiness signal, not a label.
               if (!alreadyRegistered && !String(parsed.addChurch.name || '').trim()) {
                 res.writeHead(400, H);
                 res.end(JSON.stringify({ error: 'set your church’s name in the Steward console before connecting it to a relay' }));
                 return;
               }
-              const a = parsed.auth;
-              const sigOk = a && typeof a === 'object' && a.kind === 27235 && verifyEvent(a);
-              const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
-              const ownsKey = sigOk && a.pubkey === hex;   // the signer IS the church being registered
-              const uTag = sigOk && (a.tags.find(t => t[0] === 'u') || [])[1];
-              let uOk = false;
-              try { const uu = new URL(String(uTag)); uOk = /\/config\/?$/.test(uu.pathname) && uu.host === (req.headers.host || '').split(',')[0].trim(); } catch {}   // L1: bind the proof to THIS relay's host + path (not just any /config) — anti-replay across relays
-              if (!(sigOk && fresh && ownsKey && uOk)) { res.writeHead(401, H); res.end(JSON.stringify({ error: 'unauthorized: register with the admin token, or sign a fresh proof with this church key' })); return; }
             }
             const list = curChurches();
             const name = String(parsed.addChurch.name || '').slice(0, 80);
@@ -4033,8 +4148,14 @@ function serveStatic(req, res) {
             // without this an attacker who self-registered once could loop signed re-announces of the same key
             // and force a church.json rewrite + structure-doc rescan on each (Fable audit #1).
             let changed = false;
-            if (existing) { if (name && existing.name !== name) { existing.name = name; changed = true; } }
-            else { list.push({ npub: npubEncode(hex), name, by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); changed = true; }
+            // ON A LOCKED RELAY THE OPERATOR OWNS THE LABEL. Letting an already-registered church fall
+            // through the invite-only gate (so it stops being told "nothing you set up will save") also let
+            // NOTHING TO RENAME ANY MORE. This used to let a church change the label the operator saw —
+            // measured 2026-09-04, "St A" became "RENAMED BY CHURCH" under `by: "operator"` — and every
+            // differing re-announce drove a whole-corpus rehydrate (Fable audit #1). The relay no longer
+            // stores a church-supplied name at all, so a re-announce is now genuinely a no-op and the
+            // question of who may relabel a row does not arise.
+            if (!existing) { list.push({ npub: npubEncode(hex), by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); changed = true; }
             if (changed) writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
             return;
@@ -4060,7 +4181,7 @@ function serveStatic(req, res) {
             // it, and must not have its history deleted as a side effect of that intent.
             if (!parsed.removeChurch.confirm && !parsed.removeChurch.purge) {   // dry run
               res.writeHead(200, H);
-              res.end(JSON.stringify({ ok: true, dryRun: true, npub: npubEncode(hex), name: CHURCH_NAMES.get(hex) || '', wouldDelete: { events, blobs: blobs.length, bytes } }));
+              res.end(JSON.stringify({ ok: true, dryRun: true, npub: npubEncode(hex), name: churchPetName(hex), wouldDelete: { events, blobs: blobs.length, bytes } }));
               return;
             }
             // C4 again: never let a purge leave the relay with no churches, which would open it to the world.
@@ -4105,7 +4226,7 @@ function serveStatic(req, res) {
             const hex = toHexPub(String((c && c.npub) || '').trim());
             if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub: ' + String((c && c.npub) || '').slice(0, 24) })); return; }
             const prev = CHURCH_META.get(hex) || {};
-            clean.push({ npub: npubEncode(hex), name: String((c && c.name) || '').slice(0, 80),
+            clean.push({ npub: npubEncode(hex),
                          by: prev.by || 'operator', at: prev.at || Math.floor(Date.now() / 1000) });
           }
           // C4: an EMPTY list must mean "nobody may write", not "everybody may". `!CHURCH_PUBS.size` is the

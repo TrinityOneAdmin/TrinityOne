@@ -108,12 +108,20 @@ test('documents written before this shipped still open', () => {
   assert.deepEqual(memberRig('ab'.repeat(32), [])('ab'.repeat(32), legacy), EVENT, 'members lost the church history');
 });
 
-test('with no key yet the console writes cleartext rather than refusing', () => {
-  // Deliberate, and the ONLY place this project fails open: a church whose name key has not arrived must
-  // still be able to run its calendar, and unlike the chat send nothing here claims a protection it is not
-  // delivering. Refusing would trade a legible calendar for no calendar.
-  const wire = stewardRig([]).seal(EVENT);
-  assert.deepEqual(JSON.parse(wire), EVENT);
+test('with no key the console REFUSES rather than writing cleartext', () => {
+  // INVERTED 2026-09-05, and this test is the reason the defect survived five audits: the fail-open was
+  // PINNED HERE as intended behaviour, so every later reader took it for a decision already made.
+  //
+  // MEASURED the same day on relay/relay.sqlite: 25 of 25 calendar documents in the clear — 15 event:,
+  // 5 rota:, 5 service: — first written 22:58:17 with the church's namekey: envelope not published until
+  // 23:06:29, eight minutes later. One rota held {"name":"Josh Adeyemi","pub":"415640527d0d…"}: a real name
+  // bound to a real key, on disk, permanently. Nothing re-seals them.
+  //
+  // The old argument — "refusing would trade a legible calendar for no calendar" — was the one true thing in
+  // the old note, and it is answered by _sealChurchDocReady, which waits out a merely-LATE key (the normal
+  // case: it arrives seconds after the console authenticates) and only refuses when it never comes.
+  assert.equal(stewardRig([]).seal(EVENT), null,
+    'the console wrote a gathering in the clear rather than refusing — that is the defect, not a fallback');
 });
 
 test('a locked document is kept and marked, not dropped', () => {
@@ -126,7 +134,7 @@ test('a locked document is kept and marked, not dropped', () => {
 });
 
 test('all five calendar documents are sealed, not just the one that was measured', () => {
-  const sealed = (stripComments(STEW).match(/const content = _sealChurchDoc\(doc\);/g) || []).length;
+  const sealed = (stripComments(STEW).match(/const content = await _sealChurchDocReady\(doc\);/g) || []).length;
   assert.equal(sealed, 5,
     `${sealed} of the 5 calendar documents are sealed. event, service, room, booking and rota each carry the ` +
     'time or the place of a gathering; leaving any one of them readable leaks the same fact by another route');

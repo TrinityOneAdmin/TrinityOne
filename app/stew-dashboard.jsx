@@ -535,7 +535,13 @@ function KeyDistributor() {
     // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
     // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
     // suspect keys weeks after a reconciliation. AUDIT-2026-07-27.
-  }, [groups, members, stewardRoster, blockedList, unlockTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
+  // `church.name` IS A DEPENDENCY, added 2026-09-05 (audit of 7a45d4d, finding 3). This effect bails above on
+  // !church.name and is the ONLY thing that mints the church name key — but the name was not in the deps, so
+  // on a brand-new church the mount-time run bailed (no name yet), naming the church did not re-run it, and
+  // the key waited for some unrelated change to groups or members. That is the 8-minute gap measured on the
+  // relay between the first calendar document and the namekey: envelope, and post-fix it is 8 minutes of the
+  // calendar refusing to save rather than 8 minutes of writing in the clear.
+  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
@@ -698,7 +704,33 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   // default, so the console and the relay always agree about what the policy is. AUDIT-2026-07-28.
   const saveName = async () => {
     const n = name.trim();
-    if (n && n !== church.name) { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 })); setBusy(false); }
+    if (n && n !== church.name) {
+      setBusy(true);
+      // REGISTER THE CHURCH BEFORE PUBLISHING ANYTHING. A relay refuses every write for a church it does
+      // not know, and the console's OTHER self-registration (the effect below, keyed on `church.name`)
+      // waits for the name to come BACK from the relay — which it never can, because the write that would
+      // carry it is the one being refused. On a self-hosted Suite box, with no other relay to break the
+      // tie, that is a deadlock: the box never learns the church, and nothing the steward does in the
+      // whole wizard is stored. Measured on a clean box 2026-09-04 — no church.json, no selfreg record,
+      // and calling selfRegister by hand registered it immediately, so only the trigger was missing.
+      //
+      // This is the first moment a NAME exists, and a nameless self-registration is refused on purpose
+      // (gateway H4 — one box collected 37 anonymous rows), so this is the earliest correct moment.
+      // steward.src.js already documents this as the intent: "Registration now happens where the name
+      // exists; publishes wait for it." Owner's decision, 2026-09-04: a Suite box should auto-register.
+      //
+      // Safe to call unconditionally: selfRegister refuses outright when this console is acting as a
+      // delegated steward, so a delegate can never register their own key under the church's name.
+      //
+      // `createHere` is THE opt-in that makes the box serving this console a registration target. Owner's
+      // decision, 2026-09-04: a steward deliberately creating a church on this machine is the only moment
+      // the serving box is asked to hold a church — never the boot-time re-announces, which on a community
+      // box would plant an unsolicited row and turn "this box serves the console" into "this box holds the
+      // church". This is the only call site that passes it.
+      try { if (window.Steward.selfRegister) await Promise.resolve(window.Steward.selfRegister(n, { createHere: true })); } catch (e) {}
+      await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }));
+      setBusy(false);
+    }
     // AUDIT-2026-07-28 F10: ensureJoinPolicy, not setJoinPolicy. At this point in the wizard the relay may
     // not know this church exists yet, and it refuses the write — which was swallowed here, leaving the
     // church open-join. ensureJoinPolicy retries on registration and on the next console boot, and says so
@@ -716,21 +748,39 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   // member's send, for ever, silently). There are no members yet at this point, so the key seals to nobody
   // and the roster effect keys each person as they join — its "first sighting" skip records the empty set,
   // so the first real member counts as growth and triggers distribution.
+  const [groupErr, setGroupErr] = React.useState('');
   const saveGroups = async () => {
     const chosen = STARTERS.filter(s => picks.has(s.id));
-    if (chosen.length) {
-      setBusy(true);
+    if (!chosen.length) { next(); return; }   // deliberately skipped — nothing to publish
+    setBusy(true); setGroupErr('');
+    // COUNT THE FAILURES, like saveMeetings does two steps down. This awaited publishGroup and threw the
+    // answer away, then called next() unconditionally — so on 2026-09-04 a steward created three rooms on a
+    // console whose relay was refusing everything, was advanced to the next step, and ended with a church
+    // that had no rooms and no idea. Measured: relay.sqlite held nothing, localStorage held nothing, and the
+    // dashboard read "Groups 0". publishGroup is explicitly written to report this — it resolves null when
+    // no relay accepted and false-y on a PARTIAL write, under a comment saying "an error is recoverable,
+    // false reassurance is not". DROP THE ONES THAT LANDED: every publishGroup mints a fresh id, so
+    // retrying a partially-successful step would create a second copy of the rooms that worked.
+    const done = [];
+    let failed = 0;
+    try {
       for (const g of chosen) {
         const seal = encByDefaultWiz && g.kind === 'group';   // broadcast channels are the church's own voice
         const pub = await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub, ...(seal ? { encrypted: true } : {}) }));
-        if (seal && pub && pub.id && window.Steward.publishGroupKey) {
+        if (!pub) { failed++; continue; }
+        done.push(g.id);
+        if (seal && pub.id && window.Steward.publishGroupKey) {
           let r = null;
           try { r = await window.Steward.publishGroupKey(pub.id, []); } catch (e) { r = null; }
           if (r === null || r === false) { try { await window.Steward.publishGroup({ ...pub, encrypted: false }); } catch (e) {} }
         }
       }
-      setBusy(false);
-    }
+    } catch (e) { failed = chosen.length - done.length; }
+    finally { setBusy(false); }   // ALWAYS: `busy` disables Continue AND Back AND every other step's button
+    if (done.length) setPicks(p => { const n = new Set(p); done.forEach(id => n.delete(id)); return n; });
+    if (failed) { setGroupErr(failed === chosen.length
+      ? 'Couldn’t create your rooms — the relay didn’t accept them. Check you’re online and try again; your choices are still here.'
+      : `Created ${done.length} of ${chosen.length}. Try again to create the rest.`); return; }
     next();
   };
   // A TEAM WITH NO ROLES CANNOT HOLD A ROTA. This step took a name and published a group, and nothing else:
@@ -745,14 +795,21 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     const roles = hit ? String(hit.roles || '').split('\n') : ['Lead', 'Helper', 'Helper'];
     return roles.map(r => r.trim()).filter(Boolean);
   };
+  const [teamErr, setTeamErr] = React.useState('');
   const saveTeam = async () => {
     const t = teamName.trim();
-    if (t) {
-      setBusy(true);
-      const g = await Promise.resolve(window.Steward.publishGroup({ name: t, kind: 'team', sub: 'Serving team' }));
-      try { if (g && g.id && window.Steward.publishRoster) await Promise.resolve(window.Steward.publishRoster(g.id, { roles: seedRolesFor(t), people: [] })); } catch (e) {}
-      setBusy(false);
-    }
+    if (!t) { next(); return; }
+    setBusy(true); setTeamErr('');
+    // Same shape as saveGroups above, and the same fix: publishGroup's answer was discarded and the wizard
+    // advanced regardless, so a team the relay refused left the steward on the Rota page wondering where it
+    // went. The roster is a second write and is reported separately — a team with no roles cannot hold a rota.
+    let g = null;
+    try { g = await Promise.resolve(window.Steward.publishGroup({ name: t, kind: 'team', sub: 'Serving team' })); } catch (e) { g = null; }
+    if (!g) { setBusy(false); setTeamErr('Couldn’t create that team — the relay didn’t accept it. Check you’re online and try again; the name is still here.'); return; }
+    let rosterOk = true;
+    try { if (g.id && window.Steward.publishRoster) rosterOk = !!(await Promise.resolve(window.Steward.publishRoster(g.id, { roles: seedRolesFor(t), people: [] }))); } catch (e) { rosterOk = false; }
+    setBusy(false);
+    if (!rosterOk) { setTeamErr('The team was created, but its roles didn’t save — open it on the Rota page and add them, or nobody can be put on a Sunday.'); return; }
     next();
   };
   // Step 4 — the church's weekly rhythm. This step did not exist: the ONLY wizard that pre-filled Sunday
@@ -864,7 +921,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
               return (
                 <div key={pos} style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700, marginBottom: 4 }}>WORD #{pos + 1}</div>
-                  <input value={vw[i]} onChange={e => setVw(a => a.map((x, j) => (j === i ? e.target.value : x)))} autoComplete="off" spellCheck={false} autoCapitalize="none" style={{ ...fld, height: 42, fontWeight: 400, borderColor: ok ? 'var(--sage)' : 'var(--line)' }} />
+                  {/* NAMED. The caption above is a plain <div>, so this box announced as an unnamed edit
+                      field — three of them, on the one screen where a wrong answer loses the church key.
+                      Measured 2026-09-04: labels:0, aria-label:null, aria-labelledby:null, placeholder:"".
+                      The a11y sweep that fixed nine PIN fields (d5cd066) was scoped to type="password". */}
+                  <input value={vw[i]} onChange={e => setVw(a => a.map((x, j) => (j === i ? e.target.value : x)))} aria-label={'Word ' + (pos + 1) + ' of your recovery phrase'} autoComplete="off" spellCheck={false} autoCapitalize="none" style={{ ...fld, height: 42, fontWeight: 400, borderColor: ok ? 'var(--sage)' : 'var(--line)' }} />
                 </div>
               );
             })}
@@ -948,6 +1009,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
             so plainly: "No groups yet — create your church's first chat room." */}
         <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip setup</button>
         <div style={{ flex: 1 }} />
+        {groupErr ? <div role="alert" style={{ flex: '1 1 100%', order: -1, fontSize: 13, color: 'var(--clay-ink)', lineHeight: 1.45, marginBottom: 8 }}>{groupErr}</div> : null}
         <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -985,6 +1047,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={() => setStep(4)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
+        {teamErr ? <div role="alert" style={{ flex: '1 1 100%', order: -1, fontSize: 13, color: 'var(--clay-ink)', lineHeight: 1.45, marginBottom: 8 }}>{teamErr}</div> : null}
         <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>FIRST TEAM (OPTIONAL)</div>
@@ -2483,8 +2546,10 @@ function EditGroupMembersModal({ group, onClose }) {
         const removed = before.filter(pk => !newM.includes(pk));
         if (!added.length && !removed.length) return;
         const people = teamPeopleForAllowlist(r.people, added, removed, members);
+        // Do not write the care team from a roster that did not save: publishCareTeamFor would then name a
+        // team the relay has no roster for, and careAdmin() resolves through ROSTER_PEOPLE.
         Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
-          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .then((ok) => { if (ok != null) return publishCareTeamFor(group.id, careTeamId, people); })
           .catch(() => {});
       } catch (e) {}
     };
@@ -2600,6 +2665,16 @@ function GroupChatModal({ group, onClose }) {
       });
     }).catch(() => showMod('Couldn’t remove that message — the relay could not be reached.'));
   };
+  // Put a removed message back from the row itself, so the reverse action outlives the 9-second banner.
+  // Routes through the same showMod as doRemove, and reports a refusal rather than painting it restored:
+  // unhideMessage returns falsy when no relay accepted, and a message that is still hidden on the relay
+  // that polices this church is still hidden for every member.
+  const doUnremove = (m) => {
+    setMenuFor('');
+    Promise.resolve(window.Steward.unhideMessage(group.id, m.id))
+      .then((u) => showMod(u ? 'Message put back' : 'Couldn’t put it back — the relay didn’t accept it, so it is still removed.'))
+      .catch(() => showMod('Couldn’t put it back — the relay could not be reached, so it is still removed.'));
+  };
   const msgText = (m) => {   // render polls gracefully (members vote in the member app); avoids showing raw JSON
     if (m.kind === 'poll') { try { const p = JSON.parse(m.text); return '📊 ' + (p.question || 'Poll') + ' — ' + (p.options || []).join(' · '); } catch { return '📊 Poll'; } }
     return (m.kind === 'prayer' ? '🙏 ' : '') + m.text;
@@ -2610,12 +2685,20 @@ function GroupChatModal({ group, onClose }) {
   const [composeEvt, setComposeEvt] = React.useState(false);
   const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '' });
   const [evtBusy, setEvtBusy] = React.useState(false);
+  const [evtErr, setEvtErr] = React.useState('');
   const [evDetail, setEvDetail] = React.useState(null);   // a tapped event → full details
   const postEvent = async () => {
     if (!evt.title.trim() || !evt.date) return;
-    setEvtBusy(true);
-    try { await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) {}
-    setEvtBusy(false); setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
+    setEvtBusy(true); setEvtErr('');
+    // publishEvent returns null when the church's name key never arrived — the event is NOT saved and
+    // deliberately not written in the clear. This used to close the composer and wipe the fields regardless,
+    // so the steward's typing went and no event existed. (Audit of 7a45d4d, finding 2: this call site was
+    // named in that commit's caller list and then not changed.)
+    let r = null;
+    try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
+    setEvtBusy(false);
+    if (r == null) { setEvtErr('Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }
+    setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
   };
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
@@ -2656,6 +2739,7 @@ function GroupChatModal({ group, onClose }) {
             <input value={evt.where} onChange={e => setEvt(v => ({ ...v, where: e.target.value }))} placeholder="Where (optional)" style={{ boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             <div style={{ display: 'flex', gap: 7 }}>
               <button onClick={postEvent} disabled={!evt.title.trim() || !evt.date || evtBusy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '8px', fontSize: 13, opacity: (evt.title.trim() && evt.date && !evtBusy) ? 1 : 0.5 }}>{evtBusy ? 'Posting…' : 'Post event'}</button>
+              {evtErr ? <div role="alert" style={{ flexBasis: '100%', marginTop: 8, fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)' }}>{evtErr}</div> : null}
               <button onClick={() => setComposeEvt(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }}>Cancel</button>
             </div>
           </div>
@@ -2674,7 +2758,19 @@ function GroupChatModal({ group, onClose }) {
         ) : null}
         <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
-          {msgs.map(m => (
+          {msgs.map(m => (m.removed ? (
+            /* A REMOVED MESSAGE STAYS REACHABLE TO THE STEWARD WHO REMOVED IT. Removal is reversible —
+               it publishes a `hidden:` doc and the message itself is never deleted — but the only way
+               back was an Undo on a banner that clears after 9 seconds, and unhideMessage had no other
+               caller, so pausing to think meant losing the message for good. The text is NOT shown: this
+               says a message was removed and offers to put it back, it does not reprint what was said.
+               Members never see this row — the member app filters removed messages out entirely. */
+            <div key={m.id} style={{ alignSelf: 'center', maxWidth: '86%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
+              <Icon name="trash" size={13} color="var(--ink-3)" />
+              <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Message from {nameFor(m.by) || 'a member'} removed</span>
+              <button onClick={() => doUnremove(m)} aria-label={'Put back the removed message from ' + (nameFor(m.by) || 'a member')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', padding: '4px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Put back</button>
+            </div>
+          ) : (
             <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
               {!m.mine ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, paddingLeft: 2 }}>
                 <SkBadge initials={initialsFor(m.by)} av={avFor(m.by)} pubkey={m.by} size={20} radius={7} accent="var(--sage)" />
@@ -2683,7 +2779,9 @@ function GroupChatModal({ group, onClose }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
                 <div style={{ position: 'relative', flexShrink: 0 }}>
-                  <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
+                  {/* NAMED, and it is the ONLY route to Remove and Pin. Measured 2026-09-04: 21px wide,
+                      empty innerText, aria-label null — a screen reader had nothing to announce. */}
+                  <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" aria-label={'Moderate the message from ' + (nameFor(m.by) || 'a member')} aria-expanded={menuFor === m.id} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
                   {menuFor === m.id ? (
                     <div style={{ position: 'absolute', top: 22, [m.mine ? 'left' : 'right']: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <button onClick={() => (pin && pin.msgId === m.id) ? doUnpin() : doPin(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="#8a6717" /> {(pin && pin.msgId === m.id) ? 'Unpin message' : 'Pin message'}</button>
@@ -2707,7 +2805,7 @@ function GroupChatModal({ group, onClose }) {
                 </div>
               ) : null}
             </div>
-          ))}
+          )))}
         </div>
         <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderTop: '1px solid var(--line)' }}>
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />

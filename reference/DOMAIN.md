@@ -105,6 +105,69 @@ and which of your instincts about it are wrong.
   Consequence for planning: make the Suite the advertised route, and the awkward case shrinks to churches who
   deliberately run a bare relay — a smaller, more technical group who can reasonably take one extra step.
 
+- **A Suite box must register the church with itself, automatically.** `ESTABLISHED 2026-09-04.` Owner, after
+  being shown that creating a church on a self-hosting box silently points the whole congregation at the
+  hosted pool instead: *"I think a suite box should auto register, and being asked if it's an 'always on'
+  machine is already part of that setup process."*
+
+  So self-hosting must need **no extra step**: if this computer is the church's box, creating the church on
+  it registers it there, and the console must not have to be told twice.
+
+  **Two things for whoever builds it.** First, registration is deliberately deferred until the church has a
+  NAME — a nameless self-registration is refused on purpose (`gateway.mjs` H4: one box collected 37
+  anonymous rows), so "auto-register" means *at the moment the name is saved*, not at key creation.
+  Second, `INFERRED and NOT YET FOUND IN THE CODE`: the owner refers to an existing "is this an always-on
+  machine?" question in setup. The Suite home asks *"What should this computer do for your church?"*
+  (`relay-app/home.html:39`) with "Run your church" / "Manage a relay", and "Run your church" already says
+  *"This computer keeps your church's records at the same time"* — but there is no literal always-on
+  question that I could find. Check with the owner before treating one as existing.
+
+- **A relay must not hold a church's NAME. It gets a petname derived from the key instead.**
+  `DECIDED 2026-09-04.` Owner, when shown that a church can rename itself on somebody else's relay and asked
+  who should be allowed to: *"Tbh, I don't even think church names on relays should be that easily
+  identifiable.....why have them at all? Do we need them?"*
+
+  **Measured the same day, and it is a hole in the entry below this one.** `relay/church.json` stores church
+  names in PLAINTEXT next to the npub — `{"npub":"npub1uumze…","name":"St Editha's, Marchwood","by":"operator"}`.
+  The seizure measurement below covered member names and kind-0 profiles and concluded "a seizure yields the
+  social graph in public keys, never in names". It never looked at `church.json`. On a box hosting several
+  congregations that file is a readable list of exactly which ones.
+
+  **The name does no protocol work.** Nothing gates, routes or renders on it; `CHURCH_NAMES` is read only by
+  the operator's own admin endpoints (`/config`, `/stats`, the removeChurch dry run — all admin-gated) and as
+  a push notification title. (The push case is not the exposure: `webpush` encrypts the payload to the
+  subscriber, so the push provider sees ciphertext.) The disk is the exposure.
+
+  **It exists for one reason**, recorded in the H4 comment in `scripts/gateway.mjs`: an operator faced with
+  37 rows of bare npubs cannot tell which church to remove, and removing the wrong one de-provisions a real
+  congregation. That need is real and must survive.
+
+  **CORRECTED 2026-09-05, before any code was written, and it changes what this is worth.** The church's
+  name is ALSO in cleartext on the relay in its **kind-0 profile** — measured on the live box:
+  `St Editha's, Marchwood` and `SIM St Aidan's`, readable, in `relay.sqlite`. That is public BY DESIGN and
+  the entry below says so: someone joining must see the church's name before they join, so the profile
+  cannot be sealed without breaking the join flow.
+
+  So **removing the name from `church.json` does NOT stop a seized relay yielding church names**, and it must
+  not be described as if it does. What it does buy is smaller and still real: one fewer plaintext copy, the
+  operator's list stops being a compact index of exactly which congregations a box serves, and — the part
+  that started this — there is no longer a church-supplied name on the relay for a church to rename, so the
+  "who may relabel a row" question disappears instead of being answered.
+
+  **The real exposure is the kind-0 profile and it is structural, not a bug.** A relay inherently knows the
+  names of the churches it serves, because members and joiners must read them. Closing that would mean
+  gating church profiles behind membership and finding another way to show a joiner which church a code
+  belongs to. That is a product decision, not a fix, and it is NOT taken here.
+
+  **The decision: a petname derived from the church's npub** — the wordlist at `scripts/gateway.mjs:928`
+  (`olive, cedar, dove, anchor, lamp, vine, shepherd, harbor…`) already does this for a relay's own memorable
+  name. Applied to a church key it gives the operator a stable, distinguishable label ("Quiet Harbor 42")
+  that needs nothing from the church and means nothing to whoever holds the disk.
+
+  Consequences for whoever builds it: the relay must stop STORING a church-supplied name, not merely stop
+  displaying it — and per the backwards-compatibility rule, add the derived label rather than repurposing the
+  `name` field, then stop writing `name`. Existing rows already carry real names and want clearing.
+
 - **What a seized relay actually yields — MEASURED 2026-09-02, do not re-derive by guessing.**
   Read off a live relay's sqlite, not reasoned from the code. **Encrypted at rest:** group messages (kind 1),
   DMs (kind 4), journal, notes, prayer, bookmarks, highlights, `clearance:`, `guardnotice:`. **Names are
@@ -114,6 +177,29 @@ and which of your instincts about it are wrong.
   **Cleartext on disk:** `member:<key>` (this key belongs to this church, and when it joined), **`minors:`
   (which keys are children)**, `roster:` (care structure), `group:`, `rsvp:`, `careavail:`/`unavail:`,
   `joinpolicy:`, `event:`, `financekey:`.
+  **CORRECTED 2026-09-05 — THE "NEVER IN NAMES" CLAIM IS FALSE, AND WAS WHEN IT WAS WRITTEN.** A whole-system
+  review found it and I re-measured it myself on the live box, read out of `relay/relay.sqlite`:
+
+      trinityone/roster:    {"people":[{"name":"Margaret Hoyle","pub":"44a2d349…"}]}
+      trinityone/stewards:  {"names":{"9501ad2f…":"Ruth Bexley"}}
+
+  Four real names on that disk, each paired with its public key. `trinityone/voice:` and
+  `trinityone/stewardreq:` carry a name the same way (none present on this box yet). The 2026-09-02
+  measurement below looked at member `name:` docs and kind-0 profiles — which ARE sealed — and did not look
+  at the roster or the steward list.
+
+  **Why this is the worst version of the mistake.** Combined with `minors:` (which keys are children) and
+  `guardians:` (which key is each child's guardian), both cleartext and both already listed below, a seized
+  disk gives: the care team and the stewards BY NAME with their keys, which members are children, and which
+  named adult is responsible for each of them. Those are precisely the people a compelled authority asks
+  about, and pseudonymity was the entire protection.
+
+  NOT FIXED as of 2026-09-05 — recorded so nobody plans on the old claim. The repo half-knew: the roster
+  case is a TODO in `scripts/church-docs-are-sealed.test.mjs` ("sealing this blinds the relay's careAdmin()
+  grant"); the `stewards.names` case is on no list. Sealing roster names means moving the relay-facing pub
+  list to its own field first, so it is a two-document change with a migration, not a one-liner.
+
+  The original claim, kept so the correction is legible:
   So a seizure yields **the social graph in public keys, never in names** — the shape of a congregation, its
   groups, its rota, and which members are children, but not who they are absent a separate link (a seized
   phone, network correlation — see the deanon red-team note that pubkey↔IP is open and inherent).
@@ -287,3 +373,60 @@ non-custodial by design and switched off (`givingOn = false`). Anything Lightnin
 including the wallet backup path that currently has no button — is out of scope until the owner says
 otherwise. Do not "tidy" it, delete it, or fix its copy.
 
+
+---
+
+## Owner decisions, 2026-09-05
+
+**A member's PIN does not have to be 8 digits on a phone. Six is enough.** The 8-digit rule exists to resist
+*offline* guessing, and offline guessing needs a copy of the encrypted seed. On Android it does not have one:
+`setPin` (`src/identity.src.js:594`) puts the ciphertext in the hardware-backed store and leaves only a
+non-secret marker in `localStorage`, so an attacker must first run code as the app on that device. The
+defence that actually applies there is the typing lockout, not the digit count. On web/desktop there is no
+secure store and the whole blob sits in `localStorage` (`:606`) — a million tries is minutes — so the
+stricter rule is earned there and only there.
+
+So the rule follows **where the blob lands**, not which screen the member came through:
+
+| Surface | Rule |
+|---|---|
+| Member app on a phone | 6+ characters, all digits fine |
+| Member app on web/desktop | 8+ if all digits, or nudge toward a passphrase |
+| Steward console | Stricter regardless — it guards the church key, the highest-value target in the system |
+
+The defect this replaces was never the number: the setup wizard (`app/identity.jsx:855`) and the settings
+sheet (`app/identity-extras.jsx:292-293`) disagreed, so which rule a member got depended on which door they
+came through — and the screen with the most reach had the weaker one.
+
+**Provisional until the pilot.** The owner expects to revisit this after the pilot phase of September 2026.
+Treat it as a decision to work to, not a permanent constant — but do not tighten the phone rule without
+asking, and do not "fix" it back to 8 as an inconsistency.
+
+*Why this is a domain entry and not a code comment:* a longer PIN entered several times a day is the kind of
+friction that makes people turn protection off altogether, which is strictly worse than a 6-digit PIN behind
+a hardware store. That trade is a judgement about how members behave, and it is not derivable from the code.
+
+## A person marked as a child is never a valid guardian
+
+Owner's decision, 2026-09-06, asked because the code enforced it in one place and not the other.
+
+**The rule: a guardian link must never exist between two people the same church has marked as children.**
+Not when the link is made, and not afterwards — marking someone as a young person must also end any
+guardian role they already held.
+
+*Why it was asked:* the picker already refused to offer a child as a guardian ("Only adults (not other
+children) can be linked"), but nothing re-checked a link that already existed. Mark someone as a young
+person after they were made a guardian and the app's own stated rule became quietly false for that record.
+It is not cosmetic: the relay matches a guardian link in EITHER direction and a match short-circuits the
+safeguarding refusal, so a child wrongly left as another child's guardian opens a direct-message route
+between two children that the gate exists to prevent. Found in sim round 3, verified in `gateway.mjs:1411`
+and `:1470`.
+
+*The boundary, stated so nobody re-asks:* the gate is the mechanism, who is marked as a child is the
+policy. A church wanting a 17-year-old sibling to collect a younger one does that by not marking them as
+a child. TrinityOne does not decide who is a child; it decides what follows from that mark.
+
+*Known future need, deliberately NOT built now:* teenagers helping in children's ministry are a real case,
+and after the pilot we may know whether they want a **subset** of permissions — helping, without the
+guardian rights that carry private-message access. Recorded in BACKLOG.md. Until that exists the answer is
+the simple one above: a child is never a guardian.

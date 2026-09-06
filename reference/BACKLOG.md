@@ -3,6 +3,85 @@
 (Care-partners roadmap idea moved to `reference/SPINE.md` → Phase 2, beside "Church-adjacent charities".)
 
 
+## Idea, owner 2026-09-05 — a door-only way to run kids check-in
+
+**A note for later. Not decided, not scoped, not started.**
+
+Raised after watching kids check-in driven end to end for the first time (round 2026-09-05). Two shapes were
+floated: **a standalone safeguarding app** for check-in/checkout, or **a narrower set of steward permissions**
+covering only safeguarding work.
+
+### What already exists, so the note is not re-proposing it
+`STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content']` (`src/steward.src.js:352`), and the
+Check-in tab is already gated on the `safeguarding` capability — `stewCapState('safeguarding').allowed`
+(`app/stew-dashboard.jsx`). Capability KEYS are per-capability, so granting Finance no longer hands over the
+children's register. That part is done.
+
+### The gap the idea is actually pointing at
+The person on the door on a Sunday morning is usually a volunteer, not a steward. Today, to check a child in
+they need:
+- the **steward console app** installed on their device (it is a separate APK from the member app), and
+- the **safeguarding capability**, which is the whole children's register — every child, every guardian
+  link, every clearance — not "check the children in front of me in and out today".
+
+So the smallest thing a door volunteer can be given is considerably more than the job needs. On the pilot's
+threat model that matters: the register is one of the highest-value things in the system, and it would sit on
+a volunteer's phone in a church hall.
+
+### Things to think about when this is picked up
+- Check-in records are already sealed to their OWN key (`checkinkey`), separate from the church name key —
+  verified this round: a child's name, her guardian and her pickup code are all ciphertext on the relay. So
+  the cryptographic separation for a door-only role largely exists already.
+- Checkout needs the pickup code and the child's row; it does not need the guardian list, the clearance list,
+  or any other child's record.
+- A standalone app is a third APK to sign, ship and keep current — see the two-APK note; that cost is real.
+- A narrower capability (e.g. `checkin` distinct from `safeguarding`) is cheaper, but "add, never repurpose"
+  applies: an older console meeting a new capability name must degrade safely.
+- Whatever shape it takes, the door device is the one most likely to be lost or shared. Worth deciding what
+  it holds when it is.
+
+### Do not act on this without the owner
+Explicitly parked. Recorded so it is not lost.
+
+## Decided NOT to do — relay tag index (2026-09-05)
+
+Finding 4 of the re-verification audit was "the relay has no tag index, so queries degrade as a church
+accumulates history". True, deliberate, and **the decision is to leave it alone.** Recorded here so the next
+round does not rediscover it and "fix" it.
+
+**What the relay actually does.** `scripts/event-store.mjs` indexes `(kind, created_at)`, `(pubkey,
+created_at)`, `(church, created_at)`, `dtag` and `repl`. `#d` and `#church` are columns. Any OTHER `#tag`
+filter streams the indexed set newest-first, `JSON.parse`s each row and post-matches, capped at 200,000 rows
+per filter with a per-connection allowance of 300,000 rows/s authed and 25,000 anon.
+
+**It was tried and reverted** (`540fc9e` added it, `0c3c88b` reverted, 2026-07-14). The index ordered by
+`e.created_at` rather than the tag table's, so `LIMIT` never early-terminated and it materialised every
+match — measured *worse* than the scan at ~123 ms per filter. And compound single-letter filters (`#p` +
+`#t`, which is the shape this product actually sends) limited on one tag and post-filtered the other,
+**silently truncating results**. Two reviewers and `EXPLAIN QUERY PLAN` at the time. Do not re-apply that
+design.
+
+**Measured 2026-09-05** against the real store at 200,000 synthetic rows: one doc by `#d` 0.3 ms; a quiet
+group `#t`+`#g` limit 50, 9.4 ms; a group with NO messages (scans to the cap) 807 ms; 32 crafted no-match
+filters against the authed budget, 1.2 s. The live relay holds **265 events**. `MAX_EVENTS` is 20,000 per
+church for ephemeral kinds, so three pilot churches sharing a box is ≤ 60k chat rows — a no-match scan of
+roughly 240 ms of single-thread time. Today it is microseconds.
+
+Note the finding's framing was backwards: the cost is **relay CPU**, not bytes on the wire, so it is not
+worse on a thin pipe.
+
+**Revisit when either is true:**
+1. A box exceeds ~50,000 rows of a single kind. Then build `event_tags(tag, val, created_at DESC,
+   event_id)` as a covering index, and the test must assert the query PLAN via `EXPLAIN` at 200k rows **with
+   a compound `#p`+`#t` filter in the fixture** — the two things the reverted attempt lacked.
+2. Sooner and cheaper, if relay CPU shows up at all: **scope member REQs by `church`** on the relay for
+   authed members. The column and its index already exist, and it bounds every scan to one church's rows.
+   Exempt the console, which authenticates as the church key and reads across churches for networks. Every
+   REQ path is a caller, including the post-AUTH replay.
+
+Also still open from the 2026-07-14 network sims and unchanged by this: A3 tag-scan truncation and E1
+crafted-REQ DoS, both scale-gated.
+
 ## Watch (likely already resolved)
 - **Care card hiding / blinking out on the member APK.** Earlier the Today "Practical care" card seemed to
   hide under visibility = "whole church" and vanish/reappear on reload. Both trace to the same root —
@@ -212,3 +291,17 @@ it. `scripts/the-welcome-choices-are-evenly-spaced.test.mjs` renders the real sc
 spaces itself again, if they stop sharing a style, or if one of them is quietly promoted to look like the
 primary action (they are deliberately equal weight). Measured 1/3 against the old spacing.
 
+
+## Teen helpers in children's ministry — a subset of permissions
+
+Owner, 2026-09-06, alongside the decision that a person marked as a child is never a valid guardian
+(see DOMAIN.md).
+
+Teenagers do help run children's work, and today the app has only two positions: marked as a child (no
+guardian rights, and a protected DM boundary) or not. The owner's note: **after the pilot we may know
+whether teen helpers need a subset of permissions** — able to help, without the guardian rights that
+carry private-message access to a child.
+
+Deliberately not designed yet. The pilot is what tells us whether real churches need it and in what
+shape; guessing now would ship policy where the product's rule is to ship mechanism. Do not build this
+without the owner asking for it.

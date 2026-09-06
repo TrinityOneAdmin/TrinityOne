@@ -22,6 +22,11 @@ function welcome() {
   const { React, draw } = miniReact();
   const globals = {
     React, console, setTimeout, clearTimeout, setInterval, clearInterval,
+    // IdentityOnboarding calls useDialogA11y (app/ui.jsx) so the first-run wizard is a real modal dialog —
+    // added 2026-09-05 with finding 6. In the app both are classic scripts and ui.jsx loads first, so it is a
+    // plain global; here it has to be supplied or the component throws before rendering anything. Its own
+    // behaviour is app/ui.jsx's business and is covered by the-first-run-wizard-is-a-real-dialog.test.mjs.
+    useDialogA11y: () => {},
     Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
     document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, createElement: () => ({ style: {} }) },
     navigator: { userAgent: '', clipboard: null },

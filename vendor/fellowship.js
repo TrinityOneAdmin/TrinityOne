@@ -7049,6 +7049,9 @@
   }
   var _relayAuthedAt = 0;
   var _relayAuthOkAt = 0;
+  var _relayAuth = /* @__PURE__ */ new Map();
+  var _relaySkewSec = 0;
+  var _skewMeasuredAt = 0;
   function _noteAuthAccepted(url) {
     Promise.resolve().then(() => {
       let r = null;
@@ -7058,11 +7061,61 @@
       }
       const p = r && r.authPromise;
       if (!p || typeof p.then !== "function") return;
-      p.then(() => {
-        _relayAuthOkAt = Date.now();
-      }, () => {
-      });
+      const key = normalizeURL2(url);
+      p.then(
+        () => {
+          _relayAuthOkAt = Date.now();
+          _relayAuth.set(key, { okAt: Date.now(), failedAt: 0, reason: "" });
+        },
+        (err) => {
+          _relayAuth.set(key, { okAt: 0, failedAt: Date.now(), reason: String(err && err.message || err || "refused").slice(0, 120) });
+        }
+      );
     });
+  }
+  function authState() {
+    let okAt = 0, failedAt = 0, reason = "";
+    for (const v of _relayAuth.values()) {
+      if (v.okAt > okAt) okAt = v.okAt;
+      if (v.failedAt > failedAt) {
+        failedAt = v.failedAt;
+        reason = v.reason;
+      }
+    }
+    return { okAt, failedAt, reason, failed: !!failedAt && !okAt, skewSec: _relaySkewSec, skewAt: _skewMeasuredAt };
+  }
+  var CLOCK_FAULT_SEC = 300;
+  function clockLooksWrong() {
+    return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC;
+  }
+  async function measureRelaySkew(preferUrl) {
+    const cands = [];
+    const add2 = (u) => {
+      const v = String(u || "");
+      if (v && !cands.includes(v)) cands.push(v);
+    };
+    add2(preferUrl);
+    for (const [k, v] of _relayAuth) if (v.failedAt && !v.okAt) add2(k);
+    try {
+      (churchRelays() || []).forEach(add2);
+    } catch (e) {
+    }
+    (window.Fellowship.relays || []).forEach(add2);
+    for (const url of cands) {
+      const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
+      if (!/^https?:\/\/.+/i.test(base)) continue;
+      try {
+        const r = await fetch(base + "/status", { cache: "no-store", signal: AbortSignal.timeout(6e3) });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (!j || typeof j.now !== "number") continue;
+        _relaySkewSec = Math.round(Date.now() / 1e3 - j.now);
+        _skewMeasuredAt = Date.now();
+        return _relaySkewSec;
+      } catch (e) {
+      }
+    }
+    return 0;
   }
   var _sgSelf = { cp: "", me: "", isMinor: false, known: false };
   var SG_ASSUME_KEY = "trinityone.sgassume.";
@@ -7353,8 +7406,8 @@
   function _absorbVoice(cp, d, e) {
     if (d !== VOICE_D + cp || e.pubkey !== cp) return false;
     try {
-      const c = JSON.parse(e.content);
-      _churchVoices.set(cp, { self: c.self || null, public: c.public || {} });
+      const c = _openChurchDoc(cp, e.content);
+      if (c) _churchVoices.set(cp, { self: c.self || null, public: c.public || {} });
     } catch {
     }
     _fireTrust();
@@ -7544,6 +7597,14 @@
     // admitted member until they restart the app.
     "trinityone/careavail:"
   ];
+  function _replayReseats(cp, hub) {
+    try {
+      for (const e of hub.buf.values()) {
+        if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
+      }
+    } catch (err) {
+    }
+  }
   function _replayChurchCalendar(cp, hub) {
     if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
     if (!hub.handlers || !hub.handlers.size) return;
@@ -7643,7 +7704,15 @@
       for (const p of (JSON.parse(e.content) || {}).pairs || []) {
         if (!p || !p.old || !p.new || p.old === p.new) continue;
         s.add(String(p.old).toLowerCase());
-        if (pub && String(p.new).toLowerCase() === pub) mine = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+        if (pub && String(p.new).toLowerCase() === pub) {
+          let nm = "";
+          if (typeof p.n === "string" && p.n) {
+            const o = _openChurchDoc(cp, JSON.stringify({ e: p.n }));
+            if (o && o.name) nm = o.name;
+          }
+          if (!nm) nm = p.name || "";
+          mine = String(nm).replace(/\s+/g, " ").trim().slice(0, 40);
+        }
       }
     } catch (x) {
     }
@@ -7790,12 +7859,13 @@
       if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
     }
     for (const e of hub.buf.values()) {
-      if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
-    }
-    for (const e of hub.buf.values()) {
       if (_dtag(e) === "trinityone/namekey:" + cp) _ingestNameKey(cp, e);
     }
     _replayChurchCalendar(cp, hub);
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === VOICE_D + cp) _absorbVoice(cp, _dtag(e), e);
+    }
+    _replayReseats(cp, hub);
     for (const e of hub.buf.values()) {
       const d0 = _dtag(e);
       if (d0 === "trinityone/name:" + cp) {
@@ -7834,6 +7904,10 @@
             if (_dtag(e2) === "trinityone/name:" + cp) _openSealedName(cp, e2.pubkey, e2.content);
           }
           _replayChurchCalendar(cp, hub);
+          _replayReseats(cp, hub);
+          for (const e2 of hub.buf.values()) {
+            if (_dtag(e2) === VOICE_D + cp) _absorbVoice(cp, _dtag(e2), e2);
+          }
           try {
             window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
           } catch (x) {
@@ -7858,6 +7932,7 @@
               _ingestNameKey(cp, e2);
               _replaySealedNames(cp, hub);
               _replayChurchCalendar(cp, hub);
+              _replayReseats(cp, hub);
             }
           }
           for (const h of [...hub.handlers]) {
@@ -8237,6 +8312,7 @@
           _ingestNameKey(hub.cp, e);
           _replaySealedNames(hub.cp, hub);
           _replayChurchCalendar(hub.cp, hub);
+          _replayReseats(hub.cp, hub);
         }
       }
     }
@@ -8258,6 +8334,10 @@
           break;
         }
       }
+    }
+    try {
+      _consumeJoinIntents();
+    } catch (e) {
     }
   }
   var _reconnectGuard = false;
@@ -8283,6 +8363,7 @@
     _authRefetchArmed = false;
     _relayAuthedAt = 0;
     _relayAuthOkAt = 0;
+    _relayAuth.clear();
     for (const hub of _docsHubs.values()) {
       hub.familyRebuilt = false;
       const c = hub.closer;
@@ -8359,6 +8440,108 @@
   }
   _outboxLoad();
   var _flushing = false;
+  var JOINSENT_KEY = "trinityone.joinsent";
+  var _joinSent = {};
+  function _joinSentLoad() {
+    try {
+      _joinSent = JSON.parse(localStorage.getItem(JOINSENT_KEY) || "{}");
+    } catch (e) {
+      _joinSent = {};
+    }
+    if (!_joinSent || typeof _joinSent !== "object" || Array.isArray(_joinSent)) _joinSent = {};
+  }
+  function _joinSentSave() {
+    try {
+      localStorage.setItem(JOINSENT_KEY, JSON.stringify(_joinSent));
+    } catch (e) {
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-join-state"));
+    } catch (e) {
+    }
+  }
+  function _markJoinSent(cp, evt) {
+    _joinSent[cp] = { id: evt.id, at: evt.created_at, pub: evt.pubkey };
+    _joinSentSave();
+  }
+  function _clearJoinSent(cp) {
+    if (_joinSent[cp]) {
+      delete _joinSent[cp];
+      _joinSentSave();
+    }
+  }
+  function _joinSentFor(cp) {
+    const s = _joinSent[cp];
+    return !!(s && s.pub && pub && s.pub === pub);
+  }
+  _joinSentLoad();
+  var JOININTENT_KEY = "trinityone.joinintent";
+  var _joinIntents = [];
+  function _joinIntentLoad() {
+    try {
+      _joinIntents = JSON.parse(localStorage.getItem(JOININTENT_KEY) || "[]");
+    } catch (e) {
+      _joinIntents = [];
+    }
+    if (!Array.isArray(_joinIntents)) _joinIntents = [];
+    _joinIntents = _joinIntents.filter((i3) => i3 && typeof i3.cp === "string" && typeof i3.forPub === "string");
+  }
+  function _joinIntentSave() {
+    try {
+      localStorage.setItem(JOININTENT_KEY, JSON.stringify(_joinIntents));
+    } catch (e) {
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-join-state"));
+    } catch (e) {
+    }
+  }
+  function _lockedPubHex() {
+    try {
+      const n = window.TrinityIdentity && window.TrinityIdentity.lockedNpub && window.TrinityIdentity.lockedNpub();
+      return n && toPub(n) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+  function _queueJoinIntent(cp) {
+    const forPub = _lockedPubHex();
+    if (!forPub) return false;
+    if (!_joinIntents.some((i3) => i3.cp === cp && i3.forPub === forPub)) {
+      _joinIntents.push({ cp, forPub, at: Math.floor(Date.now() / 1e3) });
+      _joinIntentSave();
+    }
+    return true;
+  }
+  function _dropJoinIntent(cp) {
+    const n = _joinIntents.length;
+    _joinIntents = _joinIntents.filter((i3) => i3.cp !== cp);
+    if (_joinIntents.length !== n) _joinIntentSave();
+  }
+  function _consumeJoinIntents() {
+    if (!sk || !pub || !_joinIntents.length) return;
+    const mine = _joinIntents.filter((i3) => i3.forPub === pub), theirs = _joinIntents.filter((i3) => i3.forPub !== pub);
+    _joinIntents = [];
+    _joinIntentSave();
+    for (const i3 of theirs) {
+      try {
+        console.warn("[fellowship] refusing a queued join made for a different identity", i3.cp.slice(0, 8), i3.forPub.slice(0, 8));
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-join-intent-refused", { detail: { cp: i3.cp, forPub: i3.forPub } }));
+      } catch (e) {
+      }
+    }
+    for (const i3 of mine) {
+      try {
+        Promise.resolve(window.Fellowship.announceMembership(i3.cp)).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
+  }
+  _joinIntentLoad();
   var PUBLISH_TIMEOUT_MS = 12e3;
   var _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
   var _wedge = /* @__PURE__ */ new Map();
@@ -8551,6 +8734,16 @@
   }
   window.Fellowship = {
     relays: loadRelays(),
+    // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
+    // would otherwise tell a member they are "waiting to be let in" can ask instead whether we were ever able
+    // to check. See authState(); measureRelaySkew() is best-effort and returns 0 when it cannot tell.
+    authState,
+    measureRelaySkew,
+    clockLooksWrong,
+    // Force fresh, authenticated sockets. Already used on the keyless->keyed transition; exposed because it is
+    // ALSO the only way out of a refused AUTH — nostr-tools caches relay.authPromise, so nothing re-signs on a
+    // socket that has already been refused, and correcting the clock alone changes nothing.
+    reconnectAll,
     // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
     // CONSUMED BY THE C4 GATE, which is what makes it more than a diagnostic: the gate proves every candidate
     // address through this before that address can receive anything. Still exposed so a device session can ask
@@ -8976,7 +9169,9 @@
         "trinityone.activeChurch",
         "trinityone.outbox",
         "trinityone.outbox.failed",
-        "trinityone.nostr.mnemonic.enc"
+        "trinityone.nostr.mnemonic.enc",
+        "trinityone.joinsent",
+        "trinityone.joinintent"
       ]);
       const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
       const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && (FORCE_WIPE.has(k) || !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k)));
@@ -9027,10 +9222,12 @@
         try {
           await window.Fellowship.ready;
         } catch {
-          return;
         }
       }
-      if (!sk) return;
+      if (!sk) {
+        _queueJoinIntent(cp);
+        return;
+      }
       const evt = finalizeEvent2({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
@@ -9046,6 +9243,7 @@
       try {
         await _publishAny(window.Fellowship.relays, evt);
         ok = true;
+        _markJoinSent(cp, evt);
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _outboxSave();
       } catch (e) {
@@ -9058,7 +9256,14 @@
     async leaveMembership(npubOrHex) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(npubOrHex);
-      if (!cp || !sk) return;
+      if (!cp) return;
+      if (!sk) {
+        if (!_joinSent[cp] && _joinIntents.some((i3) => i3.cp === cp)) {
+          _dropJoinIntent(cp);
+          return { local: true };
+        }
+        return;
+      }
       const evt = finalizeEvent2({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
@@ -9070,6 +9275,8 @@
       } catch (e) {
         return null;
       }
+      _clearJoinSent(cp);
+      _dropJoinIntent(cp);
       return evt;
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)
@@ -9627,6 +9834,19 @@
     joinFailed(npubOrHex) {
       const cp = toPub(npubOrHex);
       return !!(cp && _outboxFailed.some((o) => o && o.join === cp));
+    },
+    // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
+    // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
+    // a join that was never attempted looks like. See JOINSENT_KEY.
+    joinSent(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _joinSentFor(cp));
+    },
+    // …and whether a join was asked for while this phone could not sign — a promise waiting on the PIN. Not the
+    // same as joinQueued: nothing is in the outbox yet, and nothing will be until the right key arrives.
+    joinIntent(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _joinIntents.some((i3) => i3.cp === cp));
     },
     // Try a refused join again, at the member's request — the announce is the only thing that makes them
     // visible, so "we stopped trying" must come with a way to start again.
@@ -10493,7 +10713,7 @@
       const me = window.Fellowship.myPubkey || pub;
       const emit = () => {
         const isAdmitted = !!(me && admitted.includes(me));
-        onState({ approval, isAdmitted, isPending: approval && !isAdmitted });
+        onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {

@@ -1074,6 +1074,9 @@ let _relayAuthedAt = 0;
 // "the relay agreed" asks for it explicitly. Reset with it in reconnectAll: a new connection has proved
 // nothing yet.
 let _relayAuthOkAt = 0;
+const _relayAuth = new Map();    // url -> { okAt, failedAt, reason } — per relay, see authState()
+let _relaySkewSec = 0;           // this device's clock minus the relay's, seconds; 0 = unknown/never measured
+let _skewMeasuredAt = 0;
 // Observe the relay's OK for our AUTH without waiting on it here. nostr-tools resolves `relay.authPromise`
 // from that OK — and it can only resolve AFTER this signer returns the event, so awaiting it inside the
 // signer would deadlock the auth we are trying to complete. Hand it to a microtask instead.
@@ -1084,8 +1087,85 @@ function _noteAuthAccepted(url) {
     try { r = pool.relays.get(normalizeURL(url)); } catch (e) {}
     const p = r && r.authPromise;
     if (!p || typeof p.then !== 'function') return;
-    p.then(() => { _relayAuthOkAt = Date.now(); }, () => {});   // a refusal leaves it where it was: unproved
+    // RECORD THE REFUSAL, do not just decline to record the acceptance. This used to be `() => {}`, so a
+    // rejected AUTH was indistinguishable from one still in flight — and the consequence was measured on a
+    // phone on 2026-09-04: with the clock 15 minutes out the relay refuses the AUTH (its window is 600s),
+    // the socket STAYS OPEN, `relaysHealthy()` keeps reporting true, and every gated read returns empty. The
+    // member is then shown "Waiting to be let in" though the church admitted them weeks ago.
+    //
+    // It does not self-heal, and that is the half nobody had measured: nostr-tools caches `relay.authPromise`,
+    // so once it has settled the client NEVER SIGNS AGAIN on that socket. Correcting the clock changes
+    // nothing; new subscriptions ride the same poisoned connection. I soaked it for eleven minutes at zero
+    // drift across eleven polls and it never recovered; only closing the socket did.
+    // PER RELAY. These were two module scalars, so with one relay accepting and another refusing the answer
+    // depended on which settled LAST — a member of two churches, banned by one, saw the ban's relay decide
+    // for both, or not, by arrival order. Keyed by url, and `failed` below means "no relay will have us".
+    const key = normalizeURL(url);
+    p.then(() => { _relayAuthOkAt = Date.now(); _relayAuth.set(key, { okAt: Date.now(), failedAt: 0, reason: '' }); },
+           (err) => { _relayAuth.set(key, { okAt: 0, failedAt: Date.now(), reason: String((err && err.message) || err || 'refused').slice(0, 120) }); });
   });
+}
+// WHAT THE RELAY ACTUALLY SAID, so a screen can stop guessing. `failed` means the relay REFUSED our proof —
+// not that we are offline (the socket is up) and not that the church has not admitted us (it may have).
+// Deliberately NOT wired into the four gates that read `_relayAuthedAt`: they fail closed, and a read gate
+// that wrongly refuses is this codebase's worst failure class. This is for telling a person what happened.
+function authState() {
+  let okAt = 0, failedAt = 0, reason = '';
+  for (const v of _relayAuth.values()) {
+    if (v.okAt > okAt) okAt = v.okAt;
+    if (v.failedAt > failedAt) { failedAt = v.failedAt; reason = v.reason; }
+  }
+  // `failed` = SOMETHING refused us and NOTHING has accepted us. One refusing relay beside a working one is
+  // not a failure the member should be told about, and must never tear down the connection that works.
+  return { okAt, failedAt, reason, failed: !!failedAt && !okAt, skewSec: _relaySkewSec, skewAt: _skewMeasuredAt };
+}
+// THE RELAY CANNOT TELL US WHY, so we have to find out. gateway.mjs:5382 makes "your clock is outside the
+// window" and "this church has BLOCKED you" one condition with one else-branch — byte-identical refusals,
+// socket left open in both cases. Proved against the real gateway 2026-09-05.
+//
+// That matters because the two want opposite handling. A wrong clock is fixed by re-challenging, and stops
+// as soon as the clock is right. A ban is permanent, and re-challenging it every ninety seconds turns every
+// blocked phone into a standing load on the relay that removed them — while telling them their clock is
+// wrong and that their posts will send once it reconnects, neither of which is true.
+//
+// The measured skew is the only honest discriminator we have. Half the relay's window (600s) is the
+// threshold: comfortably outside normal drift, comfortably inside "this clock cannot authenticate".
+const CLOCK_FAULT_SEC = 300;
+function clockLooksWrong() { return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC; }
+// Best-effort measurement of THIS DEVICE's clock against the relay's, so the app can name the cause instead
+// of implying one. The HTTP `Date` header is not CORS-safelisted, so a phone cannot read it cross-origin;
+// the relay reports its own seconds in /status instead. An older relay has no `now`, and then we say nothing
+// about clocks rather than guessing. Never throws, never blocks anything.
+async function measureRelaySkew(preferUrl) {
+  // NOT relays[0]. That is the first relay this phone ever added — whichever church it belonged to — and a
+  // box there could hand back any `now` it liked, which was then rendered to the member as fact. Prefer the
+  // relay that actually refused us, then the church's own gated set, and only then the raw list.
+  // TRY EVERY CANDIDATE, not just the first. The first version asked ONE relay and gave up if it could not
+  // answer — and `now` is new, so ANY relay on an older build returns nothing. Measured on the Oppo
+  // 2026-09-05: the skew stayed 0 for three minutes with the clock a quarter-hour out, because the relay the
+  // resolution happened to pick was on build 7a292ca. Passing the url by hand returned 900 immediately.
+  // The consequence was not cosmetic: no measurement means clockLooksWrong() stays false, which means the
+  // recovery never fires — the fix silently did nothing for the case it exists for.
+  const cands = [];
+  const add = (u) => { const v = String(u || ''); if (v && !cands.includes(v)) cands.push(v); };
+  add(preferUrl);
+  for (const [k, v] of _relayAuth) if (v.failedAt && !v.okAt) add(k);   // the ones that actually refused us
+  try { (churchRelays() || []).forEach(add); } catch (e) {}
+  (window.Fellowship.relays || []).forEach(add);
+  for (const url of cands) {
+    const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
+    if (!/^https?:\/\/.+/i.test(base)) continue;
+    try {
+      const r = await fetch(base + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (!j || typeof j.now !== 'number') continue;   // that relay is too old to say — ask the next
+      _relaySkewSec = Math.round(Date.now() / 1000 - j.now);
+      _skewMeasuredAt = Date.now();
+      return _relaySkewSec;
+    } catch (e) { /* unreachable or not JSON — try the next */ }
+  }
+  return 0;   // nobody could tell us: say nothing about clocks rather than guess
 }
 let _sgSelf = { cp: '', me: '', isMinor: false, known: false };
 // ONE PHONE IS NOT ONE PERSON. The remembered safeguarding answer is keyed by church AND member, and the
@@ -1442,7 +1522,14 @@ function _absorbRoster(cp, d, e) {
 // check — only the church key may say who speaks for the church.
 function _absorbVoice(cp, d, e) {
   if (d !== VOICE_D + cp || e.pubkey !== cp) return false;
-  try { const c = JSON.parse(e.content); _churchVoices.set(cp, { self: c.self || null, public: c.public || {} }); } catch {}
+  // SEALED SINCE 2026-09-05 under the church name key, which every member holds. _openChurchDoc returns the
+  // inner object for a sealed document and the object itself for a cleartext one, so documents written
+  // before that date keep working unchanged. A document we cannot open yet leaves the by-line absent, and an
+  // absent by-line is handled everywhere already — the member is named the ordinary way.
+  try {
+    const c = _openChurchDoc(cp, e.content);
+    if (c) _churchVoices.set(cp, { self: c.self || null, public: c.public || {} });
+  } catch {}
   _fireTrust();
   return true;
 }
@@ -1697,6 +1784,21 @@ const CHURCH_SEALED_PFXS = ['trinityone/event:', 'trinityone/service:', 'trinity
 // The names path already solved this (_replaySealedNames), and so did the care key, which replays its needs
 // through onevent for exactly this reason. The calendar was simply never given the same treatment, because
 // the name key is thought of as "the key for names" — it seals the calendar too.
+// …AND THE SAME FOR RE-SEATS, which was missed when the vouched name was sealed (2026-09-05).
+//
+// _noteReseat opens the sealed name ONCE, when the document arrives, and returns with nothing if the church
+// name key is not held yet. On the phone that matters most — a brand-new install, because the whole re-seat
+// route exists for somebody who lost their 12 words — the reseat document ALWAYS arrives before the key: the
+// console publishes the vouch before setAdmitted, and the new key only becomes a name-key recipient once the
+// console's enrolment effect re-runs after admission echoes back. So the member sat as "Anonymous …2222" for
+// ever, on the one path whose entire purpose is giving them their name back, and which a child's guardian
+// link hangs off (AUDIT-2026-07-26 CRITICAL 3).
+//
+// `reseat:` is deliberately NOT in CHURCH_SEALED_PFXS: those are addressable documents replayed through
+// _subChurchAddr, and this one is handled by _noteReseat directly. Hence its own replay.
+function _replayReseats(cp, hub) {
+  try { for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); } } catch (err) {}
+}
 function _replayChurchCalendar(cp, hub) {
   if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
   // Nothing registered yet — the hub-hydration path runs before any feature subscribes, and _onChurchDocs
@@ -1773,7 +1875,16 @@ function _noteReseat(cp, e) {
     for (const p of ((JSON.parse(e.content) || {}).pairs || [])) {
       if (!p || !p.old || !p.new || p.old === p.new) continue;
       s.add(String(p.old).toLowerCase());
-      if (pub && String(p.new).toLowerCase() === pub) mine = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      // `n` is the sealed name (2026-09-05); `name` is the cleartext form still on relays. Prefer the sealed
+      // one, fall back to the plain one. If neither opens, `mine` stays empty and the member keeps whatever
+      // name they already had — the re-seat itself (the key change) still applies, because that is what the
+      // relay follows and it was never sealed.
+      if (pub && String(p.new).toLowerCase() === pub) {
+        let nm = '';
+        if (typeof p.n === 'string' && p.n) { const o = _openChurchDoc(cp, JSON.stringify({ e: p.n })); if (o && o.name) nm = o.name; }
+        if (!nm) nm = p.name || '';
+        mine = String(nm).replace(/\s+/g, ' ').trim().slice(0, 40);
+      }
     }
   } catch (x) {}
   _reseatOld.set(cp, s);
@@ -1834,6 +1945,10 @@ function _noteAdmitted(cp, content) {
     // exactly why it looked fixed. Reset the cursor so this one refetch is a FULL sync.
     const hub = _docsHubs.get(cp);
     if (hub) { hub.since = 0; hub.fullAt = 0; }
+    // _admittedDone was claimed above, BEFORE this call, so it fires exactly once — which meant that on a
+    // PIN-locked boot (the hub is open, this doc can land, there is no key) the announce returned nothing and
+    // was never retried. Now a keyless announce records a join intent bound to the locked identity and the
+    // unlock keeps it (JOININTENT_KEY); the one-shot claim is safe to leave as it is. 2026-09-06.
     try { window.Fellowship.announceMembership(cp); } catch (e) {}
     try { refetchChurchDocs(); } catch (e) {}
     // AND PUSH OUR OWN DATA UP. accept() refuses a member's personal documents — journal, prayers, notes,
@@ -1901,8 +2016,13 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) { const dt = _dtag(e); _absorbRoster(cp, dt, e); _absorbVoice(cp, dt, e); }   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
-  for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
-  for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); } _replayChurchCalendar(cp, hub);   // the key FIRST (no handlers yet, so the replay is a no-op — it holds the invariant)
+
+  for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); } _replayChurchCalendar(cp, hub);
+  // Voice is sealed too, and _absorbVoice ran above this line — before the key existed. Re-absorb now.
+  for (const e of hub.buf.values()) { if (_dtag(e) === VOICE_D + cp) _absorbVoice(cp, _dtag(e), e); }   // the key FIRST (no handlers yet, so the replay is a no-op — it holds the invariant)
+  // …THEN the re-seats. This pair used to run the other way round, so on a cold boot the vouched name was
+  // opened before the key that opens it and was lost — the comment above already said "the key FIRST".
+  _replayReseats(cp, hub);   // re-seats recorded while the app was closed — the same helper every other key-arrival path uses
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) { _recoverOwnName(cp, e); _openSealedName(cp, e.pubkey, e.content); } }
   return hub;
 }
@@ -1936,6 +2056,14 @@ function _docsHubOpen(hub) {
         // …and the CALENDAR, which is sealed under this same key. Without this a newly admitted member's
         // events/services/rotas stay padlocked until they restart the app — see _replayChurchCalendar.
         _replayChurchCalendar(cp, hub);
+        // …AND THE RE-SEATS. This is the path the reseat replay was written for and the one it missed: a new
+        // phone gets the vouched name doc first, then the console re-publishes the envelope with the new key
+        // as a recipient and it lands HERE, live. The first fix wired the cold boot and two replay paths and
+        // not this one, so the name came back only on the next restart. Four call sites, three wired.
+        _replayReseats(cp, hub);
+        // …and the by-line, sealed under the same key (192da7a). Cold boot absorbs voice BEFORE the key, so
+        // without this a church's "Rev. — Vicar" by-line stays absent for the whole session.
+        for (const e2 of hub.buf.values()) { if (_dtag(e2) === VOICE_D + cp) _absorbVoice(cp, _dtag(e2), e2); }
         try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {}
       } else if (d === 'trinityone/name:' + cp) {
         _recoverOwnName(cp, e);   // our own doc carries the copy that restores us after a locked boot
@@ -1950,7 +2078,7 @@ function _docsHubOpen(hub) {
         // The name key needs this too, and for exactly the L7 reason: _ingestNameKey requires the author to
         // be the church or a CURRENT roster steward, so an envelope that arrives before the roster does is
         // dropped and never retried. AUDIT-2026-07-27.
-        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); _replayChurchCalendar(cp, hub); } }
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); _replayChurchCalendar(cp, hub); _replayReseats(cp, hub); } }
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { _featureFailed('steward-roster refresh', d, err); } } return;
       }
       if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);   // just approved? re-announce + re-fetch once
@@ -2241,7 +2369,7 @@ async function deriveFromIdentity() {
   // a persisted since-cursor, and a name key is published once at church setup, so it does not re-arrive. On any
   // launch where the hub cache was warm and the signing key derived a moment late, the ring stayed empty for the
   // whole session and every member showed as anonymous. AUDIT-2026-07-27.
-  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); else if (d === NAMEKEY_D + hub.cp) { _ingestNameKey(hub.cp, e); _replaySealedNames(hub.cp, hub); _replayChurchCalendar(hub.cp, hub); } } }
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); else if (d === NAMEKEY_D + hub.cp) { _ingestNameKey(hub.cp, e); _replaySealedNames(hub.cp, hub); _replayChurchCalendar(hub.cp, hub); _replayReseats(hub.cp, hub); } } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}
@@ -2253,6 +2381,9 @@ async function deriveFromIdentity() {
   // Debounced: unlock fires BOTH 'trinity-identity' and 'trinity-identity-lock', and on native (async key read)
   // the two can each capture wasKeyless=true before either sets sk — guard so we reconnect at most once per window.
   if (wasKeyless && sk && !_reconnectGuard) { for (const hub of _docsHubs.values()) { if (hub.closer) { _reconnectGuard = true; setTimeout(() => { _reconnectGuard = false; }, 1500); try { reconnectAll(); } catch (e) {} break; } } }
+  // …and keep the promise a locked phone made: any join asked for without a key, for THIS identity, is
+  // announced now (a mismatched one is refused here, never carried on). See JOININTENT_KEY.
+  try { _consumeJoinIntents(); } catch (e) {}
 }
 let _reconnectGuard = false;
 async function init() {
@@ -2285,6 +2416,11 @@ function reconnectAll() {
   _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
   _relayAuthedAt = 0;          // F12: and it has proved nothing yet, so no gated read is authoritative until it does
   _relayAuthOkAt = 0;          // …and neither has any relay agreed on this connection
+  _relayAuth.clear();          // a fresh socket has neither been accepted nor refused
+  // The SKEW is deliberately kept. It measures this DEVICE's clock against the relay's, and reconnecting
+  // does not change either — clearing it made the card flicker between "your clock is about 15 minutes
+  // ahead" and the generic wording on every retry, roughly every ninety seconds. Measured on the Oppo,
+  // 2026-09-05. It is re-measured on the next retry anyway, so a genuinely stale value cannot persist.
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
   for (const hub of _docsHubs.values()) { hub.familyRebuilt = false; const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }   // F11: re-arm the family rebuild for the new socket
   // Shared subscriptions ride the same sockets, so they die with them. Drop the registry too, or the next
@@ -2338,6 +2474,94 @@ function _outboxSave() {
 }
 _outboxLoad();
 let _flushing = false;
+// A JOIN THAT LANDED IS A FACT, NOT THE ABSENCE OF A QUEUE ENTRY. Device pass 2026-09-06 (AUTH-DIAGNOSIS.md):
+// a PIN-locked phone opened a follow link, announceMembership returned before queueing anything (no key),
+// and the pending screen — which read "sent" from `!joinQueued && !joinFailed` — told the person their
+// request had been sent. Nothing had. An empty queue is what you get when a join landed AND when a join
+// was never attempted; the two were indistinguishable, and the screen chose the reassuring one.
+//
+// So "sent" is recorded POSITIVELY, at the one place it is known: when the relay accepted the announce.
+// Keyed by church INSIDE the value, under an id-free key name, deliberately — the locked-boot wipe (the
+// community-cache clear, below) removes any trinityone.* key whose NAME carries a church or member id
+// (hb:<npub> goes on every lock, which is why hb cannot serve as this evidence on a PIN phone), and the
+// value names no more than followedChurches, which is KEPT, already does. The stamp carries the pubkey that sent it, and reads false for any other
+// identity on this device — a restore or a fresh identity must not inherit "sent" from the previous one.
+const JOINSENT_KEY = 'trinityone.joinsent';   // { [churchPub]: { id, at, pub } }
+let _joinSent = {};
+function _joinSentLoad() {
+  try { _joinSent = JSON.parse(localStorage.getItem(JOINSENT_KEY) || '{}'); } catch (e) { _joinSent = {}; }
+  if (!_joinSent || typeof _joinSent !== 'object' || Array.isArray(_joinSent)) _joinSent = {};
+}
+function _joinSentSave() {
+  try { localStorage.setItem(JOINSENT_KEY, JSON.stringify(_joinSent)); } catch (e) {}
+  // the screens compute their copy at render; tell the app something it renders from has changed
+  try { window.dispatchEvent(new CustomEvent('trinity-join-state')); } catch (e) {}
+}
+function _markJoinSent(cp, evt) { _joinSent[cp] = { id: evt.id, at: evt.created_at, pub: evt.pubkey }; _joinSentSave(); }
+function _clearJoinSent(cp) { if (_joinSent[cp]) { delete _joinSent[cp]; _joinSentSave(); } }
+// Has THIS identity's announce for this church been accepted by a relay? No other evidence is admitted:
+// the app's 12-hour heartbeat mark (`trinityone.hb:<npub>`) looked usable, but it is keyed by church, not
+// by identity, so a restore would inherit "sent" from the previous person — the hole this stamp exists to
+// close. A member pending from before this stamp existed reads "not sent yet" until their next announce
+// (the heartbeat, or Check again) lands, which is honest and costs one tap.
+function _joinSentFor(cp) {
+  const s = _joinSent[cp];
+  return !!(s && s.pub && pub && s.pub === pub);
+}
+_joinSentLoad();
+// A JOIN ASKED FOR WITH NO KEY IS AN INTENT, NOT AN EVENT — and it does not go in the outbox. The outbox
+// holds finalized, signed events; nine readers dereference `o.evt.id`. A locked phone cannot sign, so what it
+// can record is only "this person wants to join this church", and that lives here, beside the outbox.
+//
+// BOUND TO AN IDENTITY AT QUEUE TIME. TrinityIdentity.lockedNpub() answers who this device's locked identity
+// is without the PIN (the encrypted blob carries its own owner). The intent records that pubkey as `forPub`,
+// and _consumeJoinIntents acts on it ONLY when the key that arrives is that pubkey. Without this, a join
+// queued under one identity would be signed by whoever unlocked next — a restore, a re-seat, a fresh
+// identity — which is wrong in a way nobody on either end would notice.
+//
+// Consumed in deriveFromIdentity's keyed branch: the intent calls announceMembership again, which now has a
+// key and takes the ordinary queue-first path, so from there on it is a signed outbox entry like any other.
+// Id-free key name, like joinsent, for the same reason; the value names the church followedChurches already
+// names and the pubkey the locked blob already carries.
+const JOININTENT_KEY = 'trinityone.joinintent';   // [{ cp, forPub, at }]
+let _joinIntents = [];
+function _joinIntentLoad() {
+  try { _joinIntents = JSON.parse(localStorage.getItem(JOININTENT_KEY) || '[]'); } catch (e) { _joinIntents = []; }
+  if (!Array.isArray(_joinIntents)) _joinIntents = [];
+  _joinIntents = _joinIntents.filter(i => i && typeof i.cp === 'string' && typeof i.forPub === 'string');
+}
+function _joinIntentSave() {
+  try { localStorage.setItem(JOININTENT_KEY, JSON.stringify(_joinIntents)); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('trinity-join-state')); } catch (e) {}
+}
+// who this device's locked identity is, as hex — '' when there is no locked identity to promise for
+function _lockedPubHex() {
+  try { const n = window.TrinityIdentity && window.TrinityIdentity.lockedNpub && window.TrinityIdentity.lockedNpub(); return (n && toPub(n)) || ''; } catch (e) { return ''; }
+}
+function _queueJoinIntent(cp) {
+  const forPub = _lockedPubHex();
+  if (!forPub) return false;   // no identity on this device can ever sign it: nothing to promise
+  if (!_joinIntents.some(i => i.cp === cp && i.forPub === forPub)) { _joinIntents.push({ cp, forPub, at: Math.floor(Date.now() / 1000) }); _joinIntentSave(); }
+  return true;
+}
+function _dropJoinIntent(cp) {
+  const n = _joinIntents.length;
+  _joinIntents = _joinIntents.filter(i => i.cp !== cp);
+  if (_joinIntents.length !== n) _joinIntentSave();
+}
+// The key has arrived. Act on the intents that were made for THIS identity; refuse — and drop — every other.
+// Cleared before acting either way: a refused intent must never be carried forward to the next key.
+function _consumeJoinIntents() {
+  if (!sk || !pub || !_joinIntents.length) return;
+  const mine = _joinIntents.filter(i => i.forPub === pub), theirs = _joinIntents.filter(i => i.forPub !== pub);
+  _joinIntents = []; _joinIntentSave();
+  for (const i of theirs) {
+    try { console.warn('[fellowship] refusing a queued join made for a different identity', i.cp.slice(0, 8), i.forPub.slice(0, 8)); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent('trinity-join-intent-refused', { detail: { cp: i.cp, forPub: i.forPub } })); } catch (e) {}
+  }
+  for (const i of mine) { try { Promise.resolve(window.Fellowship.announceMembership(i.cp)).catch(() => {}); } catch (e) {} }
+}
+_joinIntentLoad();
 // One attempt at one relay set, bounded in time. Offline publishes do NOT fail fast — a socket that never
 // opens leaves Promise.any pending indefinitely — so without this the composer would sit on "sending" for
 // minutes and a flush would never finish. Verified on-device in airplane mode.
@@ -2582,6 +2806,14 @@ if (typeof window !== 'undefined') {
 
 window.Fellowship = {
   relays: loadRelays(),
+  // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
+  // would otherwise tell a member they are "waiting to be let in" can ask instead whether we were ever able
+  // to check. See authState(); measureRelaySkew() is best-effort and returns 0 when it cannot tell.
+  authState, measureRelaySkew, clockLooksWrong,
+  // Force fresh, authenticated sockets. Already used on the keyless->keyed transition; exposed because it is
+  // ALSO the only way out of a refused AUTH — nostr-tools caches relay.authPromise, so nothing re-signs on a
+  // socket that has already been refused, and correcting the clock alone changes nothing.
+  reconnectAll,
   // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
   // CONSUMED BY THE C4 GATE, which is what makes it more than a diagnostic: the gate proves every candidate
   // address through this before that address can receive anything. Still exposed so a device session can ask
@@ -2881,8 +3113,17 @@ window.Fellowship = {
     // them is data loss, not hygiene. mydata/notes/journal/highlights: the member's OWN writing, not the
     // church's. The Bible, reader and settings caches keep the offline reader working, which is the whole
     // point of the lock screen.
+    // joinsent: the fact that a relay accepted this identity's join. Wiping it would make every locked boot
+    // tell a pending member their request was never sent. Its key names nobody; its value names only the
+    // church followedChurches (kept) already names, plus this device's own pubkey. joinintent: a join asked
+    // for while locked, bound to the locked identity — it exists precisely to survive this boot, and wiping
+    // it here is the bug it fixes. Both as literals, not JOINSENT_KEY/JOININTENT_KEY: two tests lift this
+    // function alone into a scope of their own. And these notes sit ABOVE the literal, not inside it:
+    // esbuild keeps comments inside an array literal, and name-key-integrity slices a fixed window of the
+    // bundle from this function's first mention — prose inside the Set pushed `_k0Seen.clear()` out of it.
     const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
-      'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc']);
+      'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc',
+      'trinityone.joinsent', 'trinityone.joinintent']);
     // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
     // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
     // no forensic gain.
@@ -2940,8 +3181,13 @@ window.Fellowship = {
   // This makes the member's pseudonymous npub visible as a member of this church.
   async announceMembership(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return;
-    if (!sk) { try { await window.Fellowship.ready; } catch { return; } }
-    if (!sk) return;
+    if (!sk) { try { await window.Fellowship.ready; } catch { /* fall through: still keyless */ } }
+    // NO KEY: RECORD THE INTENT, RETURN NOTHING. This used to be a bare `return`, before the queue below —
+    // so a PIN-locked phone that opened a follow link queued nothing, sent nothing, retried nothing, and its
+    // screen said "sent" (device pass 2026-09-06). The intent is bound to the locked identity and consumed
+    // when its key arrives (see JOININTENT_KEY). The return stays falsy on purpose: the heartbeat stamps its
+    // 12-hour mark only on a truthy result, and an intent is not a landed announce.
+    if (!sk) { _queueJoinIntent(cp); return; }
     const evt = finalizeEvent({
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
@@ -2973,6 +3219,7 @@ window.Fellowship = {
     try {
       await _publishAny(window.Fellowship.relays, evt);
       ok = true;
+      _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
       // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
       // does exactly this the moment its publish resolves; this function did not, so the entry sat in the
       // outbox for ever after a publish that WORKED. joinQueued() reads that queue, so the pending screen
@@ -2988,7 +3235,13 @@ window.Fellowship = {
   // have posted). Wired for when an unfollow action exists.
   async leaveMembership(npubOrHex) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(npubOrHex); if (!cp || !sk) return;
+    const cp = toPub(npubOrHex); if (!cp) return;
+    if (!sk) {
+      // Locked: nothing can be tombstoned. But if all this device ever held for this church was an unsent
+      // intent, there is nothing at the church to leave — drop the promise and let the unfollow go through.
+      if (!_joinSent[cp] && _joinIntents.some(i => i.cp === cp)) { _dropJoinIntent(cp); return { local: true }; }
+      return;
+    }
     const evt = finalizeEvent({
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
@@ -2997,6 +3250,8 @@ window.Fellowship = {
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
+    _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
+    _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
     return evt;
   },
 
@@ -3601,6 +3856,13 @@ window.Fellowship = {
   // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
   // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
   joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp)); },
+  // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
+  // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
+  // a join that was never attempted looks like. See JOINSENT_KEY.
+  joinSent(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _joinSentFor(cp)); },
+  // …and whether a join was asked for while this phone could not sign — a promise waiting on the PIN. Not the
+  // same as joinQueued: nothing is in the outbox yet, and nothing will be until the right key arrives.
+  joinIntent(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _joinIntents.some(i => i.cp === cp)); },
   // Try a refused join again, at the member's request — the announce is the only thing that makes them
   // visible, so "we stopped trying" must come with a way to start again.
   //
@@ -4294,7 +4556,12 @@ window.Fellowship = {
     if (!pubk) { onState({ approval: false, isAdmitted: true, isPending: false }); return () => {}; }
     let approval = false, admitted = [];
     const me = window.Fellowship.myPubkey || pub;
-    const emit = () => { const isAdmitted = !!(me && admitted.includes(me)); onState({ approval, isAdmitted, isPending: approval && !isAdmitted }); };
+    // CARRY WHETHER WE WERE ABLE TO ASK. `admitted` is a GATED read: if the relay refused our NIP-42 proof it
+    // comes back empty, which is indistinguishable from "the church has not admitted you". The screen that
+    // renders this then tells an admitted member their request is still waiting. Emit the raw signal and let
+    // the app decide what to say — this file must not own that copy.
+    const emit = () => { const isAdmitted = !!(me && admitted.includes(me));
+      onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed }); };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
         if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)

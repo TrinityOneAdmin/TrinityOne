@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody, assertOrder } from './test-slice.mjs';
 
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 const wizard = (() => {
@@ -62,12 +63,17 @@ test('a new church requires approval to join', () => {
   // told about, and at this point in the wizard it has not. The wizard swallowed the refusal and advanced, so
   // the church was created open-join anyway. The one-shot is replaced by ensureJoinPolicy, which converges:
   // see scripts/join-policy.test.mjs, which drives it against a relay that already hosts a congregation.
-  const at = wizard.indexOf('const saveName');
-  const fn = wizard.slice(at, at + 900);
+  // fnBody, not a fixed width. This was `slice(at, at + 900)` and saveName grew past it on 2026-09-04
+  // (it now registers the church with the relay before publishing), so the window stopped covering
+  // ensureJoinPolicy and this test reported an open-join church that was never open. scripts/test-windows
+  // caught it and said what to use instead; a bigger number would only defer the same failure.
+  const fn = fnBody(wizard, 'const saveName = async () => {', 'saveName');
   assert.match(fn, /ensureJoinPolicy\(\)/, 'church setup no longer gates joins, so a new church is open to anyone holding the code');
   assert.doesNotMatch(fn, /setJoinPolicy\(true\)/,
     'the one-shot is back — it is refused by any relay that already hosts a church, and the refusal is swallowed here');
-  const policyAt = fn.indexOf('ensureJoinPolicy');
-  const nextAt = fn.indexOf('next()');
-  assert.ok(policyAt < nextAt, 'the policy must be published before the wizard moves on');
+  // assertOrder, not indexOf: the plain search matched `ensureJoinPolicy` inside the AUDIT-2026-07-28
+  // comment above the code (offset 1744 vs the real call at 2100), so the ordering was satisfied by prose
+  // and would have stayed green with the call moved or deleted. Comments can satisfy assertions — that is
+  // what this helper exists for, and this file imports it now. Raised by the audit of 2026-09-04.
+  assertOrder(fn, 'ensureJoinPolicy', 'next()', 'the policy must be published before the wizard moves on');
 });

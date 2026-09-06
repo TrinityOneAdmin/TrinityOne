@@ -502,7 +502,11 @@ function CareRequests({ ctx }) {
     // else" on the form, and they can always open their own request, so the flag is readable here.
     try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' && !(String(r.from || '').toLowerCase() === myPub && r.forSelf !== false))), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
-  }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub]);
+    // …and on ctx.connTick. Without it a socket that dropped and returned left this list frozen: the console's
+    // twin showed a care request as still needing "Set up help" while the need made from it already existed
+    // (measured 2026-09-04), and a care admin reading that sets the same help up twice. screens-chat.jsx
+    // carries the same dep for the same reason.
+  }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub, ctx.connTick]);
   if (!(isCareAdmin || isCleared) || !reqs.length) return null;
   // WHICH OF THESE CAME FROM A YOUNG PERSON. A care admin is served the church's list of children and can
   // simply look. A cleared adult who is NOT a care admin is not served that list — and does not need it: the
@@ -813,7 +817,7 @@ function AskForHelp({ ctx, linkOnly }) {
     let unsub = null;
     try { unsub = window.Fellowship.subscribeCareRequests(list => setMine((list || []).filter(r => (r.from || '').toLowerCase() === myPub)), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
-  }, [ctx.church && ctx.church.npub, myPub]);
+  }, [ctx.church && ctx.church.npub, myPub, ctx.connTick]);   // re-subscribe after a reconnect — see the note above
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>
@@ -1559,7 +1563,7 @@ function TodayScreen({ ctx }) {
               </React.Fragment>
             );
           })()}
-          <button onClick={ctx.toggleDark} style={{
+          <button onClick={ctx.toggleDark} aria-label={ctx.dark ? 'Switch to light mode' : 'Switch to dark mode'} style={{
             width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
             background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1693,11 +1697,37 @@ function TodayScreen({ ctx }) {
           "sent", and "you don't need to do anything else" is the opposite of the truth for it — retrying is the
           only thing that can help. Rather than restate that here and drift, this banner stays quiet for the
           failed and queued cases and points at the page that handles them properly. */}
-      {ctx.joinState && ctx.joinState.isPending && !ctx.joinState.removed && !ctx.joinFailed && !ctx.joinQueued ? (
+      {/* A FOURTH GUARD: we must have been ABLE to ask. `isPending` is `approval && !isAdmitted`, and the
+          admitted list is a GATED read — if the relay refused our NIP-42 proof it comes back EMPTY, which is
+          identical to "not admitted yet". Measured on a phone 2026-09-04: with the clock 15 minutes out, a
+          member the church admitted weeks earlier was told her request had been sent and a steward would let
+          her in within a day, with a "Check again" that could never succeed. The card below is for someone
+          genuinely waiting; the one above it is for someone we could not check. */}
+      {ctx.joinState && ctx.joinState.authFailed && !ctx.joinState.isAdmitted ? (
+        <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Can’t check with your church right now</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+            {/* ONLY BLAME THE CLOCK WHEN WE HAVE MEASURED IT. The relay's refusal is identical for a wrong
+                clock and for a member the church has BLOCKED, so the confident version of this text was
+                telling banned people to check their date settings and promising their posts would send —
+                they never will. The measured skew is the only thing that separates the two. */}
+            {ctx.clockIsWrong
+              ? <React.Fragment>This phone’s clock is about <b>{ctx.clockSkewMins} minutes</b> {ctx.clockSkewAhead ? 'ahead of' : 'behind'} your church’s. Set the date and time to update automatically and this will sort itself out — nothing is lost, and anything you post will send once it reconnects.</React.Fragment>
+              : <React.Fragment>Your church’s relay wouldn’t accept this phone. If it doesn’t clear on its own shortly, speak to whoever runs your church.</React.Fragment>}
+          </div>
+        </div>
+      ) : null}
+      {ctx.joinState && ctx.joinState.isPending && !ctx.joinState.removed && !ctx.joinFailed && !ctx.joinQueued && !ctx.joinState.authFailed ? (
         <div style={{ marginBottom: 22, padding: '14px 16px', borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           <div style={{ fontWeight: 800, fontSize: 14.5, marginBottom: 3 }}>Waiting to be let in</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
-            Your request has been sent{ctx.church && ctx.church.name ? ' to ' + ctx.church.name : ''}. A steward usually lets people in within a day — you don’t need to do anything else.
+            {/* "Has been sent" only when a relay accepted it (ctx.joinSent) — see the pending screen's note.
+                This card is what a PIN-locked phone showed while nothing had been sent at all. 2026-09-06. */}
+            {ctx.joinSent
+              ? <React.Fragment>Your request has been sent{ctx.church && ctx.church.name ? ' to ' + ctx.church.name : ''}. A steward usually lets people in within a day — you don’t need to do anything else.</React.Fragment>
+              : ctx.joinIntent
+              ? <React.Fragment>You’ll ask to join {(ctx.church && ctx.church.name) || 'this church'} <b>when you unlock</b> this phone — nobody at the church can see the request until then.</React.Fragment>
+              : <React.Fragment>Your request to join{ctx.church && ctx.church.name ? ' ' + ctx.church.name : ''} <b>hasn’t been sent yet</b> — nobody at the church can see it. Tap <b>Check again</b> to send it.</React.Fragment>}
           </div>
           <button onClick={() => ctx.go && ctx.go('chat')} style={{ marginTop: 10, padding: '7px 12px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>
             Check again

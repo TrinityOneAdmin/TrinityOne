@@ -31,10 +31,28 @@ for f in "$WWW"/app/*.jsx; do
   ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$WWW/app/$base.js"
   rm "$f"
 done
-# index.html for the packaged build: drop the Babel runtime, point script tags at the transpiled .js
+# index.html for the packaged build: drop the Babel runtime, point script tags at the transpiled .js, and
+# DEFER every one of them.
+#
+# Finding 5 of the 2026-09-05 audit, measured: the packaged page loads ~44 classic scripts, none deferred,
+# 2.67 MB raw / 663 KB gzipped before first paint. Each one blocks the parser, so on the thin pipe this
+# product is aimed at ("does this work over a thin pipe in Tehran") the cost is ~44 sequential blocking
+# requests rather than the bytes.
+#
+# WHY `defer` AND NOT code-splitting: every app/*.jsx is a CLASSIC script sharing globals — each ends by
+# hanging its components on `window`, and app.jsx references screen components at render. Loading them
+# lazily needs a real loader and has blanked the APK before (see the duplicate-global class of bug). `defer`
+# changes none of that: it preserves execution ORDER exactly, and deferred scripts still run before
+# DOMContentLoaded, so anything listening for it is unaffected.
+#
+# Applied HERE and not in the source index.html on purpose. Unpackaged, the page still loads Babel and the
+# app files are type="text/babel", which Babel schedules itself; deferring the vendor scripts around it
+# would change the dev path for no benefit. The packaged page is the one the APK and app.trinityone.church
+# actually serve.
 sed -i \
   -e '/babel\.min\.js/d' \
-  -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script src="\1.js">#g' \
+  -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script defer src="\1.js">#g' \
+  -e 's#<script src="#<script defer src="#g' \
   "$WWW/index.html"
 
 # APK diet (E5): the PACKAGED member app loads NONE of these — drop them so they don't bloat the APK.

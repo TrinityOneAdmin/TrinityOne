@@ -208,9 +208,10 @@ function DevotionalView({ open, onClose, ctx }) {
         <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color="#fff" /></div>
         <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
+            <button onClick={onClose} aria-label="Close this devotional" style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
               color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={20} color="#fff" /></button>
             <button onClick={() => ctx.openShareSheet({ type: 'devotional', title: d.title, ref: d.ref, series: d.series, excerpt: (d.body && d.body[0]) || '' })}
+              aria-label="Share this devotional"
               style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
               color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="share" size={18} color="#fff" /></button>
           </div>
@@ -461,12 +462,13 @@ function App() {
     window.addEventListener('trinity-identity', h);
     window.addEventListener('trinity-identity-lock', h);
     window.addEventListener('trinity-profiles', h);
+    window.addEventListener('trinity-join-state', h);   // a join was accepted / queued / dropped — ctx.joinSent & co are read at render
     // …and re-check for the first few seconds regardless of whether any of those events fire. The events are
     // the fast path; this is the one that catches a module that finished loading after we first looked, which
     // is exactly the case that shipped the app open with no identity. Bounded, then it stops.
     let n = 0;
     const t = setInterval(() => { refreshLock(); if (++n >= 20) clearInterval(t); }, 400);
-    return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); };
+    return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); window.removeEventListener('trinity-join-state', h); };
   }, []);
   // forensic hygiene: at a locked boot, wipe any community caches left on disk from a previous session.
   //
@@ -633,13 +635,51 @@ function App() {
     // socket. Now it only bumps when a relay we opened has actually DROPPED (relaysHealthy() === false) — the same
     // gate the steward console already uses. A real drop (e.g. a deploy restart) still re-subscribes to recover;
     // the foreground/online events above still fire immediately (those are real reconnect signals, not a blind timer).
+    // A REFUSED PROOF IS NOT AN UNHEALTHY SOCKET, and this beat's own health check is what hid it. Under a
+    // skewed clock the relay refuses the AUTH and LEAVES THE SOCKET OPEN, so relaysHealthy() is true and this
+    // returned immediately — for ever. nostr-tools caches relay.authPromise, so nothing re-signs on that
+    // connection: correcting the clock does not help, and neither does any amount of waiting. Measured on a
+    // phone 2026-09-04: eleven minutes at zero drift, eleven polls, still locked out; only closing the socket
+    // recovered it. reconnectAll() is exactly that close-and-re-challenge, so ask for it here — before the
+    // health check, and at most once a minute so a genuinely blocked key cannot make this a reconnect loop.
+    let lastAuthRetry = 0;
+    const retryIfRefused = () => {
+      const F = window.Fellowship;
+      if (!F || !F.authState || !F.reconnectAll) return false;
+      let st = null; try { st = F.authState(); } catch (e) { return false; }
+      if (!st || !st.failed) return false;
+      // MEASURE BEFORE RECONNECTING, because the relay will not tell us why it refused. A wrong clock and a
+      // BLOCKED key produce byte-identical refusals with the socket left open (gateway.mjs:5382 — one
+      // condition, one else-branch; proved against the real gateway 2026-09-05). Re-challenging cures the
+      // first and is useless for the second, so doing it blind turns every phone a church has removed into
+      // a permanent ninety-second teardown loop against the relay that removed them — and reconnectAll()
+      // closes every socket and re-runs nine subscriptions, which is the storm app.jsx warns about above.
+      if (!st.skewAt) { try { F.measureRelaySkew && F.measureRelaySkew(); } catch (e) {} return true; }
+      if (!(F.clockLooksWrong && F.clockLooksWrong())) return true;   // refused, but not by the clock — say so, do not loop
+      // A MONOTONIC CLOCK, because the fault we are recovering from IS the wall clock. Date.now() put
+      // `lastAuthRetry` fifteen minutes in the future while the phone was skewed; the moment the clock was
+      // corrected BACKWARDS the difference went negative and stayed under the cooldown, so the retry was
+      // suppressed for exactly as long as the original skew — the recovery could not fire during the only
+      // window it was needed. Measured on the Oppo 2026-09-05: forcing the same two calls by hand recovered
+      // the connection immediately, while the timer sat blocked. performance.now() does not move when the
+      // system clock is set.
+      const mono = () => { try { return performance.now(); } catch (e) { return Date.now(); } };
+      if (mono() - lastAuthRetry < 60000) return true;
+      lastAuthRetry = mono();
+      try { F.measureRelaySkew && F.measureRelaySkew(); } catch (e) {}   // re-measure: the clock may have been put right
+      try { F.reconnectAll(); } catch (e) {}
+      return true;
+    };
+    window.addEventListener('focus', retryIfRefused);
+    window.addEventListener('online', retryIfRefused);
     const beat = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       const F = window.Fellowship;
+      if (retryIfRefused()) return;   // refused proof → re-challenge, whatever the socket looks like
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('focus', retryIfRefused); window.removeEventListener('online', retryIfRefused); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
@@ -771,6 +811,12 @@ function App() {
     if (!np || !(F && F.announceMembership)) return;
     let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
     if (Date.now() - last < 12 * 3600 * 1000) return;
+    // ON A PIN-LOCKED BOOT THIS FIRES WITH NO KEY, every time: the lock wiped hb:<npub>, so the 12-hour check
+    // above passes, and announceMembership has nothing to sign with. It used to return quietly and nothing
+    // ever re-ran (this effect is keyed on activeChurch, which does not change on unlock). It now records a
+    // join intent bound to the locked identity, which the unlock keeps — see JOININTENT_KEY in
+    // fellowship.src.js. The falsy return below keeps the stamp unwritten, so the next launch tries again
+    // until one lands. 2026-09-06.
     // MARK DONE ON SUCCESS, NOT ON ATTEMPT. announceMembership is async and used to be called un-awaited, with
     // the 12-hour heartbeat stamp written regardless — so a failed announce set the clock anyway and the member
     // stayed invisible to their church for half a day. It is now queued in the outbox as well, so a failure is
@@ -1157,11 +1203,18 @@ function App() {
       // applicant never saw isAdmitted true.
       let wasAdmitted = false; try { wasAdmitted = lsGet(WAS_KEY) === '1'; } catch (e) {}
       if (s.isAdmitted) { wasAdmitted = true; try { lsSet(WAS_KEY, '1'); } catch (e) {} }
-      const removed = !!(wasAdmitted && s.approval && !s.isAdmitted);
+      // NOT WHEN WE COULD NOT ASK. `admitted` is a gated read, so a refused NIP-42 proof empties it — and
+      // every term here is then true for exactly the member this is supposed to protect: one this phone HAS
+      // seen admitted. Under a skewed clock that made Chat announce "You're no longer in this church — your
+      // access has been removed", which is worse than the "waiting to be let in" the Today card was fixed
+      // for, and it was being cached to localStorage as the offline answer. Found by audit, 2026-09-05.
+      const removed = !!(wasAdmitted && s.approval && !s.isAdmitted && !s.authFailed);
       setJoinState({ ...s, removed, loaded: true });
       // Cache this church's LAST-KNOWN real join state, so an offline reopen can show the TRUTH (pending stays
       // pending, admitted stays admitted) instead of a hardcoded "you're in".
-      lsSet('trinityone.joinstate.' + activeChurch, { approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending, removed });
+      // Cache only what we were ABLE to establish. Caching an unreachable read makes the wrong answer
+      // survive the reconnect that would have corrected it.
+      if (!s.authFailed) lsSet('trinityone.joinstate.' + activeChurch, { approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending, removed });
     });
     // OFFLINE FALLBACK: if the relay never answers (offline / hostile network / relay down), don't spin forever —
     // and DON'T pretend the member is admitted (the old fallback hardcoded isAdmitted:true, so a brand-new member
@@ -1809,7 +1862,17 @@ function App() {
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
-    joinState,   // { approval, isAdmitted, isPending, offline, unknown } for the active church
+    joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed } for the active church
+    // How far this phone's clock is from the relay's, in whole minutes, when we have actually MEASURED it.
+    // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date
+    // header is not CORS-safelisted so a phone cannot read it cross-origin) — the screen then says the clock
+    // is the usual cause instead of asserting a number it does not have.
+    // clockIsWrong is the MEASURED verdict, not an inference from the refusal — see the note in
+    // fellowship.src.js above clockLooksWrong(). Without it the screen blames the clock for a ban.
+    clockIsWrong: (() => { try { return !!(window.Fellowship.clockLooksWrong && window.Fellowship.clockLooksWrong()); } catch (e) { return false; } })(),
+    clockSkewMins: (() => { try { const sk = (window.Fellowship.authState && window.Fellowship.authState().skewSec) || 0;
+      return Math.abs(sk) >= 60 ? Math.round(Math.abs(sk) / 60) : undefined; } catch (e) { return undefined; } })(),
+    clockSkewAhead: (() => { try { return ((window.Fellowship.authState && window.Fellowship.authState().skewSec) || 0) > 0; } catch (e) { return false; } })(),
     // RE-ANNOUNCE, not just re-subscribe. "Check again" used to re-run the READ subscription only, so a member
     // whose join announce never landed could tap it for ever and remain invisible — the one action offered on
     // the one screen where they are stuck. Now it re-sends the thing that makes them visible, then re-reads.
@@ -1818,6 +1881,13 @@ function App() {
     // …and whether we stopped trying. Distinct from joinQueued: "still trying" is patience, "we gave up" is
     // an action the member has to take. Both used to render as "has been sent, sit tight".
     joinFailed: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinFailed && window.Fellowship.joinFailed(np)); } catch (e) { return false; } })(),
+    // …and the POSITIVE fact: a relay accepted this identity's announce. Device pass 2026-09-06: with the two
+    // above both false the screen said "has been sent" — over a join that was never attempted (the phone was
+    // PIN-locked when it followed). An empty queue is not evidence of sending; only this is.
+    joinSent: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinSent && window.Fellowship.joinSent(np)); } catch (e) { return false; } })(),
+    // …and the promise a locked phone made: the join is asked for and will go the moment the PIN is entered.
+    // Shown as exactly that — never as "sent", never silently as "not sent".
+    joinIntent: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinIntent && window.Fellowship.joinIntent(np)); } catch (e) { return false; } })(),
     // SAY THAT IT TRIED. This did the work — re-announce, re-subscribe — and showed nothing at all, so the
     // one control on the waiting-for-approval screen looked broken while working perfectly. Reported
     // independently by a member of the pilot and by a simulated 71-year-old on the same afternoon, in almost

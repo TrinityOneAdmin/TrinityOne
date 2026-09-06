@@ -282,8 +282,12 @@ function FinanceImport({ book, F, onPost, onClose }) {
         + (failed.length > 4 ? ' …and ' + (failed.length - 4) + ' more' : '') + '. Try again.');
   };
 
-  const colSelect = (val, onChange, allowNone) => (
-    <select value={val} onChange={e => onChange(parseInt(e.target.value, 10))} style={bkFld}>
+  // NAMED. The captions beside these are plain <label>s with no htmlFor, so they associate with nothing and
+  // each select announced as an unnamed combo box — on the screen that decides which column of a bank
+  // statement is money. Measured 2026-09-04: labels:0, aria-label:null, aria-labelledby:null, id:"".
+  // All five call sites pass a name (rule 2: they are the only ones, all in this file).
+  const colSelect = (val, onChange, allowNone, label) => (
+    <select value={val} onChange={e => onChange(parseInt(e.target.value, 10))} aria-label={label} style={bkFld}>
       {allowNone && <option value={-1}>— none —</option>}
       {parsed.header.map((h, i) => <option key={i} value={i}>{String(h).trim() || ('Column ' + (i + 1))}</option>)}
     </select>
@@ -306,17 +310,17 @@ function FinanceImport({ book, F, onPost, onClose }) {
             <input type="file" accept=".csv,text/csv" onChange={onFile} style={{ ...bkFld, height: 'auto', padding: 9, marginBottom: 14, lineHeight: 1.4 }} />
             {parsed && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
-                <div><label style={bkLbl}>Date column</label>{colSelect(mapping.date, v => setMapping(m => ({ ...m, date: v })))}</div>
-                <div><label style={bkLbl}>Description column</label>{colSelect(mapping.description, v => setMapping(m => ({ ...m, description: v })))}</div>
+                <div><label style={bkLbl}>Date column</label>{colSelect(mapping.date, v => setMapping(m => ({ ...m, date: v })), undefined, 'Which column holds the date')}</div>
+                <div><label style={bkLbl}>Description column</label>{colSelect(mapping.description, v => setMapping(m => ({ ...m, description: v })), undefined, 'Which column holds the description')}</div>
                 <div style={{ gridColumn: '1 / span 2' }}>
                   <label style={bkLbl}>Amount columns</label>
                   <div style={{ display: 'flex', gap: 6, background: 'var(--surface-2, #f2efe9)', borderRadius: 10, padding: 4, marginBottom: 8 }}>{seg('single', 'One signed column')}{seg('split', 'Separate in / out')}</div>
                 </div>
                 {mapping.mode === 'single'
-                  ? <div style={{ gridColumn: '1 / span 2' }}><label style={bkLbl}>Amount column (+ in / − out)</label>{colSelect(mapping.amount, v => setMapping(m => ({ ...m, amount: v })))}</div>
+                  ? <div style={{ gridColumn: '1 / span 2' }}><label style={bkLbl}>Amount column (+ in / − out)</label>{colSelect(mapping.amount, v => setMapping(m => ({ ...m, amount: v })), undefined, 'Which column holds the amount')}</div>
                   : (<>
-                      <div><label style={bkLbl}>Money in column</label>{colSelect(mapping.moneyIn, v => setMapping(m => ({ ...m, moneyIn: v })), true)}</div>
-                      <div><label style={bkLbl}>Money out column</label>{colSelect(mapping.moneyOut, v => setMapping(m => ({ ...m, moneyOut: v })), true)}</div>
+                      <div><label style={bkLbl}>Money in column</label>{colSelect(mapping.moneyIn, v => setMapping(m => ({ ...m, moneyIn: v })), true, 'Which column holds money in')}</div>
+                      <div><label style={bkLbl}>Money out column</label>{colSelect(mapping.moneyOut, v => setMapping(m => ({ ...m, moneyOut: v })), true, 'Which column holds money out')}</div>
                     </>)}
                 <label style={{ gridColumn: '1 / span 2', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, color: 'var(--ink)', cursor: 'pointer' }}>
                   <input type="checkbox" checked={monthFirst} onChange={e => setMonthFirst(e.target.checked)} /> Dates are month-first (US: MM/DD/YYYY)

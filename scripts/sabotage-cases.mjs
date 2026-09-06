@@ -659,7 +659,7 @@ export const CASES = [
     // the pre-fix behaviour exactly: publish the allowlist, leave the team's roster where it was. This is the
     // St Brigid's shape — group members 2, roster people 0, care team empty and nothing said so.
     find: `        Promise.resolve(window.Steward.publishRoster(group.id, { roles: r.roles || [], people, pods: r.pods || [] }))
-          .then(() => publishCareTeamFor(group.id, careTeamId, people))
+          .then((ok) => { if (ok != null) return publishCareTeamFor(group.id, careTeamId, people); })
           .catch(() => {});`,
     replace: `        return;`,
     test: 'scripts/care-team-membership.test.mjs',
@@ -1546,5 +1546,52 @@ export const CASES = [
 `,
     replace: ``,
     test: 'scripts/church-setup-race.test.mjs',
+  },
+  // ── the session that CREATES a church on a Suite box must publish to that box (2026-09-04) ──────────
+  {
+    name: 'suite-box: an acceptance from the serving box is no longer recorded',
+    file: 'src/steward.src.js',
+    // the pre-fix shape: registration lands, and the "0" the early probe cached is never corrected
+    find: `          if (rawOrigin && base === rawOrigin && _boxHostsUs !== true) {`,
+    replace: `          if (false) {`,
+    test: 'scripts/an-accepted-registration-tells-the-console-its-box-holds-it.test.mjs',
+  },
+  {
+    name: 'suite-box: the same, seen from the real console through the real wizard',
+    file: 'src/steward.src.js',
+    find: `          if (rawOrigin && base === rawOrigin && _boxHostsUs !== true) {`,
+    replace: `          if (false) {`,
+    test: 'scripts/a-church-created-on-a-suite-box-publishes-to-it.test.mjs',
+  },
+  {
+    name: 'suite-box: ANY acceptance is recorded as the box holding the church',
+    file: 'src/steward.src.js',
+    // the overreach: a pool acceptance flips the cache for a box that refused, or was never asked
+    find: `          if (rawOrigin && base === rawOrigin && _boxHostsUs !== true) {`,
+    replace: `          if (rawOrigin && _boxHostsUs !== true) {`,
+    test: 'scripts/an-accepted-registration-tells-the-console-its-box-holds-it.test.mjs',
+  },
+  {
+    name: 'suite-box: the serving box is seeded as a registration target unconditionally again',
+    file: 'src/steward.src.js',
+    // the previous cut: every boot-time re-announce registers with whatever box is serving the console
+    find: `    if (createHere && rawOrigin) bases.add(rawOrigin);`,
+    replace: `    if (rawOrigin) bases.add(rawOrigin);`,
+    test: 'scripts/only-the-wizard-puts-a-church-on-the-serving-box.test.mjs',
+  },
+  {
+    name: 'suite-box: the wizard stops asking for the church to be put on this box',
+    file: 'app/stew-dashboard.jsx',
+    find: `window.Steward.selfRegister(n, { createHere: true })`,
+    replace: `window.Steward.selfRegister(n)`,
+    test: 'scripts/only-the-wizard-puts-a-church-on-the-serving-box.test.mjs',
+  },
+  {
+    name: 'suite-box: the same, seen from the real console — the two halves compose',
+    file: 'app/stew-dashboard.jsx',
+    // with the engine fix intact and the wizard's opt-in gone, the box is never asked and nothing lands
+    find: `window.Steward.selfRegister(n, { createHere: true })`,
+    replace: `window.Steward.selfRegister(n)`,
+    test: 'scripts/a-church-created-on-a-suite-box-publishes-to-it.test.mjs',
   },
 ];

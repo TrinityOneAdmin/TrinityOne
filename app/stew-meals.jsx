@@ -526,7 +526,15 @@ function StewCareRequests() {
   // closeErr, which renders on every row at once.
   const [halfDone, setHalfDone] = React.useState('');
   const [chatting, setChatting] = React.useState(null);
-  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub]);
+  // RE-SUBSCRIBE AFTER A RELAY COMES BACK. This listed only [church.npub], so a socket that dropped and
+  // returned left the list frozen at whatever it held when the connection died. Measured 2026-09-04: with
+  // the relay stopped mid-operation and restarted, the console showed a care request as STILL NEEDING
+  // "Set up help" while simultaneously showing the need it had already created from it — the relay held the
+  // carereqstatus that closed it, and a reload was the only cure. A steward reading that screen sets the
+  // same help up twice. The Overview banner beside this already carries _ovConn for exactly this reason
+  // (app/stew-dashboard.jsx:2112); this is the same fix, and useStewardConn is the same source of truth.
+  const _careConn = window.useStewardConn ? window.useStewardConn() : 0;
+  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub, _careConn]);
   // A YOUNG PERSON'S REQUEST IS NOT ORDINARY CARE, AND MUST NOT SIT IN THE SAME LIST.
   // Owner, 2026-08-26: children's care must be "separate to other standard care requests".
   //

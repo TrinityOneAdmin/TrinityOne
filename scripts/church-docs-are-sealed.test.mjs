@@ -53,7 +53,11 @@ const constFor = (pfx) => {
 // care. The fix is to move that grant onto the `careteam:` document — which already exists for exactly this,
 // and is described in the gateway as "pubkeys only, no secrets… so a member can seal a carereq to exactly
 // the care team". Names get sealed; the pubkeys the relay needs stay public. Tracked as Tier 1.
-const DEFERRED = new Set(['trinityone/roster:']);
+// EMPTY SINCE 2026-09-05. `roster:` was deferred because sealing it blinds the relay's careAdmin() grant —
+// and five more besides (rota visibility and four team-room audience checks all read ROSTER_PEOPLE). The
+// answer was not to seal less but to split the document: the pubkeys stay in the clear as `pubs` for the
+// relay, the NAMES go into `e` under the church name key. See publishRoster and gateway.mjs's ROSTER_D branch.
+const DEFERRED = new Set([]);
 
 // Prefixes written by the member app rather than the console.
 const MEMBER_SIDE = new Set(['trinityone/careavail:']);
@@ -78,7 +82,7 @@ for (const pfx of prefixes) {
       const at = u.index;
       const head = STW.lastIndexOf('\n  publish', at);
       const body = STW.slice(head === -1 ? Math.max(0, at - 800) : head, at + 200);
-      assert.match(body, /_sealChurchDoc\(|encPublish\(/,
+      assert.match(body, /_sealChurchDocReady\(|_sealChurchDoc\(|encPublish\(/,
         `${pfx} is in CHURCH_SEALED_PFXS but its publisher writes cleartext — a bare JSON.stringify here ` +
         `puts this document on the relay's disk in the clear, readable by anyone who holds it. ` +
         `Route it through _sealChurchDoc(); both readers already try cleartext first, so existing ` +

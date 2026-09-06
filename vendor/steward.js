@@ -14870,15 +14870,24 @@ zoo`.split("\n");
   function _sealChurchDoc(obj) {
     const body = JSON.stringify(obj);
     const k = _nameKeyRing[0];
-    if (!k) {
-      console.warn("[steward] no church name key yet \u2014 writing this document in cleartext");
-      return body;
-    }
+    if (!k) return null;
     try {
       return JSON.stringify({ e: encrypt3(body, _unhex(k)) });
     } catch (e) {
-      return body;
+      return null;
     }
+  }
+  var NAME_KEY_WAIT_MS = 4e3;
+  function _sealChurchDocReady(obj) {
+    if (_nameKeyRing[0]) return Promise.resolve(_sealChurchDoc(obj));
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = () => {
+        if (_nameKeyRing[0] || Date.now() - t0 >= NAME_KEY_WAIT_MS) return resolve(_sealChurchDoc(obj));
+        setTimeout(tick, 120);
+      };
+      setTimeout(tick, 120);
+    });
   }
   function _openChurchDoc(content) {
     try {
@@ -14964,6 +14973,7 @@ zoo`.split("\n");
   var RESEAT_D = "trinityone/reseat:";
   var _stewardCaps = {};
   var _stewardNames = {};
+  var _stewardNamesCt = "";
   var _stewardSince = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
   var CAP_KEYS = {
@@ -15198,7 +15208,7 @@ zoo`.split("\n");
   }
   async function _refreshBoxHostsUs() {
     try {
-      if (!pub || ownRelay() === CANONICAL_RELAY) return;
+      if (!pub || !_ownOrigin()) return;
       const tok = await localAdminToken();
       if (!tok) return;
       const r = await fetch("/config", { cache: "no-store", headers: _authHdr(tok) });
@@ -15367,9 +15377,14 @@ zoo`.split("\n");
     }
   }
   var _localToken = null;
+  function _originIsLoopback() {
+    const l = typeof location !== "undefined" ? location : null;
+    if (!l || !l.hostname) return false;
+    return /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ""));
+  }
   async function localAdminToken() {
     if (_localToken) return _localToken;
-    if (!ownIsLoopback()) return "";
+    if (!_originIsLoopback()) return "";
     try {
       const r = await fetch("/local-token", { cache: "no-store" });
       if (!r.ok) return "";
@@ -15801,6 +15816,7 @@ zoo`.split("\n");
     _careRosterSeen = false;
     _stewardCaps = {};
     _stewardNames = {};
+    _stewardNamesCt = "";
     _stewardSince = {};
     _nameKeyRing = [];
     _nameKeyDocKeys = null;
@@ -17321,8 +17337,13 @@ zoo`.split("\n");
       const cp = window.Steward.parseStewardInvite(payload);
       if (!cp) return Promise.resolve({ ok: false, error: "That doesn\u2019t look like a church invite." });
       if (cp === churchPub) return Promise.resolve({ ok: false, error: "That\u2019s your own church." });
-      const content = JSON.stringify({ name: lastProfile && lastProfile.name || "" });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }, sk)).then(() => ({ ok: true, church: cp, npub: npubEncode(cp) }));
+      let content;
+      try {
+        content = JSON.stringify({ n: encrypt3(JSON.stringify({ name: lastProfile && lastProfile.name || "" }), getConversationKey(sk, cp)) });
+      } catch (e) {
+        content = JSON.stringify({ n: "" });
+      }
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }, sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
     },
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
     subscribeStewardRequests(onReqs) {
@@ -17348,7 +17369,14 @@ zoo`.split("\n");
           }
           let name = "";
           try {
-            name = JSON.parse(e.content).name || "";
+            const c = JSON.parse(e.content);
+            if (typeof c.n === "string" && c.n) {
+              try {
+                name = (JSON.parse(decrypt3(c.n, getConversationKey(sk, e.pubkey))) || {}).name || "";
+              } catch {
+              }
+            }
+            if (!name) name = c.name || "";
           } catch {
           }
           byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
@@ -18206,7 +18234,8 @@ zoo`.split("\n");
       const nameSubs = [];
       let pending = [], batchTimer = null;
       let hidden = /* @__PURE__ */ new Set();
-      const attach = () => [...byId.values()].filter((m) => !hidden.has(m.id)).sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
+      const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
+        if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", reactions: [], myReaction: "" };
         const r = rx.get(m.id);
         return { ...m, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
       });
@@ -19447,13 +19476,17 @@ zoo`.split("\n");
         }
       };
     },
-    setReseats(pairs) {
+    async setReseats(pairs) {
       _requireTrustedView("re-seat map");
       if (!sk) return Promise.resolve(null);
+      if (!_nameKeyRing[0] && (pairs || []).some((p) => p && p.name)) await _sealChurchDocReady({});
       const clean4 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
         const nm = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
         const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) };
-        if (nm) out.name = nm;
+        if (nm) {
+          const sealedNm = _sealChurchDoc({ name: nm });
+          if (sealedNm != null) out.n = JSON.parse(sealedNm).e;
+        }
         return out;
       });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean4 }) }));
@@ -19591,6 +19624,7 @@ zoo`.split("\n");
             cur = [];
             _stewardCaps = {};
             _stewardNames = {};
+            _stewardNamesCt = "";
             _stewardSince = {};
           } else {
             try {
@@ -19598,11 +19632,20 @@ zoo`.split("\n");
               cur = doc.pubkeys || [];
               _stewardCaps = doc.caps && typeof doc.caps === "object" ? doc.caps : {};
               _stewardNames = doc.names && typeof doc.names === "object" ? doc.names : {};
+              _stewardNamesCt = typeof doc.n === "string" && doc.n ? doc.n : "";
+              if (_stewardNamesCt) {
+                const opened = _openChurchDoc(JSON.stringify({ e: _stewardNamesCt }));
+                if (opened && typeof opened === "object") {
+                  _stewardNames = opened;
+                  _stewardNamesCt = "";
+                }
+              }
               _stewardSince = doc.at && typeof doc.at === "object" ? doc.at : {};
             } catch {
               cur = [];
               _stewardCaps = {};
               _stewardNames = {};
+              _stewardNamesCt = "";
               _stewardSince = {};
             }
           }
@@ -19644,8 +19687,14 @@ zoo`.split("\n");
       for (const p of list) nextAt[p] = _stewardSince[p] || nowS;
       const doc = { pubkeys: list };
       if (Object.keys(next).length) doc.caps = next;
-      if (Object.keys(nextNames).length) doc.names = nextNames;
       if (Object.keys(nextAt).length) doc.at = nextAt;
+      if (Object.keys(nextNames).length) {
+        const sealedNames = _sealChurchDoc(nextNames);
+        if (sealedNames != null) doc.n = JSON.parse(sealedNames).e;
+        else if (_stewardNamesCt) doc.n = _stewardNamesCt;
+      } else if (_stewardNamesCt) {
+        doc.n = _stewardNamesCt;
+      }
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
@@ -19672,7 +19721,9 @@ zoo`.split("\n");
     _voiceSave() {
       if (!sk) return Promise.resolve(null);
       const doc = { self: _selfVoice && _selfVoice.name ? { ..._selfVoice, churchName: lastProfile.name || "" } : null, public: { ..._publicVoices } };
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
+      const sealedVoice = _sealChurchDoc(doc);
+      if (sealedVoice == null) return Promise.resolve(false);
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: sealedVoice }, sk));
     },
     setVoice(name, office) {
       _selfVoice = name && String(name).trim() ? { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) } : null;
@@ -20332,25 +20383,28 @@ zoo`.split("\n");
     // so it SHOULD be sealed, and church-docs-are-sealed.test.mjs tracks that as a deferred todo. Sealing it
     // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
     // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
-    publishRoster(teamId, roster) {
-      if (!sk || !teamId) return Promise.resolve(null);
+    async publishRoster(teamId, roster) {
+      if (!sk || !teamId) return null;
       const roles = (roster.roles || []).map((r) => ({ id: r.id || "r" + Math.random().toString(36).slice(2, 7), name: r.name || "Role" }));
       const people = (roster.people || []).map((p) => ({ id: p.id || "p" + Math.random().toString(36).slice(2, 7), name: p.name || "", pub: p.pub || "" }));
       const pods = (roster.pods || []).map((p) => ({ id: p.id || "pod" + Math.random().toString(36).slice(2, 7), name: p.name || "Pod", fills: p.fills && typeof p.fills === "object" ? p.fills : {} }));
-      const content = JSON.stringify({ roles, people, pods });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content })).then(() => ({ id: teamId, roles, people, pods }));
+      const sealed = await _sealChurchDocReady({ roles, people, pods });
+      if (sealed == null) return null;
+      const content = JSON.stringify({ pubs: people.map((p) => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content })).then((ok) => ok ? { id: teamId, roles, people, pods } : null);
     },
     subscribeRosters(onRosters) {
       return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters);
     },
     // ---- services: a dated gathering people serve at ----
     // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
-    publishService(svc) {
-      if (!sk) return Promise.resolve(null);
+    async publishService(svc) {
+      if (!sk) return null;
       const id = svc.id || "svc" + Date.now();
       const doc = { date: svc.date || "", time: svc.time || "10:30", name: svc.name || "Sunday Gathering" };
-      const content = _sealChurchDoc(doc);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
     },
     removeService(id) {
       if (!sk) return Promise.resolve(null);
@@ -20360,9 +20414,10 @@ zoo`.split("\n");
       return this._subAddr(SERVICE_D, (c) => ({ date: c.date, time: c.time, name: c.name }), onServices);
     },
     // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
-    publishRunsheet(serviceId, items) {
+    async publishRunsheet(serviceId, items) {
       if (!sk || !serviceId) return Promise.resolve(null);
-      const content = _sealChurchDoc({ items: Array.isArray(items) ? items : [] });
+      const content = await _sealChurchDocReady({ items: Array.isArray(items) ? items : [] });
+      if (content == null) return null;
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }));
     },
     subscribeRunsheets(onSheets) {
@@ -20471,12 +20526,13 @@ zoo`.split("\n");
     },
     // ---- rooms & bookings: a shared room calendar (steward-booked) ----
     // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }
-    publishRoom(room) {
-      if (!sk) return Promise.resolve(null);
+    async publishRoom(room) {
+      if (!sk) return null;
       const id = room.id || "room" + Date.now();
       const doc = { name: (room.name || "Room").trim(), capacity: room.capacity || "", note: (room.note || "").trim() };
-      const content = _sealChurchDoc(doc);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
     },
     removeRoom(id) {
       if (!sk) return Promise.resolve(null);
@@ -20485,12 +20541,13 @@ zoo`.split("\n");
     subscribeRooms(cb) {
       return this._subAddr(ROOM_D, (c) => ({ name: c.name, capacity: c.capacity, note: c.note }), cb);
     },
-    publishBooking(b) {
+    async publishBooking(b) {
       if (!sk || !b || !b.roomId) return Promise.resolve(null);
       const id = b.id || "bk" + Date.now();
       const doc = { roomId: b.roomId, date: b.date || "", start: b.start || "", end: b.end || "", title: (b.title || "").trim(), note: (b.note || "").trim() };
-      const content = _sealChurchDoc(doc);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content })).then(() => ({ id, ...doc }));
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
     },
     removeBooking(id) {
       if (!sk) return Promise.resolve(null);
@@ -20501,11 +20558,12 @@ zoo`.split("\n");
     },
     // ---- rota: assignments for one service (latest wins; published flag) ----
     // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
-    publishRota(rota) {
+    async publishRota(rota) {
       if (!sk || !rota || !rota.service) return Promise.resolve(null);
       const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
-      const content = _sealChurchDoc(doc);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content })).then(() => ({ id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} }));
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content })).then((ok) => ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : null);
     },
     removeRota(serviceId) {
       if (!sk) return Promise.resolve(null);
@@ -20527,7 +20585,7 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const v = visibility === "team" || visibility === "stewards" ? visibility : "church";
       const content = JSON.stringify({ visibility: v, updated: now() });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_SETTINGS_D], ["t", NET]], content })).then(() => ({ visibility: v }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_SETTINGS_D], ["t", NET]], content })).then((ok) => ok ? { visibility: v } : null);
     },
     // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
     // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
@@ -20541,13 +20599,14 @@ zoo`.split("\n");
     // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
     // event = { id?, date, time, title, where, blurb, accent }
     // asPub (optional) publishes the event AS an owned network instead of the church — network-wide event.
-    publishEvent(ev, asPub) {
+    async publishEvent(ev, asPub) {
       const signer = skFor(asPub);
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
       const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null };
-      const content = _sealChurchDoc(doc);
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
       if (groupId) tags.push(["t", groupId]);
       if (actingChurch) tags.push(["p", actingChurch]);
@@ -20609,7 +20668,7 @@ zoo`.split("\n");
       if (!sk || !req || !req.memberPub) return Promise.resolve(null);
       const id = req.id || "req" + Date.now();
       const content = JSON.stringify({ serviceId: req.serviceId || "", teamId: req.teamId || "", roleId: req.roleId || "", role: req.role || "", teamName: req.teamName || "", icon: req.icon || "hand", accent: req.accent || "var(--clay)", date: req.date || "", time: req.time || "", service: req.service || "", from: req.from || "Your church", note: req.note || "" });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then(() => ({ id, ...JSON.parse(content), memberPub: req.memberPub }));
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then((ok) => ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null);
     },
     // the church's own "can you serve?" request docs (so the board can join replies to a slot)
     subscribeRequests(onRequests) {
@@ -20872,7 +20931,12 @@ zoo`.split("\n");
             for (const pr of (JSON.parse(e.content) || {}).pairs || []) {
               if (!pr || !pr.old || !pr.new || pr.old === pr.new) continue;
               next.add(String(pr.old).toLowerCase());
-              const nm = String(pr.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+              let raw = pr.name || "";
+              if (typeof pr.n === "string" && pr.n) {
+                const o = _openChurchDoc(JSON.stringify({ e: pr.n }));
+                if (o && o.name) raw = o.name;
+              }
+              const nm = String(raw).replace(/\s+/g, " ").trim().slice(0, 40);
               if (nm) names.set(String(pr.new).toLowerCase(), nm);
             }
           } catch {
@@ -20956,7 +21020,7 @@ zoo`.split("\n");
       const np = toPubHex(input);
       if (!np) return Promise.resolve(null);
       const content = JSON.stringify({ joined: true });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }, sk)).then(() => ({ networkPub: np, npub: npubEncode(np) }));
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }, sk)).then((ok) => ok ? { networkPub: np, npub: npubEncode(np) } : null);
     },
     leaveNetwork(networkPub) {
       if (!sk) return Promise.resolve(null);
@@ -21066,6 +21130,7 @@ zoo`.split("\n");
       _careRosterSeen = false;
       _stewardCaps = {};
       _stewardNames = {};
+      _stewardNamesCt = "";
       _stewardSince = {};
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
@@ -21354,7 +21419,11 @@ zoo`.split("\n");
         if (!churchSk || !churchPub) return;
         const np = npubEncode(churchPub);
         const force = !!(opts && opts.force);
-        const bases = /* @__PURE__ */ new Set([window.Steward.configBase()]);
+        const createHere = !!(opts && opts.createHere);
+        const bases = /* @__PURE__ */ new Set();
+        const rawOrigin = _ownOrigin();
+        if (createHere && rawOrigin) bases.add(rawOrigin);
+        bases.add(window.Steward.configBase());
         for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, ""));
         let done = {};
         try {
@@ -21369,7 +21438,7 @@ zoo`.split("\n");
           const url = base + "/config";
           try {
             const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
-            const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }) });
+            const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }), signal: AbortSignal.timeout(6e3) });
             if (r && r.ok) {
               done[mark] = 1;
               try {
@@ -21378,6 +21447,25 @@ zoo`.split("\n");
               }
               accepted = true;
               _markRegOk();
+              if (rawOrigin && base === rawOrigin && _boxHostsUs !== true) {
+                _boxHostsUs = true;
+                try {
+                  lsSet(_boxHostsKey(), "1");
+                } catch (e) {
+                }
+                try {
+                  _gate.refresh(relaysRaw(), pub);
+                } catch (e) {
+                }
+                try {
+                  window.dispatchEvent(new CustomEvent("steward-relays"));
+                } catch (e) {
+                }
+                try {
+                  window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url: "" } }));
+                } catch (e) {
+                }
+              }
             } else if (r) {
               let why = "";
               try {
@@ -21391,7 +21479,7 @@ zoo`.split("\n");
             unreachable.push(base);
           }
         }
-        const ownBase = window.Steward.configBase();
+        const ownBase = rawOrigin || window.Steward.configBase();
         const ownRefused = refused.find((x) => x.base === ownBase) || unreachable.includes(ownBase);
         if (ownRefused) {
           const why = (refused.find((x) => x.base === ownBase) || {}).why;

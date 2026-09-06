@@ -255,13 +255,18 @@ test('the OK from a relay stamps the signal; a refusal does not', async () => {
     // false failure here before this line existed.
     const nu = (src.match(/pool\.relays\.get\((\w+)\(/) || [])[1];
     assert.ok(nu, 'could not find the URL normaliser in the shipped text — re-anchor this test');
-    const fn = new Function('pool', nu, 'Date', '_stamp', 'Promise',
+    // _relayAuth joined this function on 2026-09-05: auth state became PER RELAY (a Map keyed by url), because
+    // two module scalars made "did anyone refuse us?" depend on which relay settled last. It is supplied here
+    // rather than stubbed away — the assertions below are about the SAFEGUARDING signal (_relayAuthOkAt), and
+    // that signal must keep its meaning whatever else the function records. This test caught the addition
+    // immediately, by the exact mechanism its own comment below describes.
+    const fn = new Function('pool', nu, 'Date', '_stamp', 'Promise', '_relayAuth',
       // GLOBAL. With a single replace, a version that ALSO stamped on the relay's refusal kept the second
       // assignment pointing at the real module variable, which is not in this scope — so it threw inside the
       // rejection handler, was swallowed, and the test passed over the exact defect it is named for.
       // Measured: that sabotage left this file 13/0 green until this `g` was added.
       src.replace(/_relayAuthOkAt = Date\.now\(\)/g, '_stamp(Date.now())') + '\nreturn _noteAuthAccepted;')(
-      pool, (u) => u, Date, (v) => { state.at = v; }, Promise);
+      pool, (u) => u, Date, (v) => { state.at = v; }, Promise, new Map());
     fn('wss://r.example/relay');
     settle ? resolve(true) : reject(new Error('auth-failed: bad challenge or signature'));
     await tick(); await tick();

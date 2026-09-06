@@ -302,6 +302,37 @@ function isNative() {
   return !!(c && typeof c.isNativePlatform === 'function' && c.isNativePlatform());
 }
 
+// ONE PIN RULE, AND IT FOLLOWS WHERE THE ENCRYPTED SEED LANDS — NOT WHICH SCREEN THE MEMBER CAME THROUGH.
+//
+// Owner decision, 2026-09-05 (reference/DOMAIN.md). The 8-digit floor exists to resist OFFLINE guessing,
+// and offline guessing needs a copy of the blob:
+//
+//   native      setPin() puts the ciphertext in the hardware-backed store and leaves only {v,native,pub}
+//               — a pubkey, no secret — in localStorage. An attacker must first run code AS THE APP on the
+//               device to have anything to guess against, and the typing lockout is what applies. Six is
+//               enough, and digits are fine: a longer PIN typed several times a day is the kind of friction
+//               that makes people turn protection off altogether, which is strictly worse.
+//   web/desktop no secure store, so the whole blob sits in localStorage. A million combinations is minutes.
+//               The stricter floor is earned here, and only here.
+//
+// The defect this replaces was never the number. The setup wizard (app/identity.jsx) required 6 and said
+// "digits are fine"; the settings sheet (app/identity-extras.jsx) refused all-numeric under 8. Two screens,
+// two rules, and the one with the most reach had the weaker one. Both now call this.
+//
+// Returns '' when the PIN is acceptable, or the sentence to show the member. Provisional: the owner expects
+// to revisit after the September 2026 pilot.
+const PIN_MIN = 6;
+const PIN_MIN_NUMERIC_SOFT = 8;   // web/desktop only
+function pinRuleError(pin, native) {
+  const p = String(pin || '');
+  if (p.length < PIN_MIN) return 'Choose a PIN of at least ' + PIN_MIN + ' characters. Adding letters makes it much harder to guess.';
+  const onDevice = (typeof native === 'boolean') ? native : isNative();
+  if (!onDevice && /^\d+$/.test(p) && p.length < PIN_MIN_NUMERIC_SOFT) {
+    return 'On a computer an all-number PIN is easy to guess — use ' + PIN_MIN_NUMERIC_SOFT + '+ digits, or add letters.';
+  }
+  return '';
+}
+
 // Native: OS secure store (Keychain/Keystore) -- the gold standard.
 // Web/desktop: persist the seed in THIS browser's localStorage so the same identity (name,
 // messages, synced data) returns across reloads. It never leaves the device; the app still
@@ -416,6 +447,7 @@ function applyLocked() {
 }
 
 window.TrinityIdentity = {
+  pinRuleError,             // one rule, shared by the wizard and the settings sheet — see the block above
   current: null,
   ephemeral: false,
   locked: false,            // true when a community PIN is set and hasn't been entered this session

@@ -79,6 +79,11 @@ function app({ outcome }) {
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
     // shells and leaf icons: render children, nothing else, so the sheet's own markup is what is read below
     Overlay: ({ open, children }) => (open ? children : null),
+    // IdentityOnboarding calls useDialogA11y (app/ui.jsx) so the first-run wizard is a real modal dialog —
+    // added 2026-09-05 with finding 6. In the app both are classic scripts and ui.jsx loads first, so it is a
+    // plain global; here it has to be supplied or the component throws before rendering anything. Its own
+    // behaviour is app/ui.jsx's business and is covered by the-first-run-wizard-is-a-real-dialog.test.mjs.
+    useDialogA11y: () => {},
     Icon: () => null,
     IconBtn: ({ name, onClick }) => React.createElement('button', { title: name, onClick }),
     Group: ({ children }) => children,

@@ -23,7 +23,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stripComments } from './test-slice.mjs';
 
 const FS_V = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const ST_V = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -96,8 +96,16 @@ test('saving a name cannot touch the steward roster at all', () => {
 test('the owner\'s private labels for stewards are not published to the congregation', () => {
   // `names` is what an owner types to tell their stewards apart. Publishing those to members would disclose
   // something nobody consented to. The public by-line is a separate, opt-in field in a separate document.
-  const setr = (() => { const i = ST_V.indexOf('setStewards'); return i < 0 ? '' : ST_V.slice(i, i + 1800); })();
-  assert.match(setr, /doc\.names\s*=/, 'the private labels have stopped being carried forward');
+  // Sliced by braces, not by a fixed 1800 characters — see scripts/test-windows.test.mjs for why a window
+  // that no longer reaches the code it names is worse than no test.
+  const setr = stripComments(fnBody(ST_V, 'setStewards(', 'setStewards'));
+  // SEALED SINCE 2026-09-05 (finding 1). The claim is unchanged — the owner's private labels are carried
+  // forward across an unrelated edit — but they now travel in `n`, encrypted under the church name key,
+  // because the cleartext map named the church's officers beside their keys on the relay's disk.
+  assert.match(setr, /doc\.n\s*=/, 'the private labels have stopped being carried forward');
+  assert.doesNotMatch(setr, /doc\.names\s*=/,
+    'the private labels are in the clear again — this document sat on the relay reading ' +
+    '{"names":{"<pubkey>":"Ruth Bexley"}}, which is the church\'s leadership by name under seizure');
   assert.doesNotMatch(setr, /doc\.public\s*=/,
     'the roster is publishing member-visible names again — that belongs in the voice document');
 });

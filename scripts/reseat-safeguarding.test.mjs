@@ -235,7 +235,12 @@ function consoleSide() {
     + grab(STEWARD, 'function _newestByD(') + grab(STEWARD, 'function _connectedRelays(')
     + grab(STEWARD, 'function _guardiansDiffer(')
     + grab(STEWARD, 'async function _clearancesMatching(') + grab(STEWARD, 'function _clearanceOutranks(')
-    + grab(STEWARD, 'async function _publishToRelays(evt, urls)');
+    + grab(STEWARD, 'async function _publishToRelays(evt, urls)')
+    // setReseats seals the display name it carries across a key change (2026-09-05, finding 1) — that name
+    // used to sit on the relay bound to BOTH the old and the new key, which says "this person, before and
+    // after" and is more identifying than either list alone. The REAL sealer is grabbed rather than stubbed:
+    // a stub would decide the very thing the sealing raises, and the ring below is a real key.
+    + grab(STEWARD, 'function _sealChurchDoc(obj)');
   const methods = [
     grab(STEWARD, 'publishClearance(memberPub, status, urls)'),
     grab(STEWARD, 'refreshClearances(memberPubs, minors, approved, guardians)'),
@@ -269,6 +274,7 @@ function consoleSide() {
     // clear someone, when the rig would have thrown ReferenceError and read as the bug under test rather
     // than as a broken harness. Bound now so the next case that needs it simply works.
     _clearedTrail: { cp: '', map: {}, list: [], loaded: false },
+    _nameKeyRing: ['ef'.repeat(32)], _unhex: (h) => Uint8Array.from(h.match(/.{2}/g).map(x => parseInt(x, 16))),
     _authFuture: (e) => (e.created_at || 0) > Math.floor(Date.now() / 1000) + 600,
     _CLOCK_SKEW: 600, now, toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
     [feName]: finalizeEvent, feChurch: (t) => finalizeEvent(t, church.sk),
