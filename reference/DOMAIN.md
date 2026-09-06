@@ -405,3 +405,28 @@ asking, and do not "fix" it back to 8 as an inconsistency.
 *Why this is a domain entry and not a code comment:* a longer PIN entered several times a day is the kind of
 friction that makes people turn protection off altogether, which is strictly worse than a 6-digit PIN behind
 a hardware store. That trade is a judgement about how members behave, and it is not derivable from the code.
+
+## A person marked as a child is never a valid guardian
+
+Owner's decision, 2026-09-06, asked because the code enforced it in one place and not the other.
+
+**The rule: a guardian link must never exist between two people the same church has marked as children.**
+Not when the link is made, and not afterwards — marking someone as a young person must also end any
+guardian role they already held.
+
+*Why it was asked:* the picker already refused to offer a child as a guardian ("Only adults (not other
+children) can be linked"), but nothing re-checked a link that already existed. Mark someone as a young
+person after they were made a guardian and the app's own stated rule became quietly false for that record.
+It is not cosmetic: the relay matches a guardian link in EITHER direction and a match short-circuits the
+safeguarding refusal, so a child wrongly left as another child's guardian opens a direct-message route
+between two children that the gate exists to prevent. Found in sim round 3, verified in `gateway.mjs:1411`
+and `:1470`.
+
+*The boundary, stated so nobody re-asks:* the gate is the mechanism, who is marked as a child is the
+policy. A church wanting a 17-year-old sibling to collect a younger one does that by not marking them as
+a child. TrinityOne does not decide who is a child; it decides what follows from that mark.
+
+*Known future need, deliberately NOT built now:* teenagers helping in children's ministry are a real case,
+and after the pilot we may know whether they want a **subset** of permissions — helping, without the
+guardian rights that carry private-message access. Recorded in BACKLOG.md. Until that exists the answer is
+the simple one above: a child is never a guardian.
