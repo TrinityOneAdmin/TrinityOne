@@ -291,3 +291,17 @@ it. `scripts/the-welcome-choices-are-evenly-spaced.test.mjs` renders the real sc
 spaces itself again, if they stop sharing a style, or if one of them is quietly promoted to look like the
 primary action (they are deliberately equal weight). Measured 1/3 against the old spacing.
 
+
+## Teen helpers in children's ministry — a subset of permissions
+
+Owner, 2026-09-06, alongside the decision that a person marked as a child is never a valid guardian
+(see DOMAIN.md).
+
+Teenagers do help run children's work, and today the app has only two positions: marked as a child (no
+guardian rights, and a protected DM boundary) or not. The owner's note: **after the pilot we may know
+whether teen helpers need a subset of permissions** — able to help, without the guardian rights that
+carry private-message access to a child.
+
+Deliberately not designed yet. The pilot is what tells us whether real churches need it and in what
+shape; guessing now would ship policy where the product's rule is to ship mechanism. Do not build this
+without the owner asking for it.
