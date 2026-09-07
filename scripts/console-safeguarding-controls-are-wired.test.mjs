@@ -53,6 +53,8 @@ const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 
 const PK = 'bramhexpubkey';
 const NAME = 'Bram Whitlock';
+const CHILD = 'ivyhexpubkey', CHILD_NAME = 'Ivy Whitlock';
+const OTHER_PARENT = 'ruthhexpubkey';   // the child's other confirmed guardian, who must NOT be unlinked
 
 // Compile a set of slices from stew-dashboard.jsx together, with `globals` in scope, and hand back the named
 // declarations. Same mechanism as scripts/a-dm-that-never-sent-is-not-sent.test.mjs: a temp .jsx through the
@@ -75,9 +77,12 @@ async function loadSlices(anchors, exportNames, globals) {
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
 // One member's row, drawn the way the Members panel draws it, over a church whose safeguarding state we set.
-async function memberRowFor({ minor = false, cleared = false, results = {} }) {
+// `guardianOf`: a child pubkey this member is currently a confirmed guardian of (the D2 shape).
+async function memberRowFor({ minor = false, cleared = false, guardianOf = null, results = {} }) {
   const { React } = miniReact();
-  const calls = { minors: [], approved: [], nophoto: [], reseal: [], notice: [], blocked: [] };
+  const calls = { minors: [], approved: [], nophoto: [], guardians: [], removed: [], reseal: [], notice: [], blocked: [] };
+  const guardians = guardianOf ? { [guardianOf]: [PK, OTHER_PARENT] } : {};
+  const parentSet = new Set(); Object.values(guardians).forEach(ps => ps.forEach(p => parentSet.add(p)));
   const sg = {
     loaded: true, clearedKnown: true, cleared: {},
     minors: minor ? [PK] : [],
@@ -91,6 +96,8 @@ async function memberRowFor({ minor = false, cleared = false, results = {} }) {
       setMinors: (l) => { calls.minors.push(l); return 'minors' in results ? results.minors : true; },
       setApproved: (l, o) => { calls.approved.push([l, o]); return 'approved' in results ? results.approved : true; },
       setNoPhoto: (l) => { calls.nophoto.push(l); return true; },
+      setGuardians: (m) => { calls.guardians.push(m); return 'guardians' in results ? results.guardians : true; },
+      notifyGuardianRemoved: (parent, child) => { calls.removed.push([parent, child]); },
     },
     dispatchEvent: (e) => { calls.blocked.push(e); return true; },
   };
@@ -107,7 +114,7 @@ async function memberRowFor({ minor = false, cleared = false, results = {} }) {
       setMinorNotice: (n) => calls.notice.push(n),
       _reseal: (...a) => calls.reseal.push(a),
       // the row's own furniture — none of it is the control under test
-      nameByPub: { [PK]: NAME }, guardians: {}, parentSet: new Set(),
+      nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, parentSet,
       minorNotice: null, delegated: false, photosAllowed: false,
       SkBadge: Stub('SkBadge'), SkPill: Stub('SkPill'), Icon: Stub('Icon'),
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },
@@ -243,4 +250,82 @@ test('CONTROL: when both writes land, the steward still gets the plain-English c
   assert.match(last.text, /clearance was removed/i);
   assert.notEqual(last.tone, 'fail');
   assert.equal(r.calls.reseal.length, 1, 'the successful path must still reseal to the member’s phone');
+});
+
+// ── D2 (sim round 3): A CHILD IS NEVER A GUARDIAN ──────────────────────────────────────────────────────────
+// The picker refuses to link a child as a parent, but a link made BEFORE the mark stayed in the guardians
+// map — and the relay matched it in either direction as a reason to let two children message each other.
+// Owner's decision 2026-09-06 (reference/DOMAIN.md): marking someone as a young person must also end any
+// guardian role they already hold. Pressed through the rendered control, so this fails if the feature is
+// deleted from the screen, not only if the engine behind it breaks.
+
+test('MARKING A GUARDIAN AS A CHILD ENDS THEIR GUARDIAN ROLE — minors first, then the guardians map', async () => {
+  const r = await memberRowFor({ guardianOf: CHILD });
+  r.byLabel('Mark as a child: ').props.onClick();
+  await tick();
+  assert.deepEqual(r.calls.minors, [[PK]], 'the child mark itself was not published');
+  assert.equal(r.calls.guardians.length, 1,
+    NAME + ' was a confirmed guardian of ' + CHILD_NAME + ', was marked as a child, and is STILL in the guardians ' +
+    'map. The console refused to make that link and then left it standing once made. The relay matches a guardian ' +
+    'link in either direction, so this is a private-message route between two children');
+  assert.deepEqual(r.calls.guardians[0], { [CHILD]: [OTHER_PARENT] },
+    'the wrong entry was removed — the child\u2019s OTHER guardian must stay, and only the newly-marked child goes');
+  assert.deepEqual(r.calls.removed, [[PK, CHILD]],
+    'the parent\u2019s app was not told the link is gone, so it keeps showing a child it may message');
+});
+
+test('…and the unlinked child is re-sealed with the NEW map, so their phone learns', async () => {
+  const r = await memberRowFor({ guardianOf: CHILD });
+  r.byLabel('Mark as a child: ').props.onClick();
+  await tick();
+  const withMap = r.calls.reseal.filter(a => a[2].includes(CHILD));
+  assert.equal(withMap.length, 1, 'the child whose guardian was removed was never re-sealed — their app keeps the old answer');
+  assert.deepEqual(withMap[0][3], { [CHILD]: [OTHER_PARENT] },
+    'the child was re-sealed with the OLD guardian map, which still names the newly-marked child as their parent');
+  assert.ok(r.calls.reseal.some(a => a[2].includes(PK)), 'the newly-marked child themselves was not re-sealed');
+});
+
+test('A GUARDIAN REMOVAL THE RELAY REFUSED IS REPORTED, NOT PAINTED AS DONE', async () => {
+  // The dangerous direction, same as unlinkParent: the mark landed, the link did not go, and the person is
+  // still a guardian the relay would honour — except that the relay now ignores a child\u2019s guardian entry.
+  // The console must still say so: the record contradicts itself and only the steward can put it right.
+  const r = await memberRowFor({ guardianOf: CHILD, results: { guardians: false } });
+  r.byLabel('Mark as a child: ').props.onClick();
+  await tick();
+  const last = r.calls.notice.filter(Boolean).pop();
+  assert.ok(last, 'no notice at all after the guardians write failed');
+  assert.equal(last.tone, 'fail', 'the failed removal was reported as a success');
+  assert.match(last.text, /STILL listed as a guardian/i, 'the notice does not say the person is still a guardian, which is the fact that matters');
+  assert.match(last.text, new RegExp(CHILD_NAME), 'the notice does not name the child they are still linked to');
+  assert.equal(r.calls.removed.length, 0, 'the parent\u2019s app was told the link is gone when the relay still holds it');
+  assert.ok(!r.calls.reseal.some(a => a[2].includes(CHILD)),
+    'the child was re-sealed with a map the relay refused — their phone now disagrees with every relay');
+});
+
+test('CONTROL: marking someone who is NOT a guardian touches the guardians map not at all', async () => {
+  const r = await memberRowFor({});
+  r.byLabel('Mark as a child: ').props.onClick();
+  await tick();
+  assert.deepEqual(r.calls.guardians, [], 'an unrelated child mark rewrote the whole guardians map');
+  assert.deepEqual(r.calls.removed, []);
+  const last = r.calls.notice.filter(Boolean).pop();
+  assert.ok(!last || !/guardian/i.test(last.text), 'the steward was told about a guardian role the person never had');
+});
+
+test('CONTROL: UNMARKING leaves the guardians map alone — the rule ends roles, it does not grant them', async () => {
+  const r = await memberRowFor({ minor: true, guardianOf: CHILD });   // the historic contradiction: a child still listed
+  r.byLabel('Unmark as a child: ').props.onClick();
+  await tick();
+  assert.deepEqual(r.calls.guardians, [],
+    'unmarking rewrote the guardians map. Only a steward decides who is a guardian; unmarking must not silently make one');
+});
+
+test('…and the steward is told, in plain words, that the guardian role ended with the mark', async () => {
+  const r = await memberRowFor({ guardianOf: CHILD });
+  r.byLabel('Mark as a child: ').props.onClick();
+  await tick();
+  const last = r.calls.notice.filter(Boolean).pop();
+  assert.ok(last && last.tone !== 'fail', 'the successful path produced no notice, or a failure');
+  assert.match(last.text, /no longer listed as a guardian/i);
+  assert.match(last.text, new RegExp(CHILD_NAME), 'the notice does not name the child');
 });

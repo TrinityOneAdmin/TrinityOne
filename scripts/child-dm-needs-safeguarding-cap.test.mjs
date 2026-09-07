@@ -49,10 +49,14 @@ const lift = (name, stubs, anchor) => {
 };
 
 const CHURCH = 'c'.repeat(64), CHILD = 'k'.repeat(64);
-const make = ({ approved = [], guardians = [], caps = {} } = {}) => lift('safeguardAllows', {
+const make = ({ approved = [], guardians = [], minors = [], caps = {} } = {}) => lift('safeguardAllows', {
   minorGoverningChurches: () => [CHURCH],
   approvedIn: (who) => approved.includes(who),
   guardianLinkedIn: (minor, who) => guardians.includes(who),
+  // D2 (sim round 3): a guardian entry naming a child is ignored at decision time — a child is never a
+  // guardian. The REAL check is relay-child-is-never-a-guardian.test.mjs, against a running gateway; this stub
+  // exists so the lift below still resolves every name the function mentions.
+  minorOf: (who) => minors.includes(who),
   networkOf: () => false,
   stewardCan: (who, cp, cap) => {
     const held = caps[who];
@@ -90,7 +94,7 @@ test('a child governed by two churches needs clearance from BOTH', () => {
   const twoChurches = lift('safeguardAllows', {
     minorGoverningChurches: () => [CHURCH, 'other'],
     approvedIn: (who, cp) => who === 'half' && cp === CHURCH,   // cleared by one church only
-    guardianLinkedIn: () => false, networkOf: () => false, stewardCan: () => false,
+    guardianLinkedIn: () => false, minorOf: () => false, networkOf: () => false, stewardCan: () => false,
   });
   assert.equal(twoChurches(CHILD, 'half'), false,
     'clearance from one church opened a child governed by two');
@@ -147,7 +151,7 @@ test('an ADULT\'s request for help is untouched by any of this', () => {
   // The gate only engages for a minor. A church whose care lead is scoped to Care alone must go on running
   // ordinary care exactly as before — the change must not quietly shrink their job.
   const noMinors = lift('safeguardAllows', { minorGoverningChurches: () => [],
-    approvedIn: () => false, guardianLinkedIn: () => false, networkOf: () => false, stewardCan: () => false });
+    approvedIn: () => false, guardianLinkedIn: () => false, minorOf: () => false, networkOf: () => false, stewardCan: () => false });
   assert.equal(noMinors('a'.repeat(64), 'careLead'), true,
     'an adult who asked for help can no longer be answered — the safeguarding gate is firing on everybody');
 });

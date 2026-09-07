@@ -286,7 +286,7 @@ window.HelpData = {
         { type: 'steps', label: 'Set up your child’s account', items: [
           'Tap your circle at the top → “Children’s accounts” → “Add a child”.',
           'Enter their name. The app makes a new account and shows you its 12 recovery words — write them down and keep them safe.',
-          'On your child’s phone, sign them in with the code you are shown: in the app, “I’ve used it before” → “Someone set this up for me”, then point their camera at it. If the app is not installed yet, their phone’s normal camera opens it in the browser instead.',
+          'On your child’s phone, sign them in with the code you are shown: in the app, “Someone set this up for me”, then point their camera at it. If the app is not installed yet, their phone’s normal camera opens it in the browser instead.',
           'A steward confirms the link — then your child is protected by the rules above.',
         ] },
         { type: 'callout', tone: 'sage', text: 'You hold your child’s 12 recovery words, so the account is yours to look after. A steward confirms every parent–child link, so no one can attach themselves to a child who isn’t theirs.' },
@@ -313,7 +313,7 @@ window.HelpData = {
       blocks: [
         { type: 'p', text: 'TrinityOne can let you know when there’s something for you — a message, a church announcement, or a request to serve — even when the app is closed. You’re always in control of what comes through.' },
         { type: 'steps', label: 'Turn them on or off', items: [
-          'Tap your circle at the top → Settings → Notifications.',
+          'Tap your circle at the top → Notifications.',
           'Turn “Allow notifications” on (your phone may ask permission — tap Allow).',
           'Switch on only the things you’d like to hear about.',
         ] },
@@ -407,7 +407,7 @@ window.HelpData = {
           { lead: 'Groups & announcements', text: 'Create chat rooms and announcement channels, set which are open or invite-only, and mark the ones that are safe for children.' },
           { lead: 'Rota', text: 'Build serving teams and schedules, send “Can you serve?” requests, and see who’s said yes, can’t, or is away.' },
           { lead: 'Events & calendar', text: 'Post events and socials and see who’s coming.' },
-          { lead: 'Where your church lives (the relay)', text: 'Every church runs on a relay — the small server that carries its chat, members and announcements (the Bible reader needs none of it). New churches start on the shared TrinityOne relay with nothing to set up; when you’re ready, Settings → Relays can point your church at one you trust, or your own, without anyone losing anything.' },
+          { lead: 'Where your church lives (the relay)', text: 'Every church runs on a relay — the small server that carries its chat, members and announcements (the Bible reader needs none of it). New churches start on the shared TrinityOne relay with nothing to set up; when you’re ready, Settings → Network & relays can point your church at one you trust, or your own, without anyone losing anything.' },
         ] },
         { type: 'callout', tone: 'sage', text: 'Two extra desks can be switched on in Settings when you need them: Practical care (meal trains), and Church finances — a treasurer’s ledger (see the next guide).' },
         { type: 'note', text: 'Being a steward is delegated and revocable: a steward gets their own key and can be added or removed at any time, so leadership can change hands without anyone losing access to the church.' },
@@ -456,7 +456,7 @@ window.HelpData = {
       blocks: [
         { type: 'p', text: 'A leader or steward at your church can create an identity for you and hand it over with a simple QR code (a square barcode). You just:' },
         { type: 'steps', label: 'With a steward’s help', items: [
-          'Open TrinityOne → Restore / Scan invite.',
+          'Open TrinityOne and choose “Someone set this up for me”.',
           'Point your camera at the QR code they show you.',
           'That’s it — you’re in, no typing.',
         ] },

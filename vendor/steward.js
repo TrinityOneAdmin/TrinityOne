@@ -18956,7 +18956,7 @@ zoo`.split("\n");
       }
       const guardsUnknown = guardians === null;
       const guardsKnown = !guardsUnknown;
-      const guardsFor = (h) => guardsKnown ? gmap.get(h) || [] : void 0;
+      const guardsFor = (h) => guardsKnown ? (gmap.get(h) || []).filter((p) => !mins.has(p)) : void 0;
       const sameList = (x, y) => {
         const a = x || [], b = y || [];
         return a.length === b.length && a.every((v, i3) => v === b[i3]);
@@ -21122,6 +21122,15 @@ zoo`.split("\n");
         } catch (e) {
         }
       }
+      try {
+        _loadBoxHosts();
+        _refreshBoxHostsUs();
+      } catch (e) {
+      }
+      try {
+        _gate.refresh(relaysRaw(), pub);
+      } catch (e) {
+      }
       lastProfile = {};
       _profileLoaded = false;
       _clearanceSent.clear();
@@ -21176,10 +21185,22 @@ zoo`.split("\n");
         }
       } catch (e) {
       }
+      const candidates = () => {
+        const out = [];
+        const add2 = (u) => {
+          const s = String(u || "").trim();
+          if (s && !out.includes(s)) out.push(s);
+        };
+        const o = _ownOrigin();
+        if (o) add2(o.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") + "/relay");
+        for (const u of relaysRaw()) add2(u);
+        return out;
+      };
+      let closed = false, sub = null, dialled = [];
       const nameSubs = /* @__PURE__ */ new Map();
       const resolveName = (cp) => {
-        if (nameSubs.has(cp)) return;
-        nameSubs.set(cp, pool.subscribeMany(relays(), [{ kinds: [0], authors: [cp] }], {
+        if (closed || nameSubs.has(cp) || !dialled.length) return;
+        nameSubs.set(cp, pool.subscribeMany(dialled, [{ kinds: [0], authors: [cp] }], {
           onevent(e) {
             try {
               const nm = JSON.parse(e.content).name || "";
@@ -21195,49 +21216,86 @@ zoo`.split("\n");
           }
         }));
       };
-      if (stewardedChurches.size) cb([...stewardedChurches.keys()]);
-      [...stewardedChurches.keys()].forEach(resolveName);
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#t": [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (!d.startsWith(STEWARDS_D)) return;
-          const cp = d.slice(STEWARDS_D.length);
-          if (cp === me) return;
-          let listed = false;
-          if (!(e.tags.some((t) => t[0] === "deleted") || !e.content)) {
-            try {
-              listed = (JSON.parse(e.content).pubkeys || []).includes(me);
-            } catch {
-            }
-          }
-          const had = stewardedChurches.has(cp);
-          if (listed && !had) {
-            stewardedChurches.set(cp, { name: "Church" });
-            save();
-            resolveName(cp);
-            cb([...stewardedChurches.keys()]);
-          } else if (!listed && had) {
-            stewardedChurches.delete(cp);
-            save();
-            if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub);
-            cb([...stewardedChurches.keys()]);
-          }
-        },
-        oneose() {
-          cb([...stewardedChurches.keys()]);
-        }
-      });
-      return () => {
+      const closeAll = () => {
         try {
-          sub.close();
+          if (sub) sub.close();
         } catch {
         }
+        sub = null;
         for (const s of nameSubs.values()) {
           try {
             s.close();
           } catch {
           }
         }
+        nameSubs.clear();
+      };
+      const open = (urls) => {
+        if (closed) return;
+        const same = sub && urls.length === dialled.length && urls.every((u) => dialled.includes(u));
+        if (same) return;
+        closeAll();
+        dialled = urls.slice();
+        if (!dialled.length) return;
+        [...stewardedChurches.keys()].forEach(resolveName);
+        sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }], {
+          onevent(e) {
+            const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (!d.startsWith(STEWARDS_D)) return;
+            const cp = d.slice(STEWARDS_D.length);
+            if (cp === me) return;
+            let listed = false;
+            if (!(e.tags.some((t) => t[0] === "deleted") || !e.content)) {
+              try {
+                listed = (JSON.parse(e.content).pubkeys || []).includes(me);
+              } catch {
+              }
+            }
+            const had = stewardedChurches.has(cp);
+            if (listed && !had) {
+              stewardedChurches.set(cp, { name: "Church" });
+              save();
+              resolveName(cp);
+              cb([...stewardedChurches.keys()]);
+            } else if (!listed && had) {
+              stewardedChurches.delete(cp);
+              save();
+              if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub);
+              cb([...stewardedChurches.keys()]);
+            }
+          },
+          oneose() {
+            cb([...stewardedChurches.keys()]);
+          }
+        });
+      };
+      if (stewardedChurches.size) cb([...stewardedChurches.keys()]);
+      try {
+        Promise.resolve(_gate.refresh(candidates(), me)).then(open, () => {
+        });
+      } catch (e) {
+      }
+      const onReturned = () => {
+        if (closed) return;
+        let now2 = [];
+        try {
+          now2 = _gate.admit(candidates(), me);
+        } catch (e) {
+          now2 = [];
+        }
+        if (now2.some((u) => !dialled.includes(u))) open(now2);
+      };
+      try {
+        window.addEventListener("steward-relay-returned", onReturned);
+      } catch (e) {
+      }
+      return () => {
+        closed = true;
+        try {
+          window.removeEventListener("steward-relay-returned", onReturned);
+        } catch (e) {
+        }
+        closeAll();
       };
     },
     // this church's network memberships -> [{ networkPub, npub }]

@@ -44,7 +44,10 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
     nophoto: alreadySuppressed ? [pk] : [],
     clearedKnown: true,
   };
-  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls', 'nameByPub',
+  // `guardians` / `parentSet`: toggleMinor now reads the parent map when MARKING, to end any guardian role the
+  // person holds (a child is never a guardian — D2). Nobody here is a guardian; that path has its own tests in
+  // console-safeguarding-controls-are-wired.test.mjs.
+  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls', 'nameByPub', 'guardians', 'parentSet',
     body + '\nreturn toggleMinor;')(
     sg,
     new Set(sg.minors),
@@ -59,6 +62,7 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
     (n) => calls.notice.push(n),
     calls,
     { },   // nameByPub — only read on the failure branches, which these cases do not take
+    {}, new Set(),   // guardians, parentSet
   );
   await fn(pk);
   return calls;

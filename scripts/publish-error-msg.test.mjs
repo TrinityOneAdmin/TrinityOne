@@ -79,3 +79,40 @@ test('every refusal gateway.mjs can send maps to something specific', () => {
       `the relay sends "${r}" but the steward is told to check the connection — add a case for it`);
   }
 });
+
+// A DELEGATED STEWARD IS NEVER TOLD TO RESTORE THE CHURCH KEY.
+//
+// 2026-09-07, found on a real delegated console the moment the discovery fix let one in: the sticky banner
+// "this relay is set up for a different church. Restore this church's key in Settings" sat on EVERY tab
+// while that console was reading and acting through the very relay it was calling somebody else's. The
+// refused writes were carekey: (no care grant) and groupkey:, both while properly authenticated.
+//
+// "not a member or not permitted" is the relay's answer to a CAPABILITY refusal as well as to a wrong
+// church. A delegate signs with their own key by design and never holds the church key, so a key mismatch
+// is not a diagnosis that can apply to them — and restoring a church key would replace the church identity
+// on their device. Same rule as the kind-10002 carve-out: only a refusal that could ONLY mean a key
+// mismatch may raise that alarm.
+test('a delegated steward is told what happened, never to restore the church key', () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, 'window');
+  const prev = globalThis.window;
+  try {
+    globalThis.window = { Steward: { actingChurch: '53998834c6ce59bc5d08a52ebaa82e905d5d187b6fbad0ebc5b131be1e5dede0' } };
+    const m = map('blocked: not a member or not permitted for this group');
+    assert.equal(m.wrongChurch, false,
+      'a delegated steward’s capability refusal was diagnosed as the wrong church key');
+    assert.doesNotMatch(m.msg, /Restore this church’s key/,
+      'the banner told a DELEGATED steward to restore the church key — they do not hold one, and doing it ' +
+      'would replace the church identity on their device');
+    assert.match(m.msg, /hasn’t been given to you/, 'the delegate is not told what actually happened');
+    assert.equal(m.sticky, true, 'a refused save must not vanish on its own');
+
+    // …and the owner's diagnosis is unchanged: with no acting church, the same reason still means the key.
+    globalThis.window = { Steward: { actingChurch: '' } };
+    const owner = map('blocked: not a member or not permitted for this group');
+    assert.equal(owner.wrongChurch, true,
+      'an OWNER console lost the genuine wrong-church diagnosis — that alarm still has to fire');
+    assert.match(owner.msg, /Restore this church’s key/);
+  } finally {
+    if (had) globalThis.window = prev; else delete globalThis.window;
+  }
+});
