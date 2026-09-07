@@ -15,6 +15,7 @@
     --surface-2: #FBF5EA;
     --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
     --font-read: 'Newsreader', Georgia, serif;
+    --shadow: 0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);   /* index.html's value; the help cards (screens-help.jsx) use it */
   }
   html, body { margin: 0; height: 100%; background: #efece6; }
   #root { height: 100vh; }
@@ -98,8 +99,16 @@
 <!-- render-crash boundary: a blank screen is the worst failure this product has, and every one of them was silent -->
 <script type="text/babel" src="app/error-boundary.jsx"></script>
 <script type="text/babel" src="app/icons.jsx"></script>
+<!-- In-app Help, SHARED with the member app: the article copy (help-data), its illustrations, and the block
+     renderer / text-size stepper / read-aloud (screens-help). NOT screens-help-main.jsx — its BackupWalkthrough
+     reads window.TrinityIdentity, which the console does not have. The console's own dialog + entry point is
+     app/stew-help.jsx below (must stay stew-*: sync-web.sh strips stew-* from the member build). -->
+<script type="text/babel" src="app/help-illustrations.jsx"></script>
+<script type="text/babel" src="app/help-data.jsx"></script>
+<script type="text/babel" src="app/screens-help.jsx"></script>
 <!-- shared modal a11y (window.useStewDialog): role=dialog/aria-modal/Escape/focus for the console's dialogs -->
 <script type="text/babel" src="app/stew-modal.jsx"></script>
+<script type="text/babel" src="app/stew-help.jsx"></script>
 <!-- steward surfaces (mock SK data + the four surfaces) -->
 <script type="text/babel" src="app/stew-data.jsx"></script>
 <script type="text/babel" src="app/recur.jsx"></script>

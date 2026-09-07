@@ -66,6 +66,7 @@ function consoleWith(React, over = {}) {
     NetworkAnnounceComposer: function NetworkAnnounceComposer() { return null; },
     DismissibleNote: function DismissibleNote(p) { return p.children; },
     ConsoleChrome: function ConsoleChrome(p) { return p.children; },   // a passthrough: the layout under test is INSIDE it
+    StewHelpButton: function StewHelpButton() { return null; },   // the console's Help entry (app/stew-help.jsx); the REAL one is drawn in steward-help.test.mjs
     useStewDialog: () => ({ current: null }),
     useStewNarrow: () => false,
     churchHandle: () => 'grace',

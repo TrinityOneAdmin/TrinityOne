@@ -1403,6 +1403,7 @@ function StewDashboard({ initial = 'overview' }) {
               {actions}
             </div>
             <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
+            <StewHelpButton />
             {/* The page heading. Off-screen on a phone — the narrow header has no room for it — but a
                 screen reader still announces which section of the console it has landed in, and the card
                 headings below it now have something to hang from. */}
@@ -1447,6 +1448,7 @@ function StewDashboard({ initial = 'overview' }) {
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px', marginLeft: 'auto' }}>STEWARD</span>
           </div>
           <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
+          <StewHelpButton />
           <nav aria-label="Console sections" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {nav.map(n => {
               const on = n.key === tab;

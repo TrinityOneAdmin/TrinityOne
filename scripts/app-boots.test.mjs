@@ -53,8 +53,13 @@ after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(data
 // `seed` is localStorage written BEFORE the app's real load: booting a first-run app with no church exercises
 // almost none of the subscription code, so the shallow version of this test missed the very ReferenceError it
 // was written for. We seed a followed+active church so the church-doc subscriptions actually run.
-async function boot(path, { ms = 15000, seed = null, drive = null } = {}) {
-  const prof = join(tmpdir(), 'trin-chr-' + process.pid + '-' + Math.abs(path.split('').reduce((a, c) => a + c.charCodeAt(0), 0)));
+async function boot(path, { ms = 15000, seed = null, drive = null, tag = '' } = {}) {
+  // `tag` gives a boot its OWN profile. Two boots of the same path share a name otherwise, and measured
+  // 2026-09-07: the second steward boot in one run woke up to the first's localStorage — a console already
+  // holding a PIN-locked key — and landed on "Console locked" instead of the dashboard, every run. With its
+  // own profile name it does not. (Why the wipe in `finally` did not take is not known; no profile dir was
+  // left behind.)
+  const prof = join(tmpdir(), 'trin-chr-' + process.pid + '-' + tag + Math.abs(path.split('').reduce((a, c) => a + c.charCodeAt(0), 0)));
   // Never let a test reach production. The app dials wss://app.trinityone.church and the Tailscale funnel from
   // CANONICAL_RELAYS regardless of where the page came from; resolving them to a dead local port means a test
   // cannot write to the live relay even by accident.
@@ -146,6 +151,22 @@ test('the steward console mounts and throws nothing', { skip: !CHROME ? 'no chro
   assert.ok(r.nodes > 20, `#root has ${r.nodes} nodes — the console rendered nothing`);
 });
 
+// In-page helpers, as source strings for Runtime.evaluate: press the button whose text matches, type into the
+// input whose placeholder contains. And the walk from a fresh console to its dashboard — "Start a new church",
+// a PIN, and the wait for key generation — shared by every test that needs to be past the locked screen.
+const click = (re) => `(() => { const b=[...document.querySelectorAll('button')].find(x=>${re}.test((x.textContent||'').trim())); if(b){b.click();return 'ok';} return 'miss'; })()`;
+const type = (ph, val) => `(() => { const i=[...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes(${JSON.stringify(ph)}));
+  if(!i) return 'miss';
+  const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+  set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+const toDashboard = async ({ evalIn, wait }) => {
+  await evalIn(click('/Start a new church/i')); await wait(2500);
+  await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
+  await evalIn(type('Type it again', 'cedar-harbour-lamp-42'));
+  await evalIn(click('/Set PIN/i'));
+  await wait(9000);   // key generation + first render of the whole dashboard
+};
+
 test('the steward console mounts its DASHBOARD without throwing', { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
   // THE ONE THAT BITES, for the console — the sibling of the member app's "WITH a church" case above.
   //
@@ -160,18 +181,7 @@ test('the steward console mounts its DASHBOARD without throwing', { skip: !CHROM
   // refuses to hold a plaintext seed, so a fixture would have to reproduce its AES-GCM/PBKDF2 format — and a
   // fixture that drifts from the real format silently stops testing anything. This cannot drift, because it
   // IS the path a steward walks.
-  const r = await boot('/steward.html', { ms: 9000, drive: async ({ evalIn, wait }) => {
-    const click = (re) => `(() => { const b=[...document.querySelectorAll('button')].find(x=>${re}.test((x.textContent||'').trim())); if(b){b.click();return 'ok';} return 'miss'; })()`;
-    const type = (ph, val) => `(() => { const i=[...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes(${JSON.stringify(ph)}));
-      if(!i) return 'miss';
-      const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-      set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
-    await evalIn(click('/Start a new church/i')); await wait(2500);
-    await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
-    await evalIn(type('Type it again', 'cedar-harbour-lamp-42'));
-    await evalIn(click('/Set PIN/i'));
-    await wait(9000);   // key generation + first render of the whole dashboard
-  } });
+  const r = await boot('/steward.html', { ms: 9000, drive: toDashboard });
 
   assert.deepEqual(r.errors, [],
     `the console threw while rendering its dashboard:\n  ${r.errors.join('\n  ')}\n` +
@@ -182,4 +192,40 @@ test('the steward console mounts its DASHBOARD without throwing', { skip: !CHROM
   assert.ok(r.nodes > 120,
     `#root has ${r.nodes} nodes — the console did not reach its dashboard, so "no errors" proves nothing. ` +
     `Screen text: ${JSON.stringify(r.text)}`);
+});
+
+// THE CONSOLE'S HELP, IN THE REAL PAGE. scripts/steward-help.test.mjs proves the dialog through a miniature
+// React; this one presses the same control in Chromium with every script steward.html loads sharing one real
+// global scope — which is where a duplicate top-level name, a missing <script> tag, or a help file that
+// assumes something only the member app has (window.TrinityIdentity) would actually show up.
+test('a steward can open Help from the dashboard, read a guide, and Escape out of it', { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  const seen = {};
+  const r = await boot('/steward.html', { ms: 9000, tag: 'help-', drive: async (d) => {
+    await toDashboard(d);
+    const { evalIn, wait } = d;
+    const dialog = `document.querySelector('[role="dialog"][aria-label="Help"]')`;
+    seen.pressed = await evalIn(`(() => { const b=[...document.querySelectorAll('button')].find(x=>x.getAttribute('aria-label')==='Help'); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
+    seen.screen = await evalIn(`(document.body.innerText||'').trim().slice(0,240)`);
+    await wait(800);
+    seen.list = await evalIn(`(() => { const d=${dialog}; if(!d) return null;
+      const ids=[...d.querySelectorAll('[data-help-id]')].map(e=>e.getAttribute('data-help-id'));
+      const known=new Set(((window.HelpData||{}).articles||[]).map(a=>a.id));
+      return { ids, unknown: ids.filter(i=>!known.has(i)) }; })()`);
+    await evalIn(`(() => { const b=document.querySelector('[data-help-id="console"]'); if(b) b.click(); })()`);
+    await wait(800);
+    seen.guide = await evalIn(`(() => { const d=${dialog}; if(!d) return null;
+      const a=(window.HelpData.articles||[]).find(x=>x.id==='console'); const p=(a.blocks||[]).find(b=>b.type==='p');
+      return { hasFirstParagraph: !!p && (d.innerText||'').includes(p.text.slice(0,60)), title: (d.querySelector('h2')||{}).textContent||'' }; })()`);
+    await evalIn(`(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); })()`);
+    await wait(500);
+    seen.afterEscape = await evalIn(`!!${dialog}`);
+  } });
+  assert.deepEqual(r.errors, [], `the console threw while opening Help:\n  ${r.errors.join('\n  ')}`);
+  assert.equal(seen.pressed, 'ok', `no control with the accessible name "Help" on the dashboard. Screen text: ${JSON.stringify(seen.screen)}`);
+  assert.ok(seen.list, 'pressing Help opened no dialog with role=dialog and the name "Help"');
+  assert.ok(seen.list.ids.length >= 6, `only ${seen.list.ids.length} guides listed: ${JSON.stringify(seen.list.ids)}`);
+  assert.deepEqual(seen.list.unknown, [], 'guides listed that are not in window.HelpData');
+  assert.ok(seen.guide, 'the dialog vanished when a guide was opened');
+  assert.ok(seen.guide.hasFirstParagraph, `the console guide's first paragraph is not on screen (title shown: ${JSON.stringify(seen.guide.title)})`);
+  assert.equal(seen.afterEscape, false, 'Escape did not close the help dialog in the real page');
 });
