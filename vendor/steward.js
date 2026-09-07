@@ -18956,7 +18956,7 @@ zoo`.split("\n");
       }
       const guardsUnknown = guardians === null;
       const guardsKnown = !guardsUnknown;
-      const guardsFor = (h) => guardsKnown ? gmap.get(h) || [] : void 0;
+      const guardsFor = (h) => guardsKnown ? (gmap.get(h) || []).filter((p) => !mins.has(p)) : void 0;
       const sameList = (x, y) => {
         const a = x || [], b = y || [];
         return a.length === b.length && a.every((v, i3) => v === b[i3]);

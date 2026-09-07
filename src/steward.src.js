@@ -4824,7 +4824,12 @@ window.Steward = {
     // several callers and tests do that, and changing what silence means would disable guardian sync widely.
     const guardsUnknown = guardians === null;
     const guardsKnown = !guardsUnknown;
-    const guardsFor = (h) => (guardsKnown ? (gmap.get(h) || []) : undefined);
+    // A CHILD IS NEVER A GUARDIAN (D2, sim round 3; owner's decision 2026-09-06, reference/DOMAIN.md). Anyone on
+    // this church's minors list is dropped from every child's sealed guardian list HERE, inside the helper,
+    // so every child whose stored clearance still names a child differs from `want` and is re-sealed on the
+    // next Members open — nobody has to touch anything. Inside guardsFor rather than at its call sites so both
+    // the comparison and the write see the same list (child-parent-dm.test.mjs asserts the call shape).
+    const guardsFor = (h) => (guardsKnown ? (gmap.get(h) || []).filter(p => !mins.has(p)) : undefined);
     const sameList = (x, y) => { const a = x || [], b = y || []; return a.length === b.length && a.every((v, i) => v === b[i]); };
     const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }; };
     const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared && sameList(a.guardians, b.guardians);
