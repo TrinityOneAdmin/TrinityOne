@@ -250,8 +250,32 @@ function publishErrorMessage(reason, evt) {
   // list, is always the second. Reporting it as the first told stewards on healthy churches to restore
   // their key, which overwrites it. Only the church's own documents can imply a key mismatch.
   if (evt && evt.kind === 10002) return { wrongChurch: false, sticky: false, msg: '' };
-  if (/not a member|not permitted/i.test(r)) return { wrongChurch: true, sticky: true,
-    msg: 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.' };
+  // A CAPABILITY REFUSAL IS NOT A WRONG KEY EITHER — and for a DELEGATED steward it never can be.
+  // "not a member or not permitted" is also what the relay says when a delegate writes something their
+  // grant does not cover, and a delegate signs with their OWN key by design: they do not hold the church
+  // key, so a key mismatch is not a diagnosis that applies to them. Told otherwise, the sticky banner
+  // instructed them to "Restore this church's key in Settings" — the one action they must never take,
+  // because it would replace the church identity on their device. The Stewards panel says as much three
+  // screens away ("no steward can add themselves… only the church key may edit this roster").
+  //
+  // Seen on a real delegated console the moment the discovery fix let one in (2026-09-07): the banner sat
+  // on EVERY tab — Overview, Groups, Members, Check-in — while that same console was reading and acting
+  // through the very relay it was calling somebody else's. The refused writes were carekey: (no care
+  // grant, correctly refused) and groupkey:, both while authenticated as the steward.
+  //
+  // Same shape as the kind-10002 carve-out above: only a refusal that could ONLY mean a key mismatch may
+  // raise the alarm. For a delegate, none can — so say what actually happened and name the person who can
+  // change it, which is what the capability screens already do well.
+  if (/not a member|not permitted/i.test(r)) {
+    // `typeof window` guard, not a bare reference: publish-error-msg.test.mjs lifts this function out of
+    // this file with `new Function` and runs it with no DOM, so a bare `window` is a ReferenceError that
+    // takes three existing tests down with it. (It did, before this guard.)
+    const delegated = !!(typeof window !== 'undefined' && window.Steward && window.Steward.actingChurch);
+    if (delegated) return { wrongChurch: false, sticky: true,
+      msg: 'That change wasn’t saved — this part of the church hasn’t been given to you. Ask whoever holds the church key; they can change what you may do from their own console.' };
+    return { wrongChurch: true, sticky: true,
+      msg: 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.' };
+  }
   if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
     msg: 'Someone else saved a newer version of this while you were editing. Reload the page and make your change again — trying again as-is won’t help.' };
   if (/deleted by its author/i.test(r)) return { wrongChurch: false, sticky: true,
