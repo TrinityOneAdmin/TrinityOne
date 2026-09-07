@@ -4535,6 +4535,32 @@ function DashMembers() {
     if (!unmarking && !kidPhotosAllowed && !nophotoSet.has(pk)) {
       try { window.Steward.setNoPhoto([...(sg.nophoto || []), pk]); } catch (e) {}
     }
+    // A CHILD IS NEVER A GUARDIAN — so marking somebody as a child must END any guardian role they already
+    // hold. Sim round 3, D2: the picker refuses to link a child as a parent, but a link made BEFORE the mark
+    // stayed in `guardians:`, and the relay matched it in either direction as a reason to let two children
+    // message each other. Owner's decision 2026-09-06 (reference/DOMAIN.md). Minors first, guardians second:
+    // the protection lands before the tidy-up, and the relay now ignores a child's guardian entry at decision
+    // time, so the gap between the two writes is not a route. A removal the relay refuses is REPORTED, never
+    // painted as done — the same standard unlinkParent holds itself to.
+    let unlinkedFrom = [], nextG = null;
+    if (!unmarking && parentSet.has(pk)) {
+      nextG = {};
+      Object.keys(guardians).forEach(c => {
+        const ps = guardians[c] || [], kept = ps.filter(p => p !== pk);
+        if (kept.length !== ps.length) unlinkedFrom.push(c);
+        if (kept.length) nextG[c] = kept;
+      });
+      let okG = null;
+      try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+      if (!okG) {
+        setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is marked as a child, but they are STILL listed as a guardian of '
+          + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + ' — the relay didn’t accept the removal. A child is never a guardian; try again.' });
+        _reseal(next, nextApproved, [pk]);
+        return r;
+      }
+      // the children they were unlinked from learn from their own sealed clearance; the parent's app is told directly
+      unlinkedFrom.forEach(c => { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pk, c); } catch (e) {} });
+    }
     // SAY SO. Unmarking a child ALSO revokes their youth clearance, and that is deliberate — leaving a stale
     // clearance behind is how a six-year-old becomes someone the relay treats as cleared to message children
     // (see the note above). But it happened in silence: a steward correcting a mis-tap destroyed a real
@@ -4560,8 +4586,12 @@ function DashMembers() {
     }
     setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
       ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
-      : null);
-    _reseal(next, nextApproved, [pk]); return r;
+      : (unlinkedFrom.length
+        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian.' }
+        : null));
+    // With the new map when a link was removed: the unlinked children's sealed clearances are the only place
+    // their phones learn who their confirmed parents are now.
+    _reseal(next, nextApproved, nextG ? [pk, ...unlinkedFrom] : [pk], nextG || undefined); return r;
   };
   // A CHILD CANNOT BE CLEARED TO WORK WITH CHILDREN. The relay refuses to store it; refuse it here too, so a
   // steward is told rather than left believing a press landed. Miriam: "not a word of objection that I was
@@ -4607,6 +4637,13 @@ function DashMembers() {
   };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = async (r) => {
+    // The guard linkParent has always had, and this path did not: a request from someone the church has marked
+    // as a child must be refused, not confirmed. A child is never a guardian (D2; reference/DOMAIN.md).
+    if (minorsSet.has(r.parent)) {
+      setMinorNotice({ pk: r.child, tone: 'fail', text: (nameByPub[r.parent] || 'That person') + ' is marked as a child, so they cannot be confirmed as a guardian '
+        + 'of ' + (nameByPub[r.child] || 'this child') + '. Nothing has been linked. A child is never a guardian — unmark them first if that was wrong.' });
+      return null;
+    }
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
     let okG = null;
     try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
@@ -4857,6 +4894,10 @@ function DashMembers() {
           {(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="sage">parent: {guardians[m.pubkey].map(p => nameByPub[p] || 'linked').join(', ')}</SkPill> : null}
           {minorsSet.has(m.pubkey) && !(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="ink">no guardian</SkPill> : null}
           {parentSet.has(m.pubkey) ? <SkPill tint="sage">parent account</SkPill> : null}
+          {/* Only data an older console wrote, or a re-seat carried across, can produce this now — which is
+              exactly why it must be visible: the row is the only place a steward learns of a historic link.
+              Unmark and re-mark them to clear it, or unlink them from the child's row. */}
+          {minorsSet.has(m.pubkey) && parentSet.has(m.pubkey) ? <SkPill tint="clay">child · still listed as a guardian</SkPill> : null}
           <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="chat" size={15} color="currentColor" /> Chat</button>
           {/* WHAT EACH CONTROL ACTUALLY NEEDS, rather than "are you the owner". One `!delegated` wrapper used to
@@ -5013,13 +5054,13 @@ function DashMembers() {
               // to be able to see WHO they are actually linking.
               <div key={r.child} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
                 <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.4 }}>
-                  <div><b style={{ color: 'var(--ink)' }}>{knownName(r.parent)}</b> asks to be linked as a parent{r.claimedParentName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedParentName}”</span> : null}</div>
+                  <div><b style={{ color: 'var(--ink)' }}>{knownName(r.parent)}</b> asks to be linked as a parent{r.claimedParentName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedParentName}”</span> : null}{minorsSet.has(r.parent) ? <span style={{ color: 'var(--clay-ink)', fontWeight: 700 }}> — is marked as a child and cannot be a guardian</span> : null}</div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>parent {idOf(r.parent)}</div>
                   <div style={{ marginTop: 4 }}>of <b style={{ color: 'var(--ink)' }}>{knownName(r.child)}</b>{r.claimedChildName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedChildName}”</span> : null}{minorsSet.has(r.child) ? null : <span style={{ color: 'var(--clay-ink)' }}> — not currently marked as a child</span>}</div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>child {idOf(r.child)}</div>
                   <div style={{ marginTop: 5, fontSize: 11.5, color: 'var(--ink-3)' }}>Confirming lets this person DM the child directly and marks the child as under-18. Check both npubs are who you expect.</div>
                 </div>
-                <button onClick={() => approveGuardian(r)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
+                <button onClick={() => approveGuardian(r)} disabled={minorsSet.has(r.parent)} aria-label={'Confirm guardian link: ' + knownName(r.parent) + ' for ' + knownName(r.child)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0, opacity: minorsSet.has(r.parent) ? 0.5 : 1 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
               </div>
             ))}
             </div>
@@ -5131,7 +5172,7 @@ function CheckinPicker({ available, nameFor, guardiansOf, onPick, onClose }) {
           {available.map(c => { const gs = guardiansOf(c); return (
             <button key={c} onClick={() => onPick(c)} title="Check this child in" style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 36, height: 36, borderRadius: 999, background: 'var(--clay-soft)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="child" size={18} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{nameFor(c)}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{gs.length ? 'Pickup: ' + gs.join(', ') : 'No guardian linked'}</div></div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{nameFor(c)}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{gs.length ? 'Pickup: ' + gs.join(', ') : 'No adult guardian linked'}</div></div>
               <Icon name="plus" size={16} color="var(--clay)" />
             </button>
           ); })}
@@ -5162,7 +5203,10 @@ function DashCheckin() {
   const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || ('Child ' + (pub || '').slice(-6)); };
-  const guardiansOf = (pub) => (guardians[pub] || []).map(nameFor).filter(Boolean);
+  // ADULT guardians only. A child wrongly left in another child's guardian list (D2) must never be printed as
+  // the person who may collect them — this is the list a leader at the door reads a name off.
+  const minorSet = new Set(minors);
+  const guardiansOf = (pub) => (guardians[pub] || []).filter(p => !minorSet.has(p)).map(nameFor).filter(Boolean);
   const today = todayISO();
   const todays = recs.filter(r => r.date === today);
   const present = todays.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
@@ -5226,7 +5270,7 @@ function DashCheckin() {
                 <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.childName || nameFor(r.child)}</div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>In {fmtT(r.in)}{gs.length ? ' · pickup: ' + gs.join(', ') : ' · no guardian linked'}</div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>In {fmtT(r.in)}{gs.length ? ' · pickup: ' + gs.join(', ') : ' · no adult guardian linked'}</div>
                   </div>
                   {/* LABELLED WHERE IT CAN BE READ. The only label was a `title` tooltip — invisible on a
                       touch screen and to a screen reader. Round 7: a safeguarding lead looking at this row saw
