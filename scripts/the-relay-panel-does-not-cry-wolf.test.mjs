@@ -29,13 +29,16 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const PORT = 8931;                      // own port: a shared one collides with a concurrent suite
+const PORT = 8926;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs — a shared one collides with a concurrent suite
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let relay = null, dataDir = null, token = '';
 
 before(async () => {
+  // A HUNG RUN FROM HOURS AGO STILL HOLDS ITS PORT — this refuses rather than reporting phantom failures.
+  await requireFreePort(PORT, 'the-relay-panel-does-not-cry-wolf.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-panel-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: ROOT, stdio: 'ignore', env: { ...process.env, TRINITY_DATA_DIR: dataDir },

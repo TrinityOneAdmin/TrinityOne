@@ -1879,10 +1879,23 @@ function useGoPublicGate() {
   React.useEffect(() => {
     if (!selfHosted) return;
     const check = async () => {
+      // THREE ANSWERS, NOT TWO. "Not public", "couldn't ask" and "it threw" all used to collapse into
+      // `false` — and the copy for `false` is a flat statement of fact: "your relay only answers on this
+      // building's wifi, so an invite would fail on anyone else's phone." We say that to a steward whose
+      // relay is, in fact, public and reachable. Measured 2026-09-07: the console said exactly that while
+      // the relay's own panel on the same box read "ON · PUBLIC · Reachable from anywhere", and members
+      // were joining through that address at the time.
+      //
+      // tunnelState() answers `supported:false` for BOTH "this console has no local relay to ask" and
+      // "no admin token", neither of which is evidence the relay is private. So `supported === false`
+      // becomes 'unknown' and gets its own honest sentence, rather than borrowing the confident one.
+      // 'unknown' still BLOCKS the invite (see `blocking`) — not knowing is a reason to offer the tunnel,
+      // not a reason to hand out an address we cannot vouch for.
       try { const st = await window.Steward.tunnelState(); if (!alive.current) return;
         if (st && st.running && st.wss) { const nm = await window.Steward.ownRelayName().catch(() => ''); if (alive.current) setPub({ wss: st.wss, name: nm }); }
+        else if (st && st.supported === false) { if (alive.current) setPub('unknown'); }
         else if (alive.current) setPub(false);
-      } catch (e) { if (alive.current) setPub(false); }
+      } catch (e) { if (alive.current) setPub('unknown'); }
     };
     check();
     // keep sibling invite surfaces coherent — go-public (or a cleared stale url) dispatches 'steward-relays'.
@@ -1897,7 +1910,9 @@ function useGoPublicGate() {
     if (alive.current) setBusy(false);
   };
   // gate is "open" (show the invite) when: not self-hosted, already public, or the operator chose to skip
-  const blocking = selfHosted && (pub === null || (pub === false && !override));
+  // 'unknown' blocks too: we could not check, so we cannot vouch for the invite. It is NOT rendered
+  // with the same words as a known-private relay — see GoPublicPanel.
+  const blocking = selfHosted && (pub === null || pub === 'unknown' || (pub === false && !override));
   return { selfHosted, pub, busy, err, override, setOverride, goPublic, blocking };
 }
 
@@ -1908,7 +1923,12 @@ function GoPublicPanel({ gate }) {
   return (
     <div>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--clay-ink)', fontWeight: 700, fontSize: 15 }}><Icon name="globe" size={18} color="var(--clay)" /> Make your church reachable</div>
-      <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0', maxWidth: 560 }}>Right now your relay only answers on this building’s wifi, so an invite would fail on anyone else’s phone. Turn on a secure tunnel — <b style={{ color: 'var(--ink)' }}>free, no account</b>, no router or port setup — and your church becomes reachable worldwide.</p>
+      {/* NEVER STATE AS FACT SOMETHING WE DID NOT CHECK. `false` means the relay told us it is not
+          public; 'unknown' means we could not ask it (no local relay to query, or no admin token) —
+          which is not evidence either way, and used to borrow the confident sentence below. */}
+      {pub === 'unknown'
+        ? <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0', maxWidth: 560 }}>We couldn’t check whether your relay can be reached from outside this building, so we can’t promise an invite will work on someone else’s phone. Turning on a secure tunnel — <b style={{ color: 'var(--ink)' }}>free, no account</b>, no router or port setup — makes sure it does.</p>
+        : <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0', maxWidth: 560 }}>Right now your relay only answers on this building’s wifi, so an invite would fail on anyone else’s phone. Turn on a secure tunnel — <b style={{ color: 'var(--ink)' }}>free, no account</b>, no router or port setup — and your church becomes reachable worldwide.</p>}
       <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 13, flexWrap: 'wrap' }}>
         <button className="sk-btn sk-btn--clay" onClick={goPublic} disabled={busy} style={busy ? { opacity: .6, cursor: 'wait' } : undefined}>
           {busy ? <><span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,.5)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', marginRight: 4, animation: 'trinitySpin .7s linear infinite' }} /> Opening a secure tunnel… (up to 30s)</> : <><Icon name="globe" size={17} color="#fff" /> Turn on public access</>}
