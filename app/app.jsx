@@ -1229,7 +1229,6 @@ function App() {
     return () => { clearTimeout(offlineT); if (typeof unsub === 'function') unsub(); };
   }, [activeChurch, churches, connTick]);
   // tell the member the moment they're approved (pending → admitted), within the same church session
-  const wasPendingRef = React.useRef(false);
   const approvedToastedRef = React.useRef(false);   // once per church — the join sub flickers isPending on reconnect, which was re-toasting
   useAE(() => {
     // persist the "already welcomed" flag per church — the in-memory ref reset every launch, and the join sub
@@ -1237,15 +1236,29 @@ function App() {
     const key = activeChurch ? 'trinityone.approvedToast.' + activeChurch : null;
     let already = approvedToastedRef.current;
     if (!already && key) { try { already = localStorage.getItem(key) === '1'; } catch (e) {} }
-    if (wasPendingRef.current && joinState.approval && joinState.isAdmitted && !joinState.isPending && !already) {
+    // NO LONGER REQUIRES HAVING WATCHED THE TRANSITION. This also demanded `wasPendingRef.current` — the
+    // app had to be open and to have SEEN the pending state before admission landed. A steward takes up to
+    // a day, and the help tells the member closing the app is fine ("If you close it, nothing is lost").
+    // So the common case — approved while the app was shut — reopened to a church that simply worked, with
+    // nothing ever saying they were in. Measured 2026-09-07: an admitted member's screen carried no
+    // admission notice at all; the waiting card had just disappeared. Meanwhile the help promises "Leave
+    // the app open and you will see it happen", which the app then did not do for anyone who did not.
+    //
+    // Safe to fire on the standing state rather than the edge, because isAdmitted is a POSITIVE signal:
+    // it means "my key is on the church's admitted list", read live. A refused or ungated read comes back
+    // EMPTY (fellowship.src.js carries that note), so this can be falsely NEGATIVE but never falsely
+    // positive — which is the direction that matters. It cannot congratulate someone who is not in.
+    //
+    // Repeats are still prevented by the persisted per-church flag below, which is what actually made the
+    // old ref necessary; the ref alone reset on every launch.
+    if (joinState.approval && joinState.isAdmitted && !joinState.isPending && !already) {
       const nm = (churches.find(c => c.id === activeChurch) || {}).name || 'your church';
       toast('You’re approved — welcome to ' + nm + '!');
       approvedToastedRef.current = true;
       try { if (key) localStorage.setItem(key, '1'); } catch (e) {}
     }
-    wasPendingRef.current = !!joinState.isPending;
   }, [joinState.isPending, joinState.isAdmitted, joinState.approval]);
-  React.useEffect(() => { wasPendingRef.current = false; approvedToastedRef.current = false; }, [activeChurch]);   // reset on church switch
+  React.useEffect(() => { approvedToastedRef.current = false; }, [activeChurch]);   // reset on church switch
   // events posted by group leaders (members the church empowered) — merged into the church's events
   const [groupEvents, setGroupEvents] = useA([]);
   // depend on STABLE string keys (npub + sorted group-ids), not the array refs — else this re-subscribes on
