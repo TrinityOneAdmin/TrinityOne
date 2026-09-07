@@ -69,11 +69,24 @@ if [[ $DO_APK == 1 ]]; then
   # build packages the LAST-synced assets, which silently ships stale web code).
   say "member APK"
   run "bash scripts/sync-web.sh"
-  # assembleRelease → signed with the STABLE release key (android/app/keystore.properties, gitignored) +
-  # non-debuggable, so every update installs cleanly over the last. (Falls back to unsigned on a box
-  # without the keystore — keep release.keystore + keystore.properties backed up.)
-  run "( cd android && ./gradlew assembleRelease -q )"
-  run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"
+  # ⚠ PILOT-DEFERRED: DEBUG-signed on purpose, the same owner's call that governs the steward APK
+  # (see scripts/build-steward-apk.sh, "PILOT-DEFERRED"). The steward build was corrected when the
+  # slip was caught there; THIS path was missed and went on release-signing the member app —
+  # confirmed by the owner on 2026-09-07 ("we should be debug only still") after a release had
+  # already produced a stable-signed trinityone.apk. That APK was replaced with a debug build by hand.
+  #
+  # Why it matters, and it is not bookkeeping: a stable-signed APK cannot be installed over a
+  # debug-signed one and vice versa, so mixing the two mid-pilot strands testers on whichever they
+  # installed first — they must uninstall to move, which destroys the identity and church membership
+  # on that device. It also spends the real signing key on pilot builds before go-live.
+  #
+  # AT GO-LIVE: swap the two lines below back (and the pair in build-steward-apk.sh), because
+  # assembleRelease is what gives a non-debuggable build signed with the stable key so that every
+  # later update installs cleanly over the last. Keep release.keystore + keystore.properties backed up.
+  #     run "( cd android && ./gradlew assembleRelease -q )"
+  #     run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"
+  run "( cd android && ./gradlew assembleDebug -q )"
+  run "cp android/app/build/outputs/apk/debug/app-debug.apk trinityone.apk"
   # in-app update check: refresh the manifest the member app reads on open (apk-latest.json, served
   # at ASSET_BASE). Old installs compare their versionCode to this and show an "Update available" banner.
   if [[ $DRY == 0 ]]; then
