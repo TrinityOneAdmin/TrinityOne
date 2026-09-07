@@ -34,17 +34,49 @@
 
   const initials = (n) => (n||'?').split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
   async function poll() {
+    // REACHABILITY IS DECIDED BY THE FETCH, NOTHING ELSE. This try used to wrap the fetch AND every DOM
+    // update after it, so any rendering error landed in the catch below and told a volunteer their relay
+    // was down. It did, continuously: `/status` stopped returning `counts` (it is still in the
+    // open-source snapshot at fcbf20a, "carries only non-sensitive counts"), so `s.counts.churches` threw
+    // on every poll — five seconds apart, for ever — on a perfectly healthy box.
+    //
+    // What that looked like, measured 2026-09-07: the first line of every tab read "Relay not reachable —
+    // Is the relay running? Restart the app." while the same page showed 294 events, two churches and
+    // "✓ Reachable from anywhere", and /status answered ok:true. The one instruction on screen was to
+    // restart the thing that was working. Four of the six headline cards were dashes at the same time —
+    // the four assignments after the throw — sitting beside the very numbers they claimed not to know.
+    // One defect, two findings (round 4, #2 and #3).
+    let s;
     try {
-      const r = await fetch('/status', { cache:'no-store' });
-      const s = await r.json();
+      const r = await fetch('/status', { cache: 'no-store' });
+      s = await r.json();
+    } catch (e) {
+      document.getElementById('dot').className = 'dot off';
+      document.getElementById('title').textContent = 'Relay not reachable';
+      document.getElementById('sub').textContent = 'Is the relay running? Restart the app.';
+      return;
+    }
+    try {
       document.getElementById('dot').className = 'dot on';
       document.getElementById('title').textContent = 'Your relay is running';
       const up = Math.floor(s.uptimeMs/1000); const h=Math.floor(up/3600), m=Math.floor((up%3600)/60);
       document.getElementById('sub').textContent = 'Up ' + (h?h+'h ':'') + m + 'm · port ' + s.port;
-      document.getElementById('s-churches').textContent = s.counts.churches;
-      document.getElementById('s-members').textContent = s.counts.members;
-      document.getElementById('s-events').textContent = s.counts.events;
-      document.getElementById('s-conns').textContent = s.counts.connections;
+      // COUNTS COME FROM THE ADMIN-GATED /stats, NOT FROM /status. They were read from `s.counts` on the
+      // public, unauthenticated /status — and they are church-identifying, which is the standard the rest
+      // of that handler holds itself to (the clock was justified there as "says nothing about the
+      // church"). So they are not being restored to /status; the panel already holds an admin token and
+      // already calls /stats for the activity chart. `—` stays put when a number is genuinely unknown.
+      const st = await fetch('/stats?days=1', { headers: authHeaders(), cache: 'no-store' })
+        .then(r2 => (r2.ok ? r2.json() : null)).catch(() => null);
+      if (st) {
+        const kinds = st.kinds || [];
+        const total = kinds.reduce((a, k) => a + (k.n || 0), 0);
+        const profiles = (kinds.find(k => k.kind === 0) || {}).n;
+        document.getElementById('s-churches').textContent = (st.churches || []).length;
+        if (profiles != null) document.getElementById('s-members').textContent = profiles;
+        document.getElementById('s-events').textContent = total.toLocaleString();
+        if (st.connections != null) document.getElementById('s-conns').textContent = st.connections;
+      }
       // sync health — the point of the card is 'is this working?', not a button
       const sw = document.getElementById('syncWhen');
       if (sw && s.sync) {
@@ -58,9 +90,14 @@
         }
       }
     } catch (e) {
-      document.getElementById('dot').className = 'dot off';
-      document.getElementById('title').textContent = 'Relay not reachable';
-      document.getElementById('sub').textContent = 'Is the relay running? Restart the app.';
+      // THE RELAY ANSWERED. Whatever went wrong here is ours — a field that changed shape, a missing
+      // element — and it must never be reported as the relay being down, which is what sent a volunteer
+      // to restart a healthy box for weeks. Leave the "running" headline alone (the fetch above earned
+      // it), leave whatever rendered before this, and say plainly that the panel is the broken part.
+      try {
+        document.getElementById('sub').textContent = 'Your relay is answering, but this page couldn’t read part of its reply.';
+      } catch (e2) {}
+      try { console.error('[relay panel] render failed after a successful /status', e); } catch (e2) {}
     }
   }
   poll(); setInterval(poll, 5000);

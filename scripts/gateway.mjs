@@ -3447,6 +3447,15 @@ function serveStatic(req, res) {
       churches: (act.churches || []).map(c => ({ ...c, name: churchPetName(c.church) })),
       media: { bytes: _mediaBytesTotal, capBytes: effMediaCap() },
       uptimeMs: Date.now() - STARTED_AT,
+      // LIVE SOCKETS, for the operator's "Connected now" card. It is the one figure on that dashboard the
+      // stored-event stats cannot answer, and it used to come from `counts.connections` on the PUBLIC
+      // /status — which no longer carries counts at all, so the card had been a dash beside the very
+      // numbers it claimed not to know (round 4). Added HERE, behind the admin token, rather than restored
+      // to /status: this endpoint is already gated, and the /status handler holds itself to "says nothing
+      // about the church" (see the clock note there). A live connection count is closer to a server metric
+      // than a church fact, but it is still a signal about how busy a congregation is, and the gated
+      // endpoint costs nothing to use — the panel already sends the token for its activity chart.
+      connections: wss ? wss.clients.size : 0,
     }));
     return;
   }
