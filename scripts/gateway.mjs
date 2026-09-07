@@ -1467,7 +1467,18 @@ function safeguardAllows(minorPub, other) {
   const cps = minorGoverningChurches(minorPub);
   if (!cps.length) return true;
   for (const cp of cps) {
-    if (approvedIn(other, cp) || guardianLinkedIn(minorPub, other, cp)) continue;
+    // A CHILD IS NEVER A GUARDIAN, whatever the guardians: map says. The map is written by the console, which
+    // refuses to LINK a child as a parent but never re-checked a link that already existed: mark a linked adult
+    // as a young person afterwards and the link stayed, and because guardianLinkedIn matches in EITHER direction
+    // it short-circuited this refusal — a direct-message route between two people the same church had marked
+    // as children, which is the exact thing this gate exists to prevent. Found in sim round 3 (D2); owner's
+    // decision 2026-09-06 (reference/DOMAIN.md): a person the church marks as a child is never a valid guardian.
+    // Evaluated HERE, per church, at decision time — so it holds whichever document was written first, holds
+    // over every map already stored (the relay rehydrates all history on update), and holds against an older or
+    // modified console. The guardians: write itself is NOT refused for naming a child: one bad entry would then
+    // block every legitimate link in the same document. Same shape as approvedIn, where a child is never a
+    // cleared worker. guardianLinkedIn is left as it is so its name stays true.
+    if (approvedIn(other, cp) || (guardianLinkedIn(minorPub, other, cp) && !minorOf(other, cp))) continue;
     // THE SAFEGUARDING ROLE, NOT MERELY SOME ROLE. This read `stewardCan(other, cp, 'any')` until 2026-08-26,
     // so a delegated steward holding ANY single capability could privately message any child in the
     // congregation — a treasurer given nothing but Finance, a volunteer given nothing but Groups & rotas.
