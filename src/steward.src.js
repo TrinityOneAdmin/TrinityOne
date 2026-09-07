@@ -6865,6 +6865,17 @@ window.Steward = {
     // between churches changes where this console comes back to.
     const _isNetwork = !actingChurch && tp !== churchPub;
     if (!_isNetwork) { try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {} }
+    // DOES THIS BOX HOLD THE CHURCH WE JUST SWITCHED TO? `_boxHostsUs` is cached per church (_boxHostsKey is
+    // keyed on `pub`), but only setKey ever reloaded it — so a switch carried the answer for the PREVIOUS key
+    // across. For a delegated steward that answer is "no": their own key is not a church anywhere, the box
+    // honestly said so, and ownRelay() then named the community pool for the church this box actually holds.
+    // Measured 2026-09-06 (round 3, D1): a steward granted from the owner's console on the same box never
+    // saw the church — zero frames — because the one relay holding it had been dropped from relaysRaw().
+    // Same pair setKey runs, for the same reason: now that we know which church is asking, ask again. On a
+    // tunnelled console localAdminToken() is null and _refreshBoxHostsUs returns early, leaving whatever was
+    // cached for the church key (null on first sight → the box stays in, the documented safe side).
+    try { _loadBoxHosts(); _refreshBoxHostsUs(); } catch (e) {}
+    try { _gate.refresh(relaysRaw(), pub); } catch (e) {}
     lastProfile = {}; _profileLoaded = false;   // don't carry one identity's profile fields — or its loaded-ness — into the other's edits
     // The just-published clearance cache is per-CHURCH and must not survive the switch either: it is keyed by
     // member pubkey alone, so a member who belongs to both churches could be skipped for the wrong one within
@@ -6942,32 +6953,90 @@ window.Steward = {
         window.Steward.setActiveIdentity(want);
       }
     } catch (e) {}
-    // resolve a stewarded church's real name from its kind-0 profile (kept open so a rename follows live)
+    // WHICH RELAYS TO ASK, AND WHEN. This read used to go over relays() — the publish set, filtered by the
+    // gate's CACHE. Two things made that an empty list for exactly the person this function exists for:
+    //   1. relaysRaw() starts from ownRelay(), which returns the community pool the moment `_boxHostsUs` is
+    //      false — and for a delegated steward it always is, because their own key is not a church anywhere,
+    //      so the box that holds the church they steward was never even a candidate; and
+    //   2. admit() is synchronous and answers from the cache alone (relay-net.src.js, "never verify-or-drop on
+    //      the hot path"), so on a cold cache it returned [] and the subscription was opened over nothing.
+    // Measured 2026-09-06 (round 3, D1): zero frames, the church never appeared in the switcher.
+    //
+    // So the candidates are read the way the enrolment census reads them (relayNetCandidates, "READ STRAIGHT
+    // OFF location"): the box that served this console, then everything relaysRaw() assembles, de-duplicated.
+    // And they are PROVED BEFORE USE, awaited: _gate.refresh() is the gate's own "prove this list now" form.
+    // Every address dialled below has proved, at that address, that it holds a relay identity key — the one
+    // and only admission rule (reference/RELAY-ADMISSION.md). Nothing is admitted here that the gate did not
+    // admit, nothing here publishes, and _ownOrigin() is '' inside a Capacitor APK, so on a phone this list
+    // is exactly relaysRaw(). This is a read of the same class as the two bootstrap reads that file names as
+    // load-bearing: the document that says which church you steward must be read before you know whose
+    // signature to look for.
+    const candidates = () => {
+      const out = [];
+      const add = (u) => { const s = String(u || '').trim(); if (s && !out.includes(s)) out.push(s); };
+      const o = _ownOrigin();
+      if (o) add(o.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/relay');
+      for (const u of relaysRaw()) add(u);
+      return out;
+    };
+    // The subscriptions are opened when the proof resolves, so they live in closure cells the closer can
+    // reach; the closer runs synchronously (the hook needs an unsubscribe back at once) and marks itself
+    // closed so a proof landing after it opens nothing.
+    let closed = false, sub = null, dialled = [];
     const nameSubs = new Map();
+    // resolve a stewarded church's real name from its kind-0 profile (kept open so a rename follows live)
     const resolveName = (cp) => {
-      if (nameSubs.has(cp)) return;
-      nameSubs.set(cp, pool.subscribeMany(relays(), [{ kinds: [0], authors: [cp] }], {
+      if (closed || nameSubs.has(cp) || !dialled.length) return;
+      nameSubs.set(cp, pool.subscribeMany(dialled, [{ kinds: [0], authors: [cp] }], {
         onevent(e) { try { const nm = (JSON.parse(e.content).name) || ''; if (nm && stewardedChurches.has(cp) && (stewardedChurches.get(cp).name !== nm)) { stewardedChurches.set(cp, { name: nm }); save(); cb([...stewardedChurches.keys()]); } } catch {} },
         oneose() {},
       }));
     };
+    const closeAll = () => {
+      try { if (sub) sub.close(); } catch {} sub = null;
+      for (const s of nameSubs.values()) { try { s.close(); } catch {} } nameSubs.clear();
+    };
+    const open = (urls) => {
+      if (closed) return;
+      const same = sub && urls.length === dialled.length && urls.every(u => dialled.includes(u));
+      if (same) return;                       // the proof landed for a set we already dialled
+      closeAll();
+      dialled = urls.slice();
+      if (!dialled.length) return;            // nothing proved: keep listening for a relay to return
+      [...stewardedChurches.keys()].forEach(resolveName);   // refresh names for cached entries
+      sub = pool.subscribeMany(dialled, [{ kinds: [30078], '#t': [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (!d.startsWith(STEWARDS_D)) return;
+          const cp = d.slice(STEWARDS_D.length);
+          if (cp === me) return;   // our own roster doesn't make us our own steward
+          let listed = false;
+          if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { listed = ((JSON.parse(e.content).pubkeys) || []).includes(me); } catch {} }
+          const had = stewardedChurches.has(cp);
+          if (listed && !had) { stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp); cb([...stewardedChurches.keys()]); }
+          else if (!listed && had) { stewardedChurches.delete(cp); save(); if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub); cb([...stewardedChurches.keys()]); }
+        },
+        oneose() { cb([...stewardedChurches.keys()]); },
+      });
+    };
     if (stewardedChurches.size) cb([...stewardedChurches.keys()]);   // emit the cached list immediately
-    [...stewardedChurches.keys()].forEach(resolveName);              // refresh names for cached entries
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (!d.startsWith(STEWARDS_D)) return;
-        const cp = d.slice(STEWARDS_D.length);
-        if (cp === me) return;   // our own roster doesn't make us our own steward
-        let listed = false;
-        if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { listed = ((JSON.parse(e.content).pubkeys) || []).includes(me); } catch {} }
-        const had = stewardedChurches.has(cp);
-        if (listed && !had) { stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp); cb([...stewardedChurches.keys()]); }
-        else if (!listed && had) { stewardedChurches.delete(cp); save(); if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub); cb([...stewardedChurches.keys()]); }
-      },
-      oneose() { cb([...stewardedChurches.keys()]); },
-    });
-    return () => { try { sub.close(); } catch {} for (const s of nameSubs.values()) { try { s.close(); } catch {} } };
+    // Prove, then open. A refresh that rejects opens nothing; the returned-relay listener below is the retry.
+    try { Promise.resolve(_gate.refresh(candidates(), me)).then(open, () => {}); } catch (e) {}
+    // RE-OPEN WHEN A RELAY ENTERS THE ADMITTED SET. The hook re-subscribes on `conn` only, and `conn` bumps
+    // on a socket returning from down — never on a proof landing. The gate's onChange fires this same event
+    // when a proof lands, so without this listener the fix would work only from a warm cache. admit() is the
+    // cache-only form and is right here: this is a "did the answer change?" check, not a probe.
+    const onReturned = () => {
+      if (closed) return;
+      let now = []; try { now = _gate.admit(candidates(), me); } catch (e) { now = []; }
+      if (now.some(u => !dialled.includes(u))) open(now);
+    };
+    try { window.addEventListener('steward-relay-returned', onReturned); } catch (e) {}
+    return () => {
+      closed = true;
+      try { window.removeEventListener('steward-relay-returned', onReturned); } catch (e) {}
+      closeAll();
+    };
   },
   // this church's network memberships -> [{ networkPub, npub }]
   subscribeNetworks(onNetworks) {
