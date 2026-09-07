@@ -852,6 +852,40 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     if (!rows.length) { next(); return; }   // deliberately skipped — nothing to publish
     setBusy(true); setMeetingErr('');
     let failed = 0;
+    // MINT THE NAME KEY BEFORE SEALING AGAINST IT. A brand-new church has none: every caller of
+    // ensureNameKeyForMembers lives in the Members area, which setup never reaches. publishEvent seals
+    // through _sealChurchDocReady, which waits NAME_KEY_WAIT_MS for a ring and then — correctly — returns
+    // null rather than writing a gathering in the clear. So this step could NEVER succeed on a new church:
+    // it failed, blamed the relay ("the relay didn't accept them") which was never asked, offered no way
+    // past, and the only escape was reloading the page, which nothing on screen suggests. Found in sim
+    // round 4 before any agent ran; the church survives a reload intact.
+    //
+    // ONLY ON THE CREATE PATH, and that is the whole safety of this. `trinityone.steward.newchurch` is the
+    // positive marker seedNewChurch sets when THIS device just minted THIS key (steward-root.jsx) — the same
+    // marker the wizard already trusts, and its comment records what inferring instead cost: an established
+    // church tripped the guess on a slow relay and gained permanently duplicated Sunday events.
+    //
+    // WHY THAT MATTERS MORE THAN THE BUG: this wizard is also the RESTORE path. A restored church may already
+    // hold a name key, and minting a second ring publishes it newest-wins — every sealed name, message and
+    // calendar entry in that congregation stops opening. The code has a comment about exactly that happening
+    // once, via a delegated console with an empty ring. So: never mint unless we know we made this church.
+    //
+    // ensureNameKeyForMembers is called rather than a second mint written here — it holds the one-at-a-time
+    // lock and the "never act on a view we have not established" guard (it returns null when the relay view
+    // is unproved, which is the safe answer). With no members yet its recipient list is [cp, churchPub], so a
+    // new church gets a ring it can seal and re-open with; Members re-wraps for people as they join.
+    let newChurch = false;
+    try { newChurch = localStorage.getItem('trinityone.steward.newchurch') === '1'; } catch (e) {}
+    if (newChurch && window.Steward.ensureNameKeyForMembers) {
+      // Bounded: a slow relay must not strand the steward in the wizard. If it does not land we fall through
+      // and publishMeeting reports honestly, as it does today.
+      try {
+        await Promise.race([
+          Promise.resolve(window.Steward.ensureNameKeyForMembers([], [])).catch(() => null),
+          new Promise((r) => setTimeout(r, 6000)),
+        ]);
+      } catch (e) {}
+    }
     try {
       // publishMeeting resolves null when no relay accepted. The previous version awaited it and advanced
       // regardless, so an offline or wrong-key relay produced exactly the empty calendar this step exists to
@@ -865,7 +899,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
                                   // disabled Continue AND Back AND the other steps — a silent, inescapable
                                   // wizard with no error text anywhere on screen.
     if (failed) { setMeetingErr(failed === rows.length
-      ? 'Couldn’t save your meetings — the relay didn’t accept them. Check you’re online and try again; your rows are still here.'
+      // DO NOT NAME THE RELAY. This said "the relay didn't accept them" for a failure the relay was never
+      // asked about — the seal gave up before any write was attempted — so it sent a steward to check a
+      // connection that was fine. Say what is known (not saved, rows kept) and offer the way out that
+      // exists, rather than a cause we have not established.
+      ? 'Couldn’t save your meetings yet — your rows are still here, so try again in a moment. You can also skip this and add them from the Calendar tab later.'
       : `Saved ${rows.length - failed} of ${rows.length}. Try again to save the rest.`); return; }
     next();
   };
@@ -1062,7 +1100,18 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={saveMeetings} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{meetings.filter(m => m.title.trim()).length ? `Add ${meetings.filter(m => m.title.trim()).length} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <WizMeetings meetings={meetings} setMeetings={setMeetings} />
-      {meetingErr ? <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, transparent)', fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}>{meetingErr}</div> : null}
+      {/* AN ESCAPE, AND ONLY ONCE IT IS NEEDED. The primary button reads "Skip for now" only while every row
+          is blank — and this step arrives PRE-FILLED, so a steward whose save fails has Back, a failing
+          button, and nothing else. That is how a new church sat trapped here: the step could not succeed
+          (no name key yet), and the sole way out was reloading the page, which nothing suggests. Offering
+          the skip only after a failure keeps the happy path unchanged and does not invite anyone to walk
+          past a step that would have worked. Their rows stay in the form. */}
+      {meetingErr ? <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, transparent)', fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}>
+        {meetingErr}
+        <div style={{ marginTop: 10 }}>
+          <button onClick={next} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Skip for now and finish setup <Icon name="chevR" size={14} color="currentColor" /></button>
+        </div>
+      </div> : null}
     </WizShell>
   );
 
