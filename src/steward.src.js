@@ -5358,9 +5358,8 @@ window.Steward = {
     // whole document exists to prevent, and the console has a mounted banner for exactly this.
     try {
       window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'join policy',
-        message: 'Your church is not set up on this relay yet, so “people must be approved before they can '
-          + 'join” could not be saved — anyone with your join link can currently join straight in. Finish '
-          + 'connecting your church to its relay, then reopen the console and this will apply itself.' } }));
+        message: 'A relay refused “people must be approved before they can join”, so anyone with your '
+          + 'join link can join straight in. Fix it under Relays → “A relay is refusing our posts”.' } }));
     } catch (e) {}
     return { ok: false, reason: 'refused' };
   },
