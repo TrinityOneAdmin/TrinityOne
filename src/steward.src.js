@@ -609,8 +609,11 @@ function ownRelay() {
   if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
   return ((l.protocol === 'https:') ? 'wss://' : 'ws://') + l.host + '/relay';
 }
-// Stick/clear the Suite "Console only" flag from the launcher: ?host=off sets it (church runs on community
-// relays), ?host=on or the full-suite ?relayapp=1 clears it (church self-hosts on this box).
+// NO LAUNCHER MODE PARAM IS READ HERE, and none should be. ?host=off / ?host=on / ?relayapp=1 all once set
+// or cleared a sticky "Console only" flag; that flag was deleted (scripts/suite-two-doors.test.mjs pins
+// that it stays deleted) and the params have been inert ever since. Where the church lives is DETECTED
+// below, by asking this box whether it holds this church. Left as a comment because the desktop Suite
+// went on appending ?relayapp=1 for months, believing it did something.
 // Does the relay on this origin hold OUR church? null = not asked yet (treated as yes — see ownRelay).
 // Answered by the relay's own /config, which lists the churches it serves. Token-gated, and the console
 // already holds that token for this box. Cached per church so a restart paints correctly before the answer.
