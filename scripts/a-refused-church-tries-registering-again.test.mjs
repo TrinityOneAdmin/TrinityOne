@@ -60,8 +60,20 @@ const nip98 = (sk, url) => finalizeEvent({ kind: 27235, created_at: Math.floor(D
 const cfgAdmin = (churches) => fetch(`http://127.0.0.1:${PORT}/config`, { method: 'POST',
   headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
   body: JSON.stringify({ churches: churches.map(npub => ({ npub })) }) });
-const setSettings = (s) => fetch(`http://127.0.0.1:${PORT}/settings`, { method: 'POST',
-  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
+// READ THE SETTING BACK, never trust the 200. Verifying this fix, I POSTed settings to /config instead of
+// /settings, took the 400 as applied, and read an unchanged relay as data — which made me contradict a
+// correct audit finding. An instrument that fails silently reports exactly what a working one reports.
+async function setSettings(want) {
+  const r = await fetch(`http://127.0.0.1:${PORT}/settings`, { method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify(want) });
+  assert.equal(r.ok, true, `/settings refused ${JSON.stringify(want)} — the relay is not in the state this test needs`);
+  const got = (await r.json()) || {};
+  for (const k of Object.keys(want)) {
+    assert.equal(got.settings && got.settings[k], want[k],
+      `/settings answered 200 but did not apply ${k}. The test would then measure a relay in the WRONG mode ` +
+      'and report the answer as if it meant something.');
+  }
+}
 async function selfRegisterAs(sk, npub) {
   const url = `http://127.0.0.1:${PORT}/config`;
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -78,7 +90,7 @@ test('a COMMUNITY relay that has forgotten a church will take it back', async ()
   // a relay is in for a church it used to carry.
   assert.equal((await cfgAdmin([keep, gone])).ok, true, 'could not seed two churches');
   assert.equal((await cfgAdmin([keep])).ok, true, 'could not drop the church — re-anchor this test');
-  assert.equal((await setSettings({ offerHosting: true })).ok, true, 'could not put the relay in community mode');
+  await setSettings({ offerHosting: true });
   await sleep(300);
   const r = await selfRegisterAs(goneSk, gone);
   assert.equal(r.status, 200,
@@ -93,7 +105,7 @@ test('a COMMUNITY relay that has forgotten a church will take it back', async ()
 test('a PRIVATE relay still holding another church refuses it — the fix does NOT cover this', async () => {
   const keepSk = generateSecretKey(), keep = npubEncode(getPublicKey(keepSk));
   const goneSk = generateSecretKey(), gone = npubEncode(getPublicKey(goneSk));
-  assert.equal((await setSettings({ offerHosting: false })).ok, true, 'could not put the relay back to private');
+  await setSettings({ offerHosting: false });
   assert.equal((await cfgAdmin([keep, gone])).ok, true, 'could not seed two churches');
   assert.equal((await cfgAdmin([keep])).ok, true, 'could not drop the church');
   await sleep(300);
