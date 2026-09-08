@@ -79,7 +79,7 @@ window.HelpData = {
 
           { lead: 'I’ve got the app, but I can’t find my church.', text: 'There is no public list of churches to search — that is deliberate, because a searchable directory of congregations is exactly the thing some churches cannot afford to have. You join with the link, QR code or joining code your church shares. If you do not have one, ask whoever invited you, or anyone already using it at your church.' },
 
-          { lead: 'It says “waiting for approval”. How long?', text: 'A steward usually lets people in within a day. Leave the app open and you will see it happen. If you close it, nothing is lost — but the app cannot notify you yet, so check back rather than waiting for a buzz.' },
+          { lead: 'It says “waiting for approval”. How long?', text: 'A steward usually lets people in within a day. You will see it the moment it happens if the app is open — and if you closed it, you are told when you next open it. Nothing is lost either way. Your phone will not buzz, so there is nothing to wait up for.' },
 
           { lead: 'Can my church leaders read my private messages?', text: 'No — one-to-one messages are encrypted, so the server holds only scrambled text. But it does see THAT you and another person messaged, and when. Church group rooms are different: unless your church turned on encryption for a room, the server can read what is written there. The app says so at the top of every room, and it is worth believing it.' },
 
@@ -105,7 +105,7 @@ window.HelpData = {
       minutes: 2,
       blocks: [
         { type: 'list', items: [
-          { lead: 'Name', text: 'Tap your circle at the top, choose Display name, and type a friendly name — e.g. “Maria from Tuesday group”. Leave it blank to keep it private.' },
+          { lead: 'Name', text: 'Tap You at the bottom, choose Edit name & mark, and type a friendly name — e.g. “Maria from Tuesday group”. Leave it blank to keep it private.' },
           { lead: 'Picture', text: 'Pick a symbol or your initial on a colour you choose. If your church turns on member photos, adults can also set a real photo — children always keep a symbol or initial, for safety. A steward can reset a photo that isn’t suitable.' },
         ] },
         { type: 'note', text: 'You can change these any time. They’re the only things others see — never your phone number, email, or real name.' },
@@ -176,7 +176,7 @@ window.HelpData = {
       blocks: [
         { type: 'p', text: 'The Community tab is where your church life lives: announcements, group chats, and private messages. It’s a quiet, friendly space — just your church, no strangers, no adverts.' },
         { type: 'steps', label: 'Follow your church', items: [
-          'Tap your circle at the top → “Follow a church”.',
+          'Tap You at the bottom → “Follow a church”.',
           'Point your camera at the church’s QR code, or paste the link they gave you.',
           'That’s it — you’ll see their groups and announcements.',
         ] },
@@ -249,7 +249,7 @@ window.HelpData = {
           { lead: 'Pick a day to help', text: 'Tap a day and tap “I’ll help”. It shows as covered so two people don’t turn up for the same slot. Changed your plans? Tap again to step back — no fuss.' },
           { lead: 'Say what you’re bringing', text: 'For meals, you can jot a quick note (“lasagne + salad”) so the family gets some variety and helpers don’t all bring the same thing.' },
         ] },
-        { type: 'callout', tone: 'sage', text: 'If the help is for you, the need is yours to steer. You’ll see “This is for you”, and on any day you’re already sorted you can tap “I’m sorted” — that day comes off the list, so no one cooks a meal you don’t need.' },
+        { type: 'callout', tone: 'sage', text: 'If the help is for you, the need is yours to steer. You’ll see “This is for you”, and on any day you’re already sorted you can tap “I’m covered” — that day comes off the list, so no one cooks a meal you don’t need. (“I’m sorted — close this” is different: it closes the whole thing, and your church stops signing up to help.)' },
         { type: 'note', text: 'Some churches keep this to a small care team rather than the whole church — either way, it’s only ever your own church, and only for as long as the help is needed.' },
       ],
     },
@@ -279,12 +279,12 @@ window.HelpData = {
         { type: 'p', text: 'TrinityOne helps your church look after children online. Your church — not a tick-box — decides who is a child and which adults are cleared to work with young people, so the protection matches the care already taken in person. It works alongside your church’s safeguarding (background checks, policy), never instead of it.' },
         { type: 'list', items: [
           { lead: 'Children see only child-safe groups', text: 'A young person’s app shows just the groups your church has marked safe for them. Adult spaces never appear.' },
-          { lead: 'Private messages are protected', text: 'A child can only be privately messaged by their own parent and by adults the church has cleared for youth work. Any other adult simply can’t.' },
+          { lead: 'Private messages are protected', text: 'A child can only be privately messaged by their own parent and by approved people at the church — the adults it has cleared for youth work, and whoever looks after safeguarding. Nobody else can, and neither can another child.' },
           { lead: 'Your leaders are always reachable', text: 'A young person can always message the church itself if they need help.' },
         ] },
         { type: 'p', text: 'A parent can set up and look after a child’s account from their own phone:' },
         { type: 'steps', label: 'Set up your child’s account', items: [
-          'Tap your circle at the top → “Children’s accounts” → “Add a child”.',
+          'Tap You at the bottom → “Children’s accounts” → “Add a child”.',
           'Enter their name. The app makes a new account and shows you its 12 recovery words — write them down and keep them safe.',
           'On your child’s phone, sign them in with the code you are shown: in the app, “Someone set this up for me”, then point their camera at it. If the app is not installed yet, their phone’s normal camera opens it in the browser instead.',
           'A steward confirms the link — then your child is protected by the rules above.',
@@ -295,6 +295,7 @@ window.HelpData = {
         // unresolved "📸 Screenshot placeholder — replace this box with a real screenshot" boxes to the public
         // since 2026-06-25; the steps are the part that mattered and they read fine without pictures.
         { type: 'p', text: 'For stewards — how you mark a young person. A child is only ever marked by a steward, or confirmed from a parent’s request. It is never self-declared, and never a “are you over 18?” tick-box:' },
+        { type: 'p', text: 'A young person is never a guardian. If you mark someone as a child who is already listed as another child’s parent or pickup contact, that role ends there and then — the console tells you which children they have been unlinked from. It is the same rule read from both ends: a child cannot be confirmed as a guardian, and marking someone as a child undoes it if it already happened.' },
         { type: 'steps', label: 'Mark a young person as a child', items: [
           'Open the Steward console → Members, and find them in the list.',
           'Tap “Child”. A badge appears beside their name — that is the whole job.',
@@ -311,9 +312,9 @@ window.HelpData = {
       summary: 'Get a gentle nudge when something needs you — and choose exactly what.',
       minutes: 2,
       blocks: [
-        { type: 'p', text: 'TrinityOne can let you know when there’s something for you — a message, a church announcement, or a request to serve — even when the app is closed. You’re always in control of what comes through.' },
+        { type: 'p', text: 'TrinityOne can remind you the evening before you’re due to serve, even when the app is closed. Messages and church announcements don’t buzz your phone yet — open the app to see those. You’re always in control of what comes through.' },
         { type: 'steps', label: 'Turn them on or off', items: [
-          'Tap your circle at the top → Notifications.',
+          'Tap You at the bottom → Notifications.',
           'Turn “Allow notifications” on (your phone may ask permission — tap Allow).',
           'Switch on only the things you’d like to hear about.',
         ] },
@@ -454,13 +455,13 @@ window.HelpData = {
       summary: 'If setting up yourself feels daunting, you don’t have to do it alone.',
       minutes: 2,
       blocks: [
-        { type: 'p', text: 'A leader or steward at your church can create an identity for you and hand it over with a simple QR code (a square barcode). You just:' },
-        { type: 'steps', label: 'With a steward’s help', items: [
-          'Open TrinityOne and choose “Someone set this up for me”.',
-          'Point your camera at the QR code they show you.',
-          'That’s it — you’re in, no typing.',
+        { type: 'p', text: 'Nobody has to do this alone. Ask a leader or steward to sit with you for five minutes — on a Sunday, with your own phone in your hand. They walk you through it; the account is made on your phone and stays yours.' },
+        { type: 'steps', label: 'With a steward beside you', items: [
+          'Ask them for the church’s invite — a QR code (a square barcode) or a link.',
+          'Point your camera at it, or tap the link. TrinityOne opens, already following your church.',
+          'Choose a name, and they can help you write down your 12 words there and then.',
         ] },
-        { type: 'callout', tone: 'sage', text: 'They can also help you write down your 12 words, so your account is safely backed up from day one. Ask anyone at church — they’ll be glad to help.' },
+        { type: 'callout', tone: 'sage', text: 'Writing the 12 words down together is the part worth their time. Nobody else — not your steward, not us — can recover your account without them, so the paper in your hand is the whole backup. Ask anyone at church; they’ll be glad to help.' },
       ],
     },
   ],
