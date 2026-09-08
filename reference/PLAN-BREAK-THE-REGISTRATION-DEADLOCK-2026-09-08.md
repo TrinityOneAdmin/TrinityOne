@@ -1,47 +1,63 @@
-# Plan: break the registration deadlock, and stop advising a destructive fix
+# Plan v2: retry registration when a relay says it does not know this church
 
-Two changes, both small, both aimed at the deadlock in
-`reference/FINDING-REGISTRATION-DEADLOCK-2026-09-08.md`. Written before implementing so it can be
-refuted cheaply. Pilot is close; the bar is "smallest change that removes the trap", not "best design".
+**Supersedes v1 entirely.** v1 proposed caching the church's name. An audit refuted the diagnosis it
+rested on, and re-measuring with the control confirmed the audit — see §0 of
+`reference/FINDING-REGISTRATION-DEADLOCK-2026-09-08.md`. The name is not the problem and caching it
+would have fixed nothing.
 
-## Change 1 — cache the church's own name, so the retry can fire
+Pilot is close and the owner is explicitly risk-averse. The bar is **the smallest change that removes
+the trap**, not the best design.
 
-**The trap.** `app/stew-dashboard.jsx:1339`:
+---
+
+## The trap, in one paragraph
+
+The console keeps a note per church per relay: *registered here — done*. It is written on success
+(`src/steward.src.js:7207`), it is **never cleared**, and the switch that bypasses it is **never used**:
 
 ```js
-if (!S || S.actingChurch || !church.name || !S.selfRegister) return;
-S.selfRegister(church.name).catch(() => {});
+const force = !!(opts && opts.force);            // :7168 — read here
+...
+const mark = churchPub + '@' + base;             // :7194
+if (!force && done[mark]) continue;              // :7195 — and nothing anywhere passes force
 ```
 
-`church.name` comes from `useStewardChurch` (`app/steward-root.jsx:298`), which fills **only** from
-`subscribeProfile` — the kind-0 read back from the relays. An unregistered church cannot publish that
-kind-0 (measured: `blocked: not a member or not permitted for this group`), so the name is never known,
-so the retry never runs, so the church never re-registers.
+So when a relay later loses the church — a reset, a restore without `church.json`, a migration to new
+hardware — the console skips that relay for ever. The church cannot write its join policy
+(`gateway.mjs:2288` needs `leaderOf`, which needs `CHURCH_PUBS.has(cp)`), and nothing ever tries to fix
+it. **A success marker that no later failure can invalidate.**
 
-**The change.** Remember the name locally, keyed by church pubkey, and let the retry fall back to it.
+## Change 1 — pass `force` when a refusal has been recorded
 
-- **Write** the cache wherever a non-empty name for THIS church is known:
-  1. when the profile subscription yields one (`useStewardChurch`), and
-  2. when the console publishes one (`publishProfile`), which is the moment of setup and rename.
-- **Read** it in the retry effect: `const name = church.name || cachedChurchName(pub)`.
-- Key: `trinityone.steward.churchname.<churchpub>` — per church, so an identity switch cannot cross it.
+`app/stew-dashboard.jsx:1339`, today:
 
-**Why this is the safe one.** It adds a fallback to a guard; it removes nothing. If the cache is empty
-the behaviour is exactly today's. It cannot make a working church worse, only an unregistered one
-better.
+```js
+React.useEffect(() => {
+  const S = window.Steward;
+  if (!S || S.actingChurch || !church.name || !S.selfRegister) return;
+  S.selfRegister(church.name).catch(() => {});
+}, [church.name]);
+```
 
-**Risks, and what I claim about each**
+The change is the argument: when `relayRejectionActive()` is true — the console already persists that a
+write was refused as a membership problem (`app/stew-dashboard.jsx:225`) — pass `{ force: true }`.
 
-| Risk | Assessment |
-|---|---|
-| A delegated steward re-registers someone else's church under their own key | The retry already returns early on `S.actingChurch`, and that guard is untouched. The cache is keyed by church pubkey, not by "the church I'm looking at". |
-| A stale cached name registers the church under an old label | Possible and harmless: `selfRegister` sends a label, not authority. The next `publishProfile` corrects it, and the relay stores no name of its own (`gateway.mjs:4055`). |
-| Repeated registration attempts hammer a relay that will never accept | `selfRegister` already skips a relay marked done, and the effect fires once per console load. Unchanged in frequency — today it fires whenever the name resolves. |
-| The cache outlives the church (key restored, different church) | Keyed by pubkey, so a different church reads a different key. A wiped-and-recreated church has a new key. |
-| localStorage unavailable / throws | Every read and write wrapped; an empty cache is exactly today's behaviour. |
+**Deliberately narrow, and each of these is a decision, not an oversight:**
 
-**Explicitly NOT doing:** letting an unregistered church write its own kind-0 at the relay. That is one
-line and would let any key seed a profile on any relay. Rejected in the finding, still rejected.
+- **Only when a rejection is on record.** A healthy church never forces, so the ordinary path is
+  byte-identical to today.
+- **On console load only**, via the effect that already exists. Recovery therefore costs the steward
+  one reload. I am **not** adding a listener on `steward-relay-rejected`: the audit showed two
+  overlapping `selfRegister` calls can latch `_regNeedsName` and hold the publish gate shut for
+  `REG_GATE_MS` = 45s (`src/steward.src.js:2204`, `:7269`). One reload is a smaller price than that
+  interaction, and this is the wrong week to take it.
+- **`force` does not widen where we post.** `bases` (`:7185-7189`) is unchanged: `configBase()` plus the
+  canonical relays, and the serving box **only** under `createHere`, which only the setup wizard passes
+  (`app/stew-dashboard.jsx:754`, guarded by
+  `scripts/only-the-wizard-puts-a-church-on-the-serving-box.test.mjs`). `force` skips a skip; it adds no
+  destination.
+- **The delegate guard is untouched.** `S.actingChurch` still returns early at `:1341`, and
+  `selfRegister` refuses independently at `:7162`.
 
 ## Change 2 — stop telling stewards to restore their church key
 
@@ -50,22 +66,48 @@ line and would let any key seed a profile on any relay. Rejected in the finding,
 > Changes weren't saved: this relay is set up for a different church. **Restore this church's key in
 > Settings**, or point the relay at this church.
 
-That refusal string covers BOTH "wrong key" and "this church is not registered here" — and the second
-is far more likely (it is what the deadlock produces). Restoring a church key is destructive and
-irreversible, and it cannot fix the common cause.
+That string covers both "wrong key" and "this relay does not carry this church" — and the second is far
+more likely. Restoring a church key is destructive and irreversible, and it cannot fix it.
 
-**The change.** Keep `wrongChurch: true` — it is what raises `noteRelayRejection()` and reveals the
-repair panel, which is the correct response. Change only the wording: lead with the likely cause, name
-the control that fixes it, and demote the key theory to a parenthetical rather than an instruction.
+Keep `wrongChurch: true`: it is what raises `noteRelayRejection()`, which reveals the registration panel
+**and now also arms Change 1**. Change the wording only — lead with the likely cause, name the control
+that fixes it, demote the key theory to a parenthetical rather than an instruction.
 
-**Risk:** a genuine wrong-key case now reads as a registration problem. Acceptable — the repair panel
-it points at is where both are resolved, and the destructive action stops being the headline.
+## Tests
+
+**Must be updated in the same commit** (the audit found both; this is the "two caller lists" trap):
+
+- `scripts/publish-error-msg.test.mjs:118` asserts the owner message matches `/Restore this church’s
+  key/` — note the curly apostrophe. It lifts `publishErrorMessage` out with `new Function` and runs it,
+  so the `typeof window` guard at `:273` must survive.
+- `scripts/church-setup-race.test.mjs:191` anchors on the literal `selfRegister(church.name)`.
+
+**New, executable:** drive a real `scripts/gateway.mjs`, register a church, confirm the mark is written,
+remove the church from the relay, and assert that `selfRegister(name)` skips while
+`selfRegister(name, { force: true })` re-registers. That is the property the whole fix rests on, and it
+fails today.
+
+**A gap I am naming rather than hiding.** The wiring — "the effect passes `force` when a rejection is
+active" — lives in `app/stew-dashboard.jsx`, which ships unbundled, so under CLAUDE.md rule 3 a
+text-matching assertion about it would still pass with `false &&` in front of the condition. The
+engine-level test above proves `force` works; `church-setup-race.test.mjs` anchors that the call exists.
+Neither proves the argument is passed under the right condition. I do not have a way to close that
+without lifting the effect, and I am not inventing one under time pressure.
+
+## Risks
+
+| Risk | Assessment |
+|---|---|
+| A forced retry hammers a relay that will never accept | Bounded: 3-4 bases, once per console load, and only while a rejection is on record. `selfRegister` already collects per-base refusals and gives up. |
+| Recovery needs a reload, so a steward may sit on the banner | Accepted, deliberately (see above). The banner already tells them to act; Change 2 makes what it tells them correct. |
+| `force` re-registers a church on a box that should not hold it | It cannot: `bases` is unchanged and the serving box needs `createHere`. |
+| A delegated steward forces registration of someone else's church | Two independent guards, both untouched (`:1341`, `:7162`). |
+| The rejection flag is stale (relay fixed another way) | It self-clears after 7 days and on the next successful write (`steward-publish-ok`). A stale force costs one skipped POST. |
+| Rewording loses a genuine wrong-key case | It still raises the same alarm and opens the same panel, which is where both causes are resolved. Only the destructive advice stops being the headline. |
 
 ## What must still be true afterwards
 
-1. A church created normally still registers and still saves its join policy (the Oppo run today is
-   the reference: a8 14 -> 15, join policy on both relays, no banner).
-2. `publish-error-msg.test.mjs` still passes — it lifts `publishErrorMessage` out of this file and runs
-   it with no DOM, so the `typeof window` guard at `:273` must survive.
-3. No new test asserts behaviour by matching text in `app/*.jsx` (CLAUDE.md rule 3 — it ships unbundled).
-4. A test must fail if the `!church.name` fallback is removed again.
+1. A church created normally still registers and saves its join policy — the Oppo run is the reference
+   (a8 14 → 15, join policy on both relays, no banner).
+2. The healthy path is unchanged: no rejection on record means no `force`, byte-for-byte.
+3. Full suite green, and the count accounted for.
