@@ -1,6 +1,52 @@
 # Why one church could not save "people must be approved before they can join"
 
-**Status:** finding. Reproduced against a real relay. Nothing fixed.
+**Status:** CORRECTED 2026-09-08 after an independent audit. The headline mechanism below was WRONG.
+The deadlock is real; its cause is not the one this document first gave. Read §0 first.
+
+---
+
+## 0. Correction — the original diagnosis was wrong
+
+**What I claimed:** an unregistered church cannot publish its own kind-0, so the console never learns
+`church.name`, so the retry (guarded on `!church.name`) never fires.
+
+**Why it was wrong:** my reproduction had no control. I measured against a relay with **zero** churches,
+and `gateway.mjs:2148` — `if (!CHURCH_PUBS.size) return false;` — refuses *every* write from *everyone*
+on an unconfigured box. The refusal string is the same generic "not a member or not permitted" for any
+`accept()` false, so it could not distinguish "unregistered church refused" from "empty relay refuses
+everyone". I read one result as the other.
+
+**Measured again, with the control:**
+
+| Relay state | Unregistered church's kind-0 | Its join policy |
+|---|---|---|
+| zero churches | refused | refused |
+| **one other church registered** | **ACCEPTED** | refused |
+
+So on any configured relay — a8 has 15 churches — the profile lands, the console reads it back (it
+authenticates as the church key, so it may read its own event), `church.name` resolves, and **the retry
+fires today**. Links 2 and 3 of the chain below are false.
+
+**What the real cause appears to be.** `selfRegister` skips any relay it has already succeeded at:
+
+```js
+if (!force && done[mark]) continue;      // src/steward.src.js:7195
+```
+
+`done[mark]` is written on success (`:7207`), is **never cleared**, and `force` is **never passed by any
+caller** (verified by grep: `opts.force` is read at `:7168` and passed nowhere). So a console that once
+registered a church at a relay will never attempt it again — for the life of that browser profile — even
+after the relay loses the church to a reset, a restore without `church.json`, or a migration.
+
+A success marker that no later failure can invalidate. Same permanence, same symptom, different link.
+
+**What survives from the original finding:** the join-policy gate (§ link 1) is exactly as described and
+independently measured; the misleading "restore this church's key" message is exactly as described. Only
+the profile/name link is withdrawn.
+
+---
+
+**Status:** finding, first written before the correction above. Nothing fixed.
 **Question asked:** the owner's test church showed a permanent banner while a brand-new church worked.
 
 ---
