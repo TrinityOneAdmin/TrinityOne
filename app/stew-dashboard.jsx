@@ -2119,8 +2119,8 @@ function StatCard({ label, value, sub, ic, tint, onClick }) {
 function Panel({ title, action, children, style = {}, scroll = false }) {
   const narrow = useStewNarrow();
   return (
-    <div style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', padding: 22, ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
-      <div style={{ display: 'flex', flexDirection: (narrow && action) ? 'column' : 'row', alignItems: (narrow && action) ? 'stretch' : 'center', gap: (narrow && action) ? 11 : 0, marginBottom: 16, flexShrink: 0 }}>
+    <div className="sk-panel" style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
+      <div className="sk-panel-head" style={{ display: 'flex', flexDirection: (narrow && action) ? 'column' : 'row', alignItems: (narrow && action) ? 'stretch' : 'center', gap: (narrow && action) ? 11 : 0, marginBottom: 16, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
           <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, margin: 0 }}>{title}</h2>
           <div style={{ flex: 1, minWidth: 24 }} />
@@ -4425,7 +4425,7 @@ function BulkInviteModal({ onClose }) {
   return (
     <CkModal title="Bring your church on" onClose={onClose}>
       <GoPublicNote gate={gate} />
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Paste your members’ names (one per line) — or import the CSV your old church software exports. We make a printable <b>join slip</b> for each person: a QR they scan, already showing their name. Scanning opens TrinityOne <b>right in their browser</b> — no app to download, no account, no password — and joins them to your church, named.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Paste your members’ names (one per line) — or import the CSV your old church software exports. We make a printable <b>join slip</b> for each person: a QR they scan, already showing their name. Scanning opens TrinityOne <b>right in their browser</b> — no app to download, no account, no password — and joins them to your church, named.</div>
       <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
         <label className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="globe" size={14} color="currentColor" /> Import CSV<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} /></label>
         <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{list.length} name{list.length === 1 ? '' : 's'}</span>
@@ -5607,7 +5607,7 @@ function DashNetworksPanel() {
               <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Create a network</div>
             </div>
-            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Give it a name your churches will recognise — a region (“Sussex Gospel Partnership”), a family of churches (“Regions Beyond”), or a denomination. You can rename it later from its own console.</p>
+            <p className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Give it a name your churches will recognise — a region (“Sussex Gospel Partnership”), a family of churches (“Regions Beyond”), or a denomination. You can rename it later from its own console.</p>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Network name</div>
             <input value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doCreate(); }} autoFocus placeholder="e.g. Regions Beyond" style={{ width: '100%', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
             <div style={{ display: 'flex', gap: 10 }}>
@@ -6052,7 +6052,7 @@ function DashMediaPanel({ church }) {
   return (
     <Panel title="Video & audio">
       <div style={lbl}>Video channel · Watch tab</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — or an <b>unlisted YouTube playlist</b> (not publicly searchable — a private set only your members see). Videos appear in members’ Watch tab, auto-updated.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — or an <b>unlisted YouTube playlist</b> (not publicly searchable — a private set only your members see). Videos appear in members’ Watch tab, auto-updated.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" aria-label="Video channel address" placeholder="youtube.com/@yourchurch · youtube.com/playlist?list=… · rumble.com/c/…" style={inp} />
         <button onClick={saveVid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={vidSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {vidSaved ? 'Saved' : 'Save'}</button>
@@ -6060,7 +6060,7 @@ function DashMediaPanel({ church }) {
       {church.channel ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.channel}</span></div> : null}
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
       <div style={lbl}>Audio / podcast · Listen tab</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link. An <b>unlisted / private feed URL works too</b> — keep the link unguessable and it stays members-only.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link. An <b>unlisted / private feed URL works too</b> — keep the link unguessable and it stays members-only.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" aria-label="Podcast RSS feed address" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
         <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {audSaved ? 'Saved' : 'Save'}</button>
@@ -6104,7 +6104,7 @@ function SermonEditModal({ sermon, onSave, onClose, upload }) {
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{upload ? 'Name this ' + (isVideo ? 'video' : 'recording') : 'Edit ' + (isVideo ? 'video' : 'audio') + ' details'}</div>
         </div>
-        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>{upload ? 'This is what members see in the list. ' + (upload.name || '') + ' \u00b7 ' + upload.sizeText + ' \u2014 nothing is uploaded until you press Upload.' : 'Rename it and add details.'}</p>
+        <p className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>{upload ? 'This is what members see in the list. ' + (upload.name || '') + ' \u00b7 ' + upload.sizeText + ' \u2014 nothing is uploaded until you press Upload.' : 'Rename it and add details.'}</p>
         {upload && upload.seenBefore ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--ink-2)', background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, var(--line))', borderRadius: 10, padding: '9px 11px', marginBottom: 14, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--gold)" /><span>You already uploaded this file from this console. Uploading it again adds a <b>second copy</b> to everyone&rsquo;s list.</span></div> : null}
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. Sunday sermon — the Prodigal Son" aria-label="Title" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
@@ -6240,7 +6240,7 @@ function DashSermons() {
       {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); askThenUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
       {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); askThenUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
       <Panel title="Self-hosted sermons">
-        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Both land in members’ <b>Watch &amp; Listen</b> tab — audio under Listen, video under Watch. Great over a thin connection.</div>
+        <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Both land in members’ <b>Watch &amp; Listen</b> tab — audio under Listen, video under Watch. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
@@ -6311,7 +6311,7 @@ function DashChatTagsPanel({ church }) {
   const sq = (open) => ({ width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '1px solid ' + (open ? 'var(--clay)' : 'var(--line)'), background: open ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)' });
   return (
     <Panel title="Chat message tags">
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Members can flag a message so it stands out. <b>Prayer request</b> is here by default — rename, recolour or remove it. Add your own, like Testimony or Praise. Up to 6.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Members can flag a message so it stands out. <b>Prayer request</b> is here by default — rename, recolour or remove it. Add your own, like Testimony or Praise. Up to 6.</div>
 
       {tags === null ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Loading…</div> : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -6355,7 +6355,7 @@ window.DashChatTagsPanel = DashChatTagsPanel;
 // Congregation features — the steward chooses which parts of the app members see. Published on the
 // kind-0 profile as `features:{read,community,library}`; the member app hides the disabled tabs.
 // Unset = on (so existing churches are unaffected). Today (home) + Giving are controlled separately.
-function DashFeaturesPanel({ church }) {
+function DashFeaturesPanel({ church, aside = null }) {
   const f = church.features || {};
   const on = (k) => f[k] !== false;   // default enabled
   const onOpt = (k) => f[k] === true;   // opt-in extras: default OFF
@@ -6432,10 +6432,17 @@ function DashFeaturesPanel({ church }) {
     if (!approval) window.Steward.setAdmitted([...new Set([...fAdmitted, ...fMembers.map(m => m.pubkey)])]);
     window.Steward.setJoinPolicy(!approval);
   };
+  // TWO AUTHORED STACKS, WRITTEN HERE rather than by the caller. Measured 2026-09-08 at 1280x713:
+  // "Congregation features" (645px) and "Rules & privacy" (606px) were both in the FIRST stack while the
+  // second held only "Chat message tags" (272px) — 1267 against 272, so the section was 1434px tall for
+  // want of moving one card. The two panels share this component's state, so they cannot simply be
+  // rendered into different stacks by the caller without running every hook twice; the component owns
+  // the split instead. `aside` is whatever the caller wants in the second stack (the tags card).
   return (
     <React.Fragment>
+    <div>
     <Panel title="Congregation features">
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Choose which parts of the app your members see — turn off what your church doesn’t use.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Choose which parts of the app your members see — turn off what your church doesn’t use.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {/* TAPPING THE WORDS WORKS THE SWITCH. The toggle is a small control at the far right of a
             full-width row and the words naming it had no handler, so the obvious target did nothing. Four
@@ -6444,7 +6451,7 @@ function DashFeaturesPanel({ church }) {
             out" — Margaret being 79. The button stops propagation so a tap on the switch itself does not
             fire the row handler too and toggle straight back, which looks exactly like nothing happening. */}
         {ITEMS.map(([k, label, sub]) => (
-          <div key={k} onClick={() => toggle(k)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} onClick={() => toggle(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
@@ -6467,7 +6474,7 @@ function DashFeaturesPanel({ church }) {
             the row handler, so "Kids check-in" was one of the two rows a steward could press all day without
             anything happening. */}
         {EXTRAS.map(([k, label, sub]) => (
-          <div key={k} onClick={() => toggleOpt(k)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} onClick={() => toggleOpt(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{onOpt(k) ? 'On' : 'Off'} — {sub}</div>
@@ -6486,15 +6493,17 @@ function DashFeaturesPanel({ church }) {
         <DashGivingPanel church={church} />
       </div>
     </Panel>
+    </div>
 
+    <div>
     <Panel title="Rules & privacy">
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Privacy</div>
       {/* Every row in this panel is the target for its own switch — see the note in "Congregation features".
           These five were the same markup with no row handler. */}
-      <div onClick={toggleEncryptAll} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      <div onClick={toggleEncryptAll} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Encrypt all group chat</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? ('On — every group and broadcast room sealed end-to-end; the relay can’t read them.' + (encTeams.length ? ' Serving team rooms are not included.' : '')) : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{encOn ? ('On — every group and broadcast room sealed end-to-end; the relay can’t read them.' + (encTeams.length ? ' Serving team rooms are not included.' : '')) : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
         </div>
         <button onClick={(e) => { e.stopPropagation(); toggleEncryptAll(); }} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group and broadcast room end-to-end so not even the relay can read them — serving team rooms are not included" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: encOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
@@ -6502,10 +6511,10 @@ function DashFeaturesPanel({ church }) {
       </div>
       {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body={'Every group and broadcast room will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default.\n\nNew broadcast rooms are not sealed by default — a broadcast is the church’s own voice to everyone. You can seal one from the Groups list.\n\nServing team rooms are not included: they don’t have an encryption control of their own, so this leaves them as they are.'} onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
 
-      <div onClick={togglePhotos} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+      <div onClick={togglePhotos} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow member photos</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adults may set a real photo. Children only if allowed below.' : 'Off — colour, initial or symbol only (recommended for privacy).'}</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{photosOn ? 'On — adults may set a real photo. Children only if allowed below.' : 'Off — colour, initial or symbol only (recommended for privacy).'}</div>
         </div>
         <button onClick={(e) => { e.stopPropagation(); togglePhotos(); }} aria-label="Toggle member photos" role="switch" aria-checked={photosOn} title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: photosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
@@ -6513,10 +6522,10 @@ function DashFeaturesPanel({ church }) {
       </div>
       {photosOn ? (
         <React.Fragment>
-          <div onClick={toggleKidPhotos} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+          <div onClick={toggleKidPhotos} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow children’s photos</div>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{kidPhotosOn ? 'On — members marked as a child may also set a photo. Use with care.' : 'Off — children use a colour, initial or symbol. Recommended for safeguarding.'}</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{kidPhotosOn ? 'On — members marked as a child may also set a photo. Use with care.' : 'Off — children use a colour, initial or symbol. Recommended for safeguarding.'}</div>
             </div>
             <button onClick={(e) => { e.stopPropagation(); toggleKidPhotos(); }} aria-label="Toggle children’s photos" role="switch" aria-checked={kidPhotosOn} title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: kidPhotosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
@@ -6528,10 +6537,10 @@ function DashFeaturesPanel({ church }) {
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Joining</div>
-      <div onClick={toggleApproval} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      <div onClick={toggleApproval} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require approval to join</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{approval ? 'On — new joiners wait in “Requests to join” (Members) until you approve.' : 'Off — anyone with your code or QR joins straight away.'}</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{approval ? 'On — new joiners wait in “Requests to join” (Members) until you approve.' : 'Off — anyone with your code or QR joins straight away.'}</div>
         </div>
         <button onClick={(e) => { e.stopPropagation(); toggleApproval(); }} aria-label="Toggle approval to join" role="switch" aria-checked={approval} title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: approval ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
@@ -6540,16 +6549,18 @@ function DashFeaturesPanel({ church }) {
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Member names</div>
-      <div onClick={toggleFullName} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+      <div onClick={toggleFullName} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require a real first &amp; last name</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{fullName ? 'On — members are asked to set a full name (e.g. “Jane Smith”); those without one are nudged to add a surname.' : 'Off — members may use a single name or stay anonymous.'}</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{fullName ? 'On — members are asked to set a full name (e.g. “Jane Smith”); those without one are nudged to add a surname.' : 'Off — members may use a single name or stay anonymous.'}</div>
         </div>
         <button onClick={(e) => { e.stopPropagation(); toggleFullName(); }} aria-label="Toggle require full name" role="switch" aria-checked={fullName} title="Ask members to set a full first and last name instead of staying anonymous" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: fullName ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: fullName ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
     </Panel>
+    {aside}
+    </div>
     </React.Fragment>
   );
 }
@@ -6590,11 +6601,11 @@ function DashGivingPanel({ church }) {
           pressed; this switch is `disabled` for the pilot, and a row handler would sail straight past that and
           publish `giving:true` from a press on the label. Same for Manna in stew-manna.jsx. If the pilot lock
           is ever lifted, add the row handler THEN, with stopPropagation on the switch. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)',
+      <div className="set-row" style={{ display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)',
         background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}><b style={{ color: 'var(--clay-ink)' }}>Locked during the pilot</b> — {church.giving ? 'on: members can give to this church.' : 'off: members won’t see giving.'} This opens up once testing is finished.</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}><b style={{ color: 'var(--clay-ink)' }}>Locked during the pilot</b> — {church.giving ? 'on: members can give to this church.' : 'off: members won’t see giving.'} This opens up once testing is finished.</div>
         </div>
         <button onClick={toggleGiving} disabled aria-label="Toggle giving" role="switch" aria-checked={!!church.giving} title="Giving is locked during the pilot" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'not-allowed', opacity: .4, flexShrink: 0,
           background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
@@ -6642,7 +6653,7 @@ function NameEditModal({ current, isNetwork, onSave, onClose }) {
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isNetwork ? 'globe' : 'bank'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? `Rename ${label}` : `Name your ${label}`}</div>
         </div>
-        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>This is the name your {isNetwork ? 'churches' : 'members'} see in the app. You can change it anytime.</p>
+        <p className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>This is the name your {isNetwork ? 'churches' : 'members'} see in the app. You can change it anytime.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>{label} name</div>
         <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder={isNetwork ? 'e.g. Regions Beyond' : 'e.g. Grace Community Church'} style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
         <div style={{ display: 'flex', gap: 10 }}>
@@ -6667,7 +6678,7 @@ function SeriesNameModal({ current, count, onSave, onClose }) {
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? 'Rename series' : 'Name this series'}</div>
         </div>
-        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Groups these {count} devotionals under one heading in your members’ apps. You can change it anytime.</p>
+        <p className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Groups these {count} devotionals under one heading in your members’ apps. You can change it anytime.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Series name</div>
         <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. The Weekly Word" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
         <div style={{ display: 'flex', gap: 10 }}>
@@ -6702,7 +6713,7 @@ function SeriesScheduleModal({ label, count, onApply, onClear, onClose }) {
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="clock" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Schedule release</div>
         </div>
-        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Drip <b>{label}</b> out to your members — its {count} devotionals release one at a time, in their current order.</p>
+        <p className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Drip <b>{label}</b> out to your members — its {count} devotionals release one at a time, in their current order.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>First one releases</div>
         <input type="datetime-local" value={toLocalInput(startSec)} onChange={e => setStartSec(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Then one</div>
@@ -6801,7 +6812,7 @@ function ImageCropModal({ file, outW, outH, round, radiusPct, title, onSave, onC
   };
   return (
     <CkModal title={title || 'Position image'} onClose={onClose}>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Drag to reposition, slide to zoom. What’s inside the frame is exactly what members will see.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Drag to reposition, slide to zoom. What’s inside the frame is exactly what members will see.</div>
       <div style={{ display: 'flex', justifyContent: 'center' }}>
         <canvas ref={ref} width={DW} height={DH} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}
           style={{ width: DW, height: DH, maxWidth: '100%', borderRadius: round ? '50%' : (radiusPct != null ? Math.round(Math.min(DW, DH) * radiusPct) : 14), border: '1px solid var(--line)', cursor: 'grab', touchAction: 'none', background: 'var(--surface-2)' }} />
@@ -6862,7 +6873,7 @@ function DashBrandingPanel({ church }) {
     <Panel title="Church branding">
       {cropFile ? <ImageCropModal file={cropFile} outW={768} outH={256} title="Position your banner" onSave={saveBanner} onClose={() => setCropFile(null)} /> : null}
       <div style={lbl}>Banner</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
       {/* live preview — banner + logo + name, the way members see the header */}
       <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${acc}, color-mix(in oklab, ${acc} 60%, #000))`, WebkitMaskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
@@ -6882,7 +6893,7 @@ function DashBrandingPanel({ church }) {
       {church.banner ? (
         <div style={{ marginTop: 14 }}>
           <div style={lbl}>Banner fade</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>How softly the bottom of the banner blends into the page.</div>
+          <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>How softly the bottom of the banner blends into the page.</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <input type="range" min="0" max="80" step="2" value={fade} onChange={e => onFade(Number(e.target.value))} style={{ flex: 1, accentColor: acc }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-2)', minWidth: 52, textAlign: 'right' }}>{fade === 0 ? 'None' : fade + '%'}</span>
@@ -6893,7 +6904,7 @@ function DashBrandingPanel({ church }) {
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
 
       <div style={lbl}>Brand colour</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Tints the highlights, buttons and active states in your members’ app to match your church.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Tints the highlights, buttons and active states in your members’ app to match your church.</div>
       {/* big spectrum-picker tile + a prominent # hex field */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: acc, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
@@ -7290,16 +7301,11 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       </div>
       </React.Fragment> : null}
 
-      {section === 'features' ? <React.Fragment>
-      <div>
-      <DashFeaturesPanel church={church} />
-      </div>
       {/* Giving and Practical care used to be cards of their own here. They are rows inside "Congregation
-          features → Extras" now, which is where the rest of the church's feature switches live. */}
-      <div>
-      <DashChatTagsPanel church={church} />
-      </div>
-      </React.Fragment> : null}
+          features → Extras" now, which is where the rest of the church's feature switches live.
+          The stacks for this section are authored INSIDE DashFeaturesPanel — its two cards share state, so
+          the caller cannot place them in different columns without mounting the component twice. */}
+      {section === 'features' ? <DashFeaturesPanel church={church} aside={<DashChatTagsPanel church={church} />} /> : null}
 
       {/* Network and relays are one page. Apart, the Relays card was the only child of .net-grid and so
           landed in that grid's NARROW first track (capped at 360px) with the wide track left empty — which
@@ -7465,7 +7471,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <button onClick={() => setConfirmRemove(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay-ink)' }}><Icon name="x" size={15} color="currentColor" /> Remove this church from this device</button>
         ) : (
           <div style={{ padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
-            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
+            <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
             <div style={{ display: 'flex', gap: 8 }}>
               {/* AWAIT the removal. removeKey() clears localStorage synchronously but the Keystore half is a
                   native round-trip, and reloading on top of it tears the WebView down mid-remove() — leaving the
