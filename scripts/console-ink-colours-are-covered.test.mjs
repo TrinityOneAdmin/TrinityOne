@@ -125,19 +125,19 @@ test('CONTROL: the real DashRelaysCard renders, and its relay rows reach the scr
   assert.match(all, /Where your church publishes/, 'DashRelaysCard no longer renders its blurb — re-anchor this test');
   assert.match(all, /wss:\/\/nos\.lol/, 'the relay list is not rendering a row per relay, so nothing below is being measured');
   assert.match(all, /Offline/);
-  assert.match(all, /Live/);
+  assert.match(all, /Answering/);   // was "Live"; renamed 2026-09-08 because answering a socket is not accepting a write
 });
 
 test('a relay that is DOWN says so in --clay-ink, and one that is up in --sage-ink', async () => {
   const tree = await paint(relaysCard({ relays: ONE_UP_ONE_DOWN, backup: { boxes: 2, online: 1, syncOn: true } }));
   const off = smallest(tree, /^Offline$/);
-  const on = smallest(tree, /^Live$/);
+  const on = smallest(tree, /^Answering$/);
   assert.ok(off && on, 'the per-relay health line is gone — re-anchor this test');
   assert.equal(styleOf(off).color, 'var(--clay-ink)',
     '"Offline" is the one word on this card that tells a steward their church is unreachable, and it is ' +
     'painted ' + styleOf(off).color + '. --clay measures 4.29:1 on a card, under the 4.5:1 floor');
   assert.equal(styleOf(on).color, 'var(--sage-ink)',
-    '"Live" is painted at ' + styleOf(on).color + '; --sage measures 3.80:1 as text');
+    '"Answering" is painted at ' + styleOf(on).color + '; --sage measures 3.80:1 as text');
   // the globe chip beside the live relay, which is a separate site in the same row
   const chip = find(tree, n => n.type === 'div' && styleOf(n).width === 26 && styleOf(n).height === 26);
   assert.equal(chip.length, 2, 'expected one globe chip per relay row — re-anchor this test');

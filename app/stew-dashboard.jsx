@@ -211,12 +211,28 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
 // the steward reaches Settings the event is long gone.
 window.REG_NEEDED_LS = 'trinityone.steward.relay-rejected';
 const REG_NEEDED_TTL = 7 * 24 * 60 * 60 * 1000;   // a rejection older than a week is stale — the relay was likely fixed another way
-function noteRelayRejection() {
+window.REG_REFUSED_LS = 'trinityone.steward.relay-refused-urls';
+function noteRelayRejection(refused) {
   try { localStorage.setItem(window.REG_NEEDED_LS, String(Date.now())); } catch (e) {}
+  // WHICH ONES. The timestamp alone said "a relay refused us" and the Settings page could only show every
+  // relay as Live, because a relay answers a socket and refuses a write for entirely different reasons.
+  // Stored as its own key so an older console (which reads only the timestamp) is unaffected.
+  try {
+    const list = (Array.isArray(refused) ? refused : []).filter(r => r && r.url)
+      .map(r => ({ url: String(r.url), error: String(r.error || '').slice(0, 300), at: Date.now() }));
+    if (list.length) localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(list));
+  } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-rejected')); } catch (e) {}
+}
+// [{url, error, at}] for relays that refused our last write, empty once the rejection goes stale or clears.
+function relaysThatRefused() {
+  if (!relayRejectionActive()) return [];
+  try { const v = JSON.parse(localStorage.getItem(window.REG_REFUSED_LS) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
 }
 function clearRelayRejection() {
   try { localStorage.removeItem(window.REG_NEEDED_LS); } catch (e) {}
+  try { localStorage.removeItem(window.REG_REFUSED_LS); } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-cleared')); } catch (e) {}
 }
 // The flag says "a relay refused our posts". It's stale once posts are landing again — the steward may well
@@ -319,7 +335,7 @@ function PublishErrorBanner() {
     const f = (e) => {
       const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
       if (!m) return;   // a refusal we deliberately do not surface (see publishErrorMessage)
-      if (wrongChurch) noteRelayRejection();
+      if (wrongChurch) noteRelayRejection(e.detail && e.detail.refused);
       setMsg(m);
       clearTimeout(f._t);
       if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
@@ -3538,6 +3554,15 @@ function DashRelaysCard() {
     window.addEventListener('steward-relay-cleared', onCleared);
     return () => { window.removeEventListener('steward-relay-rejected', onRejected); window.removeEventListener('steward-publish-ok', onOk); window.removeEventListener('steward-relay-cleared', onCleared); };
   }, []);
+  // WHICH RELAY REFUSED, keyed the way both sides store it. Recomputed when the alarm flips or the health
+  // check returns, which is exactly when it can change. Compared with trailing slashes and case removed:
+  // the pool keys relays by its own normaliser and a raw string compare has missed silently three times.
+  const refusedSet = React.useMemo(() => {
+    const key = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
+    const m = new Map();
+    for (const r of relaysThatRefused()) m.set(key(r.url), r.error || '');
+    return m;
+  }, [regNeeded, status]);
   const [regToken, setRegToken] = React.useState('');
   const [regMsg, setRegMsg] = React.useState('');
   const [regBusy, setRegBusy] = React.useState(false);
@@ -3586,8 +3611,10 @@ function DashRelaysCard() {
           {status.map(r => {
             const self = host && r.url.includes(host);
             const up = r.status === 'on';
+            const refused = refusedSet.has(String(r.url || '').toLowerCase().replace(/\/+$/, ''));
+            const refusedWhy = refused ? refusedSet.get(String(r.url || '').toLowerCase().replace(/\/+$/, '')) : '';
             return (
-              <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <div key={r.url} title={refusedWhy ? 'This relay refused our last change and said: ' + refusedWhy : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
@@ -3598,7 +3625,12 @@ function DashRelaysCard() {
                       socket to an address we send nothing to is exactly the invisible divergence this work
                       exists to end. It stays in the list and keeps being re-checked; it just says so. */}
                   {r.member === false ? <SkPill tint="clay">Not in your network</SkPill> : null}
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Live' : 'Offline'}</span>
+                  {/* ANSWERING IS NOT ACCEPTING. "Live" only ever meant a socket opened, so a relay that
+                      answers instantly and refuses every write looked identical to a healthy one — with two
+                      relays listed there was no way to tell which had said no, and the banner could not say
+                      either. This pill carries the relay's OWN words in its tooltip. */}
+                  {refused ? <SkPill tint="clay">Refused our last change</SkPill> : null}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Answering' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
                   {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>

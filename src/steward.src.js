@@ -2018,6 +2018,17 @@ async function publish(evt) {
     // every relay rejected — surface it so the steward isn't left wondering why nothing saved
     let reason = '';
     try { const errs = (e && e.errors) || []; reason = (errs[0] && (errs[0].message || String(errs[0]))) || ''; } catch (x) {}
+    // WHICH RELAY SAID NO. `reason` kept errs[0] and threw the rest away, so a church with two relays was
+    // told "a relay refused this" and could not learn which — the Settings page then showed both as "Live",
+    // because answering a socket and accepting a write are different questions. Cost a day on 2026-09-08.
+    // AggregateError.errors is index-aligned with the promise array, which is index-aligned with _targets.
+    // Written inline, not as a shared helper: this function is lifted out of the bundle and run by the tests,
+    // where a name resolved from the enclosing IIFE is undefined — see the note above _publishToRelays.
+    let refused = [];
+    try {
+      const errs = (e && e.errors) || [];
+      refused = _targets.map((u, i) => ({ url: u, error: (errs[i] && (errs[i].message || String(errs[i]))) || '' }));
+    } catch (x) { refused = []; }
     // OUR OWN SUPERSEDED COPY IS NOT A FAILURE. Two code paths can publish the same document a moment apart;
     // the newer one lands and the older is refused with "a newer version of this is already stored". The
     // steward was then shown a red, sticky "your change could not be saved" for a change that IS saved —
@@ -2028,7 +2039,7 @@ async function publish(evt) {
       const d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1];
       if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
     } catch (x) {}
-    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
   // a write landed → the relays are accepting our posts, so any "a relay is refusing us" alarm can clear
@@ -2159,7 +2170,14 @@ async function _publishToRelays(evt, urls) {
   if (!accepted) {
     let reason = '';
     try { const f = rs.find(r => r.status === 'rejected'); reason = (f && f.reason && (f.reason.message || String(f.reason))) || ''; } catch (x) {}
-    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    // Same as publish(): name the relays, not just the first excuse. rs is index-aligned with targets.
+    // Inline for the same reason the comment above this function gives — the tests lift it and run it.
+    let refused = [];
+    try {
+      refused = targets.map((u, i) => (rs[i] && rs[i].status === 'rejected')
+        ? { url: u, error: (rs[i].reason && (rs[i].reason.message || String(rs[i].reason))) || '' } : null).filter(Boolean);
+    } catch (x) { refused = []; }
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused } })); } catch (x) {}
     return false;
   }
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
