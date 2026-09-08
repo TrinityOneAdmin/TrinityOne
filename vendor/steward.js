@@ -19406,7 +19406,7 @@ zoo`.split("\n");
       try {
         window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
           what: "join policy",
-          message: "Your church is not set up on this relay yet, so \u201Cpeople must be approved before they can join\u201D could not be saved \u2014 anyone with your join link can currently join straight in. Finish connecting your church to its relay, then reopen the console and this will apply itself."
+          message: "A relay refused \u201Cpeople must be approved before they can join\u201D, so anyone with your join link can join straight in. Fix it under Relays \u2192 \u201CA relay is refusing our posts\u201D."
         } }));
       } catch (e) {
       }

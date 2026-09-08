@@ -305,3 +305,36 @@ carry private-message access to a child.
 Deliberately not designed yet. The pilot is what tells us whether real churches need it and in what
 shape; guessing now would ship policy where the product's rule is to ship mechanism. Do not build this
 without the owner asking for it.
+
+## A church needs something to SHARE that installs the app from its own box
+
+Owner, 2026-09-08, while reviewing the relay control panel.
+
+**What exists.** "Fetch latest APK" pulls `trinityone.apk` and `trinityone-steward.apk` from the update
+origin into `relay/apks/`, and the relay serves them (`gateway.mjs:4445`, `:4776`; index built by
+`scripts/build-apk-index.sh`, rendered at `apks.html`). So a church's own box can already be the place
+its members install from.
+
+**What is missing.** Nothing surfaces that to anyone. The operator gets a maintenance-shaped button —
+"Fetch latest APK" — with no statement of what it is FOR, and the church gets nothing it can hand to a
+member: no link, no QR, no printable slip saying "install TrinityOne from our own box". The capability
+exists and is invisible at both ends.
+
+**Why it matters more than it looks.** This is the offline / restricted-network story, and the product's
+positioning puts the persecuted church and the developing world first — "does this work over a thin pipe
+in Tehran". A church where Play is blocked, or whose members are on expensive mobile data, can have
+everyone install over the hall wifi in five minutes. There is no other route to that. It also pairs with
+the existing bulk join slips: install from us, then scan to join.
+
+**Design notes for whoever builds it:**
+- The operator button should say what it is for ("Let members install the app from this box"), not what
+  it technically does.
+- The church needs a shareable artefact — most likely a QR to the box's own `/apks` page, and something
+  printable, matching the existing invite-sheet pattern (`stew-templates.jsx`, `printInviteSheet`).
+- **Staleness is the trap, and it is the same one that let a8 sit 117 commits behind for four days.** A
+  fetched APK does not age visibly. If a church distributes from its box and nobody re-fetches, members
+  install a version that is weeks old — and now it is on phones, not just a server. Whatever is built
+  must show which version the box holds and say plainly when it is behind. If it cannot tell an operator
+  that, it is a liability rather than a feature.
+- Consider whether this belongs with the relay auto-update work (owner, 08-28 and 09-08): a box that
+  updates itself should probably keep its APKs current at the same time, or explicitly say it does not.

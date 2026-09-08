@@ -1583,6 +1583,21 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         </div>
       ) : null}
 
+      {/* WHETHER THE RELAY CAN READ THIS ROOM, WHERE IT STAYS READ. This pill used to be the first child of the
+          scrolling message list below — and the room jumps to the newest message on open (scRef, and again
+          after every send), so in any room with more than a screenful of history it was gone before anyone
+          saw it. A member who scrolled up would meet it; the one who opens a busy room and types would not.
+          Measured 2026-09-08.
+          It sits here now, in the same non-scrolling band as the sending status and the PINNED banner, so
+          the room states what it is for as long as you are in it. The WORDS are unchanged and must stay
+          exact — encrypted-by-default.test.mjs and group-encryption-honesty.test.mjs both turn on a room
+          never claiming more than it does, and one of them exists because a room labelled "End-to-end
+          encrypted" once sent plain text. The 2026-08-13 decision to cut the explanatory sentence and keep
+          only the state also stands: this is a label, not a warning. */}
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '7px 14px', borderBottom: '1px solid var(--line)', background: 'var(--surface)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '5px 12px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
+          <Icon name="lock" size={13} /> {encState === 'sealed' ? 'End-to-end encrypted' : encState === 'nokey' ? 'Encrypted · no key yet' : 'Not encrypted'}</span>
+      </div>
       <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* THE STATE, AND NOTHING ELSE. This was a full sentence — "Church room · not end-to-end encrypted, so
             the relay can read messages here" — shown over every room, every time. The owner removed it
@@ -1592,10 +1607,6 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             "Not encrypted" on its face. The EXPLANATION moved to Help ("Is my church chat private?"), where
             someone asking the question can find it, instead of being shouted at everyone who is not.
             no-overclaims.test.mjs follows it there. */}
-        <div style={{ textAlign: 'center', margin: '2px 0 4px' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="lock" size={13} /> {encState === 'sealed' ? 'End-to-end encrypted' : encState === 'nokey' ? 'Encrypted · no key yet' : 'Not encrypted'}</span>
-        </div>
         {(groupEvents.length || canAddEvent) ? (
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>

@@ -132,19 +132,21 @@ fn main() {
                         thread::sleep(Duration::from_millis(250));
                     }
                     applog(&lp, &format!("port {PORT} reachable = {up}"));
-                    // Combined "church-in-a-box": open the Steward console (church management), which auto-uses
-                    // this local relay (same origin). relayapp=1 tells the console it is already running its own
-                    // relay, so the setup wizard says so instead of asking for a relay address.
-                    // First launch → the console, which shows "Start a new church" and then its own first-run
-                    // wizard. Afterwards → the launcher (home.html), where the operator picks Full suite /
-                    // Relay only / Console only.
-                    // (?setup=1 was dropped 2026-07-26: it opened a SECOND setup wizard that has been deleted,
-                    // so the param had become inert and the comment claiming it opened the wizard was false.)
-                    let url = if first_run {
-                        format!("http://127.0.0.1:{PORT}/steward.html?relayapp=1")
-                    } else {
-                        format!("http://127.0.0.1:{PORT}/relay-app/home.html")
-                    };
+                    // ALWAYS the launcher (home.html), first run included. It asks "What should this computer
+                    // do for your church?" and offers the two doors: "Run your church" (the Steward console)
+                    // and "Manage a relay" (the control panel).
+                    //
+                    // First run used to go straight to steward.html, so somebody installing the Suite purely to
+                    // run a relay for their church was walked into church setup with no way past it, and only
+                    // ever saw the chooser on the SECOND launch. Reported 2026-09-08.
+                    //
+                    // No mode is passed in the address, deliberately — scripts/suite-two-doors.test.mjs pins
+                    // that. Where the church's records live is DETECTED (_boxHostsUs asks this box's /config
+                    // whether it holds this church), not declared by the door you came through; declaring it is
+                    // what once split one congregation into two halves that could not see each other.
+                    // (?relayapp=1 was dropped here 2026-09-08: nothing has read it since the sticky host
+                    // marker was deleted — it was inert, like ?setup=1 before it.)
+                    let url = format!("http://127.0.0.1:{PORT}/relay-app/home.html");
                     if let Ok(u) = url.parse() {
                         let _ = win.navigate(u);
                     }
