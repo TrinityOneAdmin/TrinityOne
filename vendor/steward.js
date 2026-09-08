@@ -16236,13 +16236,20 @@ zoo`.split("\n");
         reason = errs[0] && (errs[0].message || String(errs[0])) || "";
       } catch (x) {
       }
+      let refused = [];
+      try {
+        const errs = e && e.errors || [];
+        refused = _targets.map((u, i3) => ({ url: u, error: errs[i3] && (errs[i3].message || String(errs[i3])) || "" }));
+      } catch (x) {
+        refused = [];
+      }
       try {
         const d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
         if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
       } catch (x) {
       }
       try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused } }));
       } catch (x) {
       }
       return false;
@@ -16353,8 +16360,14 @@ zoo`.split("\n");
         reason = f && f.reason && (f.reason.message || String(f.reason)) || "";
       } catch (x) {
       }
+      let refused = [];
       try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+        refused = targets.map((u, i3) => rs[i3] && rs[i3].status === "rejected" ? { url: u, error: rs[i3].reason && (rs[i3].reason.message || String(rs[i3].reason)) || "" } : null).filter(Boolean);
+      } catch (x) {
+        refused = [];
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused } }));
       } catch (x) {
       }
       return false;
