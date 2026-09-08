@@ -1,4 +1,45 @@
-# Plan v2: retry registration when a relay says it does not know this church
+# Plan v3 (BUILT): retry registration when a relay says it does not know this church
+
+**v3 is what shipped on `fix/a-refused-church-tries-registering-again`.** A second audit narrowed v2's
+claims; this records what that changed rather than leaving the plan overstating the fix.
+
+## What the second audit changed
+
+**The scope is narrower than v2 claimed, and the plan now says so.** `relayRejectionActive()` is only
+true once **every** relay has refused a write, because `publish()` is a `Promise.any`
+(`src/steward.src.js:1999`). So this fixes:
+
+| Case | Fixed? |
+|---|---|
+| The shared relay lost the church — every relay refuses, flag set, force fires | **yes** — and this is the case actually observed |
+| A self-hosted box reset while the pool still holds the church | **no** — nothing is refused, so nothing is recorded |
+| Console served from the box at `localhost` after a reset | **no** — the box leaves the base list |
+| Box-only console with no internet | **no** — the name never resolves |
+
+The last three are real and are NOT fixed here. They are a bigger problem (a relay can lose a church
+and nothing anywhere notices) and should not ride on a one-argument change days before a pilot.
+
+**The test gap v2 declared is closed, and declaring it was wrong.** v2 said the wiring could not be
+tested without breaking rule 3. The repo already had the technique: `fnBody()` slices a function out of a
+JSX file, and `miniReact()` in `scripts/render-jsx-screen.mjs` runs queued effects with real deps
+comparison. The only obstacle was that the retry was an anonymous inline effect. It is now the named hook
+`useRegistrationRetry()`, sliced and RUN by
+`scripts/a-refused-church-tries-registering-again.test.mjs`. Rule 3's own remedy is "lift the function and
+run it, or make no claim" — the claim is now made properly.
+
+**Two risk rows in v2 were wrong:**
+
+- *"It self-clears on the next successful write"* — only while Settings → Relays is mounted, because the
+  `steward-publish-ok` listener lives in `DashRelaysCard`. Elsewhere the flag persists up to 7 days.
+- *"A stale force costs one skipped POST"* — it costs up to three sequential POSTs with a 6s timeout
+  each. Small, bounded, and worth stating accurately.
+
+**Recovery needs a reload**, and the reworded message now says so rather than leaving the steward to
+guess.
+
+---
+
+# Plan v2 (superseded, kept for the reasoning)
 
 **Supersedes v1 entirely.** v1 proposed caching the church's name. An audit refuted the diagnosis it
 rested on, and re-measuring with the control confirmed the audit — see §0 of

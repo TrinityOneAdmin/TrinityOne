@@ -106,12 +106,21 @@ test('a delegated steward is told what happened, never to restore the church key
     assert.match(m.msg, /hasn’t been given to you/, 'the delegate is not told what actually happened');
     assert.equal(m.sticky, true, 'a refused save must not vanish on its own');
 
-    // …and the owner's diagnosis is unchanged: with no acting church, the same reason still means the key.
+    // …and the owner still raises the alarm — that is what reveals the registration panel AND arms the
+    // forced retry in useRegistrationRetry(). What CHANGED on 2026-09-08 is the advice. This reason covers
+    // "wrong key" AND "this relay does not carry this church", and the second is what a relay reset or a
+    // restore without church.json produces. Restoring a church key is destructive and irreversible and
+    // cannot fix that, so it is no longer the instruction — it is a parenthetical, and the steward is sent
+    // to the control that resolves both.
     globalThis.window = { Steward: { actingChurch: '' } };
     const owner = map('blocked: not a member or not permitted for this group');
     assert.equal(owner.wrongChurch, true,
       'an OWNER console lost the genuine wrong-church diagnosis — that alarm still has to fire');
-    assert.match(owner.msg, /Restore this church’s key/);
+    assert.doesNotMatch(owner.msg, /Restore this church’s key/,
+      'the owner is told to restore the church key again. That is destructive, irreversible, and cannot fix ' +
+      'the likelier cause of this refusal (the relay does not carry this church).');
+    assert.match(owner.msg, /A relay is refusing our posts/,
+      'the owner is not pointed at the control that actually fixes this');
   } finally {
     if (had) globalThis.window = prev; else delete globalThis.window;
   }

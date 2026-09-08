@@ -222,6 +222,37 @@ function clearRelayRejection() {
 // The flag says "a relay refused our posts". It's stale once posts are landing again — the steward may well
 // have fixed it another way (restored the key, the operator added the church) without touching the in-console
 // token, and the alarm shouldn't linger forever. True only if a rejection is recorded AND still fresh.
+// THE RETRY THAT GETS A REFUSED CHURCH BACK ON ITS RELAY.
+//
+// A NAMED HOOK, not an inline effect in StewDashboard, so a test can slice it out with fnBody() and run it
+// under scripts/render-jsx-screen.mjs — whose useEffect really queues and compares deps. app/*.jsx ships
+// UNBUNDLED, so under CLAUDE.md rule 3 a text assertion about the line below would still pass with
+// `false && ` in front of it. Rule 3's own remedy is "lift the function and run it, or make no claim", and
+// the machinery for that already exists here (see a-delegated-steward-reaches-the-church-that-granted-them).
+//
+// `force` is the whole fix. selfRegister keeps a per-church-per-relay note saying "registered here — done"
+// (src/steward.src.js:7195), written on success at :7207, NEVER cleared, and until now nothing anywhere
+// passed the flag that bypasses it. So a relay that later LOST the church — reset, restored without its
+// church.json, migrated to new hardware — was skipped for ever, and the church could never write its join
+// policy again (gateway.mjs:2288 needs leaderOf, which needs CHURCH_PUBS.has). A success marker that no
+// later failure could invalidate.
+//
+// SCOPE, measured and narrow: relayRejectionActive() is only true once EVERY relay has refused a write,
+// because publish() is a Promise.any (src/steward.src.js:1999). That is the shape where the shared relay
+// lost the church. It does NOT cover a self-hosted box that was reset while the pool still holds the
+// church — nothing is refused there, so nothing is recorded, and this never fires. That case is real and
+// is not fixed here.
+function useRegistrationRetry(churchName) {
+  React.useEffect(() => {
+    const S = typeof window !== 'undefined' ? window.Steward : null;
+    if (!S || S.actingChurch || !churchName || !S.selfRegister) return;
+    // Only force when a relay has actually refused us. A healthy church takes the identical path it took
+    // before this existed, so the ordinary case cannot be made worse by it.
+    const refused = (typeof relayRejectionActive === 'function') && relayRejectionActive();
+    S.selfRegister(churchName, refused ? { force: true } : undefined).catch(() => {});
+  }, [churchName]);
+}
+
 function relayRejectionActive() {
   try { const t = parseInt(localStorage.getItem(window.REG_NEEDED_LS) || '', 10);
     if (!t) return false;
@@ -273,8 +304,13 @@ function publishErrorMessage(reason, evt) {
     const delegated = !!(typeof window !== 'undefined' && window.Steward && window.Steward.actingChurch);
     if (delegated) return { wrongChurch: false, sticky: true,
       msg: 'That change wasn’t saved — this part of the church hasn’t been given to you. Ask whoever holds the church key; they can change what you may do from their own console.' };
+    // DO NOT LEAD WITH "restore your church key". That is destructive and irreversible, and it cannot fix
+    // the likelier cause: this refusal string covers BOTH "wrong key" and "this relay does not carry this
+    // church", and the second is what a relay reset or a restore without church.json produces. Measured
+    // 2026-09-08. wrongChurch stays TRUE — it is what raises noteRelayRejection(), which both reveals the
+    // registration panel and arms the forced retry in useRegistrationRetry().
     return { wrongChurch: true, sticky: true,
-      msg: 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.' };
+      msg: 'Changes weren’t saved — your relays aren’t carrying this church. Open Settings → Relays and use “A relay is refusing our posts”, then reload this page. (If you have just pointed this console at a relay set up for a different church, that would do it too.)' };
   }
   if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
     msg: 'Someone else saved a newer version of this while you were editing. Reload the page and make your change again — trying again as-is won’t help.' };
@@ -1336,11 +1372,7 @@ function StewDashboard({ initial = 'overview' }) {
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
   // Owner consoles only — see the note in selfRegister. A delegate's console fired this with the name of the
   // church they were helping and registered THEIR OWN key under it.
-  React.useEffect(() => {
-    const S = window.Steward;
-    if (!S || S.actingChurch || !church.name || !S.selfRegister) return;
-    S.selfRegister(church.name).catch(() => {});
-  }, [church.name]);
+  useRegistrationRetry(church.name);
   const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)
   const editName = () => setRenaming(true);
   // responsive: a phone/narrow window collapses the desktop sidebar into a top header + scrollable nav
