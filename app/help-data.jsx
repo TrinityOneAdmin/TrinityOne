@@ -85,7 +85,7 @@ window.HelpData = {
 
           { lead: 'I lost my 12 words and my phone. Can a steward fix it?', text: 'Partly, and it is important to know which part. A steward can put you back in your place — your name, your church, your groups — by moving your seat onto a new account. What cannot come back is anything that was locked to the old account: your old private messages, and any care records sealed to you. Those went with the words. This is the reason we make a fuss about writing them down.' },
 
-          { lead: 'Why can’t I message this person?', text: 'If either of you is a young person, the church decides who may message whom: a child can message their own parent, their leaders, and adults the church has cleared for youth work — and nobody else. It works both ways, so an adult who is not cleared cannot start a conversation with a child either. It is enforced by the server, not just hidden in the app, so it holds even on a modified phone.' },
+          { lead: 'Why can’t I message this person?', text: 'If either of you is a young person, the church decides who may message whom: a child can message their own parent and the approved people at the church — the adults it has cleared for youth work, and whoever looks after safeguarding — and nobody else, including another child. It works both ways, so an adult who is not cleared cannot start a conversation with a child either. It is enforced by the server, not just hidden in the app, so it holds even on a modified phone.' },
 
           { lead: 'Do I need to be online?', text: 'Not for the Bible — it is on your phone and works with no signal at all, including on a plane or in a basement. Anything involving other people (messages, rotas, care) needs a connection, and anything you write while offline is kept and sent when you are back.' },
 
@@ -105,7 +105,7 @@ window.HelpData = {
       minutes: 2,
       blocks: [
         { type: 'list', items: [
-          { lead: 'Name', text: 'Tap You at the bottom, choose Edit name & mark, and type a friendly name — e.g. “Maria from Tuesday group”. Leave it blank to keep it private.' },
+          { lead: 'Name', text: 'Tap You at the bottom, choose Add your name — or Edit name & mark if you have already set one — and type a friendly name — e.g. “Maria from Tuesday group”. Leave it blank to keep it private.' },
           { lead: 'Picture', text: 'Pick a symbol or your initial on a colour you choose. If your church turns on member photos, adults can also set a real photo — children always keep a symbol or initial, for safety. A steward can reset a photo that isn’t suitable.' },
         ] },
         { type: 'note', text: 'You can change these any time. They’re the only things others see — never your phone number, email, or real name.' },
@@ -183,7 +183,7 @@ window.HelpData = {
         { type: 'note', text: 'Some churches approve new members first. If yours does, you’ll see “Request sent — waiting for approval” — you can look around, and you’ll be able to post once a steward lets you in.' },
         { type: 'list', items: [
           { lead: 'Groups & announcements', text: 'Join in the chat, or read what the church shares. A little dot on Community tells you when something new arrives.' },
-          { lead: 'Private messages', text: 'Message anyone in your church one-to-one. These are private — only you and they can read them. To keep young people safe, private messages between a child and an adult are limited to the child’s own parent and cleared youth workers.' },
+          { lead: 'Private messages', text: 'Message anyone in your church one-to-one. These are private — only you and they can read them. To keep young people safe, a child’s private messages are limited to their own parent and the approved people at the church — the adults it has cleared for youth work, and whoever looks after safeguarding. Two children cannot message each other privately.' },
           { lead: 'Share what blesses you', text: 'Send a verse, a note, or a prayer into a group with a tap.' },
           { lead: 'Prayer requests', text: 'Mark any message as a prayer request (tap 🙏) — others can see it and lift it in prayer.' },
           { lead: 'Polls', text: 'A quick poll might pop up in a group (“which date for the picnic?”). Tap an option to vote and watch the results update.' },
@@ -266,7 +266,7 @@ window.HelpData = {
           { lead: 'It’s only your church', text: 'The directory shows the people in your church and no one else — no strangers, no wider internet.' },
           { lead: 'You choose what shows', text: 'Others see the name and picture you set (see “Setting up your name & picture”) — never a phone number, email, or real name you haven’t chosen to share.' },
         ] },
-        { type: 'note', text: 'To keep young people safe, the same protections apply here: a child can only be messaged by their own parent and cleared youth workers (see “Children & keeping young people safe”).' },
+        { type: 'note', text: 'To keep young people safe, the same protections apply here: a child can only be messaged by their own parent and the church’s approved people (see “Children & keeping young people safe”).' },
       ],
     },
     {
@@ -312,7 +312,7 @@ window.HelpData = {
       summary: 'Get a gentle nudge when something needs you — and choose exactly what.',
       minutes: 2,
       blocks: [
-        { type: 'p', text: 'TrinityOne can remind you the evening before you’re due to serve, even when the app is closed. Messages and church announcements don’t buzz your phone yet — open the app to see those. You’re always in control of what comes through.' },
+        { type: 'p', text: 'TrinityOne can let you know when there’s something for you — a message, a church announcement, or a request to serve — even when the app is closed. You’re always in control of what comes through. One thing to know: on the Android app, serving reminders are the only alerts that come through at the moment. In a browser, or added to the home screen on an iPhone, all three work.' },
         { type: 'steps', label: 'Turn them on or off', items: [
           'Tap You at the bottom → Notifications.',
           'Turn “Allow notifications” on (your phone may ask permission — tap Allow).',
