@@ -82,12 +82,33 @@ function consoleWith(React, over = {}) {
 
 // Draw one settings sub-tab and hand back its tabpanel node.
 function panelFor(section, over = {}) {
+  return withDraw(section, over).panel;
+}
+
+function withDraw(section, over = {}) {
   const { React, draw } = miniReact();
   const mod = consoleWith(React, over);
   const tree = draw(mod.DashSettings, { initialSection: section, onSectionConsumed() {} });
   const panels = find(tree, n => n.props && n.props.role === 'tabpanel');
   assert.equal(panels.length, 1, `expected one tabpanel on the ${section} tab, found ${panels.length}`);
-  return panels[0];
+  return { panel: panels[0], draw };
+}
+
+// THE STACKS AS THE GRID WILL SEE THEM. A direct child is normally a stack <div> written by the caller, and
+// that stays the rule. One exception exists and is deliberate: a card that authors its OWN stacks, because
+// its cards share state and the caller cannot place them in different columns without mounting the component
+// twice and running every hook twice with it. DashFeaturesPanel is that case (2026-09-08 — its two cards
+// were both in the first stack, 1267px against 272px, and the tab was 1434px tall for want of moving one).
+// React fragments create no DOM, so what the grid actually receives is still one <div> per column. Render
+// the component and take the stacks it emits, so the guarantee is CHECKED rather than assumed.
+function stacksOf(section, over = {}) {
+  const { panel, draw } = withDraw(section, over);
+  const out = [];
+  for (const k of boxes(panel)) {
+    if (typeof k.type === 'function') out.push(...boxes(draw(k.type, k.props)));
+    else out.push(k);
+  }
+  return out;
 }
 
 // The children of a node as the GRID sees them: React.Fragment is not a box, so it is flattened through,
@@ -135,7 +156,7 @@ test('the settings tabpanel is .sk-cols, and the Network tab keeps its own grid'
 
 test('every direct child of the settings panel is an authored stack, never a card', () => {
   for (const s of ['church', 'features', 'security']) {
-    const kids = boxes(panelFor(s));
+    const kids = stacksOf(s);
     assert.ok(kids.length >= 1, `the ${s} tab renders nothing at all`);
     for (const k of kids) {
       assert.equal(typeof k.type, 'string',
@@ -157,9 +178,10 @@ const STACKS = {
     ['Panel:Church identity', 'DashBrandingPanel'],
     ['DashMediaPanel', 'DashBackup'],
   ],
+  // DashFeaturesPanel emits both of these itself — see stacksOf().
   features: [
-    ['DashFeaturesPanel'],
-    ['DashChatTagsPanel'],
+    ['Panel:Congregation features'],
+    ['Panel:Rules & privacy', 'DashChatTagsPanel'],
   ],
   security: [
     ['Panel:Church key', 'Panel:Stewards & handoff'],
@@ -169,7 +191,7 @@ const STACKS = {
 
 for (const [section, want] of Object.entries(STACKS)) {
   test(`the ${section} tab is ${want.length} authored stacks, holding exactly the cards it is meant to`, () => {
-    const kids = boxes(panelFor(section));
+    const kids = stacksOf(section);
     assert.equal(kids.length, want.length,
       `the ${section} tab has ${kids.length} columns, not ${want.length}`);
     assert.deepEqual(kids.map(idsIn), want,
@@ -229,4 +251,39 @@ test('steward.html no longer sizes the settings cards from the viewport, or by m
     'the settings columns are being sized by a viewport media query. The panel sits inside a sidebar and a ' +
     'grid track, so the window’s width says nothing about its own — this is the mistake the .relay-grid ' +
     'comment in the same file records');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 4. THE DENSITY RULES ARE SIZED FROM THE CONTAINER, SO THE PHONE KEEPS ITS ROOMY LAYOUT.
+//    Added 2026-09-08 with the compact pass. The console ships in its OWN apk, where the roomier spacing is
+//    correct — the owner asked for this in a BROWSER. Everything compact therefore lives behind
+//    @container, never @media: these cards sit inside a sidebar and a grid track, so the window width says
+//    nothing about the room a card actually has. Verified in Chromium at both widths before merging —
+//    a 360px viewport computes 22px panel padding, a 1280px one computes 15px 17px.
+//    steward.html is a served file, not JSX, so rule 3 does not apply and these read the rules themselves.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+test('the compact settings rules are container queries, never viewport ones', () => {
+  const compact = [...CSS.matchAll(/@container[^{]*\{([\s\S]*?)\n  \}/g)].map(m => m[1]).join('\n');
+  assert.ok(compact, 'there is no @container block in steward.html — the density pass is gone');
+  for (const sel of ['.sk-panel', '.set-row', '.set-desc', '.set-note']) {
+    assert.ok(compact.includes(sel),
+      `${sel} is no longer tightened inside @container. If it moved to @media, a phone-width CARD inside a ` +
+      'wide window gets the compact spacing and a wide card inside a narrow one does not — which is the ' +
+      'exact bug the .relay-grid note in this stylesheet already records.');
+  }
+  const viewport = CSS.match(/@media[^{]*\{[^{}]*\.(sk-panel|set-row|set-desc|set-note)\b/);
+  assert.equal(viewport, null,
+    'a settings density rule is inside an @media query. The console ships in its own apk where the roomy ' +
+    'layout is correct, and these elements live inside a sidebar and a grid track — size them from the ' +
+    'container that holds them, not from the window.');
+});
+
+test('the roomy spacing is the DEFAULT, so a narrow card is never compacted by accident', () => {
+  for (const [sel, prop] of [['.sk-panel', /padding:\s*22px/], ['.set-row', /padding:\s*11px 13px/],
+                             ['.set-desc', /font-size:\s*12\.5px/]]) {
+    const base = CSS.match(new RegExp('\\n  \\' + sel + '\\s*\\{([^}]*)\\}'));
+    assert.ok(base, sel + ' has no base rule outside the container query, so a browser without container ' +
+      'query support (or any card under the threshold) gets no spacing at all');
+    assert.match(base[1], prop, sel + "'s roomy default changed — that value is what the phone renders");
+  }
 });
