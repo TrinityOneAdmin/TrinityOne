@@ -3612,7 +3612,7 @@ function DashRelaysCard() {
   };
   return (
       <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. Add your own relay (self-host it with the TrinityOne Suite) and public ones for redundancy — if one is offline, members reach another.</div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. Add your own (self-host with the Suite) plus public ones — if one is offline, members reach another.</div>
         {/* D2: single-point-of-failure nudge (counts DISTINCT relay boxes by identity — two routes to one box don't
             count as redundancy) — or a "backup on" reassurance once the church runs 2+ separate relays that mirror. */}
         {backup && backup.boxes < 2 ? (
@@ -3703,12 +3703,12 @@ function DashRelaysCard() {
             </div>
           ) : null}
           <button onClick={autoFind} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
-          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Lists only relays that offer to host churches and enforce TrinityOne’s rules — so your safeguarding + membership policy still applies.</div>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies.</div>
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
           {/* connect to a relay by its memorable name (resolved via the directory) */}
           <div style={{ marginTop: 13 }}>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 4 }}>OR CONNECT BY NAME</div>
-            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 7, lineHeight: 1.45 }}>The name the relay’s operator claimed in its panel — it always points at the relay’s current address, even if the tunnel URL changes.</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 7, lineHeight: 1.45 }}>The name its operator claimed. It follows the relay’s current address, even when the tunnel URL changes.</div>
             <div style={{ display: 'flex', gap: 9 }}>
               <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
                 placeholder="your relay’s name, e.g. grace-city" spellCheck={false} autoCapitalize="none"
@@ -3741,7 +3741,7 @@ function DashRelaysCard() {
         {/* one-time clone: copy a church's whole history from another relay onto this one (e.g. after restore) */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Copy your history to {cloneDest || 'this relay'}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copies every message, record and file your church has onto <b>{cloneDest || 'this relay'}</b>{cloneDest ? ' — the relay serving this console' : ''}. Use it when your history lives somewhere else and this relay is starting empty: after restoring from your recovery phrase, or when moving your church onto your own box. Nothing is removed from the relay you copy from, and nothing already here is overwritten. Name the relay to copy <b>from</b>.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copies your church’s whole history onto <b>{cloneDest || 'this relay'}</b> when it is starting empty — after a recovery-phrase restore, or when moving onto your own box. Nothing is removed from the relay you copy <b>from</b>, and nothing here is overwritten.</div>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={cloneSrc} onChange={e => { setCloneSrc(e.target.value); setCloneMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') cloneFromHere(); }}
               aria-label="Relay to copy your history from"

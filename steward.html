@@ -71,9 +71,17 @@
        stop setting the height of the page. */
     /* !important because these keep their inline styles: those ARE the roomy phone default, and the
        class only has to win inside this query. */
-    .set-note { font-size: 12.5px !important; line-height: 1.4 !important; margin-bottom: 8px !important; }
+    .set-note { font-size: 12px !important; line-height: 1.35 !important; margin-bottom: 7px !important; }
     /* cards within a stack sit closer once the stack is wide */
     .sk-cols > * { gap: 12px; }
+    /* ROUND TWO, 2026-09-08. The owner looked at round one in a browser and said it was still too bulky and
+       to drop the type as well — and confirmed the APK is right as it is, which is exactly what these
+       container queries protect. Everything below is desktop-only for that reason. Sizes are set here
+       rather than inline so one place governs the whole tab. */
+    .sk-panel h2 { font-size: 15px !important; }
+    .sk-panel { font-size: 13px; }
+    .set-row > div > div:first-child { font-size: 13.5px !important; }   /* the switch's own label */
+    .sk-panel .sk-btn { font-size: 12.5px !important; padding: 8px 13px !important; }
   }
   /* Network tab: Network card (narrow) beside the wide Relays card on desktop; stacks on a phone. */
   .net-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
