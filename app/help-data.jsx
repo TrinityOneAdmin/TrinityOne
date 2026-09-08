@@ -403,13 +403,13 @@ window.HelpData = {
         { type: 'p', text: 'If you lead or help run a church, the steward console is your behind-the-scenes desk — best opened on a computer. It’s where you welcome members, set up groups, build the serving rota, and post announcements. A first-time setup wizard walks you through naming the church and creating a few starter groups in about a minute.' },
         { type: 'list', items: [
           { lead: 'Invite people in', text: 'Share a joining code — a QR or a short code — for members to scan or type. If you prefer, approve each new member before they can post.' },
-          { lead: 'Members', text: 'See who’s joined, and mark who’s a child and which adults are cleared for youth work, so the safeguarding rules apply automatically (see “Children & keeping young people safe”).' },
+          { lead: 'Members', text: 'See who’s joined, and mark who’s a child and which adults are cleared for youth work, so the safeguarding rules apply automatically (see the guide on keeping young people safe).' },
           { lead: 'Groups & announcements', text: 'Create chat rooms and announcement channels, set which are open or invite-only, and mark the ones that are safe for children.' },
           { lead: 'Rota', text: 'Build serving teams and schedules, send “Can you serve?” requests, and see who’s said yes, can’t, or is away.' },
           { lead: 'Events & calendar', text: 'Post events and socials and see who’s coming.' },
           { lead: 'Where your church lives (the relay)', text: 'Every church runs on a relay — the small server that carries its chat, members and announcements (the Bible reader needs none of it). New churches start on the shared TrinityOne relay with nothing to set up; when you’re ready, Settings → Network & relays can point your church at one you trust, or your own, without anyone losing anything.' },
         ] },
-        { type: 'callout', tone: 'sage', text: 'Two extra desks can be switched on in Settings when you need them: Practical care (meal trains), and Church finances — a treasurer’s ledger (see the next guide).' },
+        { type: 'callout', tone: 'sage', text: 'Practical care — meal trains, lifts and errands — switches on under Settings → Features when your church wants it. Church finances, a treasurer’s ledger, is already there in the console’s own list (see the next guide).' },
         { type: 'note', text: 'Being a steward is delegated and revocable: a steward gets their own key and can be added or removed at any time, so leadership can change hands without anyone losing access to the church.' },
         // MARKETING-AUDIT-2026-08-05: from stewards-guide.html, now deleted (940 words, zero inbound links —
         // it had no href pointing at it from anywhere on the site). This distinction is the useful part, and
@@ -461,6 +461,161 @@ window.HelpData = {
           'That’s it — you’re in, no typing.',
         ] },
         { type: 'callout', tone: 'sage', text: 'They can also help you write down your 12 words, so your account is safely backed up from day one. Ask anyone at church — they’ll be glad to help.' },
+      ],
+    },
+    // ── THE CONSOLE'S OWN ARTICLES ──────────────────────────────────────────────────
+    // Written 2026-09-08. Until today the steward console showed eight of the articles above verbatim
+    // (STEW_HELP_IDS, app/stew-help.jsx) under the line "the same words your members can read in their app".
+    // Sharing the words is a real virtue and two of the eight keep it — 'console' and 'how-it-works' are the
+    // same subject for both readers. The other six are addressed to a MEMBER, and a steward reads them as
+    // being about the CHURCH. "Your 12 words" is the clearest case: lose a member's and one person is locked
+    // out of one account; lose the church's and there is no church to go back to. The six below are the
+    // console's own, and every navigation instruction in them was walked in a live console first. The member
+    // versions above are untouched.
+    {
+      id: 'console-words',
+      illo: 'shield',
+      title: 'Your church’s recovery phrase',
+      summary: 'Twelve words that are not your account — they are the church.',
+      minutes: 3,
+      star: true,
+      blocks: [
+        { type: 'p', text: 'There are two sets of twelve words in your life here, and they do very different jobs. The ones in your own member app are your personal account. These are the church’s — and whoever holds them is the church: they can post in its name, admit and remove people, and open what it has sealed.' },
+        { type: 'callout', tone: 'clay', text: 'Lose your own words and you are locked out of one account. Lose the church’s and the church is not locked — it is gone. There is no way to move a church onto a new key, so you would be starting a different one: every member joins again from scratch, and anything sealed to the old key — private group chat, the books, sealed care records — stays sealed for good.' },
+        { type: 'steps', label: 'Write them down — once, today', items: [
+          'Settings → Security → Church key → “Reveal recovery phrase”.',
+          'Write the twelve words on paper, in order, by hand.',
+          'Put the paper where your church already keeps the things it cannot replace — the safe, the deeds, the insurance file.',
+          'Press “Hide”, and close the console.',
+        ] },
+        { type: 'dont', items: [
+          'Don’t photograph them, and don’t put them in the church’s shared drive, email or WhatsApp.',
+          'Don’t keep the only copy on the computer this console runs on — that is the one thing a fire, a theft or a dead hard disk takes with it.',
+          'Don’t type them into anything but a TrinityOne console’s own “Restore from a recovery phrase” box.',
+        ] },
+        { type: 'rule', text: 'The phrase lives on paper, off this computer. While the key is held here the console can show it to you again — after that, nothing can.' },
+        { type: 'note', text: 'The console PIN is not the phrase. The PIN encrypts the key on this computer and keeps a passer-by out of it. Forget the PIN and you restore from the phrase; lose the phrase and there is nothing to restore from.' },
+        { type: 'note', text: 'If only one person can find that paper, the church depends on that one person being reachable. Churches settle this differently — a second copy with a trustee, a bank box, the safe two wardens can open. What matters is that it is a decision somebody made, rather than one nobody got round to.' },
+        { type: 'tech', text: 'A standard BIP-39 mnemonic deriving the church’s secp256k1 key (NIP-06). Members and relays know the church by its public key, so a new key is a different church to every phone that has ever followed you — there is no server-side record to reset.' },
+      ],
+    },
+    {
+      id: 'console-restore',
+      illo: 'phone',
+      title: 'Moving the console, and putting people back',
+      summary: 'A new computer, a relay starting empty, a member who lost their words — three jobs, three answers.',
+      minutes: 3,
+      blocks: [
+        { type: 'p', text: 'Three different things go wrong here and they are often muddled together: the console moving to another computer, a relay starting empty, and a member losing their own twelve words. Only the last one is about somebody else.' },
+        { type: 'steps', label: 'Put the church on another computer', items: [
+          'Before you leave the old one: Settings → Church → Backup & data → “Back up church data”. That file is your messages, groups, plans and records.',
+          'On the new computer: Settings → Security → Church key → “Restore from a recovery phrase”, and type the twelve words. This computer is now the church — the same church, not a copy of it.',
+          'If the relay here is starting empty, Settings → Network & relays → “Copy your history to…” brings the past across. The phrase brings back who you are; this brings back what was said.',
+          'Set a console lock on the new computer while you are there — the same Church key panel.',
+        ] },
+        { type: 'callout', tone: 'clay', text: 'The recovery phrase is the only way back. A backup of your church’s data is well worth having and will not do this job: it rebuilds the records, but it cannot make a computer the church again. Without the phrase that file is a library nobody can add to under your church’s name.' },
+        { type: 'p', text: 'When a member loses their twelve words it is a different job, and one only you can do. It does not restore their key — nobody can do that — it moves their seat in your church onto the key they have now, on your word that they are the same person.' },
+        { type: 'steps', label: 'Reconnect a member', items: [
+          'Members → find them in the list → “Reconnect”.',
+          'On their new phone they choose “I’ve lost my 12 words”, which shows a code. Scan it, or paste it in.',
+          'If their old phone was stolen rather than lost or broken, tick that box before you finish. Once they are reconnected the old entry leaves your Members list and you cannot block it afterwards.',
+          'Press “Yes — this is…” and they are back in their place.',
+        ] },
+        { type: 'rule', text: 'You recognising them is the authorisation. There is deliberately no code or token to hand over, because such a token could be handed to the wrong person.' },
+        { type: 'note', text: 'A reconnect moves the seat, not the key. Their name, their place in the church and their ordinary groups come with them, along with a child marking, a youth clearance or a parent link. Invite-only groups you add them to again by hand — open Groups. Their old private messages and any sealed care records stay unreadable, and nothing can bring those back.' },
+        { type: 'note', text: 'If the member is marked as a child, the console will ask you to confirm with their parent or guardian first.' },
+      ],
+    },
+    {
+      id: 'console-steward',
+      illo: 'qr',
+      title: 'Sharing the load — adding a steward',
+      summary: 'Give someone their own key and exactly the powers they need — and know what each one lets them see.',
+      minutes: 3,
+      blocks: [
+        { type: 'p', text: 'You do not have to run everything, and you do not have to hand over the church to get help. A delegated steward signs in with their own key and does only what you have given them. Take it back and it stops immediately.' },
+        { type: 'steps', label: 'Add a steward', items: [
+          'Settings → Security → Delegated stewards.',
+          '“Add a steward” — scan their code, or paste it in. It is a public code: no key of yours or theirs changes hands.',
+          'Tick what they may do. Leave everything unticked and they can sign in and see the church, nothing more.',
+        ] },
+        { type: 'p', text: 'Each tick says what they will SEE, not only what they may do — which is the part worth reading slowly, because you are deciding who may read something about a person in your congregation:' },
+        { type: 'list', items: [
+          { lead: 'Finance', text: 'The church books, funds and statements. They can see every entry the church has ever recorded — giving, salaries, benevolence — and add more.' },
+          { lead: 'Care', text: 'Care needs, the care team, safety checks. They can see who has asked for help and what they asked for — often health, money or family trouble — and who is bringing meals.' },
+          { lead: 'Safeguarding', text: 'Clearances, photo decisions and kids check-in. They can see who is marked as a child, which adults are cleared, guardians, and check-in records — only you can change those lists.' },
+          { lead: 'Members', text: 'Admit people, set the join policy, reconnect someone who lost their words. They can see the whole membership list with real names, and who is waiting to join.' },
+          { lead: 'Groups & rotas', text: 'Groups, rotas, services, events, posts. They can see every group including private ones, read what is said in them, and post to the whole church in its name.' },
+        ] },
+        { type: 'note', text: 'A steward is not a second you. They cannot add other stewards, block or remove anyone, or change your relay settings — those stay with the key. So if you hand the welcoming to a volunteer, keep yourself reachable for the times it has to go the other way.' },
+        { type: 'callout', tone: 'clay', text: 'Handing over the recovery phrase is the other thing entirely, and it cannot be undone. It does not add a helper — it makes a second owner with exactly your powers, permanently. Settings → Security → Stewards & handoff is where that lives, and it says so at the moment you would do it.' },
+        { type: 'rule', text: 'If you might ever want it back, it is a delegated steward. The phrase is for someone you would trust to be the church.' },
+      ],
+    },
+    {
+      id: 'console-family-safety',
+      illo: 'people',
+      title: 'Keeping young people safe — what you set here',
+      summary: 'Two buttons on the Members page, and one consequence most churches do not expect.',
+      minutes: 3,
+      blocks: [
+        { type: 'p', text: 'Your church — not a tick-box — decides who is a child and which adults are cleared to work with young people, so the protection matches the care already taken in person. Nothing here is self-declared, and there is no “are you over 18?” question anywhere in the app.' },
+        { type: 'steps', label: 'Mark a young person', items: [
+          'Members → find them in the list → “Child”.',
+          'A badge appears beside their name. That is the whole job.',
+        ] },
+        { type: 'list', items: [
+          { lead: 'They see only child-safe groups', text: 'Their app shows just the groups you have marked safe for them. Adult spaces never appear.' },
+          { lead: 'Private messages are blocked', text: 'A private message between a child and an adult is refused unless that adult is cleared for youth, or is the child’s linked parent.' },
+          { lead: 'You are always reachable', text: 'A young person can always message the church itself if they need help.' },
+        ] },
+        { type: 'steps', label: 'Clear an adult for youth work', items: [
+          'Members → the adult’s row → “Clear for youth”.',
+        ] },
+        { type: 'callout', tone: 'clay', text: 'Your cleared list is also who can receive a request for help from a young person. Being on the care rota is not enough. If nobody in your church is cleared, no child in your church can ask for help through the app — the request has nowhere to go.' },
+        { type: 'note', text: 'Settings → Features → “Allow children’s photos” is off to begin with: children use a colour, initial or symbol instead. Photos are visible to your whole church, and you can switch this back off at any time.' },
+        { type: 'note', text: 'This supports your church’s safeguarding — it doesn’t replace background checks, training, supervision or policy. Clear only adults who are already on your church’s cleared-worker list. If you’re ever concerned, speak to your church’s safeguarding lead.' },
+        { type: 'note', text: 'Safeguarding is one of the grants you can give a steward, and it is worth knowing what it opens: who is marked as a child, which adults are cleared, who each child’s guardians are, and the check-in records with names, rooms and pickup codes. Only you can change those lists.' },
+        { type: 'tech', text: 'This is enforced at the relay, not just hidden in the app: the minor and approved-adult lists are owner-only, and the write-policy blocks child↔adult direct messages and child posts to adult groups server-side, so a tampered or third-party client can’t get around it.' },
+      ],
+    },
+    {
+      id: 'console-scams',
+      illo: 'noask',
+      title: 'Staying safe from scams',
+      summary: 'Your members are told nobody will ever need their words. Your seat is the exception — and that is the point.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'Members read a simple rule: nobody will ever need your twelve words. Yours is the one seat where that is not quite true — handing the church’s phrase to a new incumbent is a real thing you might one day do on purpose. That is exactly what makes this console worth attacking, so the rule you need is a slightly different one.' },
+        { type: 'list', items: [
+          { lead: 'Nobody legitimate ever asks for it remotely.', text: 'Not TrinityOne, not support, not a relay operator, not the diocese, not an email signed by the archdeacon. A handoff happens in person, to someone you already know, because you decided to do it — never because a message arrived asking for it.' },
+          { lead: 'Urgency is the tell.', text: 'Every version of this comes with a deadline: an account closing, a migration tonight, a service that won’t run on Sunday. Nothing here has a deadline. A church that waits until Monday loses nothing.' },
+          { lead: 'A helper does not need the key.', text: 'If someone genuinely needs to help you run the church, Settings → Security → Delegated stewards gives them their own access that you can take back. Anyone who tells you that won’t do, and it has to be the phrase, has just told you what they are after.' },
+          { lead: 'Check on a channel they did not choose.', text: 'Ring the person back on the number you already had for them. A reply to the message, or a number printed inside it, proves nothing.' },
+        ] },
+        { type: 'rule', text: 'The phrase leaves this room one way only: on paper, to a person standing in front of you, because you decided to hand over the church.' },
+        { type: 'note', text: 'The console is the church. Anyone who reaches this browser while it is unlocked can post in your church’s name, so the console lock matters nearly as much as the phrase — with a PIN set, the key is encrypted on this computer and locks again after ten minutes idle.' },
+        { type: 'callout', tone: 'clay', text: 'If you think the phrase has been seen by someone it shouldn’t have been, there is nothing to revoke — the key cannot be changed. What you can do is tell the rest of your leadership straight away, and watch what gets posted in the church’s name. It is a far smaller problem while people know to expect it.' },
+      ],
+    },
+    {
+      id: 'console-giving-records',
+      illo: 'paper',
+      title: 'The church books (for treasurers)',
+      summary: 'A private ledger for your church’s bookkeeping — money in and out, fund tracking, and statements you can share.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'Finance is already in the list down the side of this console — there is no switch to hunt for. It is your church’s own bookkeeping: you record money in and out in plain language, and it keeps the accounting balanced underneath.' },
+        { type: 'list', items: [
+          { lead: 'Record money in & out', text: 'Log offerings, standing orders and bills against clear categories — no accounting jargon, no debits and credits to learn.' },
+          { lead: 'Fund tracking', text: 'Keep general, designated (say, a building fund) and restricted funds apart, so you always know what each pot holds.' },
+          { lead: 'Import a bank statement', text: 'Upload a CSV your bank exports, tick the lines to bring in, and it files them for you — lines you’ve already imported are flagged so nothing double-counts.' },
+          { lead: 'Share a statement', text: 'Produce a summary for a quarter or a year — totals by category and fund — then download it as a PDF, copy it into a message, or post it to members. You choose what goes in.' },
+          { lead: 'Export for your accountant', text: 'Export the full ledger as a CSV whenever you need it.' },
+        ] },
+        { type: 'callout', tone: 'gold', text: 'The books are your church’s private bookkeeping, encrypted to a key of their own — the relay only ever holds unreadable ciphertext. The people who can open them are you and anyone you have given <b>Finance</b> to; nobody else, including whoever runs the relay. A statement you choose to share carries totals only, never member names, so it’s safe to hand out or post.' },
+        { type: 'note', text: 'Finance is one of the grants under Settings → Security → Delegated stewards. Whoever holds it can see every entry the church has ever recorded — giving, salaries, benevolence — and add more. That is the right grant for a treasurer and a heavy one for anybody else.' },
+        { type: 'note', text: 'More is on the way, all free: a balance sheet and trustees’ report, budgets, and regional giving-relief packs (like UK Gift Aid). Giving straight from a member’s own phone wallet is a separate idea we’re still building — nothing to set up for it yet.' },
       ],
     },
   ],

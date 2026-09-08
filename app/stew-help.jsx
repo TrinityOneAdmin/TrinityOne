@@ -2,9 +2,10 @@
 //
 // Until 2026-09-07 the console shipped no help at all: index.html loads help-data / help-illustrations /
 // screens-help / screens-help-main, steward.html loaded none of them, and the only guidance a steward could
-// reach was two links out to STEWARD-GUIDE.md on GitHub. This is the smallest useful version: the SAME
-// article copy members read (app/help-data.jsx — one source, so a sentence fixed there is fixed here), the
-// same block renderer, text-size stepper and read-aloud (app/screens-help.jsx), shown in a console dialog.
+// reach was two links out to STEWARD-GUIDE.md on GitHub. This is the smallest useful version: article copy
+// from the one shared source (app/help-data.jsx — so a sentence fixed there is fixed everywhere), the same
+// block renderer, text-size stepper and read-aloud (app/screens-help.jsx), shown in a console dialog.
+// The articles it asks for are now mostly the console's OWN — see the note over STEW_HELP_IDS below.
 //
 // Deliberately NOT loaded: app/screens-help-main.jsx. Its BackupWalkthrough reads window.TrinityIdentity,
 // which the console does not have.
@@ -23,7 +24,17 @@
 
 // The console-relevant articles, in reading order, by id. An id that is not in HelpData is skipped rather
 // than rendered blank — and scripts/steward-help.test.mjs asserts every one of these resolves.
-const STEW_HELP_IDS = ['console', 'giving-records', 'family-safety', 'steward', 'words', 'restore', 'scams', 'how-it-works'];
+//
+// SIX OF THESE ARE THE CONSOLE'S OWN (2026-09-08). The first version of this file listed the MEMBER articles
+// verbatim — 'words', 'restore', 'steward', 'scams', 'family-safety', 'giving-records' — under a line
+// promising "the same words your members can read in their app". Sharing the words is worth having and two
+// still do it: 'console' and 'how-it-works' are the same subject whoever is reading. The other six are
+// addressed to a member and a steward reads them as being about the CHURCH, which is a different object with
+// different consequences. 'words' is the clearest: a member who loses theirs loses one account; a steward who
+// loses the church's has no church to go back to, and no way to move it onto a new key. 'restore' also named
+// a member Help button that does not exist in this console, and 'steward' ("Help from a steward") is written
+// to the person being helped — who, here, is the reader's member, not the reader.
+const STEW_HELP_IDS = ['console', 'console-giving-records', 'console-family-safety', 'console-steward', 'console-words', 'console-restore', 'console-scams', 'how-it-works'];
 
 function stewHelpArticles() {
   const all = (window.HelpData && Array.isArray(window.HelpData.articles)) ? window.HelpData.articles : [];
@@ -83,7 +94,7 @@ function StewardHelp({ onClose }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p style={{ fontFamily: 'var(--font-read)', fontSize: 16 * fs, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>Short guides to running your church on TrinityOne. The same words your members can read in their app, so you are never telling them something different.</p>
+              <p style={{ fontFamily: 'var(--font-read)', fontSize: 16 * fs, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>Short guides to running your church on TrinityOne. Written for the person at this desk: the church key in your hands is not the same thing as a member’s own account, and the two go wrong in very different ways.</p>
               {articles.map(a => (
                 <button key={a.id} onClick={() => setOpenId(a.id)} data-help-id={a.id} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                   {Illo ? <Illo name={a.illo} size={44} /> : null}

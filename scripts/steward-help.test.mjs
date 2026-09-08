@@ -125,9 +125,72 @@ for (const [what, innerWidth] of [['the desktop layout', 1200], ['the narrow (ph
     const known = new Set(win.HelpData.articles.map(a => a.id));
     assert.ok(ids.length >= 6, `only ${ids.length} guides listed: ${JSON.stringify(ids)}`);
     for (const id of ids) assert.ok(known.has(id), `the dialog lists "${id}", which is not an article in help-data.jsx`);
-    for (const must of ['console', 'giving-records', 'family-safety']) assert.ok(ids.includes(must), `the "${must}" guide is missing from the console's help`);
+    for (const must of ['console', 'console-giving-records', 'console-family-safety']) assert.ok(ids.includes(must), `the "${must}" guide is missing from the console's help`);
   });
 }
+
+// ── THE CONSOLE READS ITS OWN ARTICLES, NOT THE MEMBERS' ──────────────────────────────────────────────────
+// 2026-09-08. Six of the eight guides the console listed were addressed to a MEMBER; a steward read them as
+// being about the CHURCH, which is a different object with different consequences. This is the point-of-use
+// test for that fix: it drives the real dialog to the real list and asserts what a steward can actually
+// press. Pointing STEW_HELP_IDS back at the member ids, or deleting the console articles from help-data.jsx,
+// fails it — an unknown id is filtered out by stewHelpArticles(), so the guide simply vanishes from the
+// screen, which is exactly the silent shape this asserts against.
+//
+// MEASURED RED, 2026-09-08. Three sabotages, each scoped to one anchor asserted unique before replacing:
+//   1. STEW_HELP_IDS reverted to the member list ('words', 'restore', …) → 4 of 13 fail; this one reports
+//      'the console does not list "console-words" — a steward cannot reach the console version of that guide'.
+//   2. the whole console-words article cut out of help-data.jsx → 3 fail. The dialog still RENDERS (seven
+//      guides is still >= 6), so the guide simply disappears — which is why the check is by id, not by count.
+//   3. the old "same words your members can read" line put back → 1 fails, the top-line test below.
+const MEMBER_ONLY = ['words', 'restore', 'steward', 'scams', 'family-safety', 'giving-records'];
+const CONSOLE_OWN = ['console-words', 'console-restore', 'console-steward', 'console-scams', 'console-family-safety', 'console-giving-records'];
+
+test('the guides a steward can press are the CONSOLE articles, and none of the member-addressed ones', () => {
+  const { mod, draw, win } = fresh();
+  let tree = draw(mod.StewDashboard, {});
+  helpButtons(tree)[0].props.onClick();
+  tree = draw(mod.StewDashboard, {});
+  const ids = articleButtons(dialogs(tree)[0]).map(b => b.props['data-help-id']);
+  for (const id of CONSOLE_OWN) assert.ok(ids.includes(id), `the console does not list "${id}" — a steward cannot reach the console version of that guide`);
+  for (const id of MEMBER_ONLY) assert.ok(!ids.includes(id), `the console lists "${id}" — a member-addressed guide that reads as being about the church here`);
+  // …and both halves of every pair really exist, so the member app kept its own copy.
+  const known = new Set(win.HelpData.articles.filter(a => Array.isArray(a.blocks)).map(a => a.id));
+  for (const id of MEMBER_ONLY.concat(CONSOLE_OWN)) assert.ok(known.has(id), `"${id}" is not an article with blocks in help-data.jsx`);
+});
+
+test('a console guide reaches the screen saying the church key is not a member account', () => {
+  const { mod, draw, win } = fresh();
+  let tree = draw(mod.StewDashboard, {});
+  helpButtons(tree)[0].props.onClick();
+  tree = draw(mod.StewDashboard, {});
+  const btn = articleButtons(dialogs(tree)[0]).find(b => b.props['data-help-id'] === 'console-words');
+  assert.ok(btn, 'the console has no "console-words" guide to open');
+  btn.props.onClick();
+  tree = draw(mod.StewDashboard, {});
+  const said = texts(dialogs(tree)[0]).join(' ');
+  const article = win.HelpData.articles.find(a => a.id === 'console-words');
+  // the article's OWN words, read from the data at run time — not strings copied into this test
+  for (const b of article.blocks) {
+    if (b.type === 'p' || b.type === 'rule' || b.type === 'callout' || b.type === 'note') {
+      assert.ok(said.includes(b.text), `a ${b.type} block of the church-key guide did not reach the dialog`);
+    }
+    if (b.type === 'steps') for (const it of b.items) assert.ok(said.includes(it), `step "${it}" did not reach the dialog`);
+  }
+});
+
+// The top line sat above the list promising "the same words your members can read in their app". Six of the
+// eight are no longer those words, and a reassurance that is false is worse than none.
+test('the line above the list does not promise words the console no longer shows', () => {
+  const { mod, draw } = fresh();
+  let tree = draw(mod.StewDashboard, {});
+  helpButtons(tree)[0].props.onClick();
+  tree = draw(mod.StewDashboard, {});
+  const said = texts(dialogs(tree)[0]).join(' ');
+  assert.ok(!/same words your members can read/i.test(said),
+    'the console still tells a steward these are the same words their members read — six of the eight are not');
+  assert.ok(/Short guides to running your church/i.test(said), 'the list lost its introduction entirely');
+});
 
 test('every id the console asks for resolves to an article — a typo would otherwise be a silently shorter list', () => {
   const src = read('app/stew-help.jsx');
