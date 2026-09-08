@@ -188,7 +188,10 @@ test('a console helping run SOMEBODY ELSE\'s church never registers itself as on
 test('and the screen that fires it asks the same question first', () => {
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const src = stripComments(DASH);
-  const i = src.indexOf('selfRegister(church.name)');
+  // Re-anchored 2026-09-08: the effect moved into the named hook useRegistrationRetry() so a test could
+  // slice it out and RUN it (see a-refused-church-tries-registering-again.test.mjs). The guarantee this
+  // test makes is unchanged — the delegate guard still has to sit in front of the call.
+  const i = src.indexOf('S.selfRegister(churchName');
   assert.ok(i > 0, 're-anchor: the dashboard no longer self-registers on the church name');
   const before = src.slice(Math.max(0, i - 400), i);
   assert.match(before, /S\.actingChurch/,
