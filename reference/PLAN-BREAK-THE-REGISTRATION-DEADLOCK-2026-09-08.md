@@ -11,7 +11,8 @@ true once **every** relay has refused a write, because `publish()` is a `Promise
 
 | Case | Fixed? |
 |---|---|
-| The shared relay lost the church — every relay refuses, flag set, force fires | **yes** — and this is the case actually observed |
+| The shared relay lost the church, and that relay is **community** or has no churches left | **yes** — and this is the shape the observed failure fits |
+| The relay lost the church but is **private** and still holds another church | **no** — measured 403 "already set up for its church" (`gateway.mjs:4142`). Forcing is correct and still useless; only the operator can resolve it. Private is the Suite DEFAULT (`:99`). |
 | A self-hosted box reset while the pool still holds the church | **no** — nothing is refused, so nothing is recorded |
 | Console served from the box at `localhost` after a reset | **no** — the box leaves the base list |
 | Box-only console with no internet | **no** — the name never resolves |

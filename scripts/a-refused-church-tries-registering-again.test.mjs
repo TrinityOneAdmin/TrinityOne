@@ -28,7 +28,8 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
+import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 import { fnBody } from './test-slice.mjs';
 import { miniReact } from './render-jsx-screen.mjs';
@@ -50,26 +51,58 @@ before(async () => {
 after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
 // ── 1. THE ENGINE ────────────────────────────────────────────────────────────────────────────────────
-// A relay that has forgotten a church accepts its registration again. This is what `force` reaches once
-// the console stops skipping — measured against the real gateway, not asserted about it.
-test('a relay that has forgotten a church will take it back', async () => {
+// THE PATH FORCE ACTUALLY TAKES, which is NOT the operator's. selfRegister posts a NIP-98-signed
+// { addChurch } to /config (src/steward.src.js:7202) and that sits behind the private-relay, invite-only
+// and cap gates (gateway.mjs:4130-4165) which the admin `churches:` write bypasses entirely. An earlier
+// version of this test dropped and re-added the church with the admin token, proved the operator can do it,
+// and passed identically on the parent commit — it guarded nothing about this change.
+const nip98 = (sk, url) => finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1e3), tags: [['u', url], ['method', 'POST']], content: '' }, sk);
+const cfgAdmin = (churches) => fetch(`http://127.0.0.1:${PORT}/config`, { method: 'POST',
+  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ churches: churches.map(npub => ({ npub })) }) });
+const setSettings = (s) => fetch(`http://127.0.0.1:${PORT}/settings`, { method: 'POST',
+  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
+async function selfRegisterAs(sk, npub) {
+  const url = `http://127.0.0.1:${PORT}/config`;
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ addChurch: { npub, name: 'Forgotten Church' }, auth: nip98(sk, url) }) });
+  let why = ''; try { why = ((await r.json()) || {}).error || ''; } catch {}
+  return { status: r.status, why };
+}
+
+test('a COMMUNITY relay that has forgotten a church will take it back', async () => {
   assert.ok(token, 'no admin token — the test could not configure the relay');
-  const keep = getPublicKey(generateSecretKey());          // a second church, so the first can be removed:
-  const gone = getPublicKey(generateSecretKey());          // gateway.mjs refuses to remove the ONLY church
-  const cfg = (churches) => fetch(`http://127.0.0.1:${PORT}/config`, { method: 'POST',
-    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ churches: churches.map(npub => ({ npub })) }) });
+  const keepSk = generateSecretKey(), keep = npubEncode(getPublicKey(keepSk));
+  const goneSk = generateSecretKey(), gone = npubEncode(getPublicKey(goneSk));
+  // gateway.mjs refuses to remove the ONLY church, so two are seeded and one dropped — this is the state
+  // a relay is in for a church it used to carry.
+  assert.equal((await cfgAdmin([keep, gone])).ok, true, 'could not seed two churches');
+  assert.equal((await cfgAdmin([keep])).ok, true, 'could not drop the church — re-anchor this test');
+  assert.equal((await setSettings({ offerHosting: true })).ok, true, 'could not put the relay in community mode');
+  await sleep(300);
+  const r = await selfRegisterAs(goneSk, gone);
+  assert.equal(r.status, 200,
+    `re-registering a forgotten church was refused (${r.status} ${r.why}). If this fails the fix reaches ` +
+    'nothing: the console can stop skipping the relay and still never get the church back on it.');
+});
 
-  assert.equal((await cfg([keep, gone])).ok, true, 'could not seed two churches');
-  assert.equal((await cfg([keep])).ok, true, 'could not drop the church again — re-anchor this test');
-
-  // the state a reset relay is in for a church it used to carry
-  const after = await (await fetch(`http://127.0.0.1:${PORT}/config`, { headers: { Authorization: 'Bearer ' + token } })).json();
-  const npubs = JSON.stringify(after.churches || []);
-  assert.equal(npubs.includes(gone), false, 'the relay still carries the church this test needs it to have forgotten');
-  assert.equal((await cfg([keep, gone])).ok, true,
-    're-registering a forgotten church was refused. If this fails the fix has nothing to reach: the console ' +
-    'can stop skipping the relay and still never get the church back on it.');
+// THE ROW THE SCOPE TABLE MUST CARRY. A private relay is the Suite DEFAULT (gateway.mjs:99
+// offerHosting:false), and a private relay that still holds another church refuses the forced retry
+// (:4142). Forcing is then correct and still useless, and only the operator can resolve it. Pinned so the
+// limit is a measured fact rather than a paragraph nobody re-checks.
+test('a PRIVATE relay still holding another church refuses it — the fix does NOT cover this', async () => {
+  const keepSk = generateSecretKey(), keep = npubEncode(getPublicKey(keepSk));
+  const goneSk = generateSecretKey(), gone = npubEncode(getPublicKey(goneSk));
+  assert.equal((await setSettings({ offerHosting: false })).ok, true, 'could not put the relay back to private');
+  assert.equal((await cfgAdmin([keep, gone])).ok, true, 'could not seed two churches');
+  assert.equal((await cfgAdmin([keep])).ok, true, 'could not drop the church');
+  await sleep(300);
+  const r = await selfRegisterAs(goneSk, gone);
+  assert.equal(r.status, 403,
+    'a private relay accepted a forgotten church back. That is a WIDENING — self-registration on a private ' +
+    'box is bootstrap-only by design (RELAY-AUDIT-2026-07-20 H4), and it is what turned one box into 19 ' +
+    'tenants. If this is now allowed it was not allowed deliberately.');
+  assert.match(r.why, /already set up for its church/, 'refused for a different reason than the bootstrap lock');
 });
 
 // ── 2. THE CONSOLE ───────────────────────────────────────────────────────────────────────────────────
@@ -77,14 +110,23 @@ test('a relay that has forgotten a church will take it back', async () => {
 // condition, and these go red — which a text match on that file could not do.
 async function runHook({ refused, actingChurch = '', name = 'Grace Church' }) {
   const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
-  const src = fnBody(DASH, 'function useRegistrationRetry(', 'useRegistrationRetry');
+  // SLICE THE REAL FLAG TOO, not just the hook. Stubbing relayRejectionActive() would only prove "if this
+  // returns true, force is passed" — it would say nothing about the flag noteRelayRejection() actually
+  // writes, which is the link the whole fix hangs on. With the `typeof` guard in the hook, a real function
+  // that was renamed or broken would force nothing, throw nothing, and leave a stubbed test green.
+  const src = [
+    fnBody(DASH, 'function noteRelayRejection(', 'noteRelayRejection'),
+    fnBody(DASH, 'function clearRelayRejection(', 'clearRelayRejection'),
+    fnBody(DASH, 'function relayRejectionActive(', 'relayRejectionActive'),
+    fnBody(DASH, 'function useRegistrationRetry(', 'useRegistrationRetry'),
+  ].join('\n');
   const tmp = join(tmpdir(), 'reg-retry-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
     // fnBody() returns the WHOLE function, signature included — wrapping it in another `function
     // useRegistrationRetry(...) { }` nests it inside itself, so the outer one declares the inner and does
     // nothing. That is not a loud failure: the two tests that assert NO call passed vacuously over it.
-    writeFileSync(tmp, src + '\nexport { useRegistrationRetry };\n');
+    writeFileSync(tmp, src + '\nexport { useRegistrationRetry, noteRelayRejection, relayRejectionActive };\n');
     js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
   } finally { rmSync(tmp, { force: true }); }
 
@@ -94,10 +136,19 @@ async function runHook({ refused, actingChurch = '', name = 'Grace Church' }) {
   const steward = { actingChurch, selfRegister: (n, opts) => { calls.push({ n, opts }); return Promise.resolve(); } };
   const win = {};
   Object.defineProperty(win, 'Steward', { get() { entered++; return steward; } });
+  // a localStorage the sliced recorder can really write to, so the flag is DRIVEN, never simulated
+  const store = new Map();
+  const localStorage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) };
+  win.REG_NEEDED_LS = 'trinityone.steward.relay-rejected';
+  win.addEventListener = () => {}; win.dispatchEvent = () => true;
   const key = '__reg_' + Math.random().toString(36).slice(2);
-  globalThis[key] = { React, window: win, relayRejectionActive: () => refused };
-  const pre = `const React = globalThis.${key}.React; const window = globalThis.${key}.window; const relayRejectionActive = globalThis.${key}.relayRejectionActive;`;
+  globalThis[key] = { React, window: win, localStorage, CustomEvent: class { constructor(t, o) { this.type = t; Object.assign(this, o); } } };
+  const pre = `const React = globalThis.${key}.React; const window = globalThis.${key}.window;`
+    + ` const localStorage = globalThis.${key}.localStorage; const CustomEvent = globalThis.${key}.CustomEvent;`
+    + ` const REG_NEEDED_TTL = 7*24*60*60*1000;`;
   const mod = await import('data:text/javascript;base64,' + Buffer.from(pre + '\n' + js).toString('base64'));
+  // the flag arrives the ONLY way it arrives in the app: a refusal was recorded.
+  if (refused) mod.noteRelayRejection();
   draw(() => { mod.useRegistrationRetry(name); return null; }, {});
   await sleep(0);
   delete globalThis[key];

@@ -5361,8 +5361,13 @@ window.Steward = {
     // whole document exists to prevent, and the console has a mounted banner for exactly this.
     try {
       window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'join policy',
+        // THIS IS THE MESSAGE THE STEWARD ACTUALLY SEES in the observed failure. publish() raises
+        // steward-publish-error first, and the dashboard's handler then replaces it with this one
+        // moments later — so the reload instruction has to be HERE too, not only on the message it
+        // overwrites. Reloading is what runs useRegistrationRetry() and re-attempts registration.
         message: 'A relay refused “people must be approved before they can join”, so anyone with your '
-          + 'join link can join straight in. Fix it under Relays → “A relay is refusing our posts”.' } }));
+          + 'join link can join straight in. Open Settings → Relays, use “A relay is refusing our '
+          + 'posts”, then reload this page.' } }));
     } catch (e) {}
     return { ok: false, reason: 'refused' };
   },
