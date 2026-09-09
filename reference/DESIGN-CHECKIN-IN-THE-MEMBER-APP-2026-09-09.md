@@ -120,8 +120,42 @@ consult it**, or the test drives something that is not the shipped path.
 - **Who may hold the helper key — a rota role, or named people?** The rota already knows who is serving on
   a Sunday. Tying the capability to the rota is elegant and means a volunteer's access ends when their
   turn does; it is also more machinery.
-- **What happens when the relay is unreachable mid-session?** A hall with bad wifi is the normal case.
-  Check-in probably has to work offline and reconcile afterwards, which is a significant constraint and
-  should be decided now rather than discovered.
+- ~~**What happens when the relay is unreachable mid-session?**~~ **DECIDED 2026-09-09 — see §8.**
 - **Does the pickup code need to survive a phone dying?** If the answer is yes, the desk needs a way to
   release a child without it, and that route is the one an attacker would aim at.
+
+## 8. DECIDED: design for a connected hall
+
+Owner, 2026-09-09: *"lets work under the assumption that churches with safeguarding stuff tend to be in
+more wealthy places with good wifi. If they don't it's just a feature they will have to forfeit a little.
+Lets design for wifi/internet."*
+
+**So: check-in assumes a reachable relay. Offline operation is not a requirement.** That is a deliberate
+scope decision, not an oversight, and it removes the largest constraint on the design.
+
+**Why the reasoning holds.** Formal children's-work safeguarding — registers, pickup codes, cleared
+volunteers — is a practice of churches that already run structured programmes, and those churches
+overwhelmingly have a building with wifi. A church without connectivity is unlikely to be running the kind
+of session this feature serves.
+
+**What follows from it:**
+
+- The parent scans a QR on the room door, and the worker's list updates from the relay. Both sides need
+  the network; that is now allowed.
+- **No offline queue, no local reconciliation, no split-brain register.** Those are the parts that would
+  have made this genuinely hard, and they are out.
+- The worker's device is **optional**, not assumed — parents scan the room, so a desk device is only
+  needed for the exceptions in §5.
+
+**What it costs, stated plainly so nobody is surprised later:**
+
+- A church with no wifi in its hall cannot use check-in. It falls back to paper, as it does today.
+- **Wifi that drops mid-session is the case to design for, and it is not the same as "offline".** A
+  five-minute outage during the busiest ten minutes of a Sunday must not produce a register that is
+  quietly wrong. The right behaviour is to fail LOUDLY at the moment of check-in — the parent is told it
+  did not work and to see the desk — rather than to accept it optimistically and reconcile later. A
+  parent who believes their child is registered when the room does not is worse than an honest refusal.
+- **This decision must be revisited if the pilot's positioning changes.** The product leads with the
+  persecuted church and the developing world, where the assumption above is false. Check-in is a feature
+  of the settled, well-connected church, and should be described that way rather than presented as
+  universal.
