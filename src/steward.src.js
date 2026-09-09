@@ -6546,11 +6546,58 @@ window.Steward = {
   subscribeCheckinPermissions(cb) {
     return this._subAddr(CHECKINPERM_D, (c) => (readCheckinPermission(JSON.stringify(c)) || { _invalid: true }), cb);
   },
-  // AND THE ENVELOPES, which the issuer needs for one reason only: to recover the session key it already minted
-  // for a service rather than replacing it. See issueCheckinSessionKeys.
+  // AND THE ENVELOPES, which the issuer needs for two reasons: to recover the session key it already minted for
+  // a service rather than replacing it, and to know which services the church has STOOD DOWN.
+  //
+  // NOT _subAddr, AND THAT IS THE WHOLE POINT — changed 2026-09-10. _subAddr FORGETS a tombstoned id (it calls
+  // _forgetById, which is correct for a calendar or a roster, where a deleted document should simply leave the
+  // list). Here it deleted the only evidence of a decision: a session the church stood down vanished from this
+  // list, the issuer — whose entire input this is — saw "no envelope for that service", republished it, AND
+  // MINTED A FRESH KEY, orphaning every record already sealed under the old one and re-staffing a Sunday the
+  // church had deliberately emptied. Measured by lifting revokeCheckinHelpers and issueCheckinSessionKeys out
+  // of vendor/steward.js and running them in sequence.
+  //
+  // A STAND-DOWN IS A FACT, NOT AN ABSENCE. It arrives as { session, standDown: true } and the issuer skips it.
+  // There is nothing for a caller to remember and no second list to pass, which matters because slice 1 has no
+  // screens at all and whoever writes the "stand this Sunday down" button will not know to.
+  //
+  // ONE AUTHOR ONLY, and this is a refusal rather than tidiness. `checkinhelper:` is owner-only at the relay
+  // (gateway.mjs, the CHECKINHELPER_D rule in accept()), so no multi-author version merge is needed — and
+  // honouring a `deleted` tag from anybody else would let one member publish a ['church']-tagged tombstone and
+  // quietly unstaff a crèche, which is exactly the authority test _forgetById was applying on our behalf. The
+  // two filters are unchanged, so this asks the relay for the same events it always did; only what it BELIEVES
+  // is narrowed.
+  //
+  // NOTHING IS CACHED IN localStorage, unlike _subAddr. Two reasons: this list feeds machinery rather than a
+  // screen, so there is no empty flash to paint over; and every entry carries the session key wrapped to its
+  // recipients, which is not something to leave lying in a browser store for the sake of a paint.
   subscribeCheckinSessionKeys(cb) {
-    return this._subAddr(CHECKINHELPER_D, (c) => ({ session: c.session, source: c.source, lifetime: c.lifetime,
-      from: c.from, until: c.until, pubs: Array.isArray(c.pubs) ? c.pubs : [], keys: (c.keys && typeof c.keys === 'object') ? c.keys : {} }), cb);
+    const byId = new Map();
+    const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+      onevent(e) {
+        if (e.pubkey !== pub) return;                      // owner-only, as the relay's own write rule is
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(CHECKINHELPER_D)) return;
+        // THE D-TAG SUFFIX, never the body's `session`. It is what the relay keys the grant on, and the relay
+        // refuses a document where the two disagree — so they agree, and this is the half that decides.
+        const session = d.slice(CHECKINHELPER_D.length);
+        if (!session) return;
+        const held = byId.get(session);
+        // NEWEST WINS BY created_at, mirroring the relay's own guard, so a stale copy replayed by a rehydrate
+        // or arriving from a peer cannot undo a decision published after it.
+        if (held && (held.ts || 0) > (e.created_at || 0)) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.set(session, { session, standDown: true, ts: e.created_at }); emit(); return; }
+        try {
+          const c = JSON.parse(e.content);
+          byId.set(session, { session, source: c.source, lifetime: c.lifetime, from: c.from, until: c.until,
+            pubs: Array.isArray(c.pubs) ? c.pubs : [], keys: (c.keys && typeof c.keys === 'object') ? c.keys : {}, ts: e.created_at });
+          emit();
+        } catch (err) {}
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch (err) {} };
   },
 
   // -- 2. HERE IS THIS WEEK'S KEY --------------------------------------------------------------------------
@@ -6645,9 +6692,29 @@ window.Steward = {
   // disagree with the relay about what 'day' means — the same class of defect as capNeedsExplicitGrant, which
   // exists so the console's padlocks and the keys cannot say different things.
   checkinLifetimes() { return Object.keys(HELPER_LIFETIMES).map(k => ({ id: k, label: HELPER_LIFETIMES[k].label, describe: HELPER_LIFETIMES[k].describe, expires: HELPER_LIFETIMES[k].max != null })); },
-  // STAND ONE SESSION DOWN. Still here, and still useful — a church restaffing a Sunday, or a session that is
-  // not happening. It is NOT how you remove a person any more: that is revokeCheckinPermission, which ends every
-  // session at once. Same honest limit as that one about a key already on a phone.
+  // STAND ONE SESSION DOWN — A SESSION THAT IS NOT HAPPENING, and that is the only thing it is for.
+  //
+  // THE CLAIM THAT STOOD HERE UNTIL 2026-09-10 WAS WRONG AND IS CORRECTED RATHER THAN SOFTENED (rule 4). It
+  // said "still useful — a church RESTAFFING A SUNDAY, or a session that is not happening". Restaffing is not
+  // what this does and never was, under the model shipped on 2026-09-09:
+  //
+  //   • TO RESTAFF, CHANGE WHO IS CLEARED AND RE-ISSUE. issueCheckinSessionKeys republishes the same envelope
+  //     to the new set of people and REUSES the session's own key, which is what keeps every record already
+  //     sealed under it readable. Revoking first is the one way to make that impossible.
+  //   • BECAUSE THIS TOMBSTONE REPLACES THE ENVELOPE, and the envelope was the only place the session key
+  //     existed — wrapped to the church and to its safeguarding stewards. After this runs, NOBODY can open
+  //     that session's register, the church included. That is right for a session that never happened and has
+  //     no records; it is destructive for one that did. §9 of the design note names this exact distinction:
+  //     "delete the person" and "delete the evidence they were in the room" are different operations and must
+  //     not be the same button. Standing a session down that HAS records is the second one, and slice 2 needs
+  //     a shape for it (recorded in reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md) rather than this.
+  //
+  // It is still NOT how you remove a PERSON: that is revokeCheckinPermission, which ends every session at once.
+  // Same honest limit as that one about a key already on a phone.
+  //
+  // WHAT THE ISSUER DOES WITH IT: subscribeCheckinSessionKeys reports this session as { standDown: true } and
+  // issueCheckinSessionKeys skips it, so automatic issuance cannot re-staff what a steward stood down. Until
+  // 2026-09-10 it did exactly that, with a fresh key.
   revokeCheckinHelpers(session) {
     if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
     const sid = String(session || '');
@@ -6708,12 +6775,34 @@ window.Steward = {
       if (win.from - at > horizon) { out.skipped.push({ session, why: 'beyond the horizon' }); continue; }
       const want = permittedHelpers(perms, win.from);
       const have = held.get(session);
+      // A SESSION THE CHURCH STOOD DOWN IS LEFT ALONE. Added 2026-09-10; before it, this was the defect.
+      // revokeCheckinHelpers tombstones the envelope, subscribeCheckinSessionKeys used to FORGET the id
+      // entirely, so this issuer saw "no envelope for that service", published one, and minted a FRESH KEY —
+      // re-staffing a Sunday the church had deliberately emptied and orphaning every record already sealed
+      // under the old key. Both halves wrong at once: the wrong people admitted, and the right records lost.
+      //
+      // A STEWARD'S DECISION OUTRANKS THE SCHEDULE. Machinery that quietly reverses an act a person took is
+      // the worst thing an automatic issuer can do, and it is worse here than a missing key would be: nothing
+      // in this feature blocks a child being checked in (design §10), so a session with no key falls back to
+      // the desk, whereas a session re-staffed against the church's wishes puts somebody in the room the
+      // church removed. To staff it again, clear the people and re-issue — the stand-down is not the undo.
+      if (have && have.standDown) { out.skipped.push({ session, why: 'stood down' }); continue; }
       // RECOVER THE KEY THIS SERVICE ALREADY HAS. The church wraps a slot to ITSELF on every envelope, so it can
       // always unwrap its own — which is what makes re-issuing to a changed set of people possible without
       // rotating the key and orphaning the records already sealed under it.
       let keyHex = '';
       if (have && have.keys && have.keys[cp]) { try { keyHex = String(nip44d(have.keys[cp], nip44ck(sk, cp)) || ''); } catch (e) { keyHex = ''; } }
       if (!/^[0-9a-f]{64}$/.test(keyHex)) keyHex = '';
+      // AND AN ENVELOPE THIS CONSOLE CANNOT OPEN IS RE-MINTED, NOT LEFT ALONE — deliberately, and it is worth
+      // saying because the opposite looks safer and is not. A guard refusing to publish over an unrecoverable
+      // envelope was written here on 2026-09-10 and removed the same day: the idempotence test above already
+      // pins this case, with the reason. A session whose envelope was written by another device, or whose
+      // church slot is corrupt, would otherwise be UNSTAFFABLE FOR EVER — nothing could ever add a helper to
+      // it, and design §10 is explicit that a lapsed or missing key must not block a session; the desk is the
+      // fallback, a permanent lock-out is not. The cost is real and is not hidden: re-minting rotates that
+      // session's key and orphans anything already sealed under it. Which way that trade should go once real
+      // registers exist is recorded for slice 2 in reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md; it is not
+      // something to flip quietly here.
       if (have && keyHex && same(have.pubs, want) && same(Object.keys(have.keys || {}), [...want, ...keepers])) {
         out.skipped.push({ session, why: 'unchanged' }); continue;
       }

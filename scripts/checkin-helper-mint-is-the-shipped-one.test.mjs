@@ -75,6 +75,7 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   let keyNonce = 0;
   const published = [];
   const warnings = [];
+  const subs = [];
   const stubs = {
     sk: new Uint8Array(32).fill(9),
     pub: CHURCH,
@@ -123,6 +124,11 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     decrypt: (ct, ck) => { const pre = 'sealed[' + ck + ']'; if (String(ct).indexOf(pre) !== 0) throw new Error('wrong key'); return String(ct).slice(pre.length); },
     finalizeEvent: (e) => ({ ...e, id: 'evt', pubkey: CHURCH, sig: 'sig' }),
     _publishToRelays: async (e) => { published.push(e); return publishOk; },
+    // THE RELAY POOL, captured rather than dialled — so the SHIPPED read-back can be driven with events the
+    // SHIPPED writers really produced. It records the subscription's handlers and nothing else; every decision
+    // about what an envelope or a tombstone MEANS stays inside the lifted function.
+    relays: () => ['wss://relay.test/relay'],
+    pool: { subscribeMany: (_relays, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; } },
     _warnUnsealed: (cap, failed) => { warnings.push({ cap, failed: [...failed] }); },
     window: { dispatchEvent: () => true },
   };
@@ -152,13 +158,34 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   const grantPerm = lift('async grantCheckinPermission(opts) {', 'grantCheckinPermission');
   const revokePerm = lift('revokeCheckinPermission(person) {', 'revokeCheckinPermission');
   const issue = lift('async issueCheckinSessionKeys(opts) {', 'issueCheckinSessionKeys');
+  // TWO MORE, ADDED 2026-09-10 with the stand-down fix. The pair that decides whether automatic issuance can
+  // reverse a steward's decision is revokeCheckinHelpers -> subscribeCheckinSessionKeys -> issueCheckinSessionKeys,
+  // and all three are lifted, so nothing between the stand-down and the issuer's answer is a test's own copy.
+  const standDown = lift('revokeCheckinHelpers(session) {', 'revokeCheckinHelpers');
+  const readKeys = lift('subscribeCheckinSessionKeys(cb) {', 'subscribeCheckinSessionKeys');
   // `this` for the issuer is the object it lives on in the console, and the one method it reaches for is the
   // mint — the REAL one, lifted above. Nothing is stubbed between the issuer's decision and the document.
   const self = { publishCheckinHelpers: (o) => mint.call({}, o) };
-  return { stubs, published, warnings,
+  // READ THE ENVELOPES BACK THROUGH THE SHIPPED SUBSCRIPTION. `events` is fed to the real onevent handler in
+  // order and then EOSE is fired, exactly as a relay would — so what comes out is what the console would
+  // actually hold, including whether a stood-down session is a row or an absence. That distinction is the whole
+  // subject: it decided, silently, whether the issuer re-staffed a Sunday the church had emptied.
+  const sessionKeysFrom = (events) => {
+    let last = null;
+    const stop = readKeys.call({}, (rows) => { last = rows; });
+    const sub = subs[subs.length - 1];
+    assert.ok(sub, 'the lifted subscription never opened one — the pool stub was not reached');
+    for (const e of events) sub.handlers.onevent(e);
+    sub.handlers.oneose();
+    stop();
+    assert.ok(Array.isArray(last), 'the shipped subscription emitted nothing at all, not even an empty list');
+    return last;
+  };
+  return { stubs, published, warnings, subs, sessionKeysFrom,
     publishCheckinHelpers: (o) => mint.call({}, o),
     grantCheckinPermission: (o) => grantPerm.call({}, o),
     revokeCheckinPermission: (who) => revokePerm.call({}, who),
+    revokeCheckinHelpers: (sid) => standDown.call({}, sid),
     issueCheckinSessionKeys: (o) => issue.call(self, o) };
 }
 
@@ -691,3 +718,81 @@ test('NOBODY IS CLEARED, SO NOBODY IS WRAPPED A KEY — and the church still is'
     'the church and its safeguarding lead lost the session key when nobody was cleared — that is the register ' +
     'they already hold, and this slice narrows nothing');
 });
+
+// ── STANDING A SESSION DOWN, AND WHAT AUTOMATIC ISSUANCE DOES ABOUT IT ────────────────────────────────────
+//
+// Found 2026-09-10 by running these three functions in the order a church would: mint the Sunday, stand it
+// down, then let the issuer run again over the same service list. Under the shipped code it RE-STAFFED the
+// session and minted a FRESH key — the second half of the "restaffing a Sunday" claim revokeCheckinHelpers
+// used to make about itself, and the first half of a data loss, because every record already sealed under the
+// old key would have been orphaned. The whole chain is lifted out of vendor/steward.js; nothing between the
+// stand-down and the issuer's answer is a copy this file wrote.
+
+test('THE STAND-DOWN IS A ROW, NOT AN ABSENCE — or the issuer cannot see it at all', async () => {
+  // The measurement that explains the defect rather than only its symptom. subscribeCheckinSessionKeys is the
+  // issuer's entire input; it used to delegate to _subAddr, which FORGETS a tombstoned id (right for a
+  // calendar, wrong for a decision). So "the church stood this session down" and "no envelope has ever been
+  // published for this session" arrived identically, and the issuer cannot distinguish two things it must
+  // treat oppositely.
+  const h = harness();
+  await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE), svc('svc-b', SERVICE_2)],
+    permissions: CLEARED, stewards: [SGLEAD] });
+  assert.equal(h.published.length, 2, 're-anchor: the issuer did not mint both Sundays');
+  const envelopes = [...h.published];
+  const stood = await h.revokeCheckinHelpers('svc-a');
+  assert.notEqual(stood, null, 'the owner console refused to stand a session down at all');
+  const tomb = h.published[h.published.length - 1];
+  assert.ok(tomb.tags.some(t => t[0] === 'deleted'), 're-anchor: the stand-down published no tombstone');
+  assert.equal((tomb.tags.find(t => t[0] === 'd') || [])[1], D.CHECKINHELPER + 'svc-a',
+    're-anchor: the tombstone is not at the envelope\'s own d-tag, so nothing below is about that session');
+
+  const rows = h.sessionKeysFrom([...envelopes, tomb]);
+  const a = rows.find(r => r.session === 'svc-a');
+  assert.ok(a, 'the session the church stood down disappeared from the console\'s own list, so the issuer ' +
+    'cannot tell it from a Sunday nobody has staffed yet — which is precisely how it came to re-staff one');
+  assert.equal(a.standDown, true, 'the stood-down session is reported as an ordinary envelope');
+  assert.equal(a.keys, undefined, 'a stood-down session still carries wrapped key material in the console\'s list');
+  // AND THE UNTOUCHED SUNDAY IS STILL A REAL ENVELOPE, or "standDown" would be what this list says about
+  // everything and the assertion above would be about nothing.
+  const b = rows.find(r => r.session === 'svc-b');
+  assert.ok(b && !b.standDown, 're-anchor: every session reads as stood down, so the row above proves nothing');
+  assert.deepEqual(b.pubs.slice().sort(), [ADA, DAN].sort(), 're-anchor: the untouched envelope lost its helpers');
+  assert.ok(b.keys[CHURCH], 're-anchor: the untouched envelope carries no key for the church');
+});
+
+test('AND THE ISSUER LEAVES IT ALONE — it does not re-staff it, and it does not mint a new key over it', async () => {
+  const h = harness();
+  await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)], permissions: CLEARED, stewards: [SGLEAD] });
+  const envelope = h.published[0];
+  const firstKey = JSON.parse(h.published[0].content).keys[CHURCH];
+  await h.revokeCheckinHelpers('svc-a');
+  const tomb = h.published[h.published.length - 1];
+  const rows = h.sessionKeysFrom([envelope, tomb]);
+  const before = h.published.length;
+
+  // THE SUNDAY IS STILL ON THE ROTA and the people are still cleared, which is the whole trap: nothing about
+  // the service or the clearances says "do not staff this", only the church's own act does.
+  const again = await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)],
+    permissions: CLEARED, stewards: [SGLEAD], existing: rows });
+  assert.deepEqual(again.issued, [],
+    'automatic issuance re-staffed a session the church had deliberately stood down. A steward acted; ' +
+    'machinery reversed it, with nobody watching and nothing on any screen to say so.');
+  assert.equal(h.published.length, before,
+    'the issuer published over a stood-down session — and with a FRESH session key, because the tombstone ' +
+    'replaced the only envelope the old key was wrapped in. Every record already sealed under it would be ' +
+    'unreadable: the "rotation must never drop a key that has already sealed something" rule this same file ' +
+    'states for the media key-ring.');
+  assert.deepEqual(again.skipped, [{ session: 'svc-a', why: 'stood down' }],
+    'the session was skipped for some other reason, so this test would keep passing if the stand-down check ' +
+    'were deleted: ' + JSON.stringify(again));
+  assert.equal(firstKey, JSON.parse(envelope.content).keys[CHURCH], 're-anchor: the key read back is not the minted one');
+});
+
+// AND THE ONE I GOT WRONG, LEFT AS A NOTE RATHER THAN AS A TEST. A third guard was written here on
+// 2026-09-10 — "never publish over an envelope whose session key this console cannot recover", on the
+// grounds that doing so rotates the key and orphans that session's register. It is a real cost and the
+// guard was still wrong: 'NOTHING IS RE-PUBLISHED WHEN NOTHING CHANGED' above already pins the opposite,
+// with the reason, and it caught the guard immediately. A session nobody can re-key would be UNSTAFFABLE
+// FOR EVER, and design §10 says a missing key must not block a session — the desk is the fallback, a
+// permanent lock-out is not. The trade-off (a staffable session versus a readable history) is recorded for
+// slice 2 in reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md rather than decided here.

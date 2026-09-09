@@ -1487,6 +1487,45 @@ const CHECKIN_HELPERS = new Map();
 // envelope. That separation is the owner's decision of 2026-09-09 and the reason a lost helper phone exposes
 // the Sundays it held rather than the year.
 const CHECKIN_PERMITS = new Map();
+// ── THE D-TAG SUFFIX, PARSED IN ONE PLACE FOR BOTH DOORS ──────────────────────────────────────────────────
+//
+// accept() and note() are two doors into the maps above, and until 2026-09-10 THEY DISAGREED ABOUT WHAT A
+// SUFFIX MAY LOOK LIKE. accept() pinned a clearance's suffix to lowercase 64-hex and bounded a session id at
+// 128 characters of [A-Za-z0-9._:-]; note() LOWERCASED the clearance suffix and bounded the session id not at
+// all. So `checkinperm:<UPPERCASE-HEX>`, a session id containing `..`, and a 300-character session id were
+// each refused on the websocket AND INSTALLED through /import and peer replication — measured one document at
+// a time on a fresh relay, and they survived a restart.
+//
+// WHY IT MATTERED, since both doors require CHURCH_PUBS.has(e.pubkey) and this was never a member or operator
+// escalation. Two spellings of one suffix are two addressable documents writing one map entry, which is what
+// accept()'s own rule says it exists to prevent. Measured symptoms of the uppercase clearance: the church saw
+// it in its list; THE PERSON IT NAMED COULD NOT READ THEIR OWN CLEARANCE, because canRead() pins the same
+// lowercase form, so their "your clearance ends on the 4th" screen was blank while this relay treated them as
+// cleared; and the document outlived the revoke, because the tombstone a console writes is lowercase.
+//
+// It also falsified the claim written on the ingest itself — "the SAME PARSER the write gate uses so a
+// document cannot mean one thing at the door and another on disk". The WINDOW half of that was true (both
+// doors call readHelperGrant / readCheckinPermission and both were verified). The D-TAG half was not.
+//
+// CALLERS — every one, per CLAUDE.md rule 2, and there are four:
+//   • accept()  CHECKINPERM_D and CHECKINHELPER_D — the websocket door
+//   • note()    CHECKINPERM_D and CHECKINHELPER_D — the ingest, reached by the boot rehydrate, by /import, and
+//     by BOTH relay-to-relay sync paths (the cursor pull and negentropy), which call note(e) directly
+// canRead() keeps its own inline 64-hex pin on the clearance suffix rather than calling this: a read gate must
+// be able to refuse without a map having been populated first, and that pin is measured against the same rule.
+//
+// RETURNS '' FOR ANYTHING ELSE, and every caller treats '' as "not a document of this kind" — installs
+// nothing, serves nothing, removes nothing.
+const checkinPermWho = (d) => {
+  const who = String(d.slice(CHECKINPERM_D.length) || '');
+  return /^[0-9a-f]{64}$/.test(who) ? who : '';
+};
+// A session id is a console-minted opaque token joined to service:<id>. Bounded and charset-checked so it
+// cannot smuggle a path, a huge key, or something that reads as another d-tag.
+const checkinHelperSid = (d) => {
+  const sid = String(d.slice(CHECKINHELPER_D.length) || '');
+  return (sid.length > 0 && sid.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(sid)) ? sid : '';
+};
 // Is `pub` a check-in helper for this church's session, RIGHT NOW?
 //
 // THE CLOCK IS THE SERVER'S, ALWAYS, and never the event's created_at. That is the whole enforcement: a helper
@@ -2218,7 +2257,18 @@ function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
+                   CHECKIN_PERMITS,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE]) { try { m.clear(); } catch {} }
+  // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
+  // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
+  // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
+  //
+  // MEASURED, not reasoned: the church kind-5-deletes a clearance, so it leaves the corpus; a MID-LIFE
+  // hydrateMaps() then runs (an /import, or a /config save — the call at the foot of the config route);
+  // CHECKIN_HELPERS correctly forgets the envelope and CHECKIN_PERMITS STILL ADMITTED. The relay went on
+  // handing out the session key and accepting register writes on a clearance it no longer held, until the
+  // process next restarted — and this relay restarts itself, so it was self-healing at an interval nobody
+  // chose, which is worse than either a permanent bug or none.
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
@@ -2495,7 +2545,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
   }
   else if (d.startsWith(CHECKINHELPER_D) && CHURCH_PUBS.has(e.pubkey)) {   // ONE SESSION'S check-in helpers — OWNER-ONLY, author IS the church
-    const sid = d.slice(CHECKINHELPER_D.length);
+    // THE SAME SUFFIX RULE AS THE DOOR, not a looser one. This was a bare `d.slice(...)` with no bound and no
+    // charset test until 2026-09-10, while accept() refused anything over 128 characters or outside
+    // [A-Za-z0-9._:-] — so a session id containing `..`, and a 300-character one, were refused on the websocket
+    // and installed through /import and peer replication. See checkinHelperSid, which is now the one parser.
+    const sid = checkinHelperSid(d);
+    if (!sid) return;
     const ts = e.created_at || 0;
     let byS = CHECKIN_HELPERS.get(e.pubkey);
     if (!byS) { byS = new Map(); CHECKIN_HELPERS.set(e.pubkey, byS); }
@@ -2572,7 +2627,19 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // disk. Enforced here as well as in accept() for the reason NEED_D and CHECKINHELPER_D both state: a
     // document already on disk replays through note() on every boot with accept() nowhere in the path, and
     // this relay restarts itself.
-    const who = String(d.slice(CHECKINPERM_D.length) || '').toLowerCase();
+    //
+    // THAT SENTENCE WAS HALF TRUE UNTIL 2026-09-10, and is corrected rather than left standing (rule 4). The
+    // WINDOW half held on both doors — both really do call readCheckinPermission, and every lifetime and cap
+    // was verified against both. The D-TAG half did not: this line read
+    //     String(d.slice(CHECKINPERM_D.length) || '').toLowerCase()
+    // while accept() pinned the RAW suffix to lowercase 64-hex. `checkinperm:<UPPERCASE-HEX>` was therefore
+    // refused on the websocket and INSTALLED here — the lowercase() folded it onto the very map entry the door
+    // had refused to write. Measured on a fresh relay: served the session key, accepted register writes, and
+    // survived a restart, while the person it named could not read their own clearance (canRead pins the
+    // lowercase form) and the console's lowercase tombstone could never remove it. checkinPermWho is now the
+    // one parser for the suffix, exactly as readCheckinPermission is for the body.
+    const who = checkinPermWho(d);
+    if (!who) return;
     const ts = e.created_at || 0;
     let byP = CHECKIN_PERMITS.get(e.pubkey);
     if (!byP) { byP = new Map(); CHECKIN_PERMITS.set(e.pubkey, byP); }
@@ -2873,10 +2940,11 @@ function accept(e) {
     // by that author — so a co-tenant cannot author a grant for another congregation's session id.
     if (d.startsWith(CHECKINHELPER_D)) {
       if (!CHURCH_PUBS.has(e.pubkey)) return false;
-      const sid = d.slice(CHECKINHELPER_D.length);
-      // A session id is a console-minted opaque token joined to service:<id>. Bounded and charset-checked so it
-      // cannot smuggle a path, a huge key, or something that reads as another d-tag.
-      if (!sid || sid.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(sid)) return false;
+      // THE SAME BOUND AND CHARSET AS THE INGEST, from the same function since 2026-09-10 — this rule is
+      // unchanged, and checkinHelperSid is where it now lives so note() cannot be looser than it. The two
+      // spellings a bare slice let through (a `..`, and 300 characters) were refused here and installed there.
+      const sid = checkinHelperSid(d);
+      if (!sid) return false;
       if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // the church stands the session down
       const g = readHelperGrant(e.content);
       // REFUSED AT THE DOOR, not merely ignored at ingest. A grant with an unbounded window, a window that
@@ -2910,8 +2978,13 @@ function accept(e) {
       // already requires `person` to be 64-hex and the comparison below requires it to equal this suffix — so an
       // npub-spelled d-tag is refused either way. This line is belt over those braces and is worth its two
       // lines; it is NOT what is holding the property up.
-      const who = String(d.slice(CHECKINPERM_D.length) || '');
-      if (!/^[0-9a-f]{64}$/.test(who)) return false;
+      //
+      // AND IT WAS THE ONLY THING HOLDING ONE SPELLING UP: `checkinperm:<UPPERCASE-HEX>`. The ingest lowercased
+      // the suffix before comparing it to `pm.person` (which readCheckinPermission lowercases too), so the pair
+      // agreed there and the door refused it here. Same rule, one function since 2026-09-10 — see
+      // checkinPermWho, which this now calls and note() calls too.
+      const who = checkinPermWho(d);
+      if (!who) return false;
       if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // the church withdraws a clearance
       const pm = readCheckinPermission(e.content);
       // REFUSED AT THE DOOR, not merely ignored at ingest — a clearance that silently did not save is a
@@ -4596,6 +4669,18 @@ function serveStatic(req, res) {
         // a read gate is bypassed by nothing, because every delivery goes through it, and it consults
         // TODAY's clearance rather than what was true when the message was sent. If you are tempted to add a
         // policy pass here again, check first whether the read gate already covers the harm.
+        //
+        // ⚠ AND "BYPASSED BY NOTHING" IS TRUE OF THE GATE THAT SENTENCE WAS WRITTEN ABOUT, NOT OF EVERY GATE.
+        // Narrowed 2026-09-10 after it was measured wrong on check-in, because it is the paragraph a future
+        // change will lean on. It holds where canRead() RE-DERIVES its answer from the event — the kind-4 DM
+        // case above, which recomputes safeguardAllows() against today's lists on every delivery. It does NOT
+        // hold where canRead() consults a MAP that note() populated: the `checkinhelper:` rule reads
+        // CHECKIN_HELPERS and calls checkinPermitted(), so it serves whatever THIS ROUTE installed. A
+        // `checkinperm:` d-tag in UPPERCASE hex was refused at the websocket door, installed here, and the
+        // session key served on it — until the ingest was made to apply accept()'s own d-tag rule.
+        //
+        // So: check whether the read gate RECOMPUTES before trusting it to cover the harm. Where it reads a
+        // derived map, note() is the gate, and note() must be exactly as strict as accept().
         setImmediate(() => { try { hydrateMaps(); } catch {} try { store.cull(); } catch {} });   // membership/groups/care live once this settles
       } catch (err) { try { res.writeHead(500, H); res.end(JSON.stringify({ error: 'import failed: ' + ((err && err.message) || 'error') })); } catch {} }
     });

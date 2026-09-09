@@ -94,3 +94,85 @@ the worker releases the child by hand.
 group. A "Children's check-in" page there is the obvious home. But granting is a weekly act tied to a
 service, and the rota already knows who is serving — so it may belong beside the rota instead, or in both.
 Decide before building, not during.
+
+## Handed to slice 2 by the audit of 2026-09-10 — READ THIS BEFORE WRITING A SCREEN
+
+Six things found while fixing three audit findings on `feat/checkin-permission-per-person`. None is fixed
+here, all of them land on whoever writes these screens, and the first is the most important thing on this
+page.
+
+### 1. ⚠ THE SHIPPED WRITER EMITS NEITHER TAG THE NEW READ GATES KEY ON
+
+`src/steward.src.js` `publishCheckin` → `encPublish` writes exactly `[['d'], ['t'], ['enc','1']]`. No
+`['session']`, no `['p']`.
+
+Both read paths added on 2026-09-09 need one of those tags:
+
+- `canRead`'s `checkin:` rule finds the session from `['session']` and asks `checkinHelperOf`;
+- the guardian rule walks `['p']` tags.
+
+So **against any check-in record a church holds today, a helper key opens nothing and a guardian sees
+nothing.** The tests that pass over those gates hand-build records carrying both tags — which is §6 of the
+design note in one sentence: *the gate is correct and the screen does not consult it, or the test drove
+something that was not the shipped path.*
+
+Nothing is broken in the relay. The writer has to start emitting both tags, and it must be the SHIPPED
+writer that a test drives, not a fixture. Do this first: every other item on this page is cosmetic beside it.
+
+### 2. `stew-dashboard.jsx` will state something false the day slice 2 lands
+
+*"the only people who can open them are you and anyone you have given Safeguarding to."* True today. False
+the moment a helper holds a session key. Reword it in the same change, not afterwards.
+
+### 3. `helperPolicy().source` has no product reader
+
+Checked rather than repeated, and it is narrower than it first looks. Both callers destructure `.lifetime`
+only — `const policy = { lifetime: helperPolicy({ lifetime: o.lifetime }).lifetime }` — and the code above
+them explains why on purpose: an envelope's source is pinned to `GRANT_SOURCE`, and "which question cleared
+this person" moved to `permissionPolicy` when the layers split. So this is not a steward changing a setting
+that does nothing; it is a returned field nothing consumes. Either drop it from `helperPolicy` or give it a
+reader, but do not build a settings control for it — that would make it item 6.
+
+### 4. `grantCheckinPermission` files everything as `'rota'`
+
+It defaults provenance to `'rota'` however the person was chosen, against `checkin-role-source.mjs`'s claim
+that naming somebody by hand *"IS a declared source and says so in the enforced record"*. The screen knows
+which it was; pass it.
+
+### 5. A 400-day-plus `dated` clearance returns bare `null`, reason discarded
+
+Against `permissionWindow`'s own promise that *"a church that typed 2099 must see it"*. The refusal is
+correct; the silence is not. A screen needs the reason to show.
+
+### 6. Neither policy function is ever fed a stored church settings document
+
+`helperPolicy` / `permissionPolicy` read a settings object nothing persists or loads. Until they do, the
+church's answer is always the built-in default and the settings page would be item 3 again.
+
+### And one decision this audit deliberately did NOT take
+
+**Standing a session down destroys the only copy of its key.** `revokeCheckinHelpers` replaces the envelope
+with a tombstone, and the envelope was the one place the session key existed — wrapped to the church and to
+its safeguarding stewards. After it runs, **nobody can open that session's register, the church included.**
+
+That is right for a session that never happened, and it is the wrong operation for one that has records.
+Design §9 names the distinction: *"delete the person" and "delete the evidence they were in the room" are
+different operations and must not be the same button.* Slice 1 has no records, so it is latent; slice 2's
+"stand this Sunday down" button is where it stops being.
+
+The same trade-off sits on the issuer, and the codebase has already chosen a side there, on purpose:
+`issueCheckinSessionKeys` RE-MINTS an envelope whose key this console cannot recover, rather than refusing —
+because refusing would make that session unstaffable for ever, and design §10 says a missing key must not
+block a session. A guard doing the opposite was written on 2026-09-10 and removed the same day; the
+idempotence test in `checkin-helper-mint-is-the-shipped-one.test.mjs` caught it and states the reason.
+
+So slice 2 needs a **shape for standing a session down that keeps the key**, e.g. republishing the envelope
+with an empty helper list and the keepers' slots intact rather than tombstoning it — same immediate,
+relay-enforced revocation (`pubs` empty refuses every helper at both the read and the write gate), and the
+register stays readable by the people accountable for it. Do not build it against a button that does not
+exist yet; do not ship the button without it.
+
+**What IS already fixed:** automatic issuance no longer re-staffs a session the church stood down.
+`subscribeCheckinSessionKeys` reports it as `{ session, standDown: true }` and `issueCheckinSessionKeys`
+skips it, so a steward's decision survives the next time a console opens. Two tests drive the real chain out
+of `vendor/steward.js`.
