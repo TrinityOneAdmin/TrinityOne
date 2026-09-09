@@ -5074,7 +5074,15 @@ function serveStatic(req, res) {
     const relApk = join(DATA_DIR,'apks', p.slice(1));
     let st2 = null; try { st2 = statSync(relApk); } catch {}
     if (st2 && st2.isFile()) {
-      let ver = ''; try { ver = (JSON.parse(readFileSync(join(ROOT, 'apk-latest.json'), 'utf8')).versionName || '').trim(); } catch {}
+      // THE NAME MUST DESCRIBE THE BYTES BEING SENT, and until 2026-09-09 it did not. It was read from the
+      // ROOT apk-latest.json, which describes the build this relay's CODE was released alongside; the file
+      // in relay/apks/ is whatever was last fetched, and relay-update.sh's --exclude='relay/*' guarantees
+      // the two drift. A box handing out 206 was labelling every download with whatever version its code
+      // shipped beside. So: the stamp recorded next to the file when it was fetched, and only then the old
+      // fallback (still right for a root-level copy put there by hand, where there is no stamp).
+      let ver = '';
+      try { ver = String((heldApks().find((h) => h.name === p.slice(1)) || {}).versionName || '').trim(); } catch {}
+      if (!ver) { try { ver = (JSON.parse(readFileSync(join(ROOT, 'apk-latest.json'), 'utf8')).versionName || '').trim(); } catch {} }
       const apkName = p.slice(1).replace('.apk', '') + (ver ? '-' + ver : '') + '.apk';   // versioned save name (e.g. trinityone-0.9.26.apk) so downloads self-label — no ambiguous trinityone(1).apk
       res.writeHead(200, { 'Content-Type': MIME['.apk'] || 'application/octet-stream', 'Content-Length': st2.size, 'Cache-Control': 'no-store, must-revalidate', 'Access-Control-Allow-Origin': '*', 'Content-Disposition': 'attachment; filename="' + apkName + '"', ...SEC_HEADERS });
       createReadStream(relApk).pipe(res); return;

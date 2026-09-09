@@ -48,7 +48,7 @@ const BUILD_207 = Buffer.alloc(1_300_000, 0x62);
 
 // The release host. Serves what `serving` says at the moment it is asked, so a test can move it on
 // mid-run exactly as the real one does when somebody builds an APK.
-const serving = { apk: BUILD_206, latest: { versionCode: 206, versionName: '0.9.71', date: '2026-09-07' } };
+const serving = { apk: BUILD_206, latest: { versionCode: 206, versionName: '0.9.99', date: '2026-09-07' } };
 let origin = null, box = null, dataDir = '', token = '', base = '';
 
 // A box is started by hand rather than through H.startRelay, because startRelay writes the `origin` file
@@ -109,7 +109,7 @@ test('fetching records WHAT was fetched, not merely that something was', async (
   const s = await apkStatus();
   assert.equal(s.holding, 2, 'the box did not end up holding both installers');
   const member = s.files.find((f) => f.name === 'trinityone.apk');
-  assert.equal(member.versionName, '0.9.71',
+  assert.equal(member.versionName, '0.9.99',
     'the box cannot say WHICH build it holds. Without this the panel and the download page can report when a ' +
     'file arrived and nothing whatever about what it is — which is the half both the operator and the member need.');
   assert.equal(member.versionCode, 206, 'the build number was not recorded beside the file');
@@ -173,7 +173,7 @@ test('the operator’s status is admin-gated; the member’s page is not', async
 
 test('the install page names the build, says how old it is, and offers the file', async () => {
   const html = await (await fetch(base + '/install')).text();
-  assert.match(html, /0\.9\.71/, 'the page a member downloads from does not say which version they are about to install');
+  assert.match(html, /0\.9\.99/, 'the page a member downloads from does not say which version they are about to install');
   assert.match(html, /Added to this box today/,
     'the page does not say how old the file is. That is the member-facing half of the staleness requirement: ' +
     'once a build is on phones rather than on a server, "nobody re-fetched" is no longer recoverable quietly.');
@@ -217,6 +217,18 @@ test('the QR a church shares encodes this box’s own install page', async () =>
   assert.equal(r.status, 200, 'there is no QR to print, put on a poster, or show on the panel');
   assert.match(String(r.headers.get('content-type') || ''), /image\/svg/, 'the QR is not served as an image');
   assert.match(await r.text(), /^<svg/, 'the QR endpoint answered with something that is not an SVG');
+});
+
+test('the downloaded file is named for the build actually being sent', async () => {
+  // It used to be named from the ROOT apk-latest.json — which describes the build this relay's CODE was
+  // released alongside, not the file in relay/apks/. relay-update.sh's --exclude='relay/*' guarantees those
+  // drift, so a box handing out 206 labelled every download with whatever version its code shipped beside.
+  // A member then has a file on their phone whose name is a claim about it that is not true.
+  const r = await fetch(base + '/trinityone.apk');
+  assert.equal(r.status, 200, 'the box would not serve the installer it says it holds');
+  assert.match(String(r.headers.get('content-disposition') || ''), /trinityone-0\.9\.99\.apk/,
+    'the saved filename does not name the build inside the file');
+  await r.arrayBuffer();
 });
 
 test('/apks reaches the same page — the address the backlog names', async () => {
@@ -269,7 +281,7 @@ test('the panel asks the box what it hands out — not the relay’s own apk-lat
 test('a behind box gets a headline an operator cannot miss, and an instruction', async () => {
   const { dom } = await runPanel(okReply({
     behind: true, holding: 2, keepCurrent: false, shareUrl: 'https://grace.example/install',
-    files: [{ name: 'trinityone.apk', title: 'TrinityOne', present: true, versionName: '0.9.71', versionCode: 206, ageDays: 2, state: 'behind', say: 'BEHIND — the update source is offering a different build.' }],
+    files: [{ name: 'trinityone.apk', title: 'TrinityOne', present: true, versionName: '0.9.99', versionCode: 206, ageDays: 2, state: 'behind', say: 'BEHIND — the update source is offering a different build.' }],
   }));
   const html = dom.els.get('apkHeld').innerHTML;
   assert.match(html, /handing out an installer that is behind/i,
@@ -277,7 +289,7 @@ test('a behind box gets a headline an operator cannot miss, and an instruction',
     'numbers to find out that what they are handing their congregation is out of date.');
   assert.match(html, /Update the installer now/,
     'the warning does not say what to do about it');
-  assert.match(html, /0\.9\.71/, 'the card does not state which build the box currently holds');
+  assert.match(html, /0\.9\.99/, 'the card does not state which build the box currently holds');
   assert.match(html, /added 2 days ago/i, 'the card does not say how old the held copy is');
   assert.equal(dom.els.get('installUrl').textContent, 'https://grace.example/install',
     'the address a church shares is not put on screen, so there is nothing to hand out');
