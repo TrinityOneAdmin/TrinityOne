@@ -7458,6 +7458,44 @@ const SETTINGS_PAGE_ALIASES = { church: 'identity', security: 'delegated' };
 // miniReact silently misaligns its hook store instead of throwing), so the pattern belongs outside
 // components altogether rather than being argued with. It cost every steward the ability to create a group
 // once, and it was caught by a pre-merge audit and not by any test that rendered the screen.
+// WHICH GROUPS THIS STEWARD KEEPS COLLAPSED, remembered between visits. Owner, 2026-09-09: "can we make
+// the groups collapsable? Church, People, Infra, Security, that will help tidy it up."
+//
+// KEYED BY CHURCH AND BY IDENTITY. The church because two churches on one console have two different settings
+// lists; the identity because a delegated steward's list is a genuinely different list — the four owner-only
+// Security pages are not theirs, so "Security collapsed" does not mean the same thing to both.
+// `actingChurch || churchPub` is this console's established way of asking which church is on screen (see the
+// note on window.stewardStreamLoaded in app/steward-root.jsx, and _briefKey above).
+//
+// BUILT IN ONE PLACE, deliberately. app/steward-root.jsx records what it cost to construct a storage key in
+// two places and then change one of them: the helper silently answered "this stream has never loaded" for
+// every stream, and its callers gate whether a roster is trustworthy. One function, three callers.
+function settingsGroupsLsKey() {
+  const S = (typeof window !== 'undefined' && window.Steward) || {};
+  return 'trinityone.steward.setgroups.' + (S.actingChurch || S.churchPub || '') + '.' + (S.pubkey || '');
+}
+
+// null means "this steward has never chosen", which is NOT the same as [] ("chosen, and all open"). Kept
+// distinct so a future default can tell a fresh console from a deliberate one without asking again.
+function readCollapsedGroups() {
+  try {
+    const v = JSON.parse(localStorage.getItem(settingsGroupsLsKey()) || 'null');
+    return Array.isArray(v) ? v.filter(x => typeof x === 'string') : null;
+  } catch (e) { return null; }
+}
+
+function writeCollapsedGroups(names) {
+  try { localStorage.setItem(settingsGroupsLsKey(), JSON.stringify(names)); } catch (e) {}
+}
+
+// Which group holds a page. Used to keep the group with the open page on screen, so nothing can open onto a
+// page whose row is hidden.
+function settingsGroupOf(visible, pageKey) {
+  if (!pageKey) return null;
+  const hit = visible.find(([, items]) => items.some(p => p.k === pageKey));
+  return hit ? hit[0] : null;
+}
+
 function settingsPageFor(wanted, visible, pages) {
   if (!wanted) return null;
   // PAGES FIRST, aliases second — see the note above. The other way round, a tab key that is also a page
@@ -7497,6 +7535,31 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const [page, setPage] = React.useState(() => settingsPageFor(initialSection, groups, pages));
   const open = pages.some(p => p.k === page) ? page : (narrow ? null : (pages.length ? pages[0].k : null));
   const cur = pages.find(p => p.k === open) || null;
+  // COLLAPSIBLE GROUPS. Read once, on mount, so a second console tab cannot fight this one for the value.
+  const [collapsed, setCollapsed] = React.useState(() => new Set(readCollapsedGroups() || []));
+  const toggleGroup = (g) => {
+    const next = new Set(collapsed);
+    if (next.has(g)) next.delete(g); else next.add(g);
+    // Written OUTSIDE the state updater: React may call an updater twice, and a write is not idempotent
+    // bookkeeping when it is the only record of the steward's choice.
+    writeCollapsedGroups([...next]);
+    setCollapsed(next);
+  };
+  // THE GROUP HOLDING THE OPEN PAGE IS ALWAYS ON SCREEN, whatever the stored preference says. A deep link
+  // into a collapsed group, or a reload while a page inside one is open, would otherwise leave that page
+  // rendered with no row in the list leading back to it — a page that exists and cannot be reached, which is
+  // the same fault as the alias that hid the Network page from every deep link. Checked at RENDER time and
+  // not only on mount, because `open` falls back to the first page when identity switching takes pages away,
+  // and that fallback can land in a collapsed group too.
+  //
+  // The cost, said plainly: in a browser a page is always open, so one of the four headers is always shown
+  // expanded. Pressing it still records the choice and it takes effect the moment the open page is
+  // elsewhere. On a phone the list and a page are never on screen together, so nothing is forced there.
+  const openGroup = settingsGroupOf(groups, open);
+  const shown = (g) => !collapsed.has(g) || g === openGroup;
+  // The rows a steward can actually reach, which is what the arrow keys walk: a collapsed group's rows are
+  // not rendered at all, so indexing the walk over every page would step onto refs that hold nothing.
+  const visiblePages = groups.reduce((a, [g, items]) => (shown(g) ? a.concat(items) : a), []);
   // THE PAGE LIST IS A NAVIGATION LIST, NOT A TAB STRIP, and that is not a cosmetic difference: on a phone
   // the list and the page are never on screen at the same time, which is the one thing a tablist may not do.
   // So the strip's tablist/tab/tabpanel roles and its roving tabindex are gone — a roving tabindex on a list
@@ -7509,8 +7572,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     const k = e.key;
     if (k !== 'ArrowDown' && k !== 'ArrowUp' && k !== 'Home' && k !== 'End') return;
     e.preventDefault();
-    const n = k === 'Home' ? 0 : k === 'End' ? pages.length - 1
-      : k === 'ArrowDown' ? (i + 1) % pages.length : (i - 1 + pages.length) % pages.length;
+    const n = k === 'Home' ? 0 : k === 'End' ? visiblePages.length - 1
+      : k === 'ArrowDown' ? (i + 1) % visiblePages.length : (i - 1 + visiblePages.length) % visiblePages.length;
     const el = navRefs.current[n];
     if (el && el.focus) el.focus();
   };
@@ -7611,17 +7674,37 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
       <div className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
       {/* THE LIST. On a phone it is the whole first screen; in a browser it is the left-hand column, always
-          on screen beside the page. Group names label their own list rather than being headings: every card
-          on a page is a Panel and Panel already emits an <h2>, so heading-level nav stays about the content
-          a steward came for and not about the furniture around it. */}
+          on screen beside the page. Sixteen pages is a lot to scan and most stewards live in one or two
+          groups, so each GROUP is a disclosure — owner, 2026-09-09, "that will help tidy it up".
+          GROUPS COLLAPSE AND NOTHING ELSE DOES. Not a page, not a card, and above all not the sentence under
+          a switch: rule 5 of reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md — a whole
+          rarely-opened page may be a click away, the consequence text beside a control may not.
+          The group name is the disclosure's own button rather than a heading: every card on a page is a
+          Panel and Panel already emits an <h2>, so heading-level navigation stays about the content a
+          steward came for and not the furniture around it. The button then labels the list it controls. */}
       {(!narrow || !open) ? (
       <nav className="set-list" aria-label="Settings pages">
-        {groups.map(([g, items]) => (
+        {groups.map(([g, items]) => {
+          const gid = 'set-grp-' + g.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+          const on = shown(g);
+          return (
           <React.Fragment key={g}>
-            <div className="set-grp" id={'set-grp-' + g.toLowerCase().replace(/[^a-z0-9]+/g, '-')}>{g}</div>
-            <ul className="set-items" aria-labelledby={'set-grp-' + g.toLowerCase().replace(/[^a-z0-9]+/g, '-')}>
+            {/* A REAL BUTTON WITH aria-expanded, which is what makes this a disclosure rather than a div
+                that happens to hide things. No aria-controls: the list it would name is not rendered while
+                the group is shut, and an aria-controls pointing at an id that is not on the page is a
+                dangling reference a reader cannot follow — the same objection the old tab strip's test
+                raised about an unselected tab. The chevron says open-or-shut without relying on colour. */}
+            <button className={'set-grp' + (on ? '' : ' set-grp--off')} id={gid} aria-expanded={on}
+              onClick={() => toggleGroup(g)}
+              title={(on ? 'Hide' : 'Show') + ' the ' + g + ' settings'}>
+              <Icon name={on ? 'chevD' : 'chevR'} size={13} color="currentColor" />
+              <span className="set-grp-n">{g}</span>
+              {!on ? <span className="set-grp-c">{items.length}</span> : null}
+            </button>
+            {on ? (
+            <ul className="set-items" aria-labelledby={gid}>
               {items.map(p => {
-                const i = pages.findIndex(x => x.k === p.k);
+                const i = visiblePages.findIndex(x => x.k === p.k);
                 const sel = p.k === open;
                 return (
                   <li key={p.k}>
@@ -7637,8 +7720,10 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
                 );
               })}
             </ul>
+            ) : null}
           </React.Fragment>
-        ))}
+          );
+        })}
       </nav>
       ) : null}
       {/* ONE PAGE, FULL WIDTH, ITS CARDS IN THE ORDER WRITTEN HERE. Nothing is packed into columns, so no
