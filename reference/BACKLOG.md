@@ -487,6 +487,36 @@ danger that no longer exists.
 `church.json` directly, and a relay left empty will accept the first church that self-registers with no
 operator action (measured 2026-09-09: 200).
 
+## Help docs and tutorial videos need redoing after the Settings rebuild
+
+Owner, 2026-09-09, while slice 1 was landing: *"We will probably need to revise the help docs on this ui
+stuff, yeah?"* and *"I will need to redo a load of the tutorial videos as well."*
+
+Settings changed shape: the four tabs (Church / Features / Network & relays / Security) are gone,
+replaced by a list of 16 pages in four groups, one page at a time. Relays alone became five pages. Groups
+become collapsible next.
+
+**Written help — smaller than feared.** `app/help-data.jsx` barely describes the console's furniture: two
+hits, "Settings → Network & relays" and one loose "in Settings". Most member-facing help talks about what
+things do, not where they sit, which is why it survived. `app/stew-help.jsx` is the steward-facing one and
+is where the real work is.
+
+**Videos are the expensive part and the owner has flagged it himself.** Anything that shows a steward
+clicking a tab is wrong now, and re-recording costs far more than editing text. Two consequences:
+
+- **Do the help pass ONCE, after the whole Settings rebuild is finished** — not after slice 1. Slices 2
+  and 3 (the remaining console sections, then the relay panel) will move furniture again, and writing the
+  docs twice is waste. Same for filming.
+- **This is an argument for finishing the rebuild in a run** rather than leaving it half-done across
+  releases. A console that is half tabs and half pages is the worst state for both docs and video.
+
+**When it is done, check:** `stew-help.jsx` navigation wording; the two `help-data.jsx` hits; any
+walkthrough that names a tab; screenshots in `reference/` and on the marketing site; and the tutorial
+videos.
+
+Related: the marketing site still needs updating to the current build (owner, 2026-09-04) — worth doing
+the site copy, the help text and the videos as one pass rather than three.
+
 ## The merge-and-document run: what is waiting, and the order to do it in
 
 State at 2026-09-09. The owner: *"ideally we merge them all and today's work soon, as well as building new

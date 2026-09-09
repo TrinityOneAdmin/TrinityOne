@@ -104,6 +104,9 @@ function consoleWith(React, over = {}) {
   return mod;
 }
 
+// One Settings PAGE, drawn. `section` was a tab key until 2026-09-09 and is a page key now — see
+// SETTINGS_GROUPS in app/stew-dashboard.jsx. 'features' still opens Congregation features; the church-key
+// card, which is what the console lock was folded into, is the 'key' page.
 function settings(section, over = {}) {
   const { React, draw } = miniReact();
   const mod = consoleWith(React, over);
@@ -137,11 +140,17 @@ test('CONTROL: the real Settings renders, with the real practical-care component
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 1. FEATURES — five cards are three, and the two that went are rows in the Extras group.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-test('the Features tab is three cards, not five', () => {
-  assert.deepEqual(cardTitles(settings('features').tree),
-    ['Congregation features', 'Rules & privacy', 'Chat message tags'],
-    'Giving and Practical care were each a card wrapping one switch. If either has its own card again, the ' +
-    'tab is back to five boxes of equal weight for three subjects');
+test('Congregation features is ONE card on its own page — not three, and not five', () => {
+  // It was five cards on one tab, then three, and since 2026-09-09 the three are three pages. What this
+  // still guards is the fold: Giving and Practical care were each a card wrapping a single switch, and if
+  // either grows its own card again this page is two boxes of equal weight for one subject.
+  assert.deepEqual(cardTitles(settings('features').tree), ['Congregation features'],
+    'the Congregation features page is not exactly one card');
+  assert.deepEqual(cardTitles(settings('rules').tree), ['Rules & privacy'],
+    'the Rules & privacy page is not exactly one card. Both cards come out of DashFeaturesPanel, which shares ' +
+    'their state; `show` picks one, and getting that wrong puts both on both pages');
+  assert.deepEqual(cardTitles(settings('tags').tree), ['Chat message tags'],
+    'the Chat message tags page is not exactly one card');
 });
 
 for (const [what, aria] of [['Practical care', 'Toggle practical care'], ['Giving', 'Toggle giving']]) {
@@ -217,15 +226,20 @@ test('the giving setup is still reachable from the row it was folded into', () =
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 2. SECURITY — the console lock is a strip inside the church-key card, and still works both ways round.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-test('the Security tab no longer has a card for the console lock', () => {
-  assert.deepEqual(cardTitles(settings('security').tree),
-    ['Church key', 'Stewards & handoff', 'Delegated stewards', 'Become a steward'],
+test('the Church key page has no separate card for the console lock', () => {
+  assert.deepEqual(cardTitles(settings('key').tree), ['Church key'],
     'the console lock is a card again. It and "Church key" are the same subject — whether the one key on ' +
     'this device is protected — and two boxes made them read as two decisions');
+  // and the other three Security cards each have a page to themselves, so none of them came back here
+  for (const [page, title] of [['stewards', 'Stewards & handoff'], ['delegated', 'Delegated stewards'],
+                               ['become', 'Become a steward']]) {
+    assert.deepEqual(cardTitles(settings(page).tree), [title],
+      `the ${page} page is not exactly the "${title}" card`);
+  }
 });
 
 test('an unlocked console offers the PIN from inside the church-key card, and the button opens the PIN dialog', () => {
-  const s = settings('security');
+  const s = settings('key');
   const key = card(s.tree, 'Church key');
   assert.match(texts(key).join(' | '), /Held on this device/,
     'the "held on this device" strip is gone — the lock was folded in under it');
@@ -239,7 +253,7 @@ test('an unlocked console offers the PIN from inside the church-key card, and th
 });
 
 test('a locked console offers Change PIN and Remove lock from the same place', () => {
-  const s = settings('security', { steward: { hasPinLock: () => true } });
+  const s = settings('key', { steward: { hasPinLock: () => true } });
   const key = card(s.tree, 'Church key');
   for (const label of ['Change PIN', 'Remove lock']) {
     assert.equal(buttonSaying(key, label).length, 1,
@@ -251,8 +265,8 @@ test('a locked console offers Change PIN and Remove lock from the same place', (
 });
 
 test('the console lock says which state it is in, in words and not only in a colour', () => {
-  const off = texts(card(settings('security').tree, 'Church key')).join(' | ');
-  const on = texts(card(settings('security', { steward: { hasPinLock: () => true } }).tree, 'Church key')).join(' | ');
+  const off = texts(card(settings('key').tree, 'Church key')).join(' | ');
+  const on = texts(card(settings('key', { steward: { hasPinLock: () => true } }).tree, 'Church key')).join(' | ');
   assert.match(off, /Not locked/, 'an unlocked console does not say so, so the strip reads the same either way');
   assert.match(off, /anyone who opens this browser can post as the church/i,
     'the unlocked strip no longer says what being unlocked costs');

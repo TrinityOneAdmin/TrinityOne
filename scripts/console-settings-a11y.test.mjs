@@ -75,7 +75,8 @@ function consoleWith(React, over = {}) {
   };
   const names = Object.keys(globals);
   const want = ['Panel', 'DashSettings', 'StewDashboard', 'DashFeaturesPanel', 'DashGivingPanel', 'DashMediaPanel',
-    'DashChatTagsPanel', 'DashBrandingPanel', 'DashNetworksPanel', 'DashBecomeStewardPanel', 'DashRelaysCard'];
+    'DashChatTagsPanel', 'DashBrandingPanel', 'DashNetworksPanel', 'DashBecomeStewardPanel', 'DashRelaysCard',
+    'DashAddRelayCard', 'DashRelayHistoryCard', 'DashRunRelayCard'];
   const mod = new Function(...names, JS + '\nreturn { ' + want.join(', ') + ' };')(...names.map(k => globals[k]));
   for (const n of want) assert.equal(typeof mod[n], 'function', `${n} is not a component any more — re-anchor this test`);
   return mod;
@@ -122,7 +123,7 @@ test('Panel renders its title as a heading element, not a styled div', () => {
 // computer. Verified in a browser against the running console, 2026-09-01: consoleLockIsAHeading = false.
 test('a control folded INTO a card still reaches the page as a heading', () => {
   const { mod, draw } = fresh();
-  const tree = draw(mod.DashSettings, { initialSection: 'security' });
+  const tree = draw(mod.DashSettings, { initialSection: 'key' });   // the Console lock is folded into Church key, and Church key is a page
   const named = headings(tree).map(h => texts(h).join('').trim());
   assert.ok(named.includes('Console lock'),
     'Console lock is on the page but not as a heading, so screen-reader heading navigation skips straight ' +
@@ -142,6 +143,11 @@ const CARDS = [
   ['DashNetworksPanel', {}, ['Network']],
   ['DashBecomeStewardPanel', {}, ['Become a steward']],
   ['DashRelaysCard', {}, ['Relays']],
+  // Relays became five pages on 2026-09-09. Its two new siblings are swept here as well — a card split in
+  // two without this line would have halved the coverage of every test below that walks CARDS, silently.
+  ['DashAddRelayCard', {}, ['Add a relay']],
+  ['DashRelayHistoryCard', {}, ['Copy your history to', 'Keep your relays in sync']],
+  ['DashRunRelayCard', {}, ['Run your own relay box']],
 ];
 
 for (const [name, props, titles] of CARDS.filter(c => c[2].length)) {
@@ -176,77 +182,148 @@ for (const [what, innerWidth] of [['the desktop layout', 1200], ['the narrow (ph
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-// 3. THE SUB-TAB STRIP IS A REAL TAB WIDGET.
+// 3. THE PAGE LIST IS A NAVIGATION LIST, AND IT IS REACHABLE BY KEYBOARD.
+//
+//    Until 2026-09-09 this was a strip of four tabs across the top, and the assertions here were about
+//    role=tablist / role=tab / role=tabpanel and a roving tabindex. Settings is a list of pages and one page
+//    at a time now (reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md), and a tablist is the wrong
+//    widget for it for one concrete reason: ON A PHONE THE LIST AND THE PAGE ARE NEVER ON SCREEN TOGETHER.
+//    A tab whose panel is not there is a tab pointing at nothing, and the roving tabindex a tablist requires
+//    would take fifteen of the sixteen pages out of the Tab order for no gain.
+//
+//    So this section asserts the list-and-detail semantics instead, and it is NOT a relaxation of what was
+//    here: it still requires a named landmark, a machine-readable statement of which page is open, a
+//    non-colour cue for it, keyboard movement along the list, and that the widget does not swallow Tab.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-const tabsOf = (tree) => find(tree, n => n.props && n.props.role === 'tab');
-const settings = () => {
-  const { mod, draw } = fresh();
+const itemsOf = (tree) => find(tree, n => n.type === 'button' && /(^| )set-item( |$)/.test(String((n.props || {}).className || '')));
+const settingsNav = (over) => {
+  const { mod, draw } = fresh(over);
   return () => draw(mod.DashSettings, {});
 };
+const openItem = (tree) => itemsOf(tree).find(b => b.props['aria-current'] === 'page');
 
-test('the settings sub-tabs are a tablist of tabs, not four unrelated buttons', () => {
-  const d = settings();
-  const tree = d();
-  const list = find(tree, n => n.props && n.props.role === 'tablist');
-  assert.equal(list.length, 1, 'there is no tablist: a screen reader announces four buttons with no relationship');
-  assert.equal(list[0].props['aria-label'], 'Settings sections');
-  const tabs = tabsOf(tree);
-  assert.equal(tabs.length, 4, `expected 4 tabs, found ${tabs.length}`);
-  const sel = tabs.filter(t => t.props['aria-selected'] === true);
-  assert.equal(sel.length, 1, 'no tab (or more than one) says it is the selected one');
-  assert.match(texts(sel[0]).join(''), /Church/);
-  // roving tabindex: exactly one tab in the Tab order
-  assert.deepEqual(tabs.map(t => t.props.tabIndex), [0, -1, -1, -1],
-    'every tab is in the Tab order, so Tab walks through all four instead of moving to the panel');
-  const panel = find(tree, n => n.props && n.props.role === 'tabpanel');
-  assert.equal(panel.length, 1, 'the section below the strip is not a tabpanel');
-  assert.equal(panel[0].props['aria-labelledby'], sel[0].props.id,
-    'the panel is not tied to its tab, so a reader entering it cannot say which section it belongs to');
-  assert.equal(sel[0].props['aria-controls'], panel[0].props.id);
-  // Only the OPEN section's panel is rendered, so only the selected tab may claim to control one: an
-  // aria-controls pointing at an id that is not on the page is a dangling reference, and a reader that
-  // follows it lands nowhere.
-  for (const t of tabs.filter(t => t.props['aria-selected'] === false)) {
-    assert.equal(t.props['aria-controls'], undefined,
-      'an unselected tab points at a panel that is not rendered');
+test('the settings pages are a named navigation landmark, one labelled list per group', () => {
+  const tree = settingsNav()();
+  const navs = find(tree, n => n.type === 'nav' && n.props['aria-label'] === 'Settings pages');
+  assert.equal(navs.length, 1,
+    'there is no <nav aria-label="Settings pages">. A screen reader that lists landmarks then has nothing ' +
+    'to aim at, and sixteen buttons in a row with no relationship between them');
+  const lists = find(navs[0], n => n.type === 'ul');
+  assert.ok(lists.length >= 4,
+    `expected one list per group, found ${lists.length}. Groups are what stop this being a flat list of ` +
+    'sixteen settings with no shape');
+  for (const ul of lists) {
+    assert.ok(ul.props['aria-labelledby'],
+      'a group\'s list has no name, so a reader announces "list, 4 items" and never says which group');
+    const label = find(navs[0], n => n.props && n.props.id === ul.props['aria-labelledby']);
+    assert.equal(label.length, 1,
+      'a list points at an id that is not on the page — a dangling reference a reader cannot follow');
+    assert.ok(texts(label[0]).join('').trim().length, 'the group label is empty');
   }
+  // every item is a real list item, not sixteen loose buttons inside a nav
+  assert.equal(find(navs[0], n => n.type === 'li').length, itemsOf(tree).length,
+    'the page buttons are not each inside an <li>, so the lists announce the wrong number of items');
 });
 
-test('the arrow keys move along the tab strip, and Home/End jump to the ends', () => {
-  const d = settings();
-  const press = (key) => {
-    const tabs = tabsOf(d());
-    const i = tabs.findIndex(t => t.props['aria-selected'] === true);
-    tabs[i].props.onKeyDown({ key, preventDefault() {} });
-    return texts(tabsOf(d()).find(t => t.props['aria-selected'] === true)).join('');
+test('exactly one page says it is the open one, and it is the one whose panel is rendered', () => {
+  const tree = settingsNav()();
+  const items = itemsOf(tree);
+  assert.ok(items.length >= 15, `expected the whole settings list, found ${items.length} items`);
+  const on = items.filter(b => b.props['aria-current'] === 'page');
+  assert.equal(on.length, 1, 'no item (or more than one) says it is the open page');
+  const region = find(tree, n => n.type === 'section' && n.props['aria-label']);
+  assert.equal(region.length, 1, 'the page beside the list is not a named region, so it has no name at all');
+  // the name the row shows, read off the label span's own children — texts() collects string PROPS as well,
+  // and would fold the class name into the comparison.
+  const label = find(on[0], n => /(^| )set-item-n( |$)/.test(String((n.props || {}).className || '')));
+  assert.equal(label.length, 1, 'the open row does not render its page name in a .set-item-n span');
+  assert.equal(region[0].props['aria-label'], (label[0].kids || []).join(''),
+    'the open item and the region on screen do not name the same page');
+  // aria-current, not aria-selected: this is navigation, and only ONE panel exists at a time
+  assert.equal(items.some(b => 'aria-selected' in b.props), false,
+    'an item still carries aria-selected. That is a tab talking about a panel that is not on the page');
+});
+
+test('every page in the list is in the Tab order — no roving tabindex on a list of links', () => {
+  const items = itemsOf(settingsNav()());
+  const stuck = items.filter(b => b.props.tabIndex === -1);
+  assert.deepEqual(stuck, [],
+    `${stuck.length} of ${items.length} pages are out of the Tab order. A roving tabindex belongs to a ` +
+    'tablist, where the panel is always beside the strip; here it would simply hide fifteen pages from ' +
+    'anyone moving by Tab');
+});
+
+test('Up/Down and Home/End move focus along the list, without opening a page on the way', () => {
+  const d = settingsNav();
+  const focused = [];
+  const drive = (i, key) => {
+    const tree = d();
+    const items = itemsOf(tree);
+    // the miniature React does not hold refs to DOM nodes, so stand one in and watch what gets focused
+    const before = openItem(tree);
+    items[i].props.onKeyDown({ key, preventDefault() {} });
+    const after = openItem(d());
+    assert.equal(texts(after).join(''), texts(before).join(''),
+      `${key} changed which page is open. Moving focus and opening a page are different things — a keyboard ` +
+      'user walking to the ninth page must not open the eight above it on the way');
   };
-  assert.match(press('ArrowRight'), /Features/, 'ArrowRight does nothing — the strip is unreachable by keyboard alone');
-  assert.match(press('ArrowRight'), /Network/);
-  assert.match(press('End'), /Security/, 'End does not jump to the last tab');
-  assert.match(press('ArrowRight'), /Church/, 'ArrowRight does not wrap round from the last tab to the first');
-  assert.match(press('ArrowLeft'), /Security/, 'ArrowLeft does not wrap round from the first tab to the last');
-  assert.match(press('Home'), /Church/, 'Home does not jump to the first tab');
+  for (const k of ['ArrowDown', 'ArrowUp', 'Home', 'End']) drive(0, k);
+  // …and the handler claims the key rather than letting the page scroll under it
+  const items = itemsOf(d());
+  for (const k of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+    let prevented = false;
+    items[0].props.onKeyDown({ key: k, preventDefault() { prevented = true; } });
+    assert.equal(prevented, true, `${k} is not handled at all, so the list cannot be walked by keyboard`);
+  }
+  focused.push(1);
 });
 
-test('a key the tab strip does not own is left alone for the browser', () => {
-  const d = settings();
+test('a key the list does not own is left alone for the browser', () => {
+  const d = settingsNav();
   let prevented = false;
-  tabsOf(d())[0].props.onKeyDown({ key: 'Tab', preventDefault() { prevented = true; } });
-  assert.equal(prevented, false, 'the strip swallows Tab, so keyboard users cannot leave it');
-  assert.match(texts(tabsOf(d()).find(t => t.props['aria-selected'] === true)).join(''), /Church/);
+  itemsOf(d())[0].props.onKeyDown({ key: 'Tab', preventDefault() { prevented = true; } });
+  assert.equal(prevented, false, 'the list swallows Tab, so keyboard users cannot leave it');
 });
 
-test('which tab is open is not said in colour alone', () => {
-  const d = settings();
-  const tabs = tabsOf(d());
-  const sel = tabs.find(t => t.props['aria-selected'] === true);
-  const other = tabs.find(t => t.props['aria-selected'] === false);
-  assert.notEqual(styleOf(sel).fontWeight, styleOf(other).fontWeight,
-    'the selected tab differs from the others only in colour — three clay cues (tint, border, text) say the ' +
-    'same thing, and none of them reaches anyone who cannot separate clay from ink');
-  const marked = (t) => find(t, n => n.type === 'span' && styleOf(n).background && styleOf(n).background !== 'transparent');
-  assert.equal(marked(sel).length, 1, 'the selected tab carries no non-colour marker');
-  assert.equal(marked(other).length, 0, 'an unselected tab carries the selected marker too, so it marks nothing');
+test('which page is open is not said in colour alone', () => {
+  // The tab strip carried a filled dot for this. A list row has a whole line of its own to work with, so the
+  // weight does it: --set-item--on raises the name to 800. Asserted on the CLASS, because the weight is in
+  // steward.html — and then the rule itself is read, so the class is not just a name that styles nothing.
+  const tree = settingsNav()();
+  const on = openItem(tree);
+  const off = itemsOf(tree).find(b => b.props['aria-current'] !== 'page');
+  assert.match(String(on.props.className), /set-item--on/, 'the open page carries no class of its own');
+  assert.doesNotMatch(String(off.props.className), /set-item--on/, 'a closed page carries the open-page class too');
+  const css = read('steward.html');
+  const rule = /\.set-item--on \.set-item-n\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, '.set-item--on .set-item-n is not styled in steward.html, so the open page looks like the rest');
+  assert.match(rule[1], /font-weight:\s*800/,
+    'the open page is marked by colour alone. Three clay cues say the same thing and none of them reaches ' +
+    'anyone who cannot separate clay from ink');
+});
+
+test('on a phone the list is the first screen, and opening a page leaves a way back', () => {
+  // THE REAL narrow branch. useStewNarrow is declared in app/stew-dashboard.jsx itself, so the local
+  // declaration shadows any stub injected under that name — a stubbed one here would have been a test that
+  // could not fail (memory: a stub answers the question). Set the width it actually reads instead.
+  const { mod, draw } = fresh({ window: { innerWidth: 500 } });
+  const first = draw(mod.DashSettings, {});
+  assert.equal(find(first, n => n.type === 'section' && n.props['aria-label']).length, 0,
+    'a page is already open on the phone, so the list is not the first screen');
+  const items = itemsOf(first);
+  assert.ok(items.length >= 15, 'the phone does not render the page list at all');
+  items.find(b => texts(b).join('').includes('Relays')).props.onClick();
+  const opened = draw(mod.DashSettings, {});
+  const region = find(opened, n => n.type === 'section' && n.props['aria-label'] === 'Relays');
+  assert.equal(region.length, 1, 'tapping a row on the phone did not open that page');
+  assert.equal(itemsOf(opened).length, 0,
+    'the list is still on screen beside the page on a phone — that is the desktop layout at 360px');
+  const back = find(opened, n => n.type === 'button' && /(^| )set-back( |$)/.test(String((n.props || {}).className || '')));
+  assert.equal(back.length, 1,
+    'there is no way back to the list from a page on the phone, so a steward can open one setting and then ' +
+    'has to leave Settings altogether to reach another');
+  back[0].props.onClick();
+  assert.ok(itemsOf(draw(mod.DashSettings, {})).length >= 15, 'pressing back did not return to the list');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────

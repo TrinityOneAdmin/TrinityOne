@@ -1,23 +1,38 @@
-// THE SETTINGS CARDS SIT IN STACKS SOMEBODY AUTHORED, AND EVERY CARD IS STILL ON ITS TAB.
+// THE SETTINGS CARDS SIT WHERE SOMEBODY PUT THEM, AND THE PHONE KEEPS ITS ROOMY LAYOUT.
+//
 // Run: node --test scripts/settings-cards-sit-in-authored-stacks.test.mjs
 //
-// Settings used to lay its cards out with `.sk-masonry { column-width: 330px }` — CSS multi-column. The
-// browser picked the break points, so three things nobody decided followed from the card heights: the
-// reading order ran down one column and then across, the Tab order jumped back up the page, and the split
-// moved whenever a card grew. One card in this very panel carried a comment saying it had been reordered
-// in source to please the packing.
+// THE FILENAME IS HISTORICAL. It was written for `.sk-cols`, a two-track grid of "authored stacks", which on
+// 2026-09-09 was itself replaced by a list of pages and one page at a time
+// (reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md). THE RULE IT PROTECTS DID NOT CHANGE and is the
+// first rule of that decision note:
 //
-// The replacement is a two-track grid (`.sk-cols`) whose DIRECT CHILDREN ARE THE COLUMNS: one <div> per
-// authored stack, cards inside it. That has exactly one failure mode worth guarding, and it is silent — a
-// card left outside a stack claims a grid track of its own and the two-column shape comes apart, or a card
-// dropped while re-nesting simply vanishes off the tab with nothing to say so.
+//     POSITIONS ARE AUTHORED, NEVER COMPUTED.
+//
+// The layout has now failed that rule twice and been rebuilt twice, so the history is worth keeping in front
+// of whoever reads this next:
+//
+//   · `.sk-masonry { column-width: 330px }` — CSS multi-column. The BROWSER chose where the column broke, so
+//     three things nobody had decided followed from the card heights: the reading order ran down one column and
+//     then across, the Tab order jumped back up the page, and the split moved whenever a card grew. One card
+//     carried a comment saying it had been reordered IN SOURCE to please the packing.
+//   · `.sk-cols` — a two-track grid whose direct children were the columns. It fixed the moving and did not
+//     fix the height: measured 2026-09-08 at 1280x713, every section still ran about two screenfuls, because
+//     the height was CONTENT — one section doing six jobs at once.
+//   · `.set-page` — a flex COLUMN holding one subject. Nothing packs, so nothing can move; and there is no
+//     second track for a card to fall into, which is the failure mode the middle version had.
+//
+// So the shape this file asserts is different and the guarantee is the same, plus one that is new and is the
+// reason the whole layout is a container query: THE PHONE'S ROOMY LAYOUT IS CORRECT AND MUST NOT CHANGE. The
+// owner has confirmed it twice. Everything compact lives behind `@container`, never `@media`, and the roomy
+// values are the DEFAULT — so a card in a narrow page gets them whatever the window is doing.
 //
 // CLAUDE.md rule 3: app/stew-dashboard.jsx ships UNBUNDLED, so `false && ` in front of a condition leaves
 // every word of it in place and a text-matching assertion still passes. Nothing here matches text in
 // app/*.jsx. The console is compiled with the same esbuild the build uses and the REAL DashSettings is
-// rendered through the miniature React in scripts/render-jsx-screen.mjs; every assertion reads the tree
-// that comes back. The two CSS assertions are about steward.html, which is a served file and not JSX, and
-// they claim only what is declared there.
+// rendered through the miniature React in scripts/render-jsx-screen.mjs; every assertion reads the tree that
+// comes back. The CSS assertions are about steward.html, which is a served file and not JSX, and they claim
+// only what is declared there.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -46,21 +61,27 @@ function consoleWith(React, over = {}) {
       relays: () => [], relayStatus: () => ({}), networks: () => [], publishProfile: () => {},
       npub: 'npub1grace', becomeStewardPayload: () => 'steward-invite-payload', qrSVG: () => '',
       joinUrl: () => 'https://app.example/join#x', inviteCode: () => 'ABC123', joinCode: () => 'ABC123',
+      ownRelay: () => 'wss://relay.grace.example/relay',
+      backupState: async () => ({ boxes: 2, online: 2, syncOn: true }),
+      addRelay: () => '', removeRelay: () => {}, rememberRelayName: () => {},
       ...(over.steward || {}),
     },
-    addEventListener() {}, removeEventListener() {}, innerWidth: 1200,
-    localStorage: { getItem: () => null, setItem() {} },
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; },
+    innerWidth: over.innerWidth || 1200,
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   };
   const globals = {
-    React, window: win, location: { hostname: 'app.example' }, navigator: { userAgent: '' },
+    React, window: win, location: { host: 'app.example', hostname: 'app.example' }, navigator: { userAgent: '' },
     document: { addEventListener() {}, removeEventListener() {} },
     localStorage: win.localStorage, setTimeout, clearTimeout, setInterval, clearInterval, console,
     fetch: async () => ({ ok: false, json: async () => ({}) }),
+    CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
     Icon: function Icon() { return null; },
     Halo: function Halo() { return null; },
     SkBadge: function SkBadge() { return null; },
     SkKey: function SkKey() { return null; },
     SkQR: function SkQR() { return null; },
+    SkPill: function SkPill() { return null; },
     SK_TINT: { clay: { bg: 'var(--clay-soft)', fg: 'var(--clay-ink)' }, sage: { bg: 'var(--sage-soft)', fg: 'var(--sage-ink)' }, gold: { bg: 'var(--gold-tint)', fg: '#8a6717' }, ink: { bg: 'var(--surface-2)', fg: 'var(--ink-2)' } },
     DashMealsPanel: function DashMealsPanel() { return null; },
     DashMannaPanel: function DashMannaPanel() { return null; },
@@ -69,50 +90,43 @@ function consoleWith(React, over = {}) {
     DismissibleNote: function DismissibleNote(p) { return p.children; },
     ConsoleChrome: function ConsoleChrome(p) { return p.children; },
     useStewDialog: () => ({ current: null }),
-    useStewNarrow: () => false,
     churchHandle: () => 'grace',
     stewCapState: () => ({ allowed: false }),
   };
   const names = Object.keys(globals);
-  const mod = new Function(...names, JS + '\nreturn { DashSettings, Panel };')(...names.map(k => globals[k]));
+  const mod = new Function(...names, JS + '\nreturn { DashSettings, Panel, SETTINGS_GROUPS };')(...names.map(k => globals[k]));
   assert.equal(typeof mod.DashSettings, 'function', 'DashSettings is not a component any more — re-anchor this test');
   assert.equal(typeof mod.Panel, 'function', 'Panel is not a component any more — re-anchor this test');
+  assert.ok(Array.isArray(mod.SETTINGS_GROUPS), 'SETTINGS_GROUPS is gone — re-anchor this test');
   return mod;
 }
 
-// Draw one settings sub-tab and hand back its tabpanel node.
-function panelFor(section, over = {}) {
-  return withDraw(section, over).panel;
+// Draw one settings page and hand back the region the cards were rendered into.
+function pageFor(key, over = {}) {
+  return withDraw(key, over).page;
 }
 
-function withDraw(section, over = {}) {
+function withDraw(key, over = {}) {
   const { React, draw } = miniReact();
   const mod = consoleWith(React, over);
-  const tree = draw(mod.DashSettings, { initialSection: section, onSectionConsumed() {} });
-  const panels = find(tree, n => n.props && n.props.role === 'tabpanel');
-  assert.equal(panels.length, 1, `expected one tabpanel on the ${section} tab, found ${panels.length}`);
-  return { panel: panels[0], draw };
+  const render = () => draw(mod.DashSettings, { initialSection: key, onSectionConsumed() {} });
+  render();                       // the first draw queues the effects…
+  const tree = render();          // …the second sees what they loaded
+  const regions = find(tree, n => n.type === 'section' && n.props['aria-label']);
+  assert.equal(regions.length, 1, `expected exactly one page open for "${key}", found ${regions.length}`);
+  return { page: regions[0], tree, draw: render, mod };
 }
 
-// THE STACKS AS THE GRID WILL SEE THEM. A direct child is normally a stack <div> written by the caller, and
-// that stays the rule. One exception exists and is deliberate: a card that authors its OWN stacks, because
-// its cards share state and the caller cannot place them in different columns without mounting the component
-// twice and running every hook twice with it. DashFeaturesPanel is that case (2026-09-08 — its two cards
-// were both in the first stack, 1267px against 272px, and the tab was 1434px tall for want of moving one).
-// React fragments create no DOM, so what the grid actually receives is still one <div> per column. Render
-// the component and take the stacks it emits, so the guarantee is CHECKED rather than assumed.
-function stacksOf(section, over = {}) {
-  const { panel, draw } = withDraw(section, over);
-  const out = [];
-  for (const k of boxes(panel)) {
-    if (typeof k.type === 'function') out.push(...boxes(draw(k.type, k.props)));
-    else out.push(k);
-  }
-  return out;
-}
+const ALL_PAGES = (() => {
+  const { React } = miniReact();
+  return consoleWith(React).SETTINGS_GROUPS
+    .reduce((a, [, items]) => a.concat(items), [])
+    .filter(p => !p.delegate)
+    .map(p => p.k);
+})();
 
-// The children of a node as the GRID sees them: React.Fragment is not a box, so it is flattened through,
-// and the `{cond ? … : null}` arms that are closed contribute nothing.
+// The children of a node as the FLEX COLUMN sees them: React.Fragment is not a box, so it is flattened
+// through, and the `{cond ? … : null}` arms that are closed contribute nothing.
 function boxes(n) {
   const out = [];
   for (const k of (n.kids || [])) {
@@ -129,137 +143,167 @@ const cardId = (n) => (typeof n.type === 'function'
   ? n.type.name + (n.props && typeof n.props.title === 'string' ? ':' + n.props.title : '')
   : '<' + n.type + '>');
 
-const idsIn = (stack) => boxes(stack).map(cardId);
-
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // CONTROL — if this fails, every assertion below is meaningless.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-test('CONTROL: the real DashSettings renders a tabpanel per sub-tab, with its cards on it', () => {
-  const church = panelFor('church');
-  assert.match(texts(church).join(' | '), /Church identity/, 'the Church tab no longer renders its identity card — re-anchor this test');
-  const security = panelFor('security');
-  assert.match(texts(security).join(' | '), /Church key/, 'the Security tab no longer renders the church-key card — re-anchor this test');
+test('CONTROL: the real DashSettings renders one page at a time, with its cards on it', () => {
+  assert.match(texts(pageFor('identity')).join(' | '), /Church identity/,
+    'the identity page no longer renders the church identity card — re-anchor this test');
+  assert.match(texts(pageFor('key')).join(' | '), /Church key/,
+    'the Church key page no longer renders the church-key card — re-anchor this test');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-// 1. THE PANEL IS A TWO-TRACK GRID, AND ITS CHILDREN ARE THE COLUMNS.
+// 1. THE PAGE IS A FLEX COLUMN, AND THE CARDS ARE ITS OWN CHILDREN. NOTHING PACKS.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-test('the settings tabpanel is .sk-cols, and the Network tab keeps its own grid', () => {
-  for (const s of ['church', 'features', 'security']) {
-    assert.equal(panelFor(s).props.className, 'sk-cols',
-      `the ${s} tab is not laid out with .sk-cols. A masonry (column-width) decides the reading and Tab ` +
-      'order from the card heights; a plain row-major grid makes every row as tall as its tallest card');
+test('every settings page is .set-page — never a packing grid, and never two of them', () => {
+  for (const k of ALL_PAGES) {
+    const page = pageFor(k);
+    assert.equal(page.props.className, 'set-page',
+      `the ${k} page is not .set-page. A masonry (column-width) or an auto-fit grid decides the reading and ` +
+      'Tab order from the card heights, and .set-page is also the container every density rule measures — ' +
+      'without it a browser gets the phone\'s roomy spacing on every card');
   }
-  assert.equal(panelFor('network').props.className, 'net-grid',
-    'the Network tab lost its own two-track grid — the Relays card is wide and does not belong in a stack');
 });
 
-test('every direct child of the settings panel is an authored stack, never a card', () => {
-  for (const s of ['church', 'features', 'security']) {
-    const kids = stacksOf(s);
-    assert.ok(kids.length >= 1, `the ${s} tab renders nothing at all`);
-    for (const k of kids) {
-      assert.equal(typeof k.type, 'string',
-        `a card (${cardId(k)}) is a DIRECT child of the ${s} tab, so it claims a grid track of its own and ` +
-        'the two-column shape comes apart. Cards go inside a stack <div>');
-      assert.equal(k.type, 'div', `the ${s} tab has a <${k.type}> where a stack <div> should be`);
-      assert.equal(k.props.className, undefined,
-        `a stack on the ${s} tab carries a className; .sk-cols styles its children by position, not by class`);
+test('the cards on a page are the page\'s own children, in the order they are written', () => {
+  for (const k of ALL_PAGES) {
+    const kids = boxes(pageFor(k));
+    assert.ok(kids.length >= 1, `the ${k} page renders nothing at all`);
+    for (const kid of kids) {
+      // Nothing between the page and a card may carry a layout class of its own: a wrapper with a grid or a
+      // column-count on it puts the browser back in charge of where the cards go.
+      const cls = String((kid.props || {}).className || '');
+      assert.doesNotMatch(cls, /sk-cols|net-grid|relay-grid|sk-masonry/,
+        `the ${k} page has a ${cls} wrapper in it, so its cards are being packed again rather than placed`);
     }
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-// 2. EACH CARD IS IN THE STACK IT WAS AUTHORED INTO — and, above all, IS STILL THERE. A card dropped while
-//    re-nesting says nothing: the tab simply renders without it.
+// 2. EACH CARD IS ON THE PAGE IT WAS AUTHORED ONTO — and, above all, IS STILL THERE. A card dropped while
+//    moving it says nothing: the page simply renders without it.
+//    (The exhaustive reconciliation — every panel on exactly one page, nothing orphaned — is
+//    scripts/settings-pages-are-a-list-and-a-detail.test.mjs. This is the per-page table.)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-const STACKS = {
-  church: [
-    ['Panel:Church identity', 'DashBrandingPanel'],
-    ['DashMediaPanel', 'DashBackup'],
-  ],
-  // DashFeaturesPanel emits both of these itself — see stacksOf().
-  features: [
-    ['Panel:Congregation features'],
-    ['Panel:Rules & privacy', 'DashChatTagsPanel'],
-  ],
-  security: [
-    ['Panel:Church key', 'Panel:Stewards & handoff'],
-    ['DashStewardsPanel', 'DashBecomeStewardPanel'],
-  ],
+const CARDS_ON = {
+  identity: ['Panel:Church identity'],
+  branding: ['DashBrandingPanel'],
+  media: ['DashMediaPanel'],
+  backup: ['DashBackup'],
+  // Both come out of DashFeaturesPanel, which owns their shared state; `show` picks which one it renders.
+  features: ['DashFeaturesPanel'],
+  rules: ['DashFeaturesPanel'],
+  tags: ['DashChatTagsPanel'],
+  relays: ['DashRelaysCard'],
+  'add-relay': ['DashAddRelayCard'],
+  history: ['DashRelayHistoryCard'],
+  ownbox: ['DashRunRelayCard'],
+  network: ['DashNetworksPanel'],
+  key: ['Panel:Church key'],
+  stewards: ['Panel:Stewards & handoff'],
+  delegated: ['DashStewardsPanel'],
+  become: ['DashBecomeStewardPanel'],
 };
 
-for (const [section, want] of Object.entries(STACKS)) {
-  test(`the ${section} tab is ${want.length} authored stacks, holding exactly the cards it is meant to`, () => {
-    const kids = stacksOf(section);
-    assert.equal(kids.length, want.length,
-      `the ${section} tab has ${kids.length} columns, not ${want.length}`);
-    assert.deepEqual(kids.map(idsIn), want,
-      `the ${section} tab's cards are not the ones authored into its stacks. A card missing from this list ` +
-      'is off the tab entirely and nothing on screen says so');
+test('the page table covers every page in the list, with nothing invented', () => {
+  assert.deepEqual(Object.keys(CARDS_ON).sort(), [...ALL_PAGES].sort(),
+    'the table below and the real navigation disagree about which pages exist. A page in the navigation and ' +
+    'not in this table is a page nothing asserts about');
+});
+
+for (const [key, want] of Object.entries(CARDS_ON)) {
+  test(`the ${key} page holds exactly the cards it is meant to`, () => {
+    assert.deepEqual(boxes(pageFor(key)).map(cardId), want,
+      `the ${key} page's cards are not the ones authored onto it. A card missing from this list is off the ` +
+      'page entirely and nothing on screen says so');
   });
 }
 
-test('a delegated steward gets the one card they are allowed, and it is still in a stack', () => {
-  const kids = boxes(panelFor('security', { steward: { isDelegated: () => true } }));
-  assert.deepEqual(kids.map(idsIn), [['Panel:Security']],
-    'a delegated steward’s Security tab is not one stack holding the one notice card — a bare card here ' +
-    'would be a grid track of its own, and the owner-only cards must not appear at all');
-  // Measured in Chromium: .sk-cols collapses the tracks it has no stack for, so ONE stack is handed the
-  // whole 1120px. This card is a single paragraph and would be set a line at a time across it.
-  assert.equal((kids[0].props.style || {}).maxWidth, 552,
-    'the lone card on a delegated steward’s Security tab is not capped at a column’s width, so it is set ' +
-    'across the full 1120px panel');
+test('a delegated steward gets the one card they are allowed, and none of the owner-only ones', () => {
+  const page = pageFor('access', { steward: { isDelegated: () => true } });
+  assert.deepEqual(boxes(page).map(cardId), ['Panel:Security'],
+    'a delegated steward’s Security page is not the one notice card. The church key, the recovery phrase, the ' +
+    'blocklist and the steward roster belong to whoever holds the key');
 });
 
-test('the church tab reorders with the identity, not with the card heights', () => {
-  // The masonry packed by height, so this order was advisory at best: the identity card is the first thing
-  // on the page and Branding follows it because they are the same subject, not because they happened to fit.
-  const first = boxes(panelFor('church'))[0];
-  assert.equal(cardId(boxes(first)[0]), 'Panel:Church identity',
-    'the first card on the Church tab is no longer the church’s own identity');
+test('the identity page leads with the church’s own identity, not with whatever fitted', () => {
+  // Under the masonry this order was advisory at best: cards were packed by height, so which card came first
+  // was a consequence of how tall they happened to be.
+  assert.equal(cardId(boxes(pageFor('identity'))[0]), 'Panel:Church identity',
+    'the first card on the identity page is no longer the church’s own identity');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-// 3. THE STYLESHEET SIDE. A declaration, not a behaviour: .sk-cols has to exist and be a grid, and the
-//    masonry rule has to be gone, or the className asserted above lands on nothing.
+// 3. THE STYLESHEET SIDE. A declaration, not a behaviour: .set-page has to exist and be a flex column, and
+//    every packing rule has to be GONE — a rule left behind is one a future card can pick up by accident.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 const CSS = read('steward.html').replace(/\/\*[\s\S]*?\*\//g, '');   // comments explain the history; they are not rules
 
-test('steward.html defines .sk-cols as a container-sized grid of stacks', () => {
-  const rule = CSS.match(/\.sk-cols\s*\{([^}]*)\}/);
-  assert.ok(rule, '.sk-cols is not defined in steward.html, so the settings panel has no layout at all');
-  assert.match(rule[1], /display:\s*grid/, '.sk-cols is not a grid');
-  assert.match(rule[1], /grid-template-columns:\s*repeat\(auto-fit,/,
-    '.sk-cols does not use auto-fit. auto-fill leaves the empty third track in place and the two stacks ' +
-    'sit in two of three columns with a hole beside them');
-  assert.match(rule[1], /minmax\(min\(360px,\s*100%\),\s*1fr\)/,
-    'the track floor is not min(360px, 100%): a bare 360px floor keeps a 360px track even when the panel ' +
-    'is narrower than that, which is what pushed the Relays card past its own border once already');
-  const kids = CSS.match(/\.sk-cols\s*>\s*\*\s*\{([^}]*)\}/);
-  assert.ok(kids, '.sk-cols > * is not styled, so each stack is a plain block and its cards do not space');
-  assert.match(kids[1], /flex-direction:\s*column/, 'a stack is not a column');
-  assert.match(kids[1], /min-width:\s*0/, 'a stack has no min-width:0, so a wide card can push its track open');
+test('steward.html defines .set-page as a container-sized flex column', () => {
+  const rule = CSS.match(/\.set-page\s*\{([^}]*)\}/);
+  assert.ok(rule, '.set-page is not defined in steward.html, so the settings page has no layout at all');
+  assert.match(rule[1], /display:\s*flex/, '.set-page is not a flex box');
+  assert.match(rule[1], /flex-direction:\s*column/,
+    '.set-page is not a column. A row, or a grid with more than one track, hands the browser back the decision ' +
+    'about which card goes where — which is the whole defect this layout exists to end');
+  assert.match(rule[1], /min-width:\s*0/, '.set-page has no min-width:0, so a wide card can push its track open');
+  assert.match(rule[1], /container-type:\s*inline-size/,
+    '.set-page is not a container, so the @container rules below measure nothing and every card in a browser ' +
+    'falls back to the roomy phone spacing');
+  assert.doesNotMatch(rule[1], /column-count|column-width|columns:/,
+    '.set-page is a multi-column box again. The browser then picks the break point, and the reading order, the ' +
+    'Tab order and the split all move whenever a card grows');
 });
 
-test('steward.html no longer sizes the settings cards from the viewport, or by masonry', () => {
-  assert.equal(/\.sk-masonry/.test(CSS), false,
-    'the masonry rule is still in steward.html. It has one user and that user has moved, so a rule left ' +
-    'behind is one a future card can pick up by accident');
-  const media = CSS.match(/@media[^{]*\{[^{}]*\.sk-cols/);
+test('steward.html lays the list beside the page, and stacks them on a phone', () => {
+  const shell = CSS.match(/\.set-shell\s*\{([^}]*)\}/);
+  assert.ok(shell, '.set-shell is not defined, so the list and the page have nothing placing them');
+  assert.match(shell[1], /display:\s*grid/, '.set-shell is not a grid');
+  assert.match(shell[1], /grid-template-columns:\s*minmax\(/,
+    '.set-shell no longer names its two tracks explicitly. auto-fit here would collapse the list into the page ' +
+    'at widths where both are on screen');
+  const one = CSS.match(/\.set-shell--one\s*\{([^}]*)\}/);
+  assert.ok(one, '.set-shell--one is gone, so the phone gets the browser\'s two-track shell for its one child');
+  assert.match(one[1], /grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+    '.set-shell--one is not a single track. On a phone only ONE of the list and the page is rendered, and in a ' +
+    'two-track grid that one child sits in the narrow 236px track');
+});
+
+test('steward.html no longer packs the settings cards by any means', () => {
+  for (const [sel, what] of [
+    ['sk-masonry', 'the CSS multi-column masonry'],
+    ['sk-cols', 'the two-track grid of authored stacks'],
+    ['net-grid', 'the Network tab\'s own two-track grid'],
+    ['relay-grid', 'the Relays card\'s two-across section grid'],
+  ]) {
+    assert.equal(new RegExp('\\.' + sel + '\\s*[>{,:]').test(CSS), false,
+      `.${sel} is still a rule in steward.html — ${what}. It has no user left, and a packing rule lying about ` +
+      'is one a future card can pick up by accident; that is why .sk-masonry was deleted rather than orphaned');
+  }
+  assert.equal(/column-count|column-width/.test(CSS), false,
+    'a multi-column declaration is back in steward.html. Measured 2026-09-01: dead column space on ' +
+    'Church / Features / Security was 469 / 488 / 799px for a masonry against 133 / 363 / 262px for authored ' +
+    'positions, and the masonry also decided the reading and Tab order');
+});
+
+test('nothing in the settings layout is sized from the viewport', () => {
+  const media = CSS.match(/@media[^{]*\{[^{}]*\.(set-page|set-shell|set-list|set-item)\b/);
   assert.equal(media, null,
-    'the settings columns are being sized by a viewport media query. The panel sits inside a sidebar and a ' +
-    'grid track, so the window’s width says nothing about its own — this is the mistake the .relay-grid ' +
-    'comment in the same file records');
+    'a settings layout rule is inside an @media query. The panel sits inside a sidebar and a grid track, so ' +
+    'the window’s width says nothing about its own — this is the mistake the deleted .relay-grid recorded, ' +
+    'where a 1120px viewport query gave a card two ~150px columns at a 1130px window and broke every line to ' +
+    'one word. Which surface is on screen is decided in JS (useStewNarrow), once.');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 4. THE DENSITY RULES ARE SIZED FROM THE CONTAINER, SO THE PHONE KEEPS ITS ROOMY LAYOUT.
-//    Added 2026-09-08 with the compact pass. The console ships in its OWN apk, where the roomier spacing is
-//    correct — the owner asked for this in a BROWSER. Everything compact therefore lives behind
+//    Added 2026-09-08 with the compact pass and carried through the 2026-09-09 redesign unchanged. The
+//    console ships in its OWN apk, where the roomier spacing is correct — the owner asked for the compact
+//    pass in a BROWSER and has confirmed the phone twice. Everything compact therefore lives behind
 //    @container, never @media: these cards sit inside a sidebar and a grid track, so the window width says
-//    nothing about the room a card actually has. Verified in Chromium at both widths before merging —
-//    a 360px viewport computes 22px panel padding, a 1280px one computes 15px 17px.
+//    nothing about the room a card actually has. Verified in Chromium at both widths before the compact pass
+//    merged — a 360px viewport computes 22px panel padding, a 1280px one computes 15px 17px.
 //    steward.html is a served file, not JSX, so rule 3 does not apply and these read the rules themselves.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('the compact settings rules are container queries, never viewport ones', () => {
@@ -269,7 +313,7 @@ test('the compact settings rules are container queries, never viewport ones', ()
     assert.ok(compact.includes(sel),
       `${sel} is no longer tightened inside @container. If it moved to @media, a phone-width CARD inside a ` +
       'wide window gets the compact spacing and a wide card inside a narrow one does not — which is the ' +
-      'exact bug the .relay-grid note in this stylesheet already records.');
+      'exact bug the deleted .relay-grid rule already recorded.');
   }
   const viewport = CSS.match(/@media[^{]*\{[^{}]*\.(sk-panel|set-row|set-desc|set-note)\b/);
   assert.equal(viewport, null,
@@ -278,7 +322,22 @@ test('the compact settings rules are container queries, never viewport ones', ()
     'container that holds them, not from the window.');
 });
 
-test('the roomy spacing is the DEFAULT, so a narrow card is never compacted by accident', () => {
+test('the container query does not fire below the threshold, and the threshold is above a phone page', () => {
+  // THE PHONE LAYOUT IS CORRECT AND MUST NOT CHANGE. Measured on the console: a 1265px page is 199px of nav
+  // plus 1033px of main, and on a phone the page the cards sit in is about 336px. So the one number that
+  // decides whether a phone gets the compact spacing is this threshold, and it has to stay comfortably above
+  // 336px — the assertion is on the NUMBER, because "it looked right" is what a re-tuned value costs.
+  const q = [...CSS.matchAll(/@container\s*\(min-width:\s*(\d+)px\)/g)].map(m => Number(m[1]));
+  assert.equal(q.length, 1, `expected one @container threshold for the settings density, found ${q.length}`);
+  assert.ok(q[0] >= 400,
+    `the density container query fires at ${q[0]}px. A settings page on a phone measures about 336px, so any ` +
+    'threshold at or below that hands the phone the compact spacing the owner has twice said is wrong');
+  assert.ok(q[0] <= 560,
+    `the density container query fires at ${q[0]}px, which a page in a browser (about 770px) still clears — ` +
+    'but only just. Re-measure before raising it further.');
+});
+
+test('the roomy spacing is the DEFAULT, so a narrow page is never compacted by accident', () => {
   for (const [sel, prop] of [['.sk-panel', /padding:\s*22px/], ['.set-row', /padding:\s*11px 13px/],
                              ['.set-desc', /font-size:\s*12\.5px/]]) {
     const base = CSS.match(new RegExp('\\n  \\' + sel + '\\s*\\{([^}]*)\\}'));
@@ -286,4 +345,10 @@ test('the roomy spacing is the DEFAULT, so a narrow card is never compacted by a
       'query support (or any card under the threshold) gets no spacing at all');
     assert.match(base[1], prop, sel + "'s roomy default changed — that value is what the phone renders");
   }
+  // and the card title, which is the third of the three sizes the owner approved on the phone
+  const h2 = CSS.match(/@container[^{]*\{[\s\S]*?\.sk-panel h2\s*\{([^}]*)\}/);
+  assert.ok(h2, '.sk-panel h2 is no longer sized inside the container query');
+  assert.match(h2[1], /font-size:\s*15px/,
+    'the compact card title is no longer 15px. The phone default is Panel’s own inline 16.5px, and this rule ' +
+    'is the only thing that changes it — moving the 15px out of @container would apply it everywhere');
 });

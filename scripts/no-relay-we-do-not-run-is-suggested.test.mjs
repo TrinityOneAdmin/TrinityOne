@@ -15,8 +15,12 @@
 //
 // THIS FILE IS TWO INDEPENDENT MECHANISMS AND IT SAYS WHICH IS WHICH:
 //
-//   PART 1 is BEHAVIOURAL and is the assertion that matters. It renders the REAL console relays panel
-//   (DashRelaysCard, app/stew-dashboard.jsx) and the REAL member relays sheet (RelaysSheet,
+//   PART 1 is BEHAVIOURAL and is the assertion that matters. It renders the REAL console relay panels
+//   (2026-09-09: DashRelaysCard was split into three — DashRelaysCard, DashAddRelayCard and
+//   DashRelayHistoryCard — and ALL THREE are rendered here, because the typed-address box, the auto-find
+//   button and connect-by-name all moved to the second of them and a sweep of the first alone would now
+//   reach none of the strings this file exists to keep off the screen) and the REAL member relays sheet
+//   (RelaysSheet,
 //   app/identity-extras.jsx) through the miniature React in render-jsx-screen.mjs, drives the panel's own
 //   Add button so its own error handler runs, and asserts that NO string that reaches the screen — visible
 //   text, placeholder, aria-label, title — names a relay we do not run. Real code runs and real branches are
@@ -107,9 +111,16 @@ function relaysCard({ relays = [], backup = null, steward = {} } = {}) {
     useStewDialog: () => ({ current: null }),
   };
   const names = Object.keys(globals);
-  const mod = new Function(...names, DASH + '\nreturn { DashRelaysCard };')(...names.map(k => globals[k]));
-  assert.equal(typeof mod.DashRelaysCard, 'function', 'DashRelaysCard is not a component any more — re-anchor this test');
-  return { draw: () => draw(mod.DashRelaysCard, {}) };
+  const want = ['DashRelaysCard', 'DashAddRelayCard', 'DashRelayHistoryCard'];
+  const mod = new Function(...names, DASH + '\nreturn { ' + want.join(', ') + ' };')(...names.map(k => globals[k]));
+  for (const n of want) assert.equal(typeof mod[n], 'function', n + ' is not a component any more — re-anchor this test');
+  // The three pages Relays became. Drawn as one tree so every assertion below sweeps all of them: a string
+  // moving from one page to another must not be able to slip out of this test's sight.
+  const all = function RelayPages() { return React.createElement('div', {},
+    React.createElement(mod.DashRelaysCard, {}),
+    React.createElement(mod.DashAddRelayCard, {}),
+    React.createElement(mod.DashRelayHistoryCard, {})); };
+  return { draw: () => draw(all, {}) };
 }
 
 // ── the member app's Relays sheet ─────────────────────────────────────────────────────────────────────────
@@ -146,7 +157,7 @@ const settle = () => new Promise(r => setImmediate(r));
 async function paint(card) { card.draw(); await settle(); return card.draw(); }
 const said = (n) => texts(n).join(' § ').replace(/\s+/g, ' ').trim();
 
-test('CONTROL: the console relays panel renders, keeps its typed-address box, and still shows a saved relay', async () => {
+test('CONTROL: the console relay pages render, keep the typed-address box, and still show a saved relay', async () => {
   // A church that ALREADY has a public relay saved. C1 removes suggestions, not stored values: the row must
   // still render, or an existing church has been stranded by this change.
   const stored = [
@@ -156,6 +167,8 @@ test('CONTROL: the console relays panel renders, keeps its typed-address box, an
   const tree = await paint(relaysCard({ relays: stored, backup: { boxes: 2, online: 2, syncOn: true } }));
   const all = said(tree);
   assert.match(all, /Where your church publishes/, 'DashRelaysCard no longer renders its blurb — re-anchor this test');
+  assert.match(all, /Three ways to add a relay your church runs/,
+    'the Add-a-relay page is not in the tree, so the placeholder and error sweeps below measure nothing');
   assert.match(all, /wss:\/\/nos\.lol/,
     'a relay already saved in a church\'s list stopped rendering. C1 removes SUGGESTIONS, never stored values');
   const box = find(tree, n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add');
@@ -164,12 +177,12 @@ test('CONTROL: the console relays panel renders, keeps its typed-address box, an
     'until there is a gate. C1 removes the suggestion, not the ability to type an address');
 });
 
-test('the console relays panel names no relay we do not run — placeholder, labels and all', async () => {
+test('the console relay pages name no relay we do not run — placeholder, labels and all', async () => {
   const tree = await paint(relaysCard({ relays: [], backup: { boxes: 1, online: 1, syncOn: false } }));
   const all = said(tree);
   // texts() collects string PROPS as well as visible text, so the placeholder and aria-label are in here.
   assert.deepEqual(hits(all), [],
-    'the console relays panel puts ' + hits(all).join(', ') + ' in front of a steward. A relay we do not run ' +
+    'a console relay page puts ' + hits(all).join(', ') + ' in front of a steward. A relay we do not run ' +
     'has none of this product\'s gates on it; suggesting one is instructing a churchwarden to publish the ' +
     'church\'s documents, sealed care requests included, to a machine that will serve them to anyone');
   const box = find(tree, n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add')[0];
