@@ -339,6 +339,31 @@ the existing bulk join slips: install from us, then scan to join.
 - Consider whether this belongs with the relay auto-update work (owner, 08-28 and 09-08): a box that
   updates itself should probably keep its APKs current at the same time, or explicitly say it does not.
 
+**CONFIRMED LIVE, 2026-09-09.** The staleness trap above is not hypothetical — it was measured on a8 the
+day after this note was written:
+
+    a8 offers:      versionCode 206, dated 2026-09-07
+    actually built: versionCode 207, 2026-09-08
+
+So anyone installing from `app.trinityone.church` was getting a build that predated a day of work,
+including a user-facing chat change. Nothing on the relay said so, and nothing would have.
+
+**The mechanism is structural, not an oversight.** `scripts/relay-update.sh:87` unpacks the bundle with
+`--exclude='relay/*'`, and the APKs live in `relay/apks/`. So a relay's CODE updates and its APKs never
+do. They move only when a human presses "Fetch latest APK". a8's code went to `38a71ed` twice today while
+its APK sat two days old.
+
+Two consequences for the design:
+
+- The owner asked on 09-08 whether "Fetch latest APK" could be removed from the relay UI. It cannot, as
+  things stand: **it is the only thing that keeps a relay's APK current.** Removing it would freeze every
+  church's installer at whatever it last held. Replace it, don't delete it.
+- Whatever replaces it should either pull APKs alongside the code update, or say plainly on the page a
+  member downloads from how old the file they are about to install is.
+
+Owner restated the need 2026-09-09: a church must be able to serve and share the app — and other apps —
+from its own box, without depending on the main site.
+
 ## An empty relay tells its operator the wrong thing, and nobody can find it
 
 Owner, 2026-09-09, asking a fair question: *"How are people meant to just run relays in support, if they
