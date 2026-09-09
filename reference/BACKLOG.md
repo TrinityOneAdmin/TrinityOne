@@ -388,3 +388,42 @@ string you know changed — which is what we did today ("Answering" vs "Live").
 
 Pairs with the service-worker two-reload problem (`sw-register.js` has no `controllerchange` listener):
 between them, a steward cannot tell a stale page from a current one, and neither can I.
+
+## Settings in a browser is STILL too bulky — third pass needed, and probably not more CSS
+
+Owner, 2026-09-09, after two rounds: *"im still not happy with the browser ui for the steward console
+settings."*
+
+Two rounds have been done and both worked as far as they went. Measured at 1280x713:
+
+| Section | Start | After round 2 |
+|---|---|---|
+| Features | 1599px | 1034px |
+| Church | 1219px | 1060px |
+| Network & relays | 1242px | 1128px |
+| Security | 1364px | 1284px |
+
+Round 1 rebalanced an authored stack that held 1267px against the other's 272px. Round 2 dropped the
+type and trimmed four paragraphs. Everything is behind `@container`, so the phone is untouched — the
+owner has confirmed the APK layout is right and it must stay that way.
+
+**What is left is not spacing, and a third CSS pass will not deliver much.** Network & relays and
+Security barely moved because their height is CONTENT: the Relays card alone is over 1000px, and it
+carries a network panel, three relay rows, add-relay, auto-find, connect-by-name, a clone-history block,
+a sync block and a reassurance footer — on one screen, all expanded, all at once.
+
+Ideas worth weighing before touching CSS again, in rough order of how much they would buy:
+
+- **The Relays card is doing six jobs.** Splitting "everyday" (which relays, are they answering) from
+  "occasional" (clone history, sync, connect by name, run your own box) would halve it. Most of that card
+  is read once in a church's life.
+- **Per-field Save buttons** are still there — 44px each plus its own spacing, and the toggles already
+  save themselves. Save-on-blur was scoped in the first plan and never built; it is the one remaining
+  BEHAVIOUR change, and it needs its own tests.
+- **Progressive disclosure for the rarely-used.** Not for the consequence text next to a switch — this
+  console describes consequences deliberately and that stays — but a whole card nobody opens twice.
+- **A denser layout mode** as a real design decision rather than shaving px: a settings LIST with detail
+  on the right, instead of tall cards side by side.
+
+Do NOT start with more `@container` tuning. Measure what the remaining height is made of first, per
+card, the way round 1 found the stack imbalance — the win was structural both times, not typographic.
