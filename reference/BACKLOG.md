@@ -365,3 +365,26 @@ Two things make it *look* like a barrier, and both are cheap:
 Belongs with `reference/PENDING-CHURCH-REQUESTS-2026-09-08.md`, which exists because these defaults leave
 willing relays and homeless churches unable to find each other. This is the same fault seen from the
 relay's side rather than the church's.
+
+## The console's footer says "web build N" and that is not the build
+
+Diagnosed 2026-09-09 when the owner reasonably concluded a deploy had not landed.
+
+`app/stew-dashboard.jsx:7554` derives the footer from the SERVICE WORKER CACHE NAME:
+
+```js
+keys.map(k => (k.match(/trinity-shell-v(\d+)/) || [])[1]).filter(Boolean)
+setV('web build ' + Math.max(...nums))
+```
+
+So it tracks `sw.js`'s cache generation, not the code being served. a8 was updated to `9ec4402` and the
+footer still read 264, because that deploy did not bump the service-worker cache. It can also move when
+nothing user-visible changed. On native it is honest (`Capacitor App.getInfo()`); only the web path lies.
+
+The relay already reports the truth at `/status` (`versionShort`, `builtAt`). The footer should show that,
+compared against what the page itself was built from, and say plainly when the page is older than the
+relay. Until it does, the only reliable way to tell whether a deploy reached a browser is to look for a
+string you know changed — which is what we did today ("Answering" vs "Live").
+
+Pairs with the service-worker two-reload problem (`sw-register.js` has no `controllerchange` listener):
+between them, a steward cannot tell a stale page from a current one, and neither can I.
