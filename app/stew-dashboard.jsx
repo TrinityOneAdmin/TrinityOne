@@ -1642,7 +1642,37 @@ function copyText(t) {
 }
 
 // The printable paper invite (church QR + steps + blank recovery-phrase grid) is generated on demand
-// by window.TrinityTemplates.printInviteSheet — see stew-templates.jsx. Wired into "Print invite" below.
+// by window.TrinityTemplates.printInviteSheet — see stew-templates.jsx.
+//
+// CORRECTED 2026-09-09: the line that used to end "Wired into 'Print invite' below" was not true. There is
+// no "Print invite" control anywhere in this console and there never has been — printInviteSheet has no
+// caller in the repository. It is a finished artefact waiting for a button. Left as it is (deleting it
+// would throw away work the owner asked for), but the comment must not claim a wiring that does not exist.
+
+// WHERE A MEMBER GOES TO GET THE APP FROM THE CHURCH'S OWN BOX.
+//
+// The box serves /install itself (gateway.mjs) — this only has to work out WHICH ADDRESS to point at, and
+// that is the same hard question joinUrl() already answers: the tunnel address when the relay is on
+// loopback, the relay's real address otherwise. So we read joinUrl()'s own answer rather than solving it
+// twice and getting a different result.
+//
+// A PRIVATE ADDRESS IS NOT A FAILURE HERE, WHICH IS THE OPPOSITE OF THE JOIN LINK. A join link travels —
+// into WhatsApp, to somebody at home — so ws://192.168.1.50 in one is a defect (joinLinkIsPrivate). This
+// slip is used ON THE PREMISES: "install from the box over the hall wifi" is the entire point of the
+// feature, and on most church networks the LAN address is the only address there is. So a private address
+// is carried and LABELLED, and only loopback is refused — that one genuinely resolves, on the reader's
+// phone, to the reader's phone.
+function installPageUrl() {
+  let relay = '';
+  try { relay = new URL(window.Steward.joinUrl()).searchParams.get('relay') || ''; } catch (e) { return null; }
+  if (!relay) return null;
+  let u;
+  try { u = new URL(String(relay).replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:')); } catch (e) { return null; }
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1' || h === '0.0.0.0' || /^127\./.test(h)) return null;
+  const lan = /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h) || /\.local$/.test(h);
+  return { url: u.origin + '/install', lan };
+}
 
 // rasterise an SVG string to a PNG data URI (jsPDF can't embed SVG directly). Force explicit pixel
 // dims so it renders even when the source SVG is scalable (width/height 100%).
@@ -2024,6 +2054,16 @@ function JoinCard({ qrSize = 92, center = false }) {
   // steward handed exactly that out from the invite poster in the round of 2026-08-19. The short code still
   // works, because a member types it into their own app and their app already knows where to look.
   const linkPrivate = !!(window.Steward.joinLinkIsPrivate && window.Steward.joinLinkIsPrivate());
+  // "Install slip": the paper that tells a member how to get the app from the church's OWN box. Only
+  // offered when there is an address worth printing — see installPageUrl().
+  const install = installPageUrl();
+  const printInstall = () => {
+    if (!install || !window.TrinityTemplates) return;
+    window.TrinityTemplates.printInstallSheet({
+      name: church.name, url: install.url, lan: install.lan,
+      qrSvg: window.Steward.qrSVG ? window.Steward.qrSVG(install.url) : '',
+    });
+  };
   const shareLink = async () => {
     if (navigator.share) { try { await navigator.share({ title: 'Join on TrinityOne', text: 'Join ' + (church.name || 'our church') + ' on TrinityOne', url }); return; } catch (e) {} }
     doCopy('link', url);
@@ -2068,6 +2108,7 @@ function JoinCard({ qrSize = 92, center = false }) {
           <button onClick={shareLink} title="Share the join link (e.g. straight into a WhatsApp group)" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="share" size={14} color="currentColor" /> Share</button>
           <button onClick={saveQrPng} title="Save the QR as an image to post in a chat or on a poster" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="qr" size={14} color="currentColor" /> Save QR</button>
           <button onClick={() => setPoster(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Show the invite poster (QR + link) to display, print, or save"><Icon name="receipt" size={14} color="currentColor" /> Invite poster</button>
+          {install ? <button onClick={printInstall} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a slip that tells people how to install the app from your church's own machine — no app store, no mobile data"><Icon name="qr" size={14} color="currentColor" /> Install slip</button> : null}
         </div>
       </div>
       {poster ? <InvitePosterModal church={church} url={url} svg={svg} onClose={() => setPoster(false)} /> : null}

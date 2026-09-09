@@ -96,7 +96,10 @@ const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // mediaCap/churchCap: operator storage limits in BYTES (0 = unlimited), settable from the control panel — for a
 // public relay hosting several churches. The effective cap is the setting if non-zero, else the env fallback.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false };
+// keepApkCurrent: refresh the APKs this box hands out whenever the update source has different ones.
+// DEFAULT OFF on purpose — see the "KEEPING IT CURRENT WITHOUT A HUMAN" note below. A church on a metered
+// or thin pipe must not be given two 40 MB downloads it never asked for; it gets the warning instead.
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -106,6 +109,7 @@ function loadSettings() {
       SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0); SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
       SETTINGS.inviteOnly = s.inviteOnly === true;
       SETTINGS.offerHosting = s.offerHosting === true;
+      SETTINGS.keepApkCurrent = s.keepApkCurrent === true;
       SETTINGS.mediaRequiresHost = s.mediaRequiresHost === true;
       // Desktop app only: may devices on this wifi reach the relay directly? OFF by default. The desktop
       // launcher reads the `lan-access` marker below at start-up to decide RELAY_HOST, so a change needs a
@@ -143,6 +147,275 @@ const BUILD = (() => {
   }
   return { sha, short: sha.slice(0, 7), date };
 })();
+
+// ── THE INSTALLER THIS BOX HANDS OUT ─────────────────────────────────────────────────────────────────────
+// A church's own box IS its app store. `POST /relay-app/fetch-apk` pulls the member + steward APKs from the
+// update ORIGIN into relay/apks/, and this gateway serves them at /trinityone.apk and /trinityone-steward.apk.
+// That is the whole offline / restricted-network story: a hall full of phones installed over local wifi, no
+// Play store, nobody spending mobile data.
+//
+// WHY THE BOOKKEEPING BELOW EXISTS, AND WHY IT IS NOT DECORATION.
+// `scripts/relay-update.sh` unpacks a new build with `--exclude='relay/*'`, and the APKs live in relay/apks/.
+// So a relay's CODE updates and its INSTALLER never does — the file only moves when a human presses a button.
+// Measured on a8, 2026-09-09: the box offered versionCode 206 dated 2026-09-07 while 207 had been built on
+// 09-08, and nothing on the box, in the operator's panel, or on the download page said so. An installer that
+// ages invisibly and then lands on phones is worse than no installer at all, so a box must be able to say
+// which build it is handing out and whether the origin has moved past it.
+//
+// TWO FACTS, AND THE BYTES ARE THE LOAD-BEARING HALF. apk-latest.json is a hand-committed DESCRIPTION of a
+// build: on the very day this was written the repo's own copy said 206 while 207 existed, so a check that
+// trusted it would have reported "up to date" over exactly the fault it exists to catch. The verdict is
+// therefore decided by comparing the SIZE OF THE FILE THE ORIGIN WOULD ACTUALLY SERVE against the size of the
+// file this box holds. The version names are what an operator reads; they are never what decides.
+const APK_NAMES = ['trinityone.apk', 'trinityone-steward.apk'];
+const APK_TITLES = { 'trinityone.apk': 'TrinityOne', 'trinityone-steward.apk': 'TrinityOne Steward' };
+const APK_BLURBS = {
+  'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, giving and the church calendar.',
+  'trinityone-steward.apk': 'For the people who run the church. It installs alongside the member app rather than replacing it.',
+};
+const APK_DIR = join(DATA_DIR, 'apks');
+const APK_HELD = join(APK_DIR, 'held.json');
+const APK_DAY = 86400000;
+
+// What is ON DISK right now, with whatever this box recorded about it when it arrived.
+function heldApks() {
+  let rec = {}; try { rec = JSON.parse(readFileSync(APK_HELD, 'utf8')) || {}; } catch {}
+  const stamps = (rec && rec.files) || {};
+  return APK_NAMES.map((name) => {
+    let st = null; try { st = statSync(join(APK_DIR, name)); } catch {}
+    if (!st || !st.isFile()) return { name, present: false };
+    const f = stamps[name] || {};
+    // A STAMP ONLY COUNTS IF IT DESCRIBES THE BYTES THAT ARE THERE. An APK dropped in by hand (scp, a USB
+    // stick between churches) over a fetched one leaves the old record sitting beside a file it is not
+    // about — and a version number attached to the wrong bytes is worse than no version number at all.
+    const stamped = f.bytes === st.size;
+    return {
+      name, present: true, bytes: st.size,
+      sha256: stamped ? String(f.sha256 || '') : '',
+      versionName: stamped ? String(f.versionName || '') : '',
+      versionCode: stamped ? (+f.versionCode || 0) : 0,
+      builtOn: stamped ? String(f.date || '') : '',
+      at: (stamped && f.at) ? f.at : st.mtimeMs,   // when this box got the file
+      stamped,
+    };
+  });
+}
+
+// What the update source is offering, asked of the source itself. HEAD, so this costs a few hundred bytes
+// rather than 80 MB — cheap enough to run on a timer, which is the point.
+async function originApkFacts() {
+  const facts = { origin: ORIGIN, latest: null, sizes: {}, reachable: false };
+  if (!ORIGIN) return facts;
+  const base = ORIGIN.replace(/\/+$/, '');
+  try {
+    const r = await fetch(base + '/apk-latest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && (j.versionCode || j.versionName)) facts.latest = { versionCode: +j.versionCode || 0, versionName: String(j.versionName || ''), date: String(j.date || '') };
+    }
+  } catch {}
+  for (const name of APK_NAMES) {
+    try {
+      const r = await fetch(base + '/' + name, { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      const len = +(r.headers.get('content-length') || 0);
+      if (r.ok && len > 0) { facts.sizes[name] = len; facts.reachable = true; }
+    } catch {}
+  }
+  return facts;
+}
+
+// Does the origin hold DIFFERENT bytes from the ones we hand out? Only ever true when the origin actually
+// answered for that file — an unreachable source must never be reported as "you are behind", and must never
+// trigger a download.
+function apkIsStale(held, facts) {
+  const originBytes = (facts && facts.sizes && facts.sizes[held.name]) || 0;
+  if (!originBytes) return false;
+  return !held.present || held.bytes !== originBytes;
+}
+
+// The sentence an operator reads. `state` is for code; `say` is for a volunteer with a borrowed laptop.
+function apkVerdict(held, facts) {
+  const originBytes = (facts && facts.sizes && facts.sizes[held.name]) || 0;
+  const ageDays = held.present ? Math.max(0, Math.floor((Date.now() - held.at) / APK_DAY)) : 0;
+  const offering = (facts && facts.latest && facts.latest.versionName) ? ' (' + facts.latest.versionName + ')' : '';
+  if (!held.present) {
+    return originBytes
+      ? { state: 'missing', ageDays: 0, say: 'This box does not hand this one out yet' + offering + '.' }
+      : { state: 'unknown', ageDays: 0, say: 'This box does not hold this one, and the update source did not offer one either.' };
+  }
+  if (originBytes && originBytes !== held.bytes) return { state: 'behind', ageDays, say: 'BEHIND — the update source is offering a different build' + offering + ' from the one this box hands out.' };
+  if (originBytes) return { state: 'current', ageDays, say: 'Up to date — the same build the update source is offering.' };
+  return { state: 'unknown', ageDays, say: ORIGIN ? 'Could not reach the update source, so this could not be checked just now.' : 'This box has no update source to compare against.' };
+}
+
+// Pull both APKs from the origin AND record what was pulled. Shared by the operator's button and the
+// automatic refresh below, so the two can never disagree about what landed on disk.
+async function fetchApksFromOrigin() {
+  if (!ORIGIN) return { error: 'this relay has no origin to fetch from' };
+  const base = ORIGIN.replace(/\/+$/, '');
+  try { mkdirSync(APK_DIR, { recursive: true }); } catch {}
+  let latest = null;
+  try { const r = await fetch(base + '/apk-latest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) }); if (r.ok) latest = await r.json(); } catch {}
+  let rec = {}; try { rec = JSON.parse(readFileSync(APK_HELD, 'utf8')) || {}; } catch {}
+  const stamps = (rec && rec.files) || {};
+  const files = {};
+  for (const f of APK_NAMES) {
+    try {
+      const r = await fetch(base + '/' + f);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
+      const tmp = join(APK_DIR, f + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(APK_DIR, f));
+      files[f] = { ok: true, bytes: buf.length };
+      // WHAT WE JUST PUT ON DISK, RECORDED BESIDE IT. Without this the box can say when a file arrived and
+      // nothing whatever about what it IS — which is the half both the operator and the member need.
+      stamps[f] = {
+        bytes: buf.length, sha256: createHash('sha256').update(buf).digest('hex'), at: Date.now(),
+        versionCode: +(latest && latest.versionCode) || 0,
+        versionName: String((latest && latest.versionName) || ''),
+        date: String((latest && latest.date) || ''),
+      };
+    } catch (e) { files[f] = { ok: false, error: String((e && e.message) || e) }; }
+  }
+  try { const tmp = APK_HELD + '.tmp'; writeFileSync(tmp, JSON.stringify({ origin: ORIGIN, at: Date.now(), files: stamps }, null, 2) + '\n'); renameSync(tmp, APK_HELD); } catch {}
+  return { origin: ORIGIN, files };
+}
+
+// KEEPING IT CURRENT WITHOUT A HUMAN — off by default, and deliberately so.
+// This product's first audience is a church on a thin or metered pipe, and two 40 MB downloads nobody asked
+// for is the wrong thing to do to them. So the operator opts in. When they have, the CHECK is a HEAD (a few
+// hundred bytes) and the DOWNLOAD happens only when the sizes genuinely differ. This is the standing answer
+// to relay-update.sh never touching relay/: with it on, a code update no longer leaves the installer behind.
+let _apkAutoBusy = false;
+async function apkAutoRefresh(why) {
+  if (_apkAutoBusy || !SETTINGS.keepApkCurrent || !ORIGIN) return false;
+  _apkAutoBusy = true;
+  try {
+    const facts = await originApkFacts();
+    if (!facts.reachable) return false;
+    if (!heldApks().some((h) => apkIsStale(h, facts))) return false;
+    console.log('[apk] the installer this box hands out is behind its update source (' + why + ') — refreshing');
+    const r = await fetchApksFromOrigin();
+    console.log('[apk] refreshed:', JSON.stringify(r.files || r));
+    return true;
+  } catch (e) { console.error('[apk] automatic refresh failed:', (e && e.message) || e); return false; }
+  finally { _apkAutoBusy = false; }
+}
+
+// The absolute address to send a member to. SETTINGS.appUrl is what the operator has TOLD this box it is
+// reachable at (behind a tunnel the Host header can be anything); fall back to the host the asker used.
+function installBase(req) {
+  const conf = String(SETTINGS.appUrl || '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\//i.test(conf)) return conf;
+  const host = String((req && req.headers && req.headers.host) || '').split(',')[0].trim();
+  if (!host) return '';
+  const fwd = String((req && req.headers && req.headers['x-forwarded-proto']) || '').split(',')[0].trim();
+  const proto = fwd || ((req && req.socket && req.socket.encrypted) ? 'https' : 'http');
+  return proto + '://' + host;
+}
+
+// A QR of a string, as SVG. Loaded lazily and never fatally: a relay that cannot find the module still
+// serves its install page, just without the code on it. qrcode-generator is a declared runtime dependency
+// (the same tier as ws and nostr-tools), so this is belt-and-braces, not an expected path.
+let _qrGen = null, _qrTried = false;
+async function qrSvgTag(text) {
+  if (!_qrTried) { _qrTried = true; try { _qrGen = (await import('qrcode-generator')).default; } catch { _qrGen = null; } }
+  if (!_qrGen) return '';
+  try { const q = _qrGen(0, 'M'); q.addData(String(text || '')); q.make(); return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); } catch { return ''; }
+}
+
+// ── THE PAGE A CHURCH SHARES ─────────────────────────────────────────────────────────────────────────────
+// Served at /install (and /apks) with NO admin token: members are not operators, and the point of the whole
+// feature is that a church can put this link or its QR in front of anyone.
+//
+// NOT TO BE CONFUSED WITH apks.html, which is a DIFFERENT page and is not this one. That file is generated
+// by scripts/build-apk-index.sh from the *.apk files in a DEV BOX's repo root, and .gitignore:24 excludes it
+// as "internal dev-box APK index — not for public deploy". A relay is deployed from `git archive`, so
+// apks.html has never existed on one and a member sent to it gets a 404. This page is rendered from what the
+// box actually holds in relay/apks/ and therefore exists wherever the APKs do.
+//
+// IT SAYS HOW OLD THE FILE IS. That is the member-facing half of the staleness requirement, and it is
+// answered from local facts only — no outbound request per visitor, so this page cannot be used to make the
+// box hammer its origin, and it still works with the update source unreachable or gone.
+//
+// NO INLINE SCRIPT AND NO on*= HANDLERS. The strict CSP this gateway serves is script-src 'self', so an
+// inline handler here would be silently dead. Everything on the page is markup: <details> does the
+// disclosure, <a href> does the download.
+const INSTALL_ESC = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const INSTALL_MB = (b) => (b >= 1048576 ? (b / 1048576).toFixed(0) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
+function installAgeLine(ageDays) {
+  if (ageDays <= 0) return 'Added to this box today.';
+  if (ageDays === 1) return 'Added to this box yesterday.';
+  return 'Added to this box ' + ageDays + ' days ago.';
+}
+function installPageHtml({ held, base, qr }) {
+  const url = (base || '') + '/install';
+  const cards = held.filter((h) => h.present).map((h) => {
+    const ageDays = Math.max(0, Math.floor((Date.now() - h.at) / APK_DAY));
+    // Describe the consequence, do not nag and do not prescribe. A member cannot fix this; the sentence
+    // exists so they can ask the person who can, rather than installing something old without knowing.
+    const old = ageDays >= 30
+      ? '<p class="warn">This copy is over a month old. It will still work — but whoever looks after this machine can refresh it so you get the newest version.</p>'
+      : '';
+    const ver = h.versionName ? 'Version ' + INSTALL_ESC(h.versionName) + (h.versionCode ? ' (build ' + h.versionCode + ')' : '') : 'Version not recorded — this copy was put here by hand rather than fetched.';
+    const sha = h.sha256
+      ? '<details class="sha"><summary>Check the file is the real one</summary><p>After downloading, run <code>sha256sum ' + INSTALL_ESC(h.name) + '</code> on a computer. It must print exactly this:</p><div class="hash">' + INSTALL_ESC(h.sha256) + '</div></details>'
+      : '';
+    return '<section class="card">'
+      + '<h2>' + INSTALL_ESC(APK_TITLES[h.name] || h.name) + '</h2>'
+      + '<p class="blurb">' + INSTALL_ESC(APK_BLURBS[h.name] || '') + '</p>'
+      + '<p class="facts">' + ver + ' · ' + INSTALL_MB(h.bytes) + (h.builtOn ? ' · built ' + INSTALL_ESC(h.builtOn) : '') + '<br>' + installAgeLine(ageDays) + '</p>'
+      + old
+      + '<a class="dl" href="/' + INSTALL_ESC(h.name) + '">Download and install</a>'
+      + sha
+      + '</section>';
+  }).join('\n');
+  const empty = '<section class="card"><h2>Nothing to install yet</h2><p class="blurb">This machine is not holding a copy of the app right now. Whoever looks after it can add one from the relay control panel — “Let members install the app from this box”.</p></section>';
+  return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+    + '<title>Install TrinityOne</title><style>'
+    + ':root{--ink:#221C16;--ink2:#6B6052;--ink3:#A89E8E;--surface:#FFFDF8;--line:rgba(34,28,22,.12);--clay:#C25A38;--clay-deep:#9C4327;--gold:#C8962E}'
+    + '*{box-sizing:border-box}'
+    + 'body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:radial-gradient(120% 80% at 50% 0%,#F7EFDF,#E4DBC9);min-height:100vh;padding:26px 16px 56px;line-height:1.5}'
+    + '.wrap{max-width:620px;margin:0 auto}'
+    + 'h1{font-size:25px;margin:0 0 4px;letter-spacing:-.4px}'
+    + '.lede{color:var(--ink2);margin:0 0 20px;font-size:14.5px}'
+    + '.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px;margin:0 0 14px;box-shadow:0 8px 20px rgba(34,28,16,.06)}'
+    + '.card h2{font-size:17.5px;margin:0 0 6px}'
+    + '.blurb{margin:0 0 10px;font-size:14px;color:var(--ink2)}'
+    + '.facts{margin:0 0 12px;font-size:12.5px;color:var(--ink3);font-weight:600}'
+    + '.warn{margin:0 0 12px;font-size:13px;color:var(--clay-deep);background:rgba(194,90,56,.09);border:1px solid rgba(194,90,56,.22);border-radius:12px;padding:10px 12px}'
+    + '.dl{display:inline-block;background:var(--clay);color:#fff;font-weight:700;font-size:15px;padding:11px 20px;border-radius:999px;text-decoration:none}'
+    + '.sha{margin-top:12px;font-size:12.5px;color:var(--ink2)}'
+    + '.sha summary{cursor:pointer;color:var(--clay);font-weight:700}'
+    + '.sha p{margin:8px 0 6px}'
+    + '.hash{font-family:ui-monospace,monospace;font-size:11px;word-break:break-all;background:rgba(34,28,22,.05);border:1px solid var(--line);border-radius:8px;padding:8px;user-select:all}'
+    + '.steps{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px 18px 18px 34px;margin:0 0 14px;font-size:14px;color:var(--ink2)}'
+    + '.steps li{margin-bottom:7px}'
+    + '.share{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px;text-align:center}'
+    + '.share h2{font-size:16px;margin:0 0 8px}'
+    + '.share svg{width:180px;height:180px;background:#fff;border-radius:12px;padding:8px}'
+    + '.share .u{font-family:ui-monospace,monospace;font-size:12.5px;word-break:break-all;color:var(--ink2);margin-top:10px;user-select:all}'
+    + 'footer{text-align:center;color:var(--ink3);font-size:12px;margin-top:22px}'
+    + '@media (prefers-color-scheme:dark){body{background:#17130F;color:#F1EADD}'
+    + '.card,.steps,.share{background:#221C16;border-color:rgba(255,255,255,.1)}'
+    + '.blurb,.steps,.share .u{color:#BDB2A2}.facts{color:#8E8474}.hash{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.1)}}'
+    + '</style></head><body><div class="wrap">'
+    + '<h1>Install TrinityOne</h1>'
+    + '<p class="lede">These files are served straight from your church’s own machine. You do not need an app store, and you do not need mobile data — the church wifi is enough.</p>'
+    + (cards || empty)
+    + '<ol class="steps">'
+    + '<li>Tap <b>Download and install</b> above.</li>'
+    + '<li>Android will ask whether to allow installing apps from your browser. Say yes — it only applies to this one file.</li>'
+    + '<li>Open the downloaded file and tap <b>Install</b>.</li>'
+    + '<li>Open TrinityOne, then scan your church’s join code or open its invite link.</li>'
+    + '</ol>'
+    + '<div class="share"><h2>Pass this on</h2>'
+    + (qr ? '<div role="img" aria-label="QR code linking to this install page">' + qr + '</div>' : '')
+    + '<div class="u">' + INSTALL_ESC(url) + '</div></div>'
+    + '<footer>Served by your church’s own TrinityOne box.</footer>'
+    + '</div></body></html>\n';
+}
 const UPDATE_FLAG = join(DATA_DIR,'.update-request');   // the relay can only write under relay/; a root path-unit watches this and runs the update
 // FEDERATION Phase 5 Tier 2 — self-hosted media (Blossom-style content-addressed blobs). A church stores its
 // OWN audio/video here (no YouTube), addressed by its SHA-256. Upload is church/steward-signed (kind 24242);
@@ -4298,10 +4571,14 @@ function serveStatic(req, res) {
           if ('churchCap' in s) SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
           if ('inviteOnly' in s) SETTINGS.inviteOnly = !!s.inviteOnly;
           if ('offerHosting' in s) SETTINGS.offerHosting = !!s.offerHosting;
+          if ('keepApkCurrent' in s) SETTINGS.keepApkCurrent = !!s.keepApkCurrent;
           saveSettings();
           // push the new offer/access state to the directory now, so discovery reflects it without waiting for
           // the next go-public/boot (no-op unless this relay is public + has a claimed name).
           if ('offerHosting' in s || 'inviteOnly' in s) { try { reclaimRelayName(); } catch {} }
+          // Turning the automatic refresh ON acts NOW rather than at the next 12-hour tick. An operator who
+          // ticks the box because the panel just told them they are behind must not be left still behind.
+          if ('keepApkCurrent' in s && SETTINGS.keepApkCurrent) { apkAutoRefresh('the operator turned it on').catch(() => {}); }
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });
@@ -4450,22 +4727,40 @@ function serveStatic(req, res) {
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
     if (req.method !== 'POST') { res.writeHead(405, H); res.end('{"error":"method"}'); return; }
     if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this relay has no origin to fetch from"}'); return; }
-    const apkDir = join(DATA_DIR,'apks');
+    // The download itself lives in fetchApksFromOrigin() so that this button and the automatic refresh do
+    // the SAME thing — including writing the provenance stamp that everything downstream reads.
     (async () => {
-      try { mkdirSync(apkDir, { recursive: true }); } catch {}
-      const files = {};
-      for (const f of ['trinityone.apk', 'trinityone-steward.apk']) {
-        try {
-          const r = await fetch(ORIGIN.replace(/\/+$/, '') + '/' + f);
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          const buf = Buffer.from(await r.arrayBuffer());
-          if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
-          const tmp = join(apkDir, f + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(apkDir, f));
-          files[f] = { ok: true, bytes: buf.length };
-        } catch (e) { files[f] = { ok: false, error: String((e && e.message) || e) }; }
-      }
+      const out = await fetchApksFromOrigin();
+      const files = out.files || {};
       const anyOk = Object.values(files).some(x => x.ok);
-      res.writeHead(anyOk ? 200 : 502, H); res.end(JSON.stringify({ origin: ORIGIN, files }));
+      res.writeHead(anyOk ? 200 : 502, H); res.end(JSON.stringify(out));
+    })();
+    return;
+  }
+  // WHAT THIS BOX IS HANDING OUT, AND WHETHER IT HAS GONE STALE.
+  // This is the endpoint the whole feature turns on. A fetched APK does not age visibly: relay-update.sh
+  // excludes relay/, so the code moves on and the installer does not, and a church distributing from its own
+  // box puts a weeks-old build on real phones without one word of warning anywhere. Answering "which build
+  // do I hand out, and has the source moved past it?" is the difference between a feature and a liability.
+  // Admin-gated: this is the OPERATOR's question, and it makes an outbound request to the update source.
+  // The member's page (/install) answers the weaker, local question and needs no token.
+  if (route === '/relay-app/apk-status') {
+    const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
+    if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    if (req.method !== 'GET') { res.writeHead(405, H); res.end('{"error":"method"}'); return; }
+    (async () => {
+      const facts = await originApkFacts();
+      const files = heldApks().map((h) => ({ ...h, title: APK_TITLES[h.name] || h.name, originBytes: facts.sizes[h.name] || 0, ...apkVerdict(h, facts) }));
+      res.writeHead(200, H); res.end(JSON.stringify({
+        ok: true, origin: ORIGIN, originReachable: facts.reachable, latest: facts.latest,
+        keepCurrent: SETTINGS.keepApkCurrent === true,
+        shareUrl: (installBase(req) || '') + '/install',
+        behind: files.some((f) => f.state === 'behind' || f.state === 'missing'),
+        holding: files.filter((f) => f.present).length,
+        files,
+      }));
     })();
     return;
   }
@@ -4784,6 +5079,37 @@ function serveStatic(req, res) {
       res.writeHead(200, { 'Content-Type': MIME['.apk'] || 'application/octet-stream', 'Content-Length': st2.size, 'Cache-Control': 'no-store, must-revalidate', 'Access-Control-Allow-Origin': '*', 'Content-Disposition': 'attachment; filename="' + apkName + '"', ...SEC_HEADERS });
       createReadStream(relApk).pipe(res); return;
     }
+  }
+  // The page a church SHARES, and the QR that gets people to it. Public on purpose: members are not
+  // operators, and a link nobody can open without a token is not something a church can hand out.
+  //
+  // Both sit ABOVE the serveApp gate below, exactly like the .apk handler they belong to. A relay may be
+  // run as relay-only and still hand out the installer — that combination is the restricted-network case
+  // this feature is for — so gating the page on serveApp would 404 the very churches it exists to serve.
+  // Nothing here reads or writes church data, and nothing here decides who may write: it serves the same
+  // two files the box already serves publicly, plus what it recorded about them.
+  if (p === '/install' || p === '/install/index.html' || p === '/apks' || p === '/apks/index.html') {
+    (async () => {
+      const base = installBase(req);
+      const qr = await qrSvgTag((base || '') + '/install');
+      const body = Buffer.from(installPageHtml({ held: heldApks(), base, qr }), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': body.length, 'Cache-Control': 'no-store', 'Content-Security-Policy': CSP, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS });
+      res.end(body);
+    })();
+    return;
+  }
+  // The install page's QR on its own, so the operator's panel can show it with a plain <img src> under a
+  // strict CSP. It encodes THIS BOX's install address and nothing a caller supplies — a QR endpoint that
+  // rendered arbitrary text would be a small open redirect dressed as an image.
+  if (p === '/apks/qr.svg' || p === '/install/qr.svg') {
+    (async () => {
+      const svg = await qrSvgTag((installBase(req) || '') + '/install');
+      if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain', ...SEC_HEADERS }); res.end('no qr'); return; }
+      const body = Buffer.from(svg, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Content-Length': body.length, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS });
+      res.end(body);
+    })();
+    return;
   }
   // feature gates: the relay always serves its own control UI (/relay-app/*); module downloads + the web-app
   // mirror are switchable by the operator (the relay can be relay-only, or also host modules and/or the app).
@@ -5479,3 +5805,9 @@ _firstPublicRefresh.then(() => logDeclaredAddresses('startup')).catch(() => {});
 // "Stay public": if the operator turned on the tunnel before, re-open it on boot (a fresh quick-tunnel URL) and
 // re-point the relay's directory name at it — so a restart doesn't silently drop members' access.
 if (existsSync(TUNNEL_FLAG)) { setTimeout(() => { startCloudflared().then(r => console.log(r.ok ? `  tunnel re-opened: ${r.url}` : `  tunnel re-open failed: ${r.error || ''}`)).catch(() => {}); }, 2500); }
+// KEEP THE INSTALLER CURRENT ACROSS A CODE UPDATE. relay-update.sh unpacks with --exclude='relay/*', so a
+// relay that has just updated its code is still handing out whatever APK it held before — this boot check is
+// the moment that gap closes. Both timers are no-ops unless the operator turned SETTINGS.keepApkCurrent on,
+// so a box nobody opted in for makes no outbound request here and downloads nothing, ever.
+setTimeout(() => { apkAutoRefresh('boot').catch(() => {}); }, 3000).unref?.();
+setInterval(() => { apkAutoRefresh('twelve-hourly check').catch(() => {}); }, 12 * 3600 * 1000).unref?.();
