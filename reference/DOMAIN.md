@@ -299,6 +299,24 @@ publishes that list automatically yet.
   imply suspicion of members. But gates facing OUTWARD — at the relay, at another church, at the world —
   are never optional.
 
+- **A church handing out the app from its own box is very often reachable only on its own wifi — and that
+  is the normal case for that feature, not a fault.** `INFERRED 2026-09-09 — PLEASE CHECK THIS ONE.`
+  Stated here because a design decision now rests on it and nobody has confirmed it.
+
+  The reasoning: "Play is blocked, or members pay for every megabyte, so we install the whole congregation
+  over the hall wifi in five minutes" is the case the installer feature exists for, and a box on a church
+  network usually has a private address (192.168.x, 10.x) and no public one. So the printable install slip
+  CARRIES a private address and labels it "works on the church's own wifi", rather than refusing it — which
+  is the **opposite** of the rule for a JOIN link. A join link travels: into WhatsApp, to somebody at home,
+  and `ws://192.168.1.50` in one is a defect (`joinLinkIsPrivate`, and a steward really did hand one out in
+  the round of 2026-08-19). An install slip is used standing in the building.
+
+  Only loopback is refused in both, because that one resolves on the reader's phone to the reader's phone.
+
+  *If this is wrong* — if churches in practice always reach their box through a tunnel or a domain, and a
+  slip carrying a LAN address is just a slip nobody can use — then the right behaviour is to refuse a
+  private address the way the join link does, and say why. One sentence from the owner settles it.
+
 - **Names over anonymity.** `ESTABLISHED.` Encourage real names; anonymity is an option, not the framing.
 
 - **The pilot's adversary is lawful compulsion and seizure**, not a hacker. `ESTABLISHED.` Never overclaim

@@ -31,7 +31,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -358,6 +358,40 @@ test('with it on, the box catches up without anyone pressing anything', async ()
     'relay-update.sh never touching relay/ — with it on, a code update no longer strands the installer.');
   const member = s.files.find((f) => f.name === 'trinityone.apk');
   assert.equal(member.bytes, BUILD_207.length, 'the box reported itself current while still holding the old bytes');
+});
+
+test('a box restarting in a loop cannot re-download the installer on every boot', async () => {
+  // The floor exists because the boot check is the one thing here that runs without anybody asking, and a
+  // relay that crash-loops — or an origin that ever reports a Content-Length that does not match the bytes
+  // it then sends, which would read as permanently behind — must not be able to spend a church's bandwidth
+  // over and over. Written to DISK, not held in memory, precisely so a restart cannot clear it.
+  serving.apk = BUILD_207;
+  try { box.kill('SIGKILL'); } catch {}
+  rmSync(dataDir, { recursive: true, force: true });
+  box = await startBox({ keepApkCurrent: true });
+  // hand the box a recently-refreshed record over the OLD build, so it is genuinely behind and recently checked
+  const stamp = { bytes: BUILD_206.length, sha256: 'x'.repeat(64), at: Date.now(), versionCode: 206, versionName: '0.9.99', date: '2026-09-07' };
+  for (let i = 0; i < 80; i++) { await sleep(250); if ((await apkStatus()).holding === 2) break; }
+  try { box.kill('SIGKILL'); } catch {}
+  mkdirSync(join(dataDir, 'apks'), { recursive: true });
+  writeFileSync(join(dataDir, 'apks', 'held.json'), JSON.stringify({ origin: origin.base, at: Date.now(), autoAt: Date.now(), files: { 'trinityone.apk': stamp, 'trinityone-steward.apk': stamp } }));
+  writeFileSync(join(dataDir, 'apks', 'trinityone.apk'), BUILD_206);
+  writeFileSync(join(dataDir, 'apks', 'trinityone-steward.apk'), BUILD_206);
+
+  const port = await H.freePort('loop-box');
+  const proc = spawn(process.execPath, ['scripts/gateway.mjs', String(port)], {
+    cwd: ROOT, stdio: 'ignore', env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_SYNC: '0' },
+  });
+  box = proc; base = 'http://127.0.0.1:' + port;
+  try {
+    for (let i = 0; i < 100; i++) { await sleep(200); try { if ((await fetch(base + '/status')).ok) break; } catch {} }
+    await sleep(6000);   // well past the 3s boot check
+    const s = await apkStatus();
+    assert.equal(s.behind, true, 'precondition: this box IS behind, so only the floor can be stopping it');
+    assert.equal(s.files.find((f) => f.name === 'trinityone.apk').bytes, BUILD_206.length,
+      'the box re-downloaded the installer within hours of the last automatic refresh. On a metered ' +
+      'connection a restart loop would then cost 80 MB per boot.');
+  } finally { try { proc.kill('SIGKILL'); } catch {} }
 });
 
 test('the boot check closes the gap a code update leaves — the installer catches up on restart', async () => {

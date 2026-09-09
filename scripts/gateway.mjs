@@ -250,7 +250,7 @@ function apkVerdict(held, facts) {
 
 // Pull both APKs from the origin AND record what was pulled. Shared by the operator's button and the
 // automatic refresh below, so the two can never disagree about what landed on disk.
-async function fetchApksFromOrigin() {
+async function fetchApksFromOrigin(auto = false) {
   if (!ORIGIN) return { error: 'this relay has no origin to fetch from' };
   const base = ORIGIN.replace(/\/+$/, '');
   try { mkdirSync(APK_DIR, { recursive: true }); } catch {}
@@ -261,7 +261,11 @@ async function fetchApksFromOrigin() {
   const files = {};
   for (const f of APK_NAMES) {
     try {
-      const r = await fetch(base + '/' + f);
+      // A TIMEOUT, because this path is no longer only a button an operator is watching. Fifteen minutes is
+      // deliberately generous — 40 MB over the connections this product is built for is slow, and cutting a
+      // real download short would be worse than waiting — but an origin that accepts and then stalls must
+      // not wedge the automatic refresh for the life of the process.
+      const r = await fetch(base + '/' + f, { signal: AbortSignal.timeout(900000) });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
@@ -277,7 +281,10 @@ async function fetchApksFromOrigin() {
       };
     } catch (e) { files[f] = { ok: false, error: String((e && e.message) || e) }; }
   }
-  try { const tmp = APK_HELD + '.tmp'; writeFileSync(tmp, JSON.stringify({ origin: ORIGIN, at: Date.now(), files: stamps }, null, 2) + '\n'); renameSync(tmp, APK_HELD); } catch {}
+  const rec2 = { origin: ORIGIN, at: Date.now(), files: stamps };
+  if (auto) rec2.autoAt = Date.now();
+  else if (rec.autoAt) rec2.autoAt = rec.autoAt;
+  try { const tmp = APK_HELD + '.tmp'; writeFileSync(tmp, JSON.stringify(rec2, null, 2) + '\n'); renameSync(tmp, APK_HELD); } catch {}
   return { origin: ORIGIN, files };
 }
 
@@ -287,15 +294,24 @@ async function fetchApksFromOrigin() {
 // hundred bytes) and the DOWNLOAD happens only when the sizes genuinely differ. This is the standing answer
 // to relay-update.sh never touching relay/: with it on, a code update no longer leaves the installer behind.
 let _apkAutoBusy = false;
-async function apkAutoRefresh(why) {
+async function apkAutoRefresh(why, force = false) {
   if (_apkAutoBusy || !SETTINGS.keepApkCurrent || !ORIGIN) return false;
+  // A FLOOR ON HOW OFTEN THIS CAN SPEND SOMEBODY'S BANDWIDTH, and it is written to disk rather than kept
+  // in memory so that a box restarting in a loop cannot re-download on every boot. It also bounds the one
+  // way this could otherwise cycle: if an origin ever reported a Content-Length that does not match the
+  // bytes it then sends, the box would read itself as permanently behind and re-fetch on every check.
+  // `force` is the operator turning the setting on — an explicit act, which should not be made to wait.
+  if (!force) {
+    let last = 0; try { last = +(JSON.parse(readFileSync(APK_HELD, 'utf8')).autoAt) || 0; } catch {}
+    if (last && Date.now() - last < 6 * 3600 * 1000) return false;
+  }
   _apkAutoBusy = true;
   try {
     const facts = await originApkFacts();
     if (!facts.reachable) return false;
     if (!heldApks().some((h) => apkIsStale(h, facts))) return false;
     console.log('[apk] the installer this box hands out is behind its update source (' + why + ') — refreshing');
-    const r = await fetchApksFromOrigin();
+    const r = await fetchApksFromOrigin(true);
     console.log('[apk] refreshed:', JSON.stringify(r.files || r));
     return true;
   } catch (e) { console.error('[apk] automatic refresh failed:', (e && e.message) || e); return false; }
@@ -317,11 +333,21 @@ function installBase(req) {
 // A QR of a string, as SVG. Loaded lazily and never fatally: a relay that cannot find the module still
 // serves its install page, just without the code on it. qrcode-generator is a declared runtime dependency
 // (the same tier as ws and nostr-tools), so this is belt-and-braces, not an expected path.
+// Memoised, because /install and /apks/qr.svg are UNAUTHENTICATED and a church may point a hall full of
+// phones at them within a minute of each other. A box answers from at most a handful of addresses, so the
+// cache is a few entries; the cap is there so a flood of forged Host headers cannot grow it without bound.
 let _qrGen = null, _qrTried = false;
+const _qrCache = new Map();
 async function qrSvgTag(text) {
+  const key = String(text || '');
+  if (_qrCache.has(key)) return _qrCache.get(key);
   if (!_qrTried) { _qrTried = true; try { _qrGen = (await import('qrcode-generator')).default; } catch { _qrGen = null; } }
   if (!_qrGen) return '';
-  try { const q = _qrGen(0, 'M'); q.addData(String(text || '')); q.make(); return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); } catch { return ''; }
+  let out = '';
+  try { const q = _qrGen(0, 'M'); q.addData(key); q.make(); out = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); } catch { out = ''; }
+  if (_qrCache.size > 64) _qrCache.clear();
+  _qrCache.set(key, out);
+  return out;
 }
 
 // ── THE PAGE A CHURCH SHARES ─────────────────────────────────────────────────────────────────────────────
@@ -4578,7 +4604,7 @@ function serveStatic(req, res) {
           if ('offerHosting' in s || 'inviteOnly' in s) { try { reclaimRelayName(); } catch {} }
           // Turning the automatic refresh ON acts NOW rather than at the next 12-hour tick. An operator who
           // ticks the box because the panel just told them they are behind must not be left still behind.
-          if ('keepApkCurrent' in s && SETTINGS.keepApkCurrent) { apkAutoRefresh('the operator turned it on').catch(() => {}); }
+          if ('keepApkCurrent' in s && SETTINGS.keepApkCurrent) { apkAutoRefresh('the operator turned it on', true).catch(() => {}); }
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });
