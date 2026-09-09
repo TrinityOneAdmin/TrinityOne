@@ -927,3 +927,19 @@ test('a loopback relay explains why there is no install code, instead of showing
     'the install block disappeared in silence. Correct behaviour with invisible reasoning is still a defect.');
   assert.match(words, /go public/i, 'the explanation does not say what would make it appear');
 });
+
+test('the invite dialog scrolls, now that the card it holds is twice as tall', () => {
+  // It never needed to: one QR, one code, one row of buttons, and it always fitted. The install block adds
+  // a SECOND 168px QR and four more controls, and a dialog with no scroll of its own simply runs off the
+  // bottom of a phone-sized console — the controls unreachable, with nothing on screen to suggest anything
+  // is below. JoinCard is stubbed deliberately: the claim here is about the container, not the card.
+  const { React, draw } = miniReact();
+  const { JoinModal } = liftFromJsx(DASH, 'function JoinModal(', 'JoinModal', ['JoinModal'], {
+    React, JoinCard: () => null, useStewDialog: () => ({ current: null }),
+  });
+  const dlg = find(draw(JoinModal, { onClose: () => {} }), (n) => n.props && n.props.role === 'dialog');
+  assert.equal(dlg.length, 1, 'the invite dialog is gone or is no longer a dialog');
+  const st = dlg[0].props.style || {};
+  assert.ok(st.maxHeight, 'the dialog has no height limit, so a tall card pushes its own controls off the screen');
+  assert.equal(st.overflowY, 'auto', 'the dialog does not scroll, so whatever overflows is simply unreachable');
+});

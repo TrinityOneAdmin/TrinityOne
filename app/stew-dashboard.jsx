@@ -2274,7 +2274,11 @@ function JoinModal({ onClose }) {
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Invite your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 30 }}>
+      {/* THE PANEL MUST SCROLL. It never needed to before: one QR, one code, one row of buttons, and it
+          always fitted. This card now carries a SECOND QR at the same 168px and a whole install block, and
+          on a phone-sized console that runs off the bottom of a dialog which has no scroll of its own —
+          the controls are simply unreachable, with nothing on screen to suggest anything is below. */}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Invite your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', maxHeight: '88vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 30 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, textAlign: 'center' }}>Invite your church</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 22px', textAlign: 'center' }}>Show this on screen or print it. One scan with a phone camera opens TrinityOne already following your church — no account, no phone number.</p>
         <JoinCard qrSize={168} center />
