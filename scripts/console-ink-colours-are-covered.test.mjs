@@ -17,8 +17,8 @@
 //
 // This file closes both holes with two independent mechanisms, and is explicit about which is which:
 //
-//   PART 1 is BEHAVIOURAL. It renders the real DashRelaysCard through the miniature React in
-//   render-jsx-screen.mjs and asserts the colour that ARRIVES ON SCREEN at 14 of its 15 token uses: relays
+//   PART 1 is BEHAVIOURAL. It renders the real console relay panels through the miniature React in
+//   render-jsx-screen.mjs and asserts the colour that ARRIVES ON SCREEN at 14 of the 15 token uses: relays
 //   online / offline / still checking, one relay box vs two, and the success and failure line of each
 //   status message, each one produced by pressing the card's own button and letting its own handler run.
 //   Real code runs and the ternaries are evaluated, so `false && ` in front of a branch fails it. (The 15th
@@ -48,7 +48,13 @@ const BARE = new Set(['var(--clay)', 'var(--sage)']);
 
 const JS = compileScreen('app/stew-dashboard.jsx');
 
-// Everything DashRelaysCard takes from outside its own file. A name it needs that is not here is a
+// THE THREE PANELS RELAYS BECAME, DRAWN AS ONE TREE. 2026-09-09 split DashRelaysCard into DashRelaysCard
+// (the list and the refusal banner), DashAddRelayCard (typed address, auto-find, connect by name) and
+// DashRelayHistoryCard (copy across, keep in sync). Ten of the fifteen token uses this file measures moved
+// into the two new ones, so they are all mounted together: a colour site moving between them cannot fall
+// out of the sweep, and the sweep at the end of the file still walks every state in one pass.
+//
+// Everything the three take from outside their own file. A name they need that is not here is a
 // ReferenceError at the point of use — deliberately, because a silently-stubbed global is how a test ends
 // up asserting about something that is not the code. Panel is the REAL Panel from the same file; the only
 // stubs are furniture from other app files (Icon, SkPill from stew-data.jsx) and the browser.
@@ -92,10 +98,14 @@ function relaysCard({ relays = [], backup = null, steward = {}, rejected = false
     useStewDialog: () => ({ current: null }),
   };
   const names = Object.keys(globals);
-  const mod = new Function(...names, JS + '\nreturn { DashRelaysCard, Panel };')(...names.map(k => globals[k]));
-  assert.equal(typeof mod.DashRelaysCard, 'function', 'DashRelaysCard is not a component any more — re-anchor this test');
-  assert.equal(typeof mod.Panel, 'function', 'Panel is not a component any more — re-anchor this test');
-  return { draw: () => draw(mod.DashRelaysCard, {}), win };
+  const want = ['DashRelaysCard', 'DashAddRelayCard', 'DashRelayHistoryCard', 'Panel'];
+  const mod = new Function(...names, JS + '\nreturn { ' + want.join(', ') + ' };')(...names.map(k => globals[k]));
+  for (const n of want) assert.equal(typeof mod[n], 'function', n + ' is not a component any more — re-anchor this test');
+  const pages = function RelayPages() { return React.createElement('div', {},
+    React.createElement(mod.DashRelaysCard, {}),
+    React.createElement(mod.DashAddRelayCard, {}),
+    React.createElement(mod.DashRelayHistoryCard, {})); };
+  return { draw: () => draw(pages, {}), win };
 }
 
 // setImmediate drains the whole microtask queue first, so one hop is enough for the card's promise chains
@@ -119,10 +129,13 @@ const ONE_UP_ONE_DOWN = [
   { url: 'wss://nos.lol', status: 'off' },
 ];
 
-test('CONTROL: the real DashRelaysCard renders, and its relay rows reach the screen', async () => {
+test('CONTROL: the real relay panels render, and the relay rows reach the screen', async () => {
   const tree = await paint(relaysCard({ relays: ONE_UP_ONE_DOWN, backup: { boxes: 2, online: 2, syncOn: true } }));
   const all = said(tree);
   assert.match(all, /Where your church publishes/, 'DashRelaysCard no longer renders its blurb — re-anchor this test');
+  assert.match(all, /Three ways to add a relay your church runs/,
+    'DashAddRelayCard is not in the tree — the add, auto-find and connect-by-name colours below measure nothing');
+  assert.match(all, /Copies your church/, 'DashRelayHistoryCard is not in the tree — the clone and sync colours below measure nothing');
   assert.match(all, /wss:\/\/nos\.lol/, 'the relay list is not rendering a row per relay, so nothing below is being measured');
   assert.match(all, /Offline/);
   assert.match(all, /Answering/);   // was "Live"; renamed 2026-09-08 because answering a socket is not accepting a write
@@ -277,7 +290,7 @@ test('the relay-is-refusing-our-posts failure is legible', async () => {
 // Every state above, swept in one pass. This is the guard against a NEW site being added on a bare token
 // inside a branch nobody thought to assert on individually — and, unlike the old sweep, the branches it
 // walks have actually been executed.
-test('across every state this card can be in, nothing on screen is TEXT painted --clay or --sage', async () => {
+test('across every state these pages can be in, nothing on screen is TEXT painted --clay or --sage', async () => {
   const trees = [];
   const collect = async (opts, drive) => {
     const card = relaysCard(opts);

@@ -60,14 +60,19 @@ function liftRegisterAtRelay(church) {
   return new Function('scope', `with (scope) { return ({ ${body} }).registerAtRelay; }`)(scope);
 }
 
-// THE CONSOLE'S OWN connectByName, with enough of DashRelaysCard around it to include the line that obtains
+// THE CONSOLE'S OWN connectByName, with enough of its component around it to include the line that obtains
 // the church. Lifting the arrow function ALONE would mean supplying `church` from here — and then deleting
 // the fix from the screen would leave this test supplying the very thing whose absence is the bug.
+//
+// 2026-09-09: connect-by-name moved out of DashRelaysCard into DashAddRelayCard, when the Relays card became
+// five pages. The slice follows it, and the component it landed in still calls useStewardChurch() itself, so
+// the point of the slice is unchanged. This is the "a signature change has TWO caller lists" trap and this
+// file is the second list: the anchor is named in a comment inside DashAddRelayCard so it cannot drift.
 function liftConnectByName({ churchName, relayUrl, registerAtRelay }) {
-  const OPEN = 'function DashRelaysCard() {';
+  const OPEN = 'function DashAddRelayCard() {';
   const start = DASH.indexOf(OPEN);
-  assert.notEqual(start, -1, 'DashRelaysCard is gone from app/stew-dashboard.jsx — re-anchor this test');
-  const end = DASH.indexOf("  // Bring a church's history onto THIS relay", start);
+  assert.notEqual(start, -1, 'DashAddRelayCard is gone from app/stew-dashboard.jsx — re-anchor this test');
+  const end = DASH.indexOf('  // ── end of the connect-by-name flow.', start);
   assert.notEqual(end, -1, 'the anchor after connectByName has moved — re-anchor this test rather than widening it');
   const body = DASH.slice(start + OPEN.length, end);
   assert.ok(body.includes('const connectByName'), 'connectByName is not inside the sliced window');

@@ -649,7 +649,7 @@ function WizShell({ step, title, sub, children, footer }) {
 // First-run setup wizard — catches a brand-new church on first console load and walks
 // name → starter groups → first serving team (or defer). Each step publishes immediately;
 // a localStorage flag (set on finish/skip) keeps it from reappearing.
-function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
+function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPost }) {
   const [step, setStep] = React.useState(0);
   const [name, setName] = React.useState(church.name || '');
   const [busy, setBusy] = React.useState(false);
@@ -1191,7 +1191,9 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         {[
           ['qr', 'Share a joining code', 'Invite members with a QR or short code.', () => { if (onDone) onDone(); if (onInvite) onInvite(); }],
           ['send', 'Post a note', 'Reach your whole church from “New post”.', () => { if (onDone) onDone(); if (onNewPost) onNewPost(); }],
-          ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.', () => { if (onTab) onTab('settings'); if (onDone) onDone(); }],
+          // NAMES A PAGE. It used to call onTab('settings') and land on whichever page Settings opened
+          // first, which since 2026-09-09 is Church identity — not what these words promise.
+          ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.', () => { if (onSettings) onSettings('relays'); else if (onTab) onTab('settings'); if (onDone) onDone(); }],
         ].map(([ic, t, d, act]) => (
           <button key={t} onClick={act} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', width: '100%', fontFamily: 'var(--font-ui)' }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--clay-ink)' }}><Icon name={ic} size={17} color="currentColor" /></div>
@@ -1266,8 +1268,8 @@ window.StewQRScanner = StewQRScanner;
 
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
-  const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings sub-tab (e.g. relay → network)
-  const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action within that sub-tab (e.g. open the Set-PIN dialog)
+  const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings PAGE (see SETTINGS_GROUPS); the four old tab keys are aliased
+  const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action on that page (e.g. open the Set-PIN dialog)
   const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
@@ -1489,7 +1491,7 @@ function StewDashboard({ initial = 'overview' }) {
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
         <JoinNotifier /><KeyDistributor />
-        {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
+        {wizard ? <StewSetupWizard church={church} onTab={setTab} onSettings={openSettings} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
           <div style={{ flexShrink: 0, background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '10px 12px 8px', display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -1534,7 +1536,7 @@ function StewDashboard({ initial = 'overview' }) {
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
         <JoinNotifier /><KeyDistributor />
-        {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
+        {wizard ? <StewSetupWizard church={church} onTab={setTab} onSettings={openSettings} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
@@ -1560,7 +1562,7 @@ function StewDashboard({ initial = 'overview' }) {
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
             <Icon name="lock" size={16} color="var(--sage)" />
-            <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Key on this device</div><div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{(window.Steward.hasPinLock && window.Steward.hasPinLock()) ? 'Stored locally · locked' : <React.Fragment>Stored locally · <span onClick={() => openSettings('security', 'pin')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>lock with a PIN</span></React.Fragment>}</div></div>
+            <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Key on this device</div><div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{(window.Steward.hasPinLock && window.Steward.hasPinLock()) ? 'Stored locally · locked' : <React.Fragment>Stored locally · <span onClick={() => openSettings('key', 'pin')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>lock with a PIN</span></React.Fragment>}</div></div>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} />
           </div>
           {/* WHERE THIS CHURCH'S RECORDS ACTUALLY LIVE, said permanently and in plain words.
@@ -2408,7 +2410,7 @@ function groupLiveSub(g, memberCount, rosters) {
   return n(memberCount || 0);   // open group: every church member can join
 }
 function DashOverview({ onTab, onNewPost, onSettings }) {
-  const goSettings = onSettings || ((s) => onTab('settings'));   // deep-links a settings sub-tab when available
+  const goSettings = onSettings || ((s) => onTab('settings'));   // deep-links a settings PAGE when available (SETTINGS_GROUPS)
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
   const rosters = window.useStewardRosters ? window.useStewardRosters() : [];   // team rosters, for live team counts
@@ -2484,7 +2486,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // there for them (round 7: a steward followed it and found "no such page exists").
   const _ovDelegated = !!(window.Steward && window.Steward.actingChurch);
   const stewardReqBanner = stewardReqs.length ? (
-    <button onClick={() => goSettings('security')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--gold) 38%, var(--line))', background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+    <button onClick={() => goSettings('delegated')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--gold) 38%, var(--line))', background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={22} color="#fff" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
@@ -3652,122 +3654,30 @@ function DashRunRelayCard() {
   );
 }
 
-function DashRelaysCard() {
-  // THE CHURCH'S NAME, because connect-by-name registers this church at the relay it just found and a
-  // nameless registration is refused (gateway.mjs H4: a NEW self-registration with no name is a 400, written
-  // after one box accumulated 37 rows the operator could only see as a bare npub). This card used to pass ''
-  // — harmless while an unconfigured relay accepted everything, and since the closed-network work a fresh box
-  // refuses every write instead, so the steward connected to a relay that would never take a word they wrote.
-  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
+// THE BACKUP PICTURE, ASKED ONCE AND SHARED BY THE TWO PAGES THAT NEED IT. "How many separate relay boxes
+// does this church have, and are they mirroring?" is the question behind the single-point-of-failure notice
+// on the Relays page AND behind whether "Keep your relays in sync" can be switched on at all. Those were
+// one card and are now two pages, so this is a hook rather than the same effect written out twice — rule 4
+// of reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md, shared primitives and not copied ones, so
+// a change to what counts as a backup reaches both pages.
+function useRelayBackupState() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
+  const [backup, setBackup] = React.useState(null);   // D2: { boxes, online, syncOn } — distinct relay BOXES (redundancy)
+  React.useEffect(() => { let ok = true; (async () => { try { const b = await window.Steward.backupState(); if (ok) setBackup(b); } catch {} })(); return () => { ok = false; }; }, [status.length]);
+  return { status, backup };
+}
+
+// ── RELAYS, the everyday page: which relays, are they answering, remove one — plus the one fault that
+//    belongs beside them rather than on a page of its own, a relay refusing our posts. Everything a church
+//    touches once or never (add, auto-find, connect by name, copy history, keep in sync, run your own box)
+//    is its own page now; SETTINGS_GROUPS in DashSettings is the list of where each of them went.
+function DashRelaysCard() {
+  const { status, backup } = useRelayBackupState();
   const host = (typeof location !== 'undefined' && location.host) || '';
   const online = status.filter(r => r.status === 'on').length;
   const checking = status.length === 0;
   const allUp = online === status.length;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
-  const [draft, setDraft] = React.useState('');
-  const [err, setErr] = React.useState('');
-  const [syncBusy, setSyncBusy] = React.useState(false);
-  const [syncMsg, setSyncMsg] = React.useState(null);
-  const [backup, setBackup] = React.useState(null);   // D2: { boxes, online, syncOn } — distinct relay BOXES (redundancy)
-  React.useEffect(() => { let ok = true; (async () => { try { const b = await window.Steward.backupState(); if (ok) setBackup(b); } catch {} })(); return () => { ok = false; }; }, [status.length]);
-  const doSync = async (on) => {
-    setSyncBusy(true); setSyncMsg(null);
-    try { const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable(); setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' }); }
-    catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
-    setSyncBusy(false);
-  };
-  // ADDING A RELAY IS NOT THE SAME AS REGISTERING WITH IT, and nothing used to say so. A relay only starts
-  // enforcing this church's rules — and only counts toward redundancy — once the church is REGISTERED on it:
-  // gateway.mjs reports `enforces: CHURCH_PUBS.size > 0`, and the console refuses to count a relay that says
-  // enforces:false. So a steward adds their second box, sees it appear in the list, and nothing ever happens.
-  // Round 9's vicar did exactly that and stopped: "I typed our second office computer's address into the Add
-  // relay box and pressed Add relay... Because of that I never got to the bit about keeping the two in step."
-  const [addedNote, setAddedNote] = React.useState('');
-  const addRelay = () => {
-    const r = window.Steward.addRelay && window.Steward.addRelay(draft);
-    if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
-    setDraft(''); setErr('');
-    setAddedNote(String(r));
-  };
-  // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
-  // relay. (Registering write-access still uses the token/pairing below.)
-  const [byName, setByName] = React.useState('');
-  const [byNameMsg, setByNameMsg] = React.useState(null);
-  const RELAY_DIRECTORY = 'https://app.trinityone.church';
-  const connectByName = async () => {
-    const n = (byName || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); if (!n) return;   // "Quiet Dove 45" → "quiet-dove-45"
-    setByNameMsg({ text: 'Looking up “' + n + '”…' });
-    try {
-      const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
-      // C5: the resolver now refuses two things it used to pass on — a cleartext (ws://) answer, and an
-      // address this church has not signed into its own relay-net document. "No relay is registered under
-      // that name" would be a plain untruth for the second, and this project has shipped six controls that
-      // told a steward a comforting story about something that did not happen. Say both possibilities.
-      if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
-      // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
-      // the address is already in the list, or when it IS this console's own relay — and in both cases the
-      // message below said "Added", which is at best confusing and at worst tells a steward they have a
-      // second box when they have one. Audit 2026-09-02 #17.
-      const added = window.Steward.addRelay ? window.Steward.addRelay(j.url) : false;
-      window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
-      setByNameMsg({ text: 'Connecting your church…' });
-      let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, church.name); } catch (e) {}
-      // THE MISSING-NAME REFUSAL IS A NOT-YET, NOT A VERDICT, and it is the one the steward can fix. Telling
-      // them "the relay operator may need to approve your church" here would send them to somebody else about
-      // a field on their own settings screen. Mirrors _regNeedsName in src/steward.src.js, which reads the
-      // relay's reason the same way.
-      const needsName = !reg.ok && /name/i.test(String(reg.why || ''));
-      setByNameMsg(needsName
-        ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
-        : { ok: true, text: reg.ok ? ((added ? '✓ Connected to “' : '✓ “') + n + (added ? '” — your church is registered and can post.' : '” was already on your list — your church is registered there and can post.')) : '✓ ' + (added ? 'Added “' : 'Already had “') + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
-      setByName('');
-    } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
-  };
-  // Bring a church's history onto THIS relay by copying it from another (e.g. a community node after a restore).
-  const [cloneSrc, setCloneSrc] = React.useState('');
-  const [cloneMsg, setCloneMsg] = React.useState(null);
-  const [cloning, setCloning] = React.useState(false);
-  const cloneFromHere = async () => {
-    const raw = (cloneSrc || '').trim(); if (!raw || cloning) return;
-    setCloning(true); setCloneMsg({ text: 'Copying your church’s history…' });
-    try {
-      let url = raw;
-      if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the mirrored directory
-        // C5: `member: false` — the possession proof, without the membership check. A clone SOURCE is the box
-        // this church is leaving, and it may be one the church never vouched for; requiring membership of it
-        // would block exactly the migration this control exists for. The DESTINATION still takes the full
-        // gate, inside cloneFromRelay. This is the only caller allowed to pass it.
-        const jj = await window.Steward.resolveRelayName(raw, { member: false });
-        if (!jj || !jj.url) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
-        url = jj.url;
-      }
-      const res = await window.Steward.cloneFromRelay(url);
-      setCloneMsg({ ok: true, text: '✓ Copied ' + (res && res.imported != null ? res.imported + ' events' : 'your church’s data') + ' onto this relay.' });
-      setCloneSrc('');
-    } catch (e) { setCloneMsg({ ok: false, text: '✗ ' + ((e && e.message) || 'Clone failed.') }); }
-    setCloning(false);
-  };
-  // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
-  const [finding, setFinding] = React.useState(false);
-  const [findMsg, setFindMsg] = React.useState('');
-  const autoFind = async () => {
-    setFinding(true); setFindMsg('');
-    try {
-      const picks = window.Steward.autoPickRelays ? await window.Steward.autoPickRelays(2) : [];
-      if (picks && picks.length) setFindMsg('✓ Added ' + picks.length + ' relay' + (picks.length > 1 ? 's' : '') + ' for backup: ' + picks.map(p => p.name || p.url).join(', '));
-      else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
-    } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
-    setFinding(false);
-  };
-  // The copy lands on whichever relay is serving this console — which "this relay" did nothing to convey
-  // from a console that lists several. Name it. Read from the engine, not location.host: when the console
-  // is served from pages.dev or runs natively the destination falls back to the canonical relay, so the
-  // address in the URL bar is exactly the case where guessing would print the wrong one.
-  const cloneDest = React.useMemo(() => {
-    try { return String(window.Steward.ownRelay() || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '').replace(/\/+$/, ''); }
-    catch (e) { return ''; }
-  }, []);
   const [regOpen, setRegOpen] = React.useState(false);
   // shown only after this relay has actually refused a write — see noteRelayRejection(). Pasting a
   // relay's admin token hands over full control of that relay, so it is not something to leave sitting
@@ -3816,7 +3726,7 @@ function DashRelaysCard() {
         {backup && backup.boxes < 2 ? (
           <div style={{ display: 'flex', gap: 11, padding: '12px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--clay)', marginBottom: 14 }}>
             <div style={{ flexShrink: 0, color: 'var(--clay-ink)', fontSize: 16, lineHeight: 1.3, fontWeight: 800 }}>⚠</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}><b style={{ color: 'var(--ink)' }}>One relay is a single point of failure.</b> If it goes offline, members can’t reach your church. Add a second relay your church runs — self-host with the TrinityOne Suite, or connect one by name below — and your data will mirror across both automatically.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}><b style={{ color: 'var(--ink)' }}>One relay is a single point of failure.</b> If it goes offline, members can’t reach your church. Add a second relay your church runs — self-host with the TrinityOne Suite, or add one under <b style={{ color: 'var(--ink)' }}>Add a relay</b> — and your data will mirror across both automatically.</div>
           </div>
         ) : backup && backup.syncOn ? (
           <div style={{ display: 'flex', gap: 9, alignItems: 'center', padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
@@ -3868,8 +3778,109 @@ function DashRelaysCard() {
             );
           })}
         </div>
-        {/* relay actions → responsive 2-column grid so the many sections sit side by side on a wide card */}
-        <div className="relay-grid">
+        {/* Only after a relay has actually refused a write. Named for the symptom the steward has, not for
+            the mechanism — "register with the relay's allow-list" means nothing to someone whose actual
+            problem is that their posts aren't saving. */}
+        {!regNeeded ? null : (
+        <div style={{ marginTop: 12 }}>
+          {!regOpen ? (
+            <button onClick={() => setRegOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> A relay is refusing our posts — fix it</button>
+          ) : (
+            <div style={{ padding: 13, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>One of your relays wouldn’t save a recent change, because it only carries churches on its own list and yours isn’t on it yet. Adding it is the relay operator’s call — if that’s you, paste the relay’s <b>admin token</b> to add this church now. It’s in the TrinityOne Suite window, or the installer output. <b>Anyone with that token controls the whole relay</b>, so don’t ask for it if the relay isn’t yours — ask its operator to add your church instead.</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={regToken} onChange={e => setRegToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') register(); }} type="password" aria-label="Relay admin token" placeholder="relay admin token" autoComplete="off" style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
+                <button onClick={register} disabled={regBusy || !regToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (regBusy || !regToken.trim()) ? .5 : 1 }}>Register</button>
+              </div>
+              {regMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: regMsg[0] === '✓' ? 'var(--sage-ink)' : regMsg[0] === '✗' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{regMsg}</div> : null}
+            </div>
+          )}
+        </div>
+        )}
+        <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
+          <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church's messages, groups and members live on the relays above. Self-host one with the TrinityOne Suite for infrastructure you fully control — or run on the shared community relays. Either way, members reach it wherever you serve the app.</div>
+        </div>
+      </Panel>
+  );
+}
+
+// ── ADD A RELAY: one page, three ways in — a typed address, auto-find, or the relay's claimed name.
+//    Split off the Relays card 2026-09-09. All three are rare, all three sat expanded on the everyday page,
+//    and between them they were most of its measured 1000px.
+function DashAddRelayCard() {
+  // THE CHURCH'S NAME, because connect-by-name registers this church at the relay it just found and a
+  // nameless registration is refused (gateway.mjs H4: a NEW self-registration with no name is a 400, written
+  // after one box accumulated 37 rows the operator could only see as a bare npub). This card used to pass ''
+  // — harmless while an unconfigured relay accepted everything, and since the closed-network work a fresh box
+  // refuses every write instead, so the steward connected to a relay that would never take a word they wrote.
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
+  const [draft, setDraft] = React.useState('');
+  const [err, setErr] = React.useState('');
+  // ADDING A RELAY IS NOT THE SAME AS REGISTERING WITH IT, and nothing used to say so. A relay only starts
+  // enforcing this church's rules — and only counts toward redundancy — once the church is REGISTERED on it:
+  // gateway.mjs reports `enforces: CHURCH_PUBS.size > 0`, and the console refuses to count a relay that says
+  // enforces:false. So a steward adds their second box, sees it appear in the list, and nothing ever happens.
+  // Round 9's vicar did exactly that and stopped: "I typed our second office computer's address into the Add
+  // relay box and pressed Add relay... Because of that I never got to the bit about keeping the two in step."
+  const [addedNote, setAddedNote] = React.useState('');
+  const addRelay = () => {
+    const r = window.Steward.addRelay && window.Steward.addRelay(draft);
+    if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+    setDraft(''); setErr('');
+    setAddedNote(String(r));
+  };
+  // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
+  // relay. (Registering write-access still uses the token/pairing below.)
+  const [byName, setByName] = React.useState('');
+  const [byNameMsg, setByNameMsg] = React.useState(null);
+  const RELAY_DIRECTORY = 'https://app.trinityone.church';
+  const connectByName = async () => {
+    const n = (byName || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); if (!n) return;   // "Quiet Dove 45" → "quiet-dove-45"
+    setByNameMsg({ text: 'Looking up “' + n + '”…' });
+    try {
+      const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
+      // C5: the resolver now refuses two things it used to pass on — a cleartext (ws://) answer, and an
+      // address this church has not signed into its own relay-net document. "No relay is registered under
+      // that name" would be a plain untruth for the second, and this project has shipped six controls that
+      // told a steward a comforting story about something that did not happen. Say both possibilities.
+      if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
+      // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
+      // the address is already in the list, or when it IS this console's own relay — and in both cases the
+      // message below said "Added", which is at best confusing and at worst tells a steward they have a
+      // second box when they have one. Audit 2026-09-02 #17.
+      const added = window.Steward.addRelay ? window.Steward.addRelay(j.url) : false;
+      window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
+      setByNameMsg({ text: 'Connecting your church…' });
+      let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, church.name); } catch (e) {}
+      // THE MISSING-NAME REFUSAL IS A NOT-YET, NOT A VERDICT, and it is the one the steward can fix. Telling
+      // them "the relay operator may need to approve your church" here would send them to somebody else about
+      // a field on their own settings screen. Mirrors _regNeedsName in src/steward.src.js, which reads the
+      // relay's reason the same way.
+      const needsName = !reg.ok && /name/i.test(String(reg.why || ''));
+      setByNameMsg(needsName
+        ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
+        : { ok: true, text: reg.ok ? ((added ? '✓ Connected to “' : '✓ “') + n + (added ? '” — your church is registered and can post.' : '” was already on your list — your church is registered there and can post.')) : '✓ ' + (added ? 'Added “' : 'Already had “') + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
+      setByName('');
+    } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
+  };
+  // ── end of the connect-by-name flow. scripts/connect-by-name-names-the-church.test.mjs slices this
+  //    function from its opening brace down to THIS line and runs the result, so the church-name lookup
+  //    above is inside the slice rather than supplied by the test. Do not move either past the other.
+  // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
+  const [finding, setFinding] = React.useState(false);
+  const [findMsg, setFindMsg] = React.useState('');
+  const autoFind = async () => {
+    setFinding(true); setFindMsg('');
+    try {
+      const picks = window.Steward.autoPickRelays ? await window.Steward.autoPickRelays(2) : [];
+      if (picks && picks.length) setFindMsg('✓ Added ' + picks.length + ' relay' + (picks.length > 1 ? 's' : '') + ' for backup: ' + picks.map(p => p.name || p.url).join(', '));
+      else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
+    } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
+    setFinding(false);
+  };
+  return (
+      <Panel title="Add a relay">
+        <div className="set-note" style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Three ways to add a relay your church runs. Any of them lets your church read from it straight away; it only starts carrying your church once it is registered there.</div>
         {/* ADD ANOTHER RELAY THIS CHURCH RUNS (redundancy) — never somebody else's.
             The placeholder below used to name two generic public Nostr relays and the error under it named
             a third. A steward who typed one of those in was following the product's own instructions, and
@@ -3917,55 +3928,81 @@ function DashRelaysCard() {
             {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay-ink)' : byNameMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
           </div>
         </div>
-        {/* Only after a relay has actually refused a write. Named for the symptom the steward has, not for
-            the mechanism — "register with the relay's allow-list" means nothing to someone whose actual
-            problem is that their posts aren't saving. */}
-        {!regNeeded ? null : (
-        <div style={{ marginTop: 12 }}>
-          {!regOpen ? (
-            <button onClick={() => setRegOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> A relay is refusing our posts — fix it</button>
-          ) : (
-            <div style={{ padding: 13, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>One of your relays wouldn’t save a recent change, because it only carries churches on its own list and yours isn’t on it yet. Adding it is the relay operator’s call — if that’s you, paste the relay’s <b>admin token</b> to add this church now. It’s in the TrinityOne Suite window, or the installer output. <b>Anyone with that token controls the whole relay</b>, so don’t ask for it if the relay isn’t yours — ask its operator to add your church instead.</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input value={regToken} onChange={e => setRegToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') register(); }} type="password" aria-label="Relay admin token" placeholder="relay admin token" autoComplete="off" style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-                <button onClick={register} disabled={regBusy || !regToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (regBusy || !regToken.trim()) ? .5 : 1 }}>Register</button>
-              </div>
-              {regMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: regMsg[0] === '✓' ? 'var(--sage-ink)' : regMsg[0] === '✗' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{regMsg}</div> : null}
-            </div>
-          )}
-        </div>
-        )}
-        {/* one-time clone: copy a church's whole history from another relay onto this one (e.g. after restore) */}
-        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Copy your history to {cloneDest || 'this relay'}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copies your church’s whole history onto <b>{cloneDest || 'this relay'}</b> when it is starting empty — after a recovery-phrase restore, or when moving onto your own box. Nothing is removed from the relay you copy <b>from</b>, and nothing here is overwritten.</div>
-          <div style={{ display: 'flex', gap: 9 }}>
-            <input value={cloneSrc} onChange={e => { setCloneSrc(e.target.value); setCloneMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') cloneFromHere(); }}
-              aria-label="Relay to copy your history from"
-              placeholder="grace-city  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
-              style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-            <button onClick={cloneFromHere} disabled={cloning || !cloneSrc.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (cloning || !cloneSrc.trim()) ? .5 : 1 }}>{cloning ? 'Copying…' : 'Copy across'}</button>
-          </div>
-          {cloneMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: cloneMsg.ok === false ? 'var(--clay-ink)' : cloneMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{cloneMsg.text}</div> : null}
-        </div>
-        {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
-        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Keep your relays in sync</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
-          {backup != null && backup.boxes >= 2 ? (
-            <div style={{ display: 'flex', gap: 9 }}>
-              <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
-              <button onClick={() => doSync(false)} disabled={syncBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Turn off</button>
-            </div>
-          ) : null}
-          {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
-        </div>
-        </div>{/* end relay-actions grid */}
-        <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
-          <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church's messages, groups and members live on the relays above. Self-host one with the TrinityOne Suite for infrastructure you fully control — or run on the shared community relays. Either way, members reach it wherever you serve the app.</div>
-        </div>
       </Panel>
+  );
+}
+
+// ── MOVE OR COPY HISTORY: the two things a church does to its relays once in its life, if ever — copy
+//    everything onto a relay that is starting empty, and switch on continuous mirroring between its own
+//    boxes. Two cards, because they are two jobs; one page, because a steward reaches for them together.
+function DashRelayHistoryCard() {
+  const { backup } = useRelayBackupState();
+  const [syncBusy, setSyncBusy] = React.useState(false);
+  const [syncMsg, setSyncMsg] = React.useState(null);
+  const doSync = async (on) => {
+    setSyncBusy(true); setSyncMsg(null);
+    try { const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable(); setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' }); }
+    catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
+    setSyncBusy(false);
+  };
+  // Bring a church's history onto THIS relay by copying it from another (e.g. a community node after a restore).
+  const [cloneSrc, setCloneSrc] = React.useState('');
+  const [cloneMsg, setCloneMsg] = React.useState(null);
+  const [cloning, setCloning] = React.useState(false);
+  const cloneFromHere = async () => {
+    const raw = (cloneSrc || '').trim(); if (!raw || cloning) return;
+    setCloning(true); setCloneMsg({ text: 'Copying your church’s history…' });
+    try {
+      let url = raw;
+      if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the mirrored directory
+        // C5: `member: false` — the possession proof, without the membership check. A clone SOURCE is the box
+        // this church is leaving, and it may be one the church never vouched for; requiring membership of it
+        // would block exactly the migration this control exists for. The DESTINATION still takes the full
+        // gate, inside cloneFromRelay. This is the only caller allowed to pass it.
+        const jj = await window.Steward.resolveRelayName(raw, { member: false });
+        if (!jj || !jj.url) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
+        url = jj.url;
+      }
+      const res = await window.Steward.cloneFromRelay(url);
+      setCloneMsg({ ok: true, text: '✓ Copied ' + (res && res.imported != null ? res.imported + ' events' : 'your church’s data') + ' onto this relay.' });
+      setCloneSrc('');
+    } catch (e) { setCloneMsg({ ok: false, text: '✗ ' + ((e && e.message) || 'Clone failed.') }); }
+    setCloning(false);
+  };
+  // The copy lands on whichever relay is serving this console — which "this relay" did nothing to convey
+  // from a console that lists several. Name it. Read from the engine, not location.host: when the console
+  // is served from pages.dev or runs natively the destination falls back to the canonical relay, so the
+  // address in the URL bar is exactly the case where guessing would print the wrong one.
+  const cloneDest = React.useMemo(() => {
+    try { return String(window.Steward.ownRelay() || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '').replace(/\/+$/, ''); }
+    catch (e) { return ''; }
+  }, []);
+  return (
+    <React.Fragment>
+        {/* one-time clone: copy a church's whole history from another relay onto this one (e.g. after restore) */}
+      <Panel title={'Copy your history to ' + (cloneDest || 'this relay')}>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copies your church’s whole history onto <b>{cloneDest || 'this relay'}</b> when it is starting empty — after a recovery-phrase restore, or when moving onto your own box. Nothing is removed from the relay you copy <b>from</b>, and nothing here is overwritten.</div>
+        <div style={{ display: 'flex', gap: 9 }}>
+          <input value={cloneSrc} onChange={e => { setCloneSrc(e.target.value); setCloneMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') cloneFromHere(); }}
+            aria-label="Relay to copy your history from"
+            placeholder="grace-city  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
+            style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
+          <button onClick={cloneFromHere} disabled={cloning || !cloneSrc.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (cloning || !cloneSrc.trim()) ? .5 : 1 }}>{cloning ? 'Copying…' : 'Copy across'}</button>
+        </div>
+        {cloneMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: cloneMsg.ok === false ? 'var(--clay-ink)' : cloneMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{cloneMsg.text}</div> : null}
+      </Panel>
+        {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
+      <Panel title="Keep your relays in sync">
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
+        {backup != null && backup.boxes >= 2 ? (
+          <div style={{ display: 'flex', gap: 9 }}>
+            <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
+            <button onClick={() => doSync(false)} disabled={syncBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Turn off</button>
+          </div>
+        ) : null}
+        {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
+      </Panel>
+    </React.Fragment>
   );
 }
 
@@ -6585,7 +6622,7 @@ window.DashChatTagsPanel = DashChatTagsPanel;
 // Congregation features — the steward chooses which parts of the app members see. Published on the
 // kind-0 profile as `features:{read,community,library}`; the member app hides the disabled tabs.
 // Unset = on (so existing churches are unaffected). Today (home) + Giving are controlled separately.
-function DashFeaturesPanel({ church, aside = null }) {
+function DashFeaturesPanel({ church, show = null }) {
   const f = church.features || {};
   const on = (k) => f[k] !== false;   // default enabled
   const onOpt = (k) => f[k] === true;   // opt-in extras: default OFF
@@ -6662,15 +6699,18 @@ function DashFeaturesPanel({ church, aside = null }) {
     if (!approval) window.Steward.setAdmitted([...new Set([...fAdmitted, ...fMembers.map(m => m.pubkey)])]);
     window.Steward.setJoinPolicy(!approval);
   };
-  // TWO AUTHORED STACKS, WRITTEN HERE rather than by the caller. Measured 2026-09-08 at 1280x713:
-  // "Congregation features" (645px) and "Rules & privacy" (606px) were both in the FIRST stack while the
-  // second held only "Chat message tags" (272px) — 1267 against 272, so the section was 1434px tall for
-  // want of moving one card. The two panels share this component's state, so they cannot simply be
-  // rendered into different stacks by the caller without running every hook twice; the component owns
-  // the split instead. `aside` is whatever the caller wants in the second stack (the tags card).
+  // TWO CARDS, ONE COMPONENT, because they share this component's state — the encrypt-all switch reads the
+  // group list that the features switches publish into, so splitting them into two components would mean two
+  // copies of every hook here. `show` picks which of the two renders: 'features' for Congregation features,
+  // 'rules' for Rules & privacy, and null (the default) for both, which is what every caller outside Settings
+  // and every test that sweeps this component for headings and colours still asks for.
+  //
+  // Settings passes one or the other, because they are two pages now — reference/DECISION-SETTINGS-LIST-AND-
+  // DETAIL-2026-09-09.md. Only one of them is ever mounted at a time, so nothing runs its hooks twice; the
+  // reason they used to share one tab was the two-track grid, and there is no grid any more.
   return (
     <React.Fragment>
-    <div>
+    {show === 'rules' ? null : (
     <Panel title="Congregation features">
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Choose which parts of the app your members see — turn off what your church doesn’t use.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -6723,9 +6763,9 @@ function DashFeaturesPanel({ church, aside = null }) {
         <DashGivingPanel church={church} />
       </div>
     </Panel>
-    </div>
+    )}
 
-    <div>
+    {show === 'features' ? null : (
     <Panel title="Rules & privacy">
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Privacy</div>
       {/* Every row in this panel is the target for its own switch — see the note in "Congregation features".
@@ -6789,8 +6829,7 @@ function DashFeaturesPanel({ church, aside = null }) {
         </button>
       </div>
     </Panel>
-    {aside}
-    </div>
+    )}
     </React.Fragment>
   );
 }
@@ -7348,6 +7387,89 @@ function DashBackup() {
   );
 }
 
+// THE SETTINGS PAGES, AND THE GROUP EACH ONE SITS IN. Settings is a list of pages and one page at a time,
+// on both surfaces — reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md, after Church / Features /
+// Network & relays / Security spent two rounds of density work still running two screenfuls each.
+//
+// This array IS the navigation, and scripts/settings-pages-are-a-list-and-a-detail.test.mjs walks it to
+// prove three things at once: every page in it is reachable, every page renders a body of its own, and no
+// panel is on two pages or on none. So a page added here without a body fails a test instead of opening
+// blank, and a card that quietly stops being rendered fails one instead of just disappearing.
+//
+//   k  the deep-link key         n  what the list says      d  the line underneath it
+//   owner: this page needs the church key, so a delegated steward never sees it
+//   delegate: the opposite — the notice that only a delegated steward is shown
+const SETTINGS_GROUPS = [
+  ['Church', [
+    { k: 'identity', n: 'Church identity', d: 'Name, picture, joining handle' },
+    { k: 'branding', n: 'Branding', d: 'Colours and church mark' },
+    { k: 'media', n: 'Video & audio', d: 'The Watch and Listen tabs' },
+    { k: 'backup', n: 'Backup & data', d: 'Export, import and recovery' },
+  ]],
+  ['People', [
+    { k: 'features', n: 'Congregation features', d: 'What members see' },
+    { k: 'rules', n: 'Rules & privacy', d: 'Photos, encryption, joining' },
+    { k: 'tags', n: 'Chat message tags', d: 'Prayer request, and your own' },
+  ]],
+  // RELAYS WAS ONE CARD DOING EIGHT JOBS, measured at over 1000px, and only the first of the eight is
+  // touched more than once in a church's life. It is five pages now; the eighth job, "a relay is refusing
+  // our posts", is NOT a page — it is a fault, so it stays a banner on Relays where the fault is visible.
+  ['Infrastructure', [
+    { k: 'relays', n: 'Relays', d: 'Where your church publishes' },
+    { k: 'add-relay', n: 'Add a relay', d: 'By address, auto-find or name' },
+    { k: 'history', n: 'Move or copy history', d: 'Copy across, keep in sync' },
+    { k: 'ownbox', n: 'Run your own box', d: 'Self-host with the Suite' },
+    { k: 'network', n: 'Network', d: 'Belong to a group of churches' },
+  ]],
+  ['Security', [
+    { k: 'access', n: 'Security', d: 'What you may do here', delegate: true },
+    { k: 'key', n: 'Church key', d: 'Recovery phrase and backup', owner: true },
+    { k: 'stewards', n: 'Stewards & handoff', d: 'Hand the church on', owner: true },
+    { k: 'delegated', n: 'Delegated stewards', d: 'Helpers, without the key', owner: true },
+    { k: 'become', n: 'Become a steward', d: 'Help another church', owner: true },
+  ]],
+];
+
+// The tab keys DashSettings took until 2026-09-09, for the ones that are NOT also page keys. Aliased rather
+// than dropped, so a saved deep link or a screen that has not been updated lands on a real page instead of a
+// blank panel — which is what the old `initialSection === 'relays' ? 'network'` line existed for.
+//
+// ONLY KEYS THAT ARE NOT PAGES BELONG HERE, and resolvePage checks the pages FIRST. 'network', 'features' and
+// 'relays' were tab keys and are page keys as well; aliasing any of them made the page of that name
+// unreachable by deep link, which is exactly what happened to Network on the first cut of this change —
+// 'network' → 'relays' meant nothing could open the Network page. The test that found it asserts the
+// invariant, so the trap cannot be reset.
+//
+// 'security' goes to Delegated stewards because that is where the one screen deep-linking it — Overview's
+// "N people want to help steward" banner — says in its own words it is sending the steward. A delegate, who
+// has no such page, is caught by resolvePage's group fallback and gets the notice instead.
+const SETTINGS_PAGE_ALIASES = { church: 'identity', security: 'delegated' };
+
+// WHICH PAGE A DEEP LINK OPENS. `visible` is the groups this steward may see and `pages` is those groups
+// flattened. A page this steward cannot see falls back to the first page of its OWN group that they can —
+// which is what the tab strip did by accident and is worth keeping: a delegate following Overview's
+// steward-requests banner gets the "you are acting as a steward" notice rather than an empty screen.
+//
+// A PURE FUNCTION AT MODULE SCOPE, not a closure inside DashSettings, and deliberately so:
+// scripts/no-hook-after-an-early-return.test.mjs scans for `if (…) return null;` above a hook call and
+// counts everything between two top-level `function` lines as one component, so a guard clause written
+// inside the component — even nested in a helper, as this was — reads to it as an early return with sixteen
+// hooks below it. That lint is a text scan by necessity (the failure it catches is structural, and
+// miniReact silently misaligns its hook store instead of throwing), so the pattern belongs outside
+// components altogether rather than being argued with. It cost every steward the ability to create a group
+// once, and it was caught by a pre-merge audit and not by any test that rendered the screen.
+function settingsPageFor(wanted, visible, pages) {
+  if (!wanted) return null;
+  // PAGES FIRST, aliases second — see the note above. The other way round, a tab key that is also a page
+  // key hides that page from every deep link.
+  if (pages.some(p => p.k === wanted)) return wanted;
+  const k = SETTINGS_PAGE_ALIASES[wanted] || wanted;
+  if (pages.some(p => p.k === k)) return k;
+  const grp = (SETTINGS_GROUPS.find(([, items]) => items.some(p => p.k === k)) || [])[0];
+  const seen = (visible.find(([g]) => g === grp) || [])[1];
+  return (seen && seen.length) ? seen[0].k : (pages.length ? pages[0].k : null);
+}
+
 function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;   // re-render when the active identity changes
   const delegated = !!(window.Steward.isDelegated && window.Steward.isDelegated());   // acting as a steward of a church we don't own
@@ -7359,24 +7481,37 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const [editingWeb, setEditingWeb] = React.useState(false);
   const [hasPin, setHasPin] = React.useState(() => !!(window.Steward.hasPinLock && window.Steward.hasPinLock()));
   const [pinAction, setPinAction] = React.useState(null);   // null | 'set' | 'change' | 'remove'
-  // settings are grouped into sub-tabs; a deep-link (e.g. the Overview relay card) can open one directly
-  // 'relays' was its own tab until it merged into 'network'; anything still deep-linking to it (a saved
-  // link, an older screen's onTab call) must land on the page that now holds it, not on a blank panel.
-  const [section, setSection] = React.useState(initialSection === 'relays' ? 'network' : (initialSection || 'church'));
-  // THE SUB-TABS ARE A REAL TAB WIDGET, not four styled buttons. They were four <button>s carrying no role
-  // and no aria-selected, so a screen reader announced four unrelated buttons with nothing to say which
-  // section was open, and the arrow keys — the only way most people using one move along a tab strip — did
-  // nothing at all. Roving tabindex (only the selected tab is in the Tab order), Left/Right wrap, Home/End.
-  const SECTIONS = [['church', 'Church'], ['features', 'Features'], ['network', 'Network & relays'], ['security', 'Security']];
-  const tabRefs = React.useRef([]);
-  const onTabKey = (e, i) => {
+  const narrow = useStewNarrow();
+  // WHICH PAGES THIS STEWARD MAY SEE. A delegate holds no church key, so the four owner-only pages are not
+  // theirs and never render; they get the one notice page instead. Filtered HERE and not inside the page
+  // bodies, so the list and the detail cannot disagree: a page missing from this list cannot be opened, and
+  // one present in it always has a body.
+  const groups = React.useMemo(() => SETTINGS_GROUPS
+    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate))])
+    .filter(([, items]) => items.length), [delegated]);
+  const pages = groups.reduce((a, [, items]) => a.concat(items), []);
+  // ON A PHONE THE LIST IS THE FIRST SCREEN and a page opens on tap, so nothing is open to begin with. In a
+  // browser the list and the page sit side by side, so a page is always open. A deep link opens its page on
+  // both. `open` is recomputed rather than stored so that switching identity — which can take four pages
+  // away — cannot leave the detail pointing at a page that is no longer in the list.
+  const [page, setPage] = React.useState(() => settingsPageFor(initialSection, groups, pages));
+  const open = pages.some(p => p.k === page) ? page : (narrow ? null : (pages.length ? pages[0].k : null));
+  const cur = pages.find(p => p.k === open) || null;
+  // THE PAGE LIST IS A NAVIGATION LIST, NOT A TAB STRIP, and that is not a cosmetic difference: on a phone
+  // the list and the page are never on screen at the same time, which is the one thing a tablist may not do.
+  // So the strip's tablist/tab/tabpanel roles and its roving tabindex are gone — a roving tabindex on a list
+  // of links is wrong, it takes fifteen of the sixteen items out of the Tab order — and what replaces them
+  // is: a named <nav>, one list per group carrying that group's name, aria-current="page" on the open one,
+  // and every item reachable by Tab. Up/Down/Home/End move FOCUS along the list WITHOUT changing the page,
+  // so a keyboard user can walk to the ninth item without opening the eight above it on the way.
+  const navRefs = React.useRef([]);
+  const onNavKey = (e, i) => {
     const k = e.key;
-    if (k !== 'ArrowRight' && k !== 'ArrowLeft' && k !== 'Home' && k !== 'End') return;
+    if (k !== 'ArrowDown' && k !== 'ArrowUp' && k !== 'Home' && k !== 'End') return;
     e.preventDefault();
-    const n = k === 'Home' ? 0 : k === 'End' ? SECTIONS.length - 1
-      : k === 'ArrowRight' ? (i + 1) % SECTIONS.length : (i - 1 + SECTIONS.length) % SECTIONS.length;
-    setSection(SECTIONS[n][0]);
-    const el = tabRefs.current[n];
+    const n = k === 'Home' ? 0 : k === 'End' ? pages.length - 1
+      : k === 'ArrowDown' ? (i + 1) % pages.length : (i - 1 + pages.length) % pages.length;
+    const el = navRefs.current[n];
     if (el && el.focus) el.focus();
   };
   React.useEffect(() => { if (initialIntent === 'pin' && !hasPin) setPinAction('set'); if (initialSection && onSectionConsumed) onSectionConsumed(); }, []);   // clear the one-shot intent + run a one-shot action (e.g. open Set-PIN)
@@ -7474,31 +7609,52 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
-      <div role="tablist" aria-label="Settings sections" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        {SECTIONS.map(([k, label], i) => {
-          const sel = section === k;
-          return (
-          // WHICH TAB IS OPEN IS NOT SAID IN COLOUR ALONE. It was a clay tint, a clay border and clay text —
-          // three ways of saying the same thing, and none of them reaches anyone who cannot separate clay
-          // from ink. The filled dot and the heavier weight say it again without colour. The dot keeps its
-          // space when hollow so the strip does not shift as the selection moves.
-          <button key={k} ref={el => { tabRefs.current[i] = el; }} onClick={() => setSection(k)} onKeyDown={e => onTabKey(e, i)}
-            role="tab" aria-selected={sel} aria-controls={sel ? 'sk-panel-' + k : undefined} id={'sk-tab-' + k} tabIndex={sel ? 0 : -1}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (sel ? 'var(--clay-ink)' : 'var(--line)'), cursor: 'pointer', background: sel ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: sel ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: sel ? 800 : 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>
-            <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 999, flexShrink: 0, background: sel ? 'var(--clay-ink)' : 'transparent', border: sel ? 'none' : '1px solid var(--line)' }} />
-            {label}
-          </button>
-          );
-        })}
-      </div>
-      {/* EVERY CARD BELOW SITS IN A STACK THAT SOMEBODY CHOSE. .sk-cols is a two-track grid and each direct
-          child is one authored column (see steward.html); a card is never a direct child of the panel, or it
-          would claim a track of its own and the two-column shape would come apart as cards are added.
-          This replaced a CSS multi-column masonry, which packed the cards by height and so decided the
-          reading order, the Tab order and the split point for us — all three moving whenever a card grew. */}
-      <div role="tabpanel" id={'sk-panel-' + section} aria-labelledby={'sk-tab-' + section} className={section === 'network' ? 'net-grid' : 'sk-cols'}>
-      {section === 'church' ? <React.Fragment>
-      <div>
+      <div className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
+      {/* THE LIST. On a phone it is the whole first screen; in a browser it is the left-hand column, always
+          on screen beside the page. Group names label their own list rather than being headings: every card
+          on a page is a Panel and Panel already emits an <h2>, so heading-level nav stays about the content
+          a steward came for and not about the furniture around it. */}
+      {(!narrow || !open) ? (
+      <nav className="set-list" aria-label="Settings pages">
+        {groups.map(([g, items]) => (
+          <React.Fragment key={g}>
+            <div className="set-grp" id={'set-grp-' + g.toLowerCase().replace(/[^a-z0-9]+/g, '-')}>{g}</div>
+            <ul className="set-items" aria-labelledby={'set-grp-' + g.toLowerCase().replace(/[^a-z0-9]+/g, '-')}>
+              {items.map(p => {
+                const i = pages.findIndex(x => x.k === p.k);
+                const sel = p.k === open;
+                return (
+                  <li key={p.k}>
+                    {/* WHICH PAGE IS OPEN IS NOT SAID IN COLOUR ALONE — the same rule the tab strip's filled
+                        dot existed for. aria-current says it to a screen reader, and the heavier weight says
+                        it to anyone who cannot separate clay from ink. */}
+                    <button ref={el => { navRefs.current[i] = el; }} onClick={() => setPage(p.k)} onKeyDown={e => onNavKey(e, i)}
+                      aria-current={sel ? 'page' : undefined} className={'set-item' + (sel ? ' set-item--on' : '')}>
+                      <span className="set-item-n">{p.n}</span>
+                      <span className="set-item-d">{p.d}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </React.Fragment>
+        ))}
+      </nav>
+      ) : null}
+      {/* ONE PAGE, FULL WIDTH, ITS CARDS IN THE ORDER WRITTEN HERE. Nothing is packed into columns, so no
+          card can move because another card grew — rule 1 of the decision note, and the whole reason
+          .sk-cols, .net-grid and .relay-grid are gone from steward.html rather than left lying about.
+          .set-page IS the container the density rules measure (steward.html), so a card gets the roomy
+          values while the page is narrower than 430px and the compact ones once it is wider, whatever the
+          window is doing. On a phone that is the roomy layout the owner has confirmed twice, unchanged.
+          No page-level heading: the card below already carries these words as its own <h2>, so the region
+          takes the name instead of repeating it on screen. */}
+      {cur && (!narrow || open) ? (
+      <section className="set-page" aria-label={cur.n}>
+      {narrow ? (
+        <button onClick={() => setPage(null)} className="set-back"><Icon name="chevL" size={16} color="currentColor" /> All settings</button>
+      ) : null}
+      {open === 'identity' ? (
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <label title="Upload a church picture" style={{ position: 'relative', cursor: picBusy ? 'default' : 'pointer', flexShrink: 0, opacity: picBusy ? .6 : 1 }}>
@@ -7521,51 +7677,36 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <button onClick={() => setEditingWeb(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> Edit</button>
         </div>
       </Panel>
+      ) : null}
 
-      <DashBrandingPanel church={church} />
-      </div>
-      <div>
-      <DashMediaPanel church={church} />
-
-      <DashBackup />
-      </div>
-      </React.Fragment> : null}
+      {open === 'branding' ? <DashBrandingPanel church={church} /> : null}
+      {open === 'media' ? <DashMediaPanel church={church} /> : null}
+      {open === 'backup' ? <DashBackup /> : null}
 
       {/* Giving and Practical care used to be cards of their own here. They are rows inside "Congregation
           features → Extras" now, which is where the rest of the church's feature switches live.
-          The stacks for this section are authored INSIDE DashFeaturesPanel — its two cards share state, so
-          the caller cannot place them in different columns without mounting the component twice. */}
-      {section === 'features' ? <DashFeaturesPanel church={church} aside={<DashChatTagsPanel church={church} />} /> : null}
+          DashFeaturesPanel holds BOTH of these cards because they share its state; `show` picks which one
+          it renders, and only ever one of them is mounted, so nothing runs its hooks twice. */}
+      {open === 'features' ? <DashFeaturesPanel church={church} show="features" /> : null}
+      {open === 'rules' ? <DashFeaturesPanel church={church} show="rules" /> : null}
+      {open === 'tags' ? <DashChatTagsPanel church={church} /> : null}
 
-      {/* Network and relays are one page. Apart, the Relays card was the only child of .net-grid and so
-          landed in that grid's NARROW first track (capped at 360px) with the wide track left empty — which
-          is what squeezed its inner two-column grid down to about 150px a side and broke every line to one
-          word. Together they use the grid as designed: the narrow Network card beside the wide Relays one. */}
-      {/* Two grid children, not three: the narrow column is a stack. As three siblings the third card
-          would land in row 2, which starts below the tall Relays card — leaving a screen of empty space
-          under Network. Stacking keeps it directly beneath. */}
-      {section === 'network' ? <React.Fragment>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
-        <DashNetworksPanel />
-        <DashRunRelayCard />
-      </div>
-      <DashRelaysCard />
-      </React.Fragment> : null}
+      {open === 'relays' ? <DashRelaysCard /> : null}
+      {open === 'add-relay' ? <DashAddRelayCard /> : null}
+      {open === 'history' ? <DashRelayHistoryCard /> : null}
+      {open === 'ownbox' ? <DashRunRelayCard /> : null}
+      {open === 'network' ? <DashNetworksPanel /> : null}
 
-      {section === 'security' && delegated ? (
-      // One stack, capped at a column's width. .sk-cols collapses the tracks it has no stack for, so a lone
-      // stack is handed the whole 1120px — measured — and this card is one short paragraph.
-      <div style={{ maxWidth: 552 }}>
+      {open === 'access' ? (
       <Panel title="Security">
         <div style={{ display: 'flex', gap: 11, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 24%, var(--line))' }}>
           <Icon name="shield" size={18} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>You’re acting as a <b style={{ color: 'var(--ink)' }}>steward</b> of this church — you can post and help manage it, but its key, recovery phrase, blocklist and steward list belong to the owner. Switch back to your own identity (top-left) to manage your own key.</div>
         </div>
       </Panel>
-      </div>
       ) : null}
-      {section === 'security' && !delegated ? <React.Fragment>
-      <div>
+
+      {open === 'key' ? (
       <Panel title="Church key">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 12 }}>
@@ -7648,7 +7789,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           )}
         </div>
       </Panel>
+      ) : null}
 
+      {open === 'stewards' ? (
       <Panel title="Stewards & handoff">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>A church is one key. To <b style={{ color: 'var(--ink)' }}>add another steward</b> or <b style={{ color: 'var(--ink)' }}>hand the church over</b>, share its recovery phrase — they enter it on their device under <b>Church key → Restore from a recovery phrase</b> (or in the Steward app). Then they can manage {church.name || 'the church'} too.</div>
         <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
@@ -7723,13 +7866,12 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <Icon name="pray" size={14} color="var(--ink-3)" /> See who’s joined in the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
         </div>
       </Panel>
-      </div>
-      <div>
-      <DashStewardsPanel church={church} />
+      ) : null}
 
-      <DashBecomeStewardPanel />
-      </div>
-      </React.Fragment> : null}
+      {open === 'delegated' ? <DashStewardsPanel church={church} /> : null}
+      {open === 'become' ? <DashBecomeStewardPanel /> : null}
+      </section>
+      ) : null}
       </div>
       <StewVersion />
     </div>

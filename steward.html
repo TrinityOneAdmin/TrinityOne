@@ -21,43 +21,55 @@
   #root { height: 100vh; }
   .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
-  /* Settings cards: TWO AUTHORED STACKS, not a masonry.
-     This was `.sk-masonry { column-width: 330px }` — CSS multi-column — and the BROWSER chose where the
-     column broke. Three things followed from the card heights that nobody had decided: the reading order
-     ran down one column and then across, the Tab order jumped back up the page, and the split moved
-     whenever a card grew. One card in Settings even carried a comment saying it had been reordered in
-     source to please the packing.
-     A plain row-major grid is the obvious replacement and is the worst of the three: rows are as tall as
-     their tallest card, so a 130px card sits in a 630px row. Three layouts were built and compared on the
-     live console at a 1400px window in the round that made this change (2026-09-01); the dead column space
-     on Church / Features / Security measured 469 / 488 / 799px for the masonry, 1270 / 800 / 749px for the
-     plain grid, and 133 / 363 / 262px for two authored stacks. Those three numbers are the reason this is
-     not a `grid-auto-flow: row` one-liner; re-measure before changing it.
-     auto-fit, not auto-fill: the tracks with no stack in them COLLAPSE. Measured in Chromium against these
-     exact rules: two stacks get 552px each at the 1120px cap, one stack gets the whole 1120px (so a lone
-     card caps its own width — see DashSettings), and a 600px container drops to a single track with the
-     stacks under each other in source order.
-     Sized from the CONTAINER, never a viewport media query — see the .relay-grid note below for what a
-     viewport query cost when the element lived inside a sidebar and a grid track. */
-  .sk-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 12px; align-items: start; max-width: 1120px; }
-  /* container-type so the density rules below can ask how wide THIS STACK is. Deliberately not a viewport
-     media query — see the .relay-grid note: this element sits inside a sidebar and a grid track, so the
-     window width says nothing useful about the space a card actually has. */
-  .sk-cols > * { display: flex; flex-direction: column; gap: 16px; min-width: 0; container-type: inline-size; }
-  /* On the Network tab the cards ARE the grid's children, so the container has to be the GRID — an
-     element cannot answer a container query about itself. Its width tracks the same space (977px on a
-     1280px window, ~336px on a phone), so the compact rules land in exactly the same places. */
-  .net-grid { container-type: inline-size; }
+  /* SETTINGS: A LIST OF PAGES, AND ONE PAGE AT A TIME.
+     reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md. This replaced `.sk-cols` (a two-track grid
+     of authored stacks) which itself replaced `.sk-masonry { column-width: 330px }` — CSS multi-column,
+     where the BROWSER chose the break point, so the reading order, the Tab order and the split all moved
+     whenever a card grew.
+     The stacks fixed the moving, and did not fix the height: measured 2026-09-08 at 1280x713, each section
+     still ran about two screenfuls (Church 1219px, Features 1599px, Network & relays 1242px, Security
+     1364px against a 649px viewport) because the height is CONTENT — one section doing six jobs at once.
+     Two rounds of density work took Features to 1034px and stopped there.
+     So nothing packs any more. One page holds one subject, and it is the only thing on screen.
+     ALL THREE OLD RULES ARE DELETED RATHER THAN LEFT BEHIND (.sk-cols, .net-grid, .relay-grid). Each was a
+     packing grid with exactly one user, and a packing rule left lying in this file is one a future card can
+     pick up by accident — the same reason .sk-masonry was deleted rather than orphaned.
+     THE TWO-COLUMN / ONE-COLUMN CHOICE IS MADE IN JS, not here: DashSettings already asks useStewNarrow()
+     which surface it is on, because on a phone it renders EITHER the list or the page and never both. A
+     media query here as well would be a second answer to a question that already has one, free to disagree
+     with it. */
+  .set-shell { display: grid; grid-template-columns: minmax(200px, 236px) minmax(0, 1fr); gap: 22px; align-items: start; max-width: 1180px; }
+  .set-shell--one { grid-template-columns: minmax(0, 1fr); gap: 0; }   /* phone: one of the two children is rendered */
+  .set-list { display: block; }
+  .set-grp { font-size: 11px; letter-spacing: .9px; text-transform: uppercase; color: var(--ink-3); font-weight: 800; margin: 16px 10px 6px; font-family: var(--font-ui); }
+  .set-list > :first-child.set-grp { margin-top: 2px; }
+  .set-items { list-style: none; margin: 0; padding: 0; }
+  .set-item { display: block; width: 100%; text-align: left; border: none; background: none; font-family: var(--font-ui); color: var(--ink); padding: 9px 11px; border-radius: 10px; cursor: pointer; }
+  .set-item:hover { background: color-mix(in oklab, var(--ink) 5%, transparent); }
+  /* NOT COLOUR ALONE — the weight carries it too; see the note on the nav button in stew-dashboard.jsx. */
+  .set-item--on { background: color-mix(in oklab, var(--clay) 12%, var(--surface)); }
+  .set-item-n { display: block; font-size: 13.5px; font-weight: 600; }
+  .set-item--on .set-item-n { font-weight: 800; color: var(--clay-ink); }
+  .set-item-d { display: block; font-size: 11.5px; color: var(--ink-3); line-height: 1.35; margin-top: 1px; }
+  .set-back { display: inline-flex; align-items: center; gap: 5px; border: none; background: none; padding: 2px 0 4px; cursor: pointer; font-family: var(--font-ui); font-size: 13px; font-weight: 700; color: var(--clay-ink); }
+  /* THE PAGE, and the CONTAINER every density rule below measures. It replaces `.sk-cols > *` exactly —
+     same flex column, same 16px gap, same min-width:0, same container-type — so a card gets the roomy
+     values while the page is under 430px and the compact ones once it is wider, whatever the window is
+     doing. On a phone the page is about 336px, which is the roomy layout the owner has confirmed twice.
+     The cap is a reading measure, not a grid: one column of text at ~1000px sets a sentence too long to
+     scan, and the widest thing on any of these pages is a relay address. */
+  .set-page { display: flex; flex-direction: column; gap: 16px; min-width: 0; max-width: 860px; container-type: inline-size; }
   /* ── SETTINGS DENSITY (2026-09-08) ────────────────────────────────────────────────────────────────
      Measured in Chromium at 1280x713 with a real church loaded: every Settings section ran about two
      screenfuls — Church 1219px, Features 1599px, Network & relays 1242px, Security 1364px, against a
      649px viewport. Two things I assumed were wrong and are recorded so nobody re-tries them:
-       • the width is NOT going spare. 1265px page = 199px nav + 1033px main (28px padding); .sk-cols
-         sits at 977px and never reaches its own 1120px cap, so raising the cap changes nothing here.
+       • the width is NOT going spare. 1265px page = 199px nav + 1033px main (28px padding). Measured
+         against the two-track .sk-cols this replaced, the cards sat at 977px and never reached their own
+         1120px cap, so raising a cap changes nothing here.
        • the toggle rows are ALREADY label-left / switch-right. They are 79px because the description
          wraps to two lines in a 435px card, not because anything is stacked.
      So the height is padding and leading, and that is what these rules take back. Roomy stays the
-     default; a stack only goes compact once it is wide enough that the text is not fighting for room. */
+     default; a page only goes compact once it is wide enough that the text is not fighting for room. */
   .sk-panel { padding: 22px; }
   .set-row { padding: 11px 13px; }
   .set-desc { font-size: 12.5px; line-height: 1.45; margin-top: 1px; }
@@ -72,8 +84,8 @@
     /* !important because these keep their inline styles: those ARE the roomy phone default, and the
        class only has to win inside this query. */
     .set-note { font-size: 12px !important; line-height: 1.35 !important; margin-bottom: 7px !important; }
-    /* cards within a stack sit closer once the stack is wide */
-    .sk-cols > * { gap: 12px; }
+    /* cards on a page sit closer once the page is wide */
+    .set-page { gap: 12px; }
     /* ROUND TWO, 2026-09-08. The owner looked at round one in a browser and said it was still too bulky and
        to drop the type as well — and confirmed the APK is right as it is, which is exactly what these
        container queries protect. Everything below is desktop-only for that reason. Sizes are set here
@@ -83,16 +95,13 @@
     .set-row > div > div:first-child { font-size: 13.5px !important; }   /* the switch's own label */
     .sk-panel .sk-btn { font-size: 12.5px !important; padding: 8px 13px !important; }
   }
-  /* Network tab: Network card (narrow) beside the wide Relays card on desktop; stacks on a phone. */
-  .net-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
-  @media (min-width: 940px) { .net-grid { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); } }
-  /* The Relays card's many sections, two across on a wide card and one when narrow. Sized from the CARD,
-     not the viewport: this used to split at a 1120px *viewport* media query, but the card lives inside a
-     sidebar and a grid track, so a 1130px window gave it two ~150px columns and broke every line to one
-     word. auto-fit measures the space actually available. */
-  /* min(300px,100%) so the track can never exceed the card: a bare minmax(300px,…) keeps a 300px floor even
-     when the card is narrower, poking inputs past the border (narrow phones, and the 940px two-column band). */
-  .relay-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 2px 24px; align-items: start; }
+  /* .net-grid and .relay-grid were here. Both are gone: Network and Relays are separate pages now, and the
+     Relays card's "many sections" — add, auto-find, connect by name, copy history, keep in sync — are pages
+     of their own, so there is nothing left on either to pack two-across. The lesson they recorded is kept
+     because it still applies to anything added here: they were sized from the CARD and not the viewport,
+     after a 1120px *viewport* media query gave the Relays card two ~150px columns at a 1130px window and
+     broke every line to one word — the card lived inside a sidebar and a grid track, so the window's width
+     said nothing about its own. That is why .set-page is a container and not a media query. */
   .stew-root *::-webkit-scrollbar { width: 0; height: 0; }
 
   /* steward UI primitives (from the handoff's Steward Surfaces stylesheet) */
