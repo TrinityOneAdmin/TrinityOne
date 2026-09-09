@@ -486,3 +486,51 @@ danger that no longer exists.
 **Workaround today:** the API cannot do it. `scripts/relay-reset.sh <dir> --churches` on the box clears
 `church.json` directly, and a relay left empty will accept the first church that self-registers with no
 operator action (measured 2026-09-09: 200).
+
+## The merge-and-document run: what is waiting, and the order to do it in
+
+State at 2026-09-09. The owner: *"ideally we merge them all and today's work soon, as well as building new
+help docs to match today's work."*
+
+**On `main`, unpushed (15 commits).** The install-from-your-own-box feature in full, plus every design and
+decision document from 09-08/09. Suite green at 2911 when it merged.
+
+**Branches ready or nearly ready:**
+
+| Branch | Contains | State |
+|---|---|---|
+| `feat/settings-list-and-detail-slice-1-relays` | Settings as a list of pages; Relays split into five; collapsible groups | suite 2994, **not on a phone** |
+| `feat/checkin-helper-capability` | The check-in security boundary | audited (no kills), four fixes in progress |
+| `fix/help-copy-matches-the-app` | Member help corrected to the app that exists | ready |
+| `fix/console-help-is-written-for-stewards` | Console help rewritten for a steward, not a member | ready |
+| `fix/console-notice-shape` | A notice keeps its shape in the console | ready |
+
+**Measured 2026-09-09:** the three help branches merge clean with each other and with `main`, suite 2914,
+no conflicts. They are internally coherent. There is no reason to hold them for their own sake.
+
+**The one real dependency, and it is small.** The three help branches add six pointers of the form
+"Settings → X". Two of those destinations disappear in the Settings rebuild:
+
+    Settings → Church             survives (still a group)
+    Settings → Security           survives
+    Settings → Features           GONE — now "People", pages "Congregation features" / "Rules & privacy"
+    Settings → Network & relays   GONE — now "Infrastructure", and Relays is five pages
+
+So the help must be re-pointed after the Settings rebuild merges, not before. Four phrases.
+
+## The order
+
+1. **Push `main`** — 15 commits sitting on one box, including a whole feature. This is the only item with
+   a real risk attached (a disk failure) and it depends on nothing.
+2. **Merge the Settings rebuild** once it has been on a phone. Rule 6, and the phone layout is the thing
+   that must not change.
+3. **Merge the three help branches**, then immediately re-point the four phrases above. Doing it in that
+   order means one edit rather than editing text that is about to be invalidated twice.
+4. **Merge check-in slice 1** when its four audit fixes are done and re-checked.
+5. **Then write the new help** — for the installer feature, the new Settings shape, and check-in once it
+   has screens. This is also the moment for the tutorial videos and the marketing site (see the note above
+   on doing those as one pass, and on not filming a console that is half tabs and half pages).
+
+**Not in this run:** the pending-relay-requests design (three open decisions), and the older branches
+(`push/nostr-unifiedpush`, `replication-phase-a`, `blossom/module-distribution`, `perf/*`,
+`payments/lightning-giving`, `multisig/church-key`, `fix/suite-two-doors` — likely superseded).
