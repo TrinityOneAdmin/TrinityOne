@@ -519,10 +519,27 @@ Math.random()...`, and the write gate resolves the church from the writer's OWN 
 
     if (d.startsWith(CHECKIN_D)) { const cp = namedChurch(e) || ...; ... }
 
-So on a multi-tenant relay, church B's safeguarding steward can publish `checkin:<A's id>` tagged `['church', B]`
-and — because these are addressable — REPLACE church A's record. A's child disappears from A's register with
-nothing to explain it. Not exploitable to READ anything (the record is sealed under A's key), but a safeguarding
-record being destroyable across tenants is the same shape as AUDIT-2026-07-24 CRITICAL-2.
+**CORRECTED 2026-09-09 — the cross-tenant claim below was WRONG, and measured to be wrong.** Two churches on
+one relay, same check-in id:
+
+    church A writes checkin:SHARED-ID for ITSELF          -> accepted
+    church A writes checkin:SHARED-ID naming CHURCH B     -> REFUSED (not a member or not permitted)
+    church B writes checkin:SHARED-ID for ITSELF          -> accepted
+
+The write gate resolves the church from the event's tag and then requires the author to BE that church or a
+safeguarding steward OF it, so A cannot write into B's register. And `replKey()` (`event-store.mjs:16`) keys
+addressable docs by **pubkey + kind + d-tag**, so two churches sharing an id hold two separate documents. There
+is no cross-tenant destruction.
+
+**What remains is real but much narrower:** one PERSON who is safeguarding steward of two churches on the same
+relay writes both records under their own pubkey, so identical ids collide with each other and one of their two
+churches loses a record. Ids are `'ci' + Date.now().toString(36) + Math.random()...`, so a collision is unlikely
+rather than impossible — and it is their own two churches, not a stranger's. Still worth namespacing, at the
+priority a latent collision deserves rather than that of a cross-tenant safeguarding write.
+
+The original claim, kept because the namespacing gap it describes is real: *"on a multi-tenant relay, church B's
+safeguarding steward can publish `checkin:<A's id>` tagged `['church', B]` and — because these are addressable —
+REPLACE church A's record."*
 
 **Not fixed on the helper branch on purpose:** `carereqIdOk` REFUSES an id with no owner prefix, and every
 check-in record already on every relay has no prefix. Copying that rule would make the existing register
