@@ -449,6 +449,43 @@ and after the pilot we may know whether they want a **subset** of permissions �
 guardian rights that carry private-message access. Recorded in BACKLOG.md. Until that exists the answer is
 the simple one above: a child is never a guardian.
 
+## How long a safeguarding key lasts is the church's decision, not ours
+
+Owner's decision, 2026-09-09, given mid-build after the check-in helper capability had been written with a
+single hard-coded lifetime: *"for the safeguarding, we need to be able to make it as flexible as possible,
+giving control over expiry etc where possible by a steward."*
+
+**The rule: WHEN a safeguarding key is valid and WHO may hold one are the church's to set. WHAT it opens is
+never a setting.**
+
+*Why it had to be corrected:* the build brief stated "access ends when the turn does" as though it were a
+rule of the product. It is not — it is one policy, and a good one for a mid-size church with a fixed Sunday
+team. A small church where the same three people cover everything would simply skip re-issuing a grant every
+week, which puts them back on the console or on paper. That is the same failure the whole feature exists to
+fix. This is the 2026-08-27 principle applied to a lifetime rather than to a gate: **ship the gates, never
+the policy.**
+
+*What was built from it:* three lifetimes, because they are the three a church would name out loud — the
+rostered session only; the whole of that day; until a steward ends it. **The default is the tightest**, so a
+church that never opens the setting gets the safest behaviour rather than the most convenient one, and that
+default is asserted by name in a test so a later well-meant loosening fails rather than ships.
+
+*And the line that does not move.* No configuration may change what a helper key opens. If a setting is ever
+proposed that widens the reach of a safeguarding key rather than its duration or its holder, that is the
+August failure — granting a steward Finance handed over the children's register — arriving by a different
+road. Flexibility about time and people; never about scope.
+
+*Revocation is part of this, not a follow-up.* A steward must be able to end a helper's access at once,
+whatever the configured lifetime says: somebody leaving under a cloud is exactly when the rota is the wrong
+source of truth, and waiting for a turn to expire is not an answer. For the open-ended lifetime, revocation
+is the ONLY thing that ever ends access, so a screen offering that option has to say so plainly.
+
+*The honest limit, so no screen overstates it:* revocation stops a helper writing, and stops them reading
+anything anyone else wrote, immediately. It does not retract the records they wrote themselves — the relay's
+first read rule is "your own event is always readable by you" — and it cannot take a key off a phone that
+already holds it. Same shape as a departed treasurer keeping their own ledger entries. "Access removed" is
+true about the future and not about the past.
+
 ## Check-in supports a safeguarded church; it does not enforce safeguarding
 
 Owner, 2026-09-09, correcting the framing of the check-in design:

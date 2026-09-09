@@ -46,11 +46,18 @@ function buildNonGitTree() {
   mkdirSync(join(dir, 'scripts'));
   copyFileSync(join(ROOT, 'scripts', 'gateway.mjs'), join(dir, 'scripts', 'gateway.mjs'));
   copyFileSync(join(ROOT, 'scripts', 'event-store.mjs'), join(dir, 'scripts', 'event-store.mjs'));
-  // gateway.mjs imports this at RUNTIME since the rec-2 wiring (2026-07-30) — the names it gates by come from
-  // the declared list. Without it the stand-in relay cannot start, and every assertion below would pass or
-  // fail for the wrong reason. All three real packaging paths ship it (git archive, strict bundle, desktop
-  // payload — checked); this harness is the only place that hand-picks files.
-  copyFileSync(join(ROOT, 'scripts', 'trinity-doc-types.mjs'), join(dir, 'scripts', 'trinity-doc-types.mjs'));
+  // EVERY LOCAL IMPORT gateway.mjs MAKES AT RUNTIME. Without all of them the stand-in relay cannot start, and
+  // every assertion below would pass or fail for the wrong reason — which is exactly what happened on
+  // 2026-09-09 when the check-in helper capability added the third one: this file said "the stand-in relay is
+  // actually up" and three tests went red for a reason that had nothing to do with bundle honesty.
+  //
+  // All three real packaging paths ship these (git archive, strict bundle, desktop payload — checked; the last
+  // two ARE git archive, so a TRACKED file under scripts/ is covered by all of them). This harness is the only
+  // place that hand-picks files, which is why the list has to be maintained here by hand — so if you add a
+  // local import to gateway.mjs, add it here in the same commit. (scripts/relay-network-harness.mjs keeps its
+  // own, deliberately different, list: see the note on OLD_LOCALS there.)
+  for (const f of ['trinity-doc-types.mjs', 'checkin-role-source.mjs'])
+    copyFileSync(join(ROOT, 'scripts', f), join(dir, 'scripts', f));
   symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'));
   writeFileSync(join(dir, 'version.txt'), 'sha: ' + '1'.repeat(40) + '\ndate: 2026-07-29T00:00:00+01:00\n');
   writeFileSync(join(dir, 'index.html'), '<!doctype html><title>stand-in</title>\n');

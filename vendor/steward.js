@@ -14775,6 +14775,204 @@ zoo`.split("\n");
     return !!h && !!suppressed && suppressed.has(h);
   }
 
+  // scripts/checkin-role-source.mjs
+  var HELPER_LIFETIMES = Object.freeze({
+    // THE DEFAULT, and the tightest. A church that never opens the setting gets the safest behaviour rather than
+    // the most convenient one. Twelve hours covers a Sunday morning with hours of slack either side and refuses
+    // a grant that would still be open next weekend.
+    session: {
+      id: "session",
+      max: 12 * 3600,
+      label: "The rostered session only",
+      describe: "Access ends when the session does.",
+      window(start, o) {
+        const before = Number.isFinite(o.before) ? Math.max(0, Math.floor(o.before)) : 45 * 60;
+        const after = Number.isFinite(o.after) ? Math.max(0, Math.floor(o.after)) : 3 * 3600;
+        return { from: start - before, until: start + after };
+      }
+    },
+    // For a church whose children's work runs across a morning and an afternoon, or an all-day event, and which
+    // does not want a steward re-issuing a grant at lunchtime. Ends at local midnight of the service's own date,
+    // so "that whole day" means the day the church means, not twenty-four hours from an arbitrary instant.
+    day: {
+      id: "day",
+      max: 26 * 3600,
+      label: "The whole of that day",
+      describe: "Access ends at the end of the day the session is on.",
+      window(start, o, endOfDay) {
+        const before = Number.isFinite(o.before) ? Math.max(0, Math.floor(o.before)) : 45 * 60;
+        return { from: start - before, until: endOfDay };
+      }
+    },
+    // For the small church where the same three people cover everything and re-issuing a grant every week is a
+    // chore that would simply be skipped — which would leave them on the console, or on paper. Its safety comes
+    // from revocation being immediate rather than from a clock, and a screen offering it must SAY that, because
+    // "until a steward ends it" is only as good as somebody remembering to end it.
+    open: {
+      id: "open",
+      max: null,
+      label: "Until a steward ends it",
+      describe: "Access continues until a steward revokes it. Nothing expires on its own.",
+      window(start, o) {
+        const before = Number.isFinite(o.before) ? Math.max(0, Math.floor(o.before)) : 45 * 60;
+        return { from: start - before, until: null };
+      }
+    }
+  });
+  var DEFAULT_HELPER_LIFETIME = "session";
+  var isDeclaredLifetime = (id) => typeof id === "string" && Object.prototype.hasOwnProperty.call(HELPER_LIFETIMES, id);
+  var MAX_SESSION_SECONDS = 26 * 3600;
+  var HEX64 = /^[0-9a-f]{64}$/;
+  var clean4 = (pubs) => {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const p of pubs || []) {
+      const h = typeof p === "string" ? p.trim().toLowerCase() : "";
+      if (!HEX64.test(h) || seen.has(h)) continue;
+      seen.add(h);
+      out.push(h);
+    }
+    return out;
+  };
+  var HELPER_SOURCES = Object.freeze({
+    // TODAY. Whoever is on the rota for this service, in a slot belonging to a team the church has named as
+    // children's work.
+    //
+    // THREE THINGS THIS HAS TO GET RIGHT, and each of them is a real trap in the shipped rota model:
+    //
+    //   1. `published` is a DRAFT FLAG and it is checked client-side only. A rota nobody has published is a
+    //      steward pencilling names in. Deriving a key grant from a draft would hand the register to whoever
+    //      was in the box at the moment somebody scrolled past. scripts/rota-view.test.mjs already sabotage-
+    //      tests this for the serving screen; the same rule has to hold here, with more at stake.
+    //   2. `assign` values carry `pub: ''` for a person with no app identity at all (stew-schedule.jsx lets a
+    //      steward name someone who has never installed anything). Those are not helpers — there is no key to
+    //      wrap anything to. They are dropped silently, which is correct: the rota is still right, the person
+    //      still serves, they simply cannot hold a key they have no key for.
+    //   3. Assign keys are the literal string `<teamId>::<roleId>`. A roleId may itself contain no `::`, but a
+    //      teamId is console-minted and must be compared as the FIRST segment only — splitting on every `::`
+    //      and taking [0] is the same thing app/app.jsx does.
+    //
+    // AND THE THING THE MODEL DOES NOT HAVE: there is no ministry taxonomy. A children's team is a
+    // `trinityone/group:<id>` whose `kind` is 'team' and whose NAME a steward typed. Nothing marks a team as
+    // children's work, so the church must SAY which teams they are — `childrenTeams`. That is a deliberate
+    // input, not a guess: matching on the word "kids" in a team name would be a safeguarding gate built on
+    // spelling, and a church running "Sunday Club" or "Junior Church" would silently get nobody.
+    rota: {
+      id: "rota",
+      label: "Whoever is on the rota for this session",
+      resolve(ctx) {
+        const rota = ctx && ctx.rota || null;
+        const teams = new Set((ctx && ctx.childrenTeams || []).filter((t) => typeof t === "string" && t));
+        if (!rota || !rota.published || !rota.assign || !teams.size) return [];
+        const out = [];
+        for (const key of Object.keys(rota.assign)) {
+          const teamId = String(key).split("::")[0];
+          if (!teams.has(teamId)) continue;
+          const who = rota.assign[key];
+          if (who && who.pub) out.push(who.pub);
+        }
+        return clean4(out);
+      }
+    },
+    // TOMORROW, if the owner decides it. A named safeguarding team, taken from its roster.
+    //
+    // Written NOW rather than left as a comment, and this is the point of the file: if the swap were a
+    // to-do it would be a rewrite, and the day it is wanted is the day somebody discovers that "the rota"
+    // was welded into six places. It is also the honest test of the abstraction — a second implementation
+    // that fits the same signature is the only proof the first one was not shaped around its caller.
+    //
+    // `roster:<teamId>` carries its pubkeys in the CLEAR (a top-level `pubs` array, sealed names beside it) —
+    // exactly what six existing relay grants hang off — so this source needs no key to answer. Note the legacy
+    // fallback: rosters written before 2026-09-05 have `people: [{pub}]` and no `pubs`, and a church that has
+    // not re-saved a team since then would otherwise resolve to nobody.
+    team: {
+      id: "team",
+      label: "A named safeguarding team",
+      resolve(ctx) {
+        const teamId = ctx && ctx.teamId;
+        if (!teamId) return [];
+        const roster = (ctx && ctx.rosters || []).find((r) => r && (r.team === teamId || r.id === teamId));
+        if (!roster) return [];
+        const pubs = Array.isArray(roster.pubs) ? roster.pubs : (roster.people || []).map((p) => p && p.pub);
+        return clean4(pubs);
+      }
+    }
+  });
+  var DEFAULT_HELPER_SOURCE = "rota";
+  var isDeclaredSource = (id) => typeof id === "string" && Object.prototype.hasOwnProperty.call(HELPER_SOURCES, id);
+  function eligibleHelpers(sourceId, ctx) {
+    if (!isDeclaredSource(sourceId)) return [];
+    try {
+      return HELPER_SOURCES[sourceId].resolve(ctx || {});
+    } catch {
+      return [];
+    }
+  }
+  function lifetimeWindow(lifetimeId, service, opts) {
+    const o = opts || {};
+    const life = HELPER_LIFETIMES[isDeclaredLifetime(lifetimeId) ? lifetimeId : ""];
+    if (!life) return null;
+    const date = String(service && service.date || "");
+    const time = String(service && service.time || "10:30");
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+    const t = /^(\d{1,2}):(\d{2})$/.exec(time);
+    if (!m || !t) return null;
+    const start = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(t[1]), Number(t[2]), 0, 0);
+    const startS = Math.floor(start.getTime() / 1e3);
+    if (!Number.isFinite(startS)) return null;
+    const endOfDay = Math.floor(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 0).getTime() / 1e3);
+    const w = life.window(startS, o, endOfDay);
+    let from = Math.floor(w.from);
+    let until = w.until == null ? null : Math.floor(w.until);
+    if (until != null && life.max != null && until - from > life.max) until = from + life.max;
+    if (until != null && until <= from) return null;
+    return { from, until, lifetime: life.id };
+  }
+  function windowFault(from, until, lifetimeId) {
+    if (!isDeclaredLifetime(lifetimeId)) return "unknown lifetime " + JSON.stringify(lifetimeId);
+    const life = HELPER_LIFETIMES[lifetimeId];
+    if (!Number.isInteger(from) || from <= 0) return "from must be a positive whole unix second";
+    if (until === null || until === void 0) {
+      return life.max == null ? "" : "a " + lifetimeId + " grant must carry an end";
+    }
+    if (life.max == null) return "an open-ended grant must not carry an end \u2014 revoke it to end it";
+    if (!Number.isInteger(until) || until <= 0) return "until must be a positive whole unix second";
+    if (until <= from) return "the window closes before it opens";
+    if (until - from > life.max) return "a " + lifetimeId + " grant may not exceed " + life.max + " seconds";
+    if (until - from > MAX_SESSION_SECONDS) return "no expiring grant may exceed " + MAX_SESSION_SECONDS + " seconds";
+    return "";
+  }
+  function helperPolicy(settings) {
+    const s = settings || {};
+    return {
+      source: isDeclaredSource(s.source) ? s.source : DEFAULT_HELPER_SOURCE,
+      lifetime: isDeclaredLifetime(s.lifetime) ? s.lifetime : DEFAULT_HELPER_LIFETIME
+    };
+  }
+  function buildHelperGrant({ session, source, lifetime, from, until, helpers, keepers, sessionKeyHex, wrap }) {
+    const sid = String(session || "");
+    if (!sid) throw new Error("buildHelperGrant: no session id");
+    if (!isDeclaredSource(source)) throw new Error("buildHelperGrant: undeclared helper source " + JSON.stringify(source));
+    if (!isDeclaredLifetime(lifetime)) throw new Error("buildHelperGrant: undeclared lifetime " + JSON.stringify(lifetime));
+    const end = until === void 0 ? null : until;
+    const fault = windowFault(from, end, lifetime);
+    if (fault) throw new Error("buildHelperGrant: " + fault);
+    if (typeof wrap !== "function") throw new Error("buildHelperGrant: wrap must be a function");
+    if (!/^[0-9a-f]{64}$/.test(String(sessionKeyHex || ""))) throw new Error("buildHelperGrant: sessionKeyHex must be 32 bytes of hex");
+    const pubs = clean4(helpers);
+    const readers = clean4([...pubs, ...keepers || []]);
+    const keys = {};
+    const failed = [];
+    for (const p of readers) {
+      try {
+        keys[p] = wrap(p, sessionKeyHex);
+      } catch {
+        failed.push(p);
+      }
+    }
+    return { doc: { session: sid, source, lifetime, from, until: end, pubs, keys }, failed };
+  }
+
   // src/steward.src.js
   async function _sealToChurch(bytes, churchPubHex, fmt) {
     if (!(globalThis.crypto && globalThis.crypto.subtle)) throw new Error("This browser can\u2019t encrypt \u2014 turn encryption off to export, or use the app.");
@@ -14982,6 +15180,7 @@ zoo`.split("\n");
     checkin: { d: "trinityone/checkinkey:", cap: "safeguarding", legacy: false, explicit: true }
     // the children's register
   };
+  var CHECKINHELPER_D = "trinityone/checkinhelper:";
   var _capState = {};
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
   var _checkinMigrated = "";
@@ -17515,9 +17714,9 @@ zoo`.split("\n");
     // ── steward-defined chat message tags (one church-signed doc; newest-wins) ──
     publishMessageTags(tags) {
       if (!sk) return Promise.resolve(null);
-      const clean4 = _sanitizeMsgTags(tags);
-      const content = JSON.stringify({ tags: clean4 });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean4);
+      const clean5 = _sanitizeMsgTags(tags);
+      const content = JSON.stringify({ tags: clean5 });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean5);
     },
     // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
     // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
@@ -19282,12 +19481,12 @@ zoo`.split("\n");
     setGuardians(links) {
       _requireTrustedView("parent links");
       if (!sk) return Promise.resolve(null);
-      const clean4 = {};
+      const clean5 = {};
       for (const [c, ps] of Object.entries(links || {})) {
         const arr = [...new Set((ps || []).filter(Boolean))];
-        if (c && arr.length) clean4[c] = arr;
+        if (c && arr.length) clean5[c] = arr;
       }
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean4 }) }, sk));
+      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }, sk));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -19497,7 +19696,7 @@ zoo`.split("\n");
       _requireTrustedView("re-seat map");
       if (!sk) return Promise.resolve(null);
       if (!_nameKeyRing[0] && (pairs || []).some((p) => p && p.name)) await _sealChurchDocReady({});
-      const clean4 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
+      const clean5 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
         const nm = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
         const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) };
         if (nm) {
@@ -19506,7 +19705,7 @@ zoo`.split("\n");
         }
         return out;
       });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean4 }) }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean5 }) }));
     },
     // RECONNECT A MEMBER ONTO A NEW KEY, as one action. Lives here rather than in the modal because a re-seat
     // is not two writes — it is a seat MOVING, and everything attached to the seat has to move with it. Every
@@ -20463,6 +20662,107 @@ zoo`.split("\n");
     },
     removeCheckin(id) {
       return window.Steward.encRemove("trinityone/checkin:" + id);
+    },
+    // -- THE CHECK-IN HELPER CAPABILITY: mint one session's grant --------------------------------------------
+    // reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md §2 and §7. The people who actually run a
+    // children's session are rota volunteers, not stewards. Today the only way to let one check a child in is to
+    // make them a safeguarding steward — which hands them the whole register, the guardian map and the minors
+    // list, permanently. This gives them one session's register and nothing else.
+    //
+    // OWNER-ONLY, matching ensureCapKeyFor and for a sharper reason: a safeguarding steward can already READ the
+    // register, but cannot hand it to a third party. Letting them mint this would be an escalation, not a
+    // convenience. The relay refuses it too (gateway.mjs, the CHECKINHELPER_D branch of accept()), so an older or
+    // modified console gains nothing by trying.
+    //
+    // WHERE THE ANSWER COMES FROM. `source` names the question, and eligibleHelpers() in
+    // scripts/checkin-role-source.mjs is the only thing that answers it. 'rota' reads this service's published
+    // rota for slots on the church's children's teams; 'team' reads a named team's roster. Swapping is passing a
+    // different `source`. Nothing in this function knows which one it got, on purpose.
+    //
+    // WHAT MAKES THE CHOSEN LIFETIME TRUE rather than asserted, both halves:
+    //   • the WINDOW, which the relay enforces against ITS OWN clock (never the event's created_at, which the
+    //     writer chooses) and refuses to store looser than the lifetime the grant declares;
+    //   • a SESSION KEY minted fresh here and wrapped only to this session's people. Last Sunday's helper holds
+    //     last Sunday's key. It does not open this Sunday's records even if every gate in the product failed.
+    //
+    // And revocation, which is immediate and beats any lifetime — see revokeCheckinHelpers below. For the
+    // open-ended lifetime it is the ONLY thing that ever ends access, so a screen offering that must say so.
+    //
+    // WHY THE KEEPERS ARE WRAPPED IN TOO. The church and its safeguarding-capable stewards must be able to open
+    // what a helper writes, or a check-in only the volunteer who typed it can ever read is not a safeguarding
+    // record at all. This is also what keeps the slice from narrowing anything: trinityone/checkinkey: is
+    // untouched, and the people who hold it are additionally given each session's key.
+    //
+    // ALL-MUST-ACCEPT, via _publishToRelays. This is a safeguarding write, and the comment on ensureCapKeyFor
+    // names publish()'s Promise.any as a KNOWN GAP for exactly this document class — an envelope that lands only
+    // on a public relay is a safeguarding key sitting somewhere the church does not control. _publishToRelays is
+    // what that comment says to copy, so this path is written that way from the start rather than inheriting the
+    // gap and a to-do.
+    async publishCheckinHelpers(opts) {
+      const o = opts || {};
+      if (!sk || !churchSkHeld() || actingChurch) return null;
+      const cp = pub;
+      const session = String(o.session || "");
+      if (!cp || !session) return null;
+      const policy = helperPolicy({ source: o.source, lifetime: o.lifetime });
+      const source = policy.source;
+      const win = lifetimeWindow(policy.lifetime, o.service, { before: o.before, after: o.after });
+      if (!win) return null;
+      const helpers = Array.isArray(o.helpers) ? o.helpers : eligibleHelpers(source, { rota: o.rota, childrenTeams: o.childrenTeams, rosters: o.rosters, teamId: o.teamId });
+      const allowed = _capAllows(CAP_KEYS.checkin, o.caps || _stewardCaps);
+      const keepers = [cp, ...(Array.isArray(o.stewards) ? o.stewards : []).filter(allowed)];
+      const sessionKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      let built;
+      try {
+        built = buildHelperGrant({
+          session,
+          source,
+          lifetime: policy.lifetime,
+          from: win.from,
+          until: win.until,
+          helpers,
+          keepers,
+          sessionKeyHex,
+          wrap: (p2, plaintext) => encrypt3(plaintext, getConversationKey(sk, p2))
+        });
+      } catch (e) {
+        return null;
+      }
+      if (built.failed.length) _warnUnsealed("check-in helper", built.failed);
+      const ok = await _publishToRelays(finalizeEvent2({
+        kind: 30078,
+        created_at: now(),
+        tags: [["d", CHECKINHELPER_D + session], ["t", NET], ["church", cp], ["session", session]],
+        content: JSON.stringify(built.doc)
+      }, sk));
+      if (ok === false || ok == null) return null;
+      return { session, source, lifetime: policy.lifetime, from: win.from, until: win.until, pubs: built.doc.pubs, failed: built.failed, key: sessionKeyHex };
+    },
+    // STAND THE SESSION DOWN. A tombstone, so the relay drops the grant rather than waiting out the window —
+    // needed when a church restaffs a session or removes a volunteer mid-morning. Owner-only, like the mint.
+    //
+    // WHAT IT CANNOT DO, said plainly because a screen must not imply otherwise: it stops the relay serving new
+    // records to that helper and refuses their writes, and it is immediate. It does NOT reach back and take the
+    // session key off a phone that already holds it, so records that helper already fetched stay readable to
+    // them. That is the same honest limit rotateCapKey carries ("rotation protects the FUTURE, not the past"),
+    // and it is why the window is short in the first place.
+    // THE SHAPES A STEWARD MAY PICK, read from the one place that defines them rather than restated on a screen.
+    // A settings panel that typed its own list would be free to offer a fourth that nothing enforces, or to
+    // disagree with the relay about what 'day' means — the same class of defect as capNeedsExplicitGrant, which
+    // exists so the console's padlocks and the keys cannot say different things.
+    checkinLifetimes() {
+      return Object.keys(HELPER_LIFETIMES).map((k) => ({ id: k, label: HELPER_LIFETIMES[k].label, describe: HELPER_LIFETIMES[k].describe, expires: HELPER_LIFETIMES[k].max != null }));
+    },
+    revokeCheckinHelpers(session) {
+      if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
+      const sid = String(session || "");
+      if (!sid) return Promise.resolve(null);
+      return _publishToRelays(finalizeEvent2({
+        kind: 30078,
+        created_at: now(),
+        tags: [["d", CHECKINHELPER_D + sid], ["t", NET], ["church", pub], ["deleted", "1"]],
+        content: ""
+      }, sk));
     },
     // MIGRATION — move any check-in record still sealed with the legacy self-key onto the safeguarding key.
     //
