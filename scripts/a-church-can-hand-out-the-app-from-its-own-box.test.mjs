@@ -36,7 +36,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fnBody } from './test-slice.mjs';
-import { miniReact, texts, button } from './render-jsx-screen.mjs';
+import { miniReact, texts, button, find } from './render-jsx-screen.mjs';
 import * as H from './relay-network-harness.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -474,14 +474,22 @@ test('the console works out an address worth printing, and refuses loopback', ()
     });
     return installPageUrl();
   };
-  assert.deepEqual(make('wss://grace.example/relay'), { url: 'https://grace.example/install', lan: false },
-    'a church with a real address got no install slip at all');
-  assert.deepEqual(make('ws://192.168.1.50:8090/relay'), { url: 'http://192.168.1.50:8090/install', lan: true },
+  assert.deepEqual(make('wss://grace.example/relay'), { url: 'https://grace.example/install', lan: false, why: '' },
+    'a church with a real address got no install page at all');
+  assert.deepEqual(make('ws://192.168.1.50:8090/relay'), { url: 'http://192.168.1.50:8090/install', lan: true, why: '' },
     'a box on the church LAN was refused — which is the configuration this whole feature is FOR');
-  assert.equal(make('ws://127.0.0.1:8090/relay'), null,
-    'the console offered to print a loopback address. On the reader’s phone that resolves to the reader’s ' +
-    'phone: it looks ordinary, and it works when the steward tests it themselves.');
-  assert.equal(make('ws://localhost:8090/relay'), null, 'localhost was accepted, which is the same defect spelled differently');
+  // IT USED TO RETURN null HERE, and `why` is the half that was missing: the control vanished from the
+  // card with no reason given, and an auditor served from 127.0.0.1 could not tell a deliberate refusal
+  // from a missing feature. Correct behaviour with invisible reasoning is still a defect.
+  assert.deepEqual(make('ws://127.0.0.1:8090/relay'), { url: '', lan: false, why: 'local' },
+    'the console offered a loopback address, or refused it without saying why. On the reader’s phone ' +
+    'that address resolves to the reader’s phone: it looks ordinary, and it works when the steward ' +
+    'tests it themselves.');
+  assert.deepEqual(make('ws://localhost:8090/relay'), { url: '', lan: false, why: 'local' },
+    'localhost was accepted, which is the same defect spelled differently');
+  assert.deepEqual(make(''), { url: '', lan: false, why: 'none' },
+    'a church with no relay address at all was reported as a loopback problem, which would send its ' +
+    'steward to a "go public" setting that is not what is wrong');
 });
 
 test('the console actually OFFERS the slip, and pressing it prints this church’s address', () => {
@@ -509,7 +517,7 @@ test('the console actually OFFERS the slip, and pressing it prints this church�
     },
     navigator: {},
     document: { createElement: () => ({ style: {}, getContext: () => ({}) }) },
-    installPageUrl: () => ({ url: 'https://grace.example/install', lan: false }),
+    installPageUrl: () => ({ url: 'https://grace.example/install', lan: false, why: '' }),
     useGoPublicGate: () => ({ blocking: false }),
     GoPublicPanel: stub, GoPublicNote: stub, SkQR: stub, InvitePosterModal: stub, Icon: stub,
     copyText: () => true,
@@ -551,7 +559,7 @@ test('a church with only a loopback relay is not offered a slip it cannot use', 
     },
     navigator: {},
     document: { createElement: () => ({ style: {}, getContext: () => ({}) }) },
-    installPageUrl: () => null,
+    installPageUrl: () => ({ url: '', lan: false, why: 'local' }),
     useGoPublicGate: () => ({ blocking: false }),
     GoPublicPanel: stub, GoPublicNote: stub, SkQR: stub, InvitePosterModal: stub, Icon: stub,
     copyText: () => true, churchHandle: () => '', shortNpub: (s) => s,
@@ -721,7 +729,7 @@ async function joinCardWith(fetchImpl) {
       },
       navigator: {},
       document: { createElement: () => ({ style: {}, getContext: () => ({}) }) },
-      installPageUrl: () => ({ url: 'https://grace.example/install', lan: false }),
+      installPageUrl: () => ({ url: 'https://grace.example/install', lan: false, why: '' }),
       useGoPublicGate: () => ({ blocking: false }),
       GoPublicPanel: stub, GoPublicNote: stub, SkQR: stub, InvitePosterModal: stub, Icon: stub,
       copyText: () => true, churchHandle: () => '', shortNpub: (s) => s,
@@ -758,4 +766,164 @@ test('a relay that cannot be reached adds nothing to the screen', async () => {
   assert.doesNotMatch(screen, /put there|older version|whoever looks after/i,
     'a relay that did not answer put a staleness warning on a steward’s screen');
   assert.match(screen, /Install slip/, 'the rest of the card did not survive a failed check');
+});
+
+// ── §8 · the install link and QR ON SCREEN, and told apart from the joining code ─────────────────────────
+// The card now carries TWO QR codes and TWO links doing different jobs: one follows the church in an app
+// you already have, the other downloads the app in the first place. Handing out the wrong one fails
+// silently — the member scans, nothing useful happens, and neither end can see why. Everything below is
+// drawn and read (rule 3), never matched in the source.
+
+// A JoinCard with a real relay address, its real QR renderer, and the staleness check pointed at a relay
+// that refuses (these cases are about what is on the card, not about staleness).
+function installCard({ relay = 'wss://grace.example/relay', copied = [], saved = [], printed = [] } = {}) {
+  const { React, draw } = miniReact();
+  const stub = () => null;
+  const { JoinCard } = liftFromJsx(DASH,
+    [['function installPageUrl()', 'installPageUrl'], ['function installerConcern(', 'installerConcern'],
+     ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'], ['async function readInstallerConcern(', 'readInstallerConcern'],
+     ['function JoinCard(', 'JoinCard']],
+    'JoinCard', ['JoinCard'], {
+      React, AbortSignal, fetch: async () => { throw new Error('ECONNREFUSED'); },
+      window: {
+        useStewardChurch: () => ({ npub: 'npub1grace', name: 'Grace Chapel', nip05: '' }),
+        Steward: {
+          npub: 'npub1grace',
+          joinUrl: () => 'https://app.trinityone.church/?follow=npub1grace&relay=' + encodeURIComponent(relay),
+          joinLinkIsPrivate: () => false,
+          // the console's own local renderer — the same one the joining code uses. Tagged so a test can
+          // see WHICH address each code on the card actually encodes.
+          qrSVG: (t) => '<svg data-encodes="' + t + '"/>',
+        },
+        TrinityTemplates: { printInstallSheet: (a) => printed.push(a) },
+      },
+      navigator: {},
+      document: { createElement: () => ({ style: {}, getContext: () => ({}) }) },
+      copyText: (t) => { copied.push(t); return true; },
+      useGoPublicGate: () => ({ blocking: false }),
+      GoPublicPanel: stub, GoPublicNote: stub, SkQR: stub, InvitePosterModal: stub, Icon: stub,
+      churchHandle: () => '', shortNpub: (s) => s,
+      URL: Object.assign(class extends globalThis.URL {}, { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} }),
+      Blob: function () { saved.push('blob'); },
+      Image: function () { this.src = ''; },
+    });
+  return draw(JoinCard, {});
+}
+
+const qrNodes = (tree) => find(tree, (n) => n.props && n.props.role === 'img');
+const areaValues = (tree) => find(tree, (n) => n.type === 'textarea').map((n) => n.props.value);
+
+test('the install address is ON SCREEN and selectable, not only on a printed slip', () => {
+  // The owner's actual complaint. The console had this value all along — installPageUrl() computes it, and
+  // its ONLY consumer was printInstallSheet. To paste the install link into WhatsApp a steward had to
+  // print a slip and read it off the paper.
+  const tree = installCard();
+  assert.ok(areaValues(tree).includes('https://grace.example/install'),
+    'the install address is nowhere on the card as selectable text. It is what somebody reads out, types ' +
+    'into a phone by hand, or copies when the clipboard button cannot reach the clipboard.');
+});
+
+test('"Copy install link" copies the install address, not the joining link', () => {
+  const copied = [];
+  const tree = installCard({ copied });
+  const btns = button(tree, 'Copy install link');
+  assert.equal(btns.length, 1, 'there is no way to copy the install link — the paste into WhatsApp is how this actually gets shared');
+  btns[0].props.onClick();
+  assert.deepEqual(copied, ['https://grace.example/install'],
+    'the button copied the wrong address. The joining link and the install link go to different places, ' +
+    'and a member who gets the wrong one scans it and nothing useful happens.');
+});
+
+test('the install QR is on screen and encodes the install page', () => {
+  const tree = installCard();
+  const codes = qrNodes(tree);
+  assert.equal(codes.length, 2, 'the card should carry exactly two QR codes — the joining one and the install one');
+  const html = codes.map((n) => (n.props.dangerouslySetInnerHTML || {}).__html || '');
+  assert.ok(html.some((h) => h.includes('data-encodes="https://grace.example/install"')),
+    'no QR on the card encodes the install page. The only code visible was the JOINING code, which points ' +
+    'somewhere else entirely.');
+  assert.ok(html.some((h) => h.includes('follow=npub1grace')), 'the joining QR was lost');
+});
+
+test('the two QR codes are told apart in words, not left for the steward to guess', () => {
+  const codes = qrNodes(installCard());
+  const labels = codes.map((n) => String(n.props['aria-label'] || ''));
+  assert.equal(new Set(labels).size, 2, 'both QR codes carry the same description, so nothing on the card says which is which');
+  assert.ok(labels.some((l) => /install/i.test(l)), 'neither code is described as the install one');
+  assert.ok(labels.some((l) => /join/i.test(l)), 'neither code is described as the joining one');
+  // And in the body text a steward actually reads, not only to a screen reader.
+  const words = texts(installCard()).join(' ');
+  assert.match(words, /Getting the app/i, 'the install controls are not labelled as a group, so they read as more joining-code buttons');
+  assert.match(words, /installs TrinityOne/i, 'nothing on the card says in plain words what the second code is for');
+});
+
+test('saving the install QR renders it locally and does not reach for the relay', () => {
+  // The relay does serve /apks/qr.svg — and using it here would add a network dependency to something the
+  // console can already draw. The joining code has rendered its own QR since the beginning; this uses the
+  // same renderer and the same save mechanism rather than inventing a second one.
+  const encoded = [];
+  const { React, draw } = miniReact();
+  const stub = () => null;
+  const fetches = [];
+  const { JoinCard } = liftFromJsx(DASH,
+    [['function installPageUrl()', 'installPageUrl'], ['function installerConcern(', 'installerConcern'],
+     ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'], ['async function readInstallerConcern(', 'readInstallerConcern'],
+     ['function JoinCard(', 'JoinCard']],
+    'JoinCard', ['JoinCard'], {
+      React, AbortSignal,
+      fetch: async (u) => { fetches.push(u); throw new Error('ECONNREFUSED'); },
+      window: {
+        useStewardChurch: () => ({ npub: 'npub1grace', name: 'Grace Chapel', nip05: '' }),
+        Steward: {
+          npub: 'npub1grace',
+          joinUrl: () => 'https://app.trinityone.church/?follow=npub1grace&relay=' + encodeURIComponent('wss://grace.example/relay'),
+          joinLinkIsPrivate: () => false,
+          qrSVG: (t) => { encoded.push(t); return '<svg/>'; },
+        },
+        TrinityTemplates: { printInstallSheet: () => {} },
+      },
+      navigator: {}, document: { createElement: () => ({ style: {}, getContext: () => ({}) }) },
+      copyText: () => true, useGoPublicGate: () => ({ blocking: false }),
+      GoPublicPanel: stub, GoPublicNote: stub, SkQR: stub, InvitePosterModal: stub, Icon: stub,
+      churchHandle: () => '', shortNpub: (s) => s,
+      URL: Object.assign(class extends globalThis.URL {}, { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} }),
+      Blob: function () {}, Image: function () { this.src = ''; },
+    });
+  const tree = draw(JoinCard, {});
+  const btns = button(tree, 'Save install QR');
+  assert.equal(btns.length, 1, 'there is no way to save the install QR as an image to post in a chat or on a poster');
+  encoded.length = 0;
+  btns[0].props.onClick();
+  assert.ok(encoded.includes('https://grace.example/install'),
+    'saving the install QR did not render the install address through the console\'s own QR renderer');
+  assert.ok(!fetches.some((u) => String(u).includes('qr.svg')),
+    'the console fetched the relay\'s /apks/qr.svg to save an image it can draw itself, adding a network ' +
+    'dependency for something entirely local');
+});
+
+test('pressing Install slip still prints, from the same address that is on screen', () => {
+  const printed = [];
+  const tree = installCard({ printed });
+  button(tree, 'Install slip')[0].props.onClick();
+  assert.equal(printed.length, 1, 'the slip was lost when the controls were regrouped');
+  assert.equal(printed[0].url, 'https://grace.example/install',
+    'the printed slip and the address shown on screen disagree, which is worse than showing neither');
+});
+
+test('a wifi-only address says so on the card as well as on the paper', () => {
+  const words = texts(installCard({ relay: 'ws://192.168.1.50:8090/relay' })).join(' ');
+  assert.match(words, /on your church’s own wifi/i,
+    'a LAN-only install address was put on screen with nothing to say it will not open from home');
+  const wide = texts(installCard()).join(' ');
+  assert.doesNotMatch(wide, /own wifi/i, 'a publicly reachable address was labelled wifi-only, which is simply wrong');
+});
+
+test('a loopback relay explains why there is no install code, instead of showing nothing', () => {
+  // An auditor served from 127.0.0.1 hit exactly this: the whole install control vanished with no reason
+  // given, and a deliberate refusal is indistinguishable from a missing feature.
+  const words = texts(installCard({ relay: 'ws://127.0.0.1:8090/relay' })).join(' ');
+  assert.doesNotMatch(words, /Copy install link/, 'a loopback address was offered for sharing — on the reader’s phone it means the reader’s phone');
+  assert.match(words, /can’t install from this machine yet/i,
+    'the install block disappeared in silence. Correct behaviour with invisible reasoning is still a defect.');
+  assert.match(words, /go public/i, 'the explanation does not say what would make it appear');
 });

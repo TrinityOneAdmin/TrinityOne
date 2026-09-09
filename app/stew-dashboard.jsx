@@ -1662,16 +1662,24 @@ function copyText(t) {
 // feature, and on most church networks the LAN address is the only address there is. So a private address
 // is carried and LABELLED, and only loopback is refused — that one genuinely resolves, on the reader's
 // phone, to the reader's phone.
+// ALWAYS RETURNS AN OBJECT, and `why` is the half that used to be missing. It returned null for every
+// unavailable case, so the whole install control simply vanished from the card with no reason given — an
+// auditor served from 127.0.0.1 hit exactly that and could not tell a deliberate refusal from a missing
+// feature. Correct behaviour with invisible reasoning is still a defect.
+//   url  — '' when there is nothing worth showing
+//   lan  — the address is private, so it works on the church's own wifi and not from home
+//   why  — 'local' (loopback: it would resolve to the reader's own phone) | 'none' (no relay address at
+//          all yet) | '' (fine)
 function installPageUrl() {
   let relay = '';
-  try { relay = new URL(window.Steward.joinUrl()).searchParams.get('relay') || ''; } catch (e) { return null; }
-  if (!relay) return null;
+  try { relay = new URL(window.Steward.joinUrl()).searchParams.get('relay') || ''; } catch (e) { return { url: '', lan: false, why: 'none' }; }
+  if (!relay) return { url: '', lan: false, why: 'none' };
   let u;
-  try { u = new URL(String(relay).replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:')); } catch (e) { return null; }
+  try { u = new URL(String(relay).replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:')); } catch (e) { return { url: '', lan: false, why: 'none' }; }
   const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h === '::1' || h === '0.0.0.0' || /^127\./.test(h)) return null;
+  if (h === 'localhost' || h === '::1' || h === '0.0.0.0' || /^127\./.test(h)) return { url: '', lan: false, why: 'local' };
   const lan = /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h) || /\.local$/.test(h);
-  return { url: u.origin + '/install', lan };
+  return { url: u.origin + '/install', lan, why: '' };
 }
 
 // IS THE APP OUR MEMBERS INSTALL FROM OUR RELAY OUT OF DATE? — the question a church that does NOT run
@@ -2126,17 +2134,18 @@ function JoinCard({ qrSize = 92, center = false }) {
   // "Install slip": the paper that tells a member how to get the app from the church's OWN box. Only
   // offered when there is an address worth printing — see installPageUrl().
   const install = installPageUrl();
+  const installSvg = (install.url && window.Steward.qrSVG) ? window.Steward.qrSVG(install.url) : '';
   // Ask the relay, once, how old the app it hands out is. Silent unless there is something to say, and
   // silent on every failure — see readInstallerConcern.
   const [installerNote, setInstallerNote] = React.useState('');
   React.useEffect(() => {
-    if (!install) { setInstallerNote(''); return; }
+    if (!install.url) { setInstallerNote(''); return; }
     let dead = false;
     readInstallerConcern(install.url).then(t => { if (!dead) setInstallerNote(t || ''); }).catch(() => {});
     return () => { dead = true; };
-  }, [install ? install.url : '']);
+  }, [install.url]);
   const printInstall = () => {
-    if (!install || !window.TrinityTemplates) return;
+    if (!install.url || !window.TrinityTemplates) return;
     window.TrinityTemplates.printInstallSheet({
       name: church.name, url: install.url, lan: install.lan,
       qrSvg: window.Steward.qrSVG ? window.Steward.qrSVG(install.url) : '',
@@ -2146,19 +2155,24 @@ function JoinCard({ qrSize = 92, center = false }) {
     if (navigator.share) { try { await navigator.share({ title: 'Join on TrinityOne', text: 'Join ' + (church.name || 'our church') + ' on TrinityOne', url }); return; } catch (e) {} }
     doCopy('link', url);
   };
-  const saveQrPng = () => {
-    if (!url || !window.Steward.qrSVG) return;
-    const u = URL.createObjectURL(new Blob([window.Steward.qrSVG(url)], { type: 'image/svg+xml' }));
+  // ONE mechanism for saving a QR, not two. This was the join QR's private helper; the install QR needs
+  // exactly the same thing (render locally, raster to PNG, offer it as a download) and a second copy of it
+  // would be a second thing to keep working. Callers: saveQrPng (the join code) and saveInstallQr.
+  const saveQrPngFor = (text, filePrefix) => {
+    if (!text || !window.Steward.qrSVG) return;
+    const u = URL.createObjectURL(new Blob([window.Steward.qrSVG(text)], { type: 'image/svg+xml' }));
     const img = new Image();
     img.onload = () => {
       const c = document.createElement('canvas'); c.width = 560; c.height = 560; const x = c.getContext('2d');
       x.fillStyle = '#fff'; x.fillRect(0, 0, 560, 560); x.drawImage(img, 24, 24, 512, 512);
-      c.toBlob(b => { if (!b) return; const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'join-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }, 'image/png');
+      c.toBlob(b => { if (!b) return; const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = filePrefix + '-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }, 'image/png');
       URL.revokeObjectURL(u);
     };
     img.onerror = () => URL.revokeObjectURL(u);
     img.src = u;
   };
+  const saveQrPng = () => saveQrPngFor(url, 'join');
+  const saveInstallQr = () => saveQrPngFor(install.url, 'install');
   // reachability gate: in the self-hosted Suite, show "make your church reachable" until the tunnel is on
   if (gate.blocking) return <GoPublicPanel gate={gate} />;
   return (
@@ -2172,7 +2186,9 @@ function JoinCard({ qrSize = 92, center = false }) {
       <GoPublicNote gate={gate} />
     <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 16, alignItems: 'center', textAlign: center ? 'center' : 'left' }}>
       <div style={{ width: qrSize + 18, height: qrSize + 18, borderRadius: 14, background: '#fff', boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 9, boxSizing: 'border-box' }}>
-        {svg ? <div role="img" aria-label="Invite QR code" style={{ width: qrSize, height: qrSize, display: 'flex' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <SkQR size={qrSize} />}
+        {/* "Invite QR code" was fine while it was the only code on this card. It no longer is, and a
+            steward choosing between two must be able to tell them apart by what they DO. */}
+        {svg ? <div role="img" aria-label="Joining QR code — scan this to follow the church in an app you already have" style={{ width: qrSize, height: qrSize, display: 'flex' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <SkQR size={qrSize} />}
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Your church code</div>
@@ -2186,14 +2202,70 @@ function JoinCard({ qrSize = 92, center = false }) {
           <button onClick={shareLink} title="Share the join link (e.g. straight into a WhatsApp group)" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="share" size={14} color="currentColor" /> Share</button>
           <button onClick={saveQrPng} title="Save the QR as an image to post in a chat or on a poster" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="qr" size={14} color="currentColor" /> Save QR</button>
           <button onClick={() => setPoster(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Show the invite poster (QR + link) to display, print, or save"><Icon name="receipt" size={14} color="currentColor" /> Invite poster</button>
-          {install ? <button onClick={printInstall} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a slip that tells people how to install the app from your church's own machine — no app store, no mobile data"><Icon name="qr" size={14} color="currentColor" /> Install slip</button> : null}
         </div>
-        {/* One plain statement, and only when there is one to make. Nothing is shown while the installer is
-            current, and nothing is shown when the relay could not be asked. */}
-        {installerNote ? <div role="status" style={{ marginTop: 10, padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{installerNote}</div> : null}
       </div>
       {poster ? <InvitePosterModal church={church} url={url} svg={svg} onClose={() => setPoster(false)} /> : null}
     </div>
+
+    {/* ── GETTING THE APP, kept apart from the joining code on purpose ──────────────────────────────────
+        THE CARD NOW CARRIES TWO QR CODES AND TWO LINKS AND THEY DO DIFFERENT JOBS. The one above follows
+        the church once TrinityOne is already on the phone; this one downloads TrinityOne in the first
+        place. Handing out the wrong one is a silent failure — the member scans, nothing useful happens,
+        and nobody can see why from either end. So these controls are a titled block that says what it is
+        for, rather than a seventh and eighth button on a row that was already six long and where "Save QR"
+        would have become ambiguous between two QRs.
+
+        Everything here is computed locally: installPageUrl() from the address the console already holds,
+        and the QR from window.Steward.qrSVG, the same renderer the joining code uses. Nothing is fetched
+        for this — a page that draws its own QR must not acquire a network dependency to show one. */}
+    {install.url ? (
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Getting the app</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '5px 0 11px' }}>
+          A different code from the one above. This one <b>installs TrinityOne</b> from your church’s own
+          machine — no app store, no mobile data. Someone installs with this first, then scans your joining
+          code to follow the church.
+        </div>
+        {install.lan ? <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10, padding: '8px 10px', borderRadius: 10, background: 'var(--surface-2)' }}>
+          This address works <b>on your church’s own wifi</b>. Join the wifi first, then scan — it will not open from home.
+        </div> : null}
+        <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 14, alignItems: center ? 'center' : 'flex-start' }}>
+          <div style={{ width: qrSize + 18, height: qrSize + 18, borderRadius: 14, background: '#fff', boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 9, boxSizing: 'border-box' }}>
+            {installSvg
+              ? <div role="img" aria-label="Install QR code — scan this to download and install the app"
+                     style={{ width: qrSize, height: qrSize, display: 'flex' }} dangerouslySetInnerHTML={{ __html: installSvg }} />
+              : <SkQR size={qrSize} />}
+          </div>
+          <div style={{ minWidth: 0, flex: 1, width: '100%' }}>
+            {/* Selectable, because this is the thing somebody reads aloud, types into a phone by hand, or
+                copies when the clipboard button cannot reach the clipboard. */}
+            <textarea readOnly value={install.url} aria-label="Address of your church’s install page"
+                      onFocus={e => e.target.select()}
+                      style={{ width: '100%', maxWidth: 320, height: 40, resize: 'none', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 10.5, padding: '6px 8px', lineHeight: 1.3, wordBreak: 'break-all' }} />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10, justifyContent: center ? 'center' : 'flex-start' }}>
+              <button onClick={() => doCopy('installlink', install.url)} title="Copy the install link to paste into WhatsApp, email or a group chat" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'installlink' ? 'check' : 'link'} size={14} color="currentColor" /> {copied === 'installlink' ? 'Copied' : 'Copy install link'}</button>
+              <button onClick={saveInstallQr} title="Save the install QR as an image to post in a chat or on a poster" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="qr" size={14} color="currentColor" /> Save install QR</button>
+              <button onClick={printInstall} title="Print a slip that tells people how to install the app from your church's own machine" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="receipt" size={14} color="currentColor" /> Install slip</button>
+            </div>
+            {/* One plain statement, and only when there is one to make. Nothing is shown while the
+                installer is current, and nothing is shown when the relay could not be asked. */}
+            {installerNote ? <div role="status" style={{ marginTop: 10, padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{installerNote}</div> : null}
+          </div>
+        </div>
+      </div>
+    ) : null}
+
+    {/* WHY THE BLOCK IS NOT THERE. Only for the loopback case, and only when the banner at the top of this
+        card is not already saying the same thing — telling a steward twice is its own kind of noise. The
+        case this covers is real and narrow: a relay on loopback that HAS claimed a directory name has
+        joinLinkIsPrivate() false, so that banner is absent and the install block would vanish in silence. */}
+    {(!install.url && install.why === 'local' && !linkPrivate) ? (
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
+        <b>Members can’t install from this machine yet.</b> Your relay is only reachable at this computer’s
+        own address, which on someone else’s phone means their phone. Turn on “go public” for your relay in
+        Settings → Network &amp; relays, and an install code will appear here.
+      </div>
+    ) : null}
     </React.Fragment>
   );
 }
