@@ -41,7 +41,19 @@
   .set-shell { display: grid; grid-template-columns: minmax(200px, 236px) minmax(0, 1fr); gap: 22px; align-items: start; max-width: 1180px; }
   .set-shell--one { grid-template-columns: minmax(0, 1fr); gap: 0; }   /* phone: one of the two children is rendered */
   .set-list { display: block; }
-  .set-grp { font-size: 11px; letter-spacing: .9px; text-transform: uppercase; color: var(--ink-3); font-weight: 800; margin: 16px 10px 6px; font-family: var(--font-ui); }
+  /* A GROUP HEADER IS A DISCLOSURE BUTTON, not a label. It carries aria-expanded, so it has to be a real
+     button; everything here is the reset that makes a button look like the small-caps label it replaced.
+     44px of height is not available in a 236px sidebar column, but the whole row is the target rather than
+     the chevron alone — the console has already paid for a control where only the small part responded
+     ("you have to hit the little switch itself rather than the words, which Margaret will not work out"). */
+  .set-grp { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: none; background: none; cursor: pointer;
+             font-size: 11px; letter-spacing: .9px; text-transform: uppercase; color: var(--ink-3); font-weight: 800;
+             margin: 16px 0 6px; padding: 4px 10px; border-radius: 8px; font-family: var(--font-ui); }
+  .set-grp:hover { background: color-mix(in oklab, var(--ink) 4%, transparent); color: var(--ink-2); }
+  .set-grp-n { flex: 1; min-width: 0; }
+  /* HOW MANY PAGES ARE BEHIND A SHUT GROUP. Without it a collapsed group is a word with nothing to say
+     whether anything is in there, which is the one thing a steward needs to know before opening it. */
+  .set-grp-c { font-size: 10.5px; font-weight: 700; letter-spacing: 0; color: var(--ink-3); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; }
   .set-list > :first-child.set-grp { margin-top: 2px; }
   .set-items { list-style: none; margin: 0; padding: 0; }
   .set-item { display: block; width: 100%; text-align: left; border: none; background: none; font-family: var(--font-ui); color: var(--ink); padding: 9px 11px; border-radius: 10px; cursor: pointer; }
