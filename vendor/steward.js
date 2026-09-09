@@ -14949,7 +14949,7 @@ zoo`.split("\n");
       lifetime: isDeclaredLifetime(s.lifetime) ? s.lifetime : DEFAULT_HELPER_LIFETIME
     };
   }
-  function buildHelperGrant({ session, source, lifetime, from, until, helpers, keepers, sessionKeyHex, wrap, rev: rev2 }) {
+  function buildHelperGrant({ session, source, lifetime, from, until, helpers, keepers, sessionKeyHex, wrap }) {
     const sid = String(session || "");
     if (!sid) throw new Error("buildHelperGrant: no session id");
     if (!isDeclaredSource(source)) throw new Error("buildHelperGrant: undeclared helper source " + JSON.stringify(source));
@@ -14970,7 +14970,7 @@ zoo`.split("\n");
         failed.push(p);
       }
     }
-    return { doc: { rev: Number.isInteger(rev2) && rev2 > 0 ? rev2 : 1, session: sid, source, lifetime, from, until: end, pubs, keys }, failed };
+    return { doc: { session: sid, source, lifetime, from, until: end, pubs, keys }, failed };
   }
 
   // src/steward.src.js
@@ -20723,7 +20723,6 @@ zoo`.split("\n");
           helpers,
           keepers,
           sessionKeyHex,
-          rev: Number.isInteger(o.rev) && o.rev > 0 ? o.rev : 1,
           wrap: (p2, plaintext) => encrypt3(plaintext, getConversationKey(sk, p2))
         });
       } catch (e) {

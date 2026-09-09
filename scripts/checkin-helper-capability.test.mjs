@@ -48,6 +48,8 @@ const cara = K();          // an ordinary member, never on any rota
 const gina = K();          // a guardian: her child is checked in today
 const hank = K();          // a guardian of a DIFFERENT family
 const teen = K();          // an older young person who does have an account, and whose guardian is gina
+const rhys = K();          // gina's OTHER child: in guardians:, and NOT in minors:. The aged-out sibling, or
+                           // simply a church that keeps one list and not the other. Both are ordinary.
 
 const S_NOW = 'svc-now', S_LAST = 'svc-last', S_SOON = 'svc-soon';
 const KEY_NOW = '11'.repeat(32), KEY_LAST = '22'.repeat(32), KEY_SOON = '33'.repeat(32);
@@ -97,7 +99,7 @@ const doc = (who, d, content, extra = []) => finalizeEvent({ kind: 30078, create
 const grant = (session, helpers, from, until, key, opts = {}) => {
   const { doc: body } = buildHelperGrant({ session, source: opts.source || 'rota',
     lifetime: opts.lifetime || DEFAULT_HELPER_LIFETIME, from, until,
-    helpers, keepers: [church.pub, sgLead.pub], sessionKeyHex: key, rev: opts.rev,
+    helpers, keepers: [church.pub, sgLead.pub], sessionKeyHex: key,
     wrap: (p, pl) => nip44.encrypt(pl, nip44.utils.getConversationKey(church.sk, p)) });
   if (opts.mangle) opts.mangle(body);
   return finalizeEvent({ kind: 30078, created_at: opts.at || now(),
@@ -110,27 +112,50 @@ const checkin = (who, id, session, guardianPub, key, payload = {}) => doc(who, D
   nip44.encrypt(JSON.stringify({ id, childName: 'A Child', code: '4821', ...payload }), unhex(key)),
   [['church', church.pub], ['session', session], ...(guardianPub ? [['p', guardianPub]] : [])]);
 
-before(async () => {
-  await requireFreePort(PORT, 'checkin-helper-capability.test.mjs');
-  dataDir = mkdtempSync(join(tmpdir(), 'trin-cih-'));
+// BOOT THE RELAY ON THE SAME DATA DIRECTORY. Separated out of before() so a test can restart the box and ask
+// its questions again — the relay rehydrates every stored document through note() on each boot, so "what this
+// relay believes" and "what this relay has written down" are two different things, and a rule that holds only
+// in the first of them is a rule that expires at the next restart. This relay restarts itself.
+async function boot() {
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
     env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(church.pub) } });
   const t0 = Date.now();
   while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${PORT}/status`)).ok) break; } catch {} await sleep(150); }
+}
+async function restart() {
+  try { w && w.close(); } catch {}
+  await new Promise(r => { relay.on('exit', r); try { relay.kill('SIGKILL'); } catch { r(); } });
+  await sleep(300);
+  await boot();
+  await sleep(500);          // let the rehydrate pass finish before anything is asked
+  w = await conn();
+}
+
+before(async () => {
+  await requireFreePort(PORT, 'checkin-helper-capability.test.mjs');
+  dataDir = mkdtempSync(join(tmpdir(), 'trin-cih-'));
+  await boot();
   w = await conn();
 
   // everyone but dan joins the congregation. dan is the delegated helper who never did.
-  for (const who of [sgLead, treasurer, ada, ben, cara, gina, hank, teen]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
+  for (const who of [sgLead, treasurer, ada, ben, cara, gina, hank, teen, rhys]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
   // the steward roster, with capabilities the owner actually ticked
   await send(w, doc(church, D.STEWARDS + church.pub, { pubkeys: [sgLead.pub, treasurer.pub],
     caps: { [sgLead.pub]: ['safeguarding'], [treasurer.pub]: ['finance'] } }));
   // safeguarding lists
+  // TWO LISTS THAT DO NOT AGREE, on purpose: rhys is gina's child in `guardians:` and is NOT in `minors:`.
+  // That is not a broken fixture, it is the commonest real state of a church that has used one screen and
+  // not the other, and it is what makes the sibling test below able to fail.
   await send(w, doc(church, D.MINORS + church.pub, { pubkeys: [teen.pub] }));
-  await send(w, doc(church, D.GUARDIANS + church.pub, { links: { [teen.pub]: [gina.pub] } }));
+  await send(w, doc(church, D.GUARDIANS + church.pub, { links: { [teen.pub]: [gina.pub], [rhys.pub]: [gina.pub] } }));
   // the two capability-key envelopes as they stand today: the register's, and the books'
   await send(w, doc(church, D.CHECKINKEY + church.pub, { rev: 1, keys: { [church.pub]: 'ct-church', [sgLead.pub]: 'ct-sg' } }));
   await send(w, doc(church, D.FINANCEKEY + church.pub, { rev: 1, keys: { [church.pub]: 'ct-church', [treasurer.pub]: 'ct-fin' } }));
+  // THE CHURCH'S OWN ROTA for this session, so the leak test below compares two documents that both exist:
+  // the rota a steward can narrow, and the grant nobody could. Sealed in the shipped product (the relay
+  // cannot read `assign`), which is exactly why its cleartext twin matters.
+  await send(w, doc(church, D.ROTA + S_NOW, 'sealed-rota-ciphertext', [['church', church.pub]]));
   // a ledger entry and a private ask-for-help, so "unreachable" is measured against documents that EXIST
   await publishAs(treasurer, doc(treasurer, D.FIN_JOURNAL + '1', { e: 'sealed-ledger' }, [['church', church.pub]]));
   await publishAs(cara, doc(cara, D.CAREREQ + cara.pub.slice(0, 16) + '-r1', { e: 'sealed-ask' }, [['church', church.pub], ['p', church.pub]]));
@@ -143,6 +168,7 @@ before(async () => {
   await send(w, checkin(church, 'r-now-gina', S_NOW, gina.pub, KEY_NOW));
   await send(w, checkin(church, 'r-now-hank', S_NOW, hank.pub, KEY_NOW));
   await send(w, checkin(church, 'r-now-teen', S_NOW, teen.pub, KEY_NOW));
+  await send(w, checkin(church, 'r-now-rhys', S_NOW, rhys.pub, KEY_NOW));
   await send(w, checkin(church, 'r-last-gina', S_LAST, gina.pub, KEY_LAST));
   await sleep(300);
 });
@@ -287,16 +313,78 @@ test('an ordinary member cannot obtain the key, write a record, or read one', as
     'any member of the church could overwrite a child\'s presence record');
   assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-gina'] }), [],
     'an ordinary member was served a child\'s check-in record');
+  // AND THE GRANT ITSELF IS NOT SERVED TO THEM AT ALL — asserted as a REFUSAL, which is the whole point of
+  // this file and which this assertion did not do until 2026-09-09. It read `for (const e of env) …`, so when
+  // the envelope WAS served the loop simply checked that cara's own slot was absent, and passed. Measured on
+  // this branch before the fix: `env.length === 1`. The read gate granted the named helper and then fell
+  // through to the ordinary effective-member rule, so every member of the congregation received the grant in
+  // full — the cleartext `pubs` array naming everyone rostered to children's work that morning, plus the
+  // keeper set off `keys{}`. A church that had narrowed its rota to stewards was still publishing the
+  // children's-work half of it to everybody, which reverses a decision the church had explicitly made.
+  //
+  // An empty list would satisfy the old loop vacuously, so the length is asserted FIRST and the slot check is
+  // kept underneath it: if the envelope ever comes back, this says so before anything else is examined.
   const env = await asks(cara, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] });
+  assert.deepEqual(env, [],
+    'an ordinary member was served the check-in helper grant. Its `pubs` array is CLEARTEXT and names ' +
+    'everyone rostered to children\'s work for that session — the relay needs it to enforce the grant, the ' +
+    'congregation does not, and a church that narrowed its rota visibility has just had that reversed.');
   for (const e of env) assert.equal(JSON.parse(e.content).keys[cara.pub], undefined,
     'the session key was wrapped to somebody who is not on the rota');
+});
+
+// ── THE GRANT IS NOT A SECOND, UNGATED COPY OF THE CHILDREN'S ROTA ────────────────────────────────────────
+
+test('THE ROTA DOES NOT LEAK THROUGH THE GRANT, and the protection does not wait on a settings page', async () => {
+  // WHY THIS IS ITS OWN TEST. The grant's `pubs` array is cleartext and names everyone rostered to children's
+  // work for that session — the relay has to read what it enforces, exactly as it does for `roster:` and
+  // `rota-settings`. Serving it to the congregation publishes the children's-work half of the rota to
+  // everybody, and does it through a document no rota screen or rota setting has any say over.
+  //
+  // THE FIRST HALF: a church that HAS narrowed its rota. `visibility: 'stewards'` is a decision a steward made
+  // on a screen; the whole point of the setting is that the congregation does not get to see who serves.
+  // Measured on this branch before the fix: cara was correctly refused `rota:` — and was handed the grant.
+  await send(w, doc(church, D.ROTA_SETTINGS, { visibility: 'stewards' }));
+  await sleep(200);
+  assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [D.ROTA + S_NOW] }), [],
+    're-anchor: rota-settings is not being enforced at all, so the comparison below proves nothing');
+  assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] }), [],
+    'the church narrowed its rota to stewards and the congregation was handed the children\'s-work half of ' +
+    'it anyway, through the helper grant. A steward\'s decision was silently reversed by a document that ' +
+    'settings page does not know exists.');
+
+  // THE SECOND HALF, AND THE ONE THAT MATTERS MORE. Take the setting away entirely — which is the state of
+  // EVERY church that exists today, because the default is 'church' and nobody has to open that page. The
+  // refusal must be identical. A protection that only arrives once a church has found a settings screen is
+  // not a protection; it is a reward for having read the manual.
+  await publishAs(church, finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', D.ROTA_SETTINGS], ['t', NET], ['church', church.pub], ['deleted', '1']], content: '' }, church.sk));
+  await sleep(200);
+  assert.equal((await asks(cara, { kinds: [30078], '#d': [D.ROTA + S_NOW] })).length, 1,
+    're-anchor: the rota is still withheld with no setting in force, so the two halves are not being compared');
+  assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] }), [],
+    'the grant is withheld only from churches that configured rota visibility. Every church that has never ' +
+    'opened that page — which is all of them — still publishes its children\'s rota to the whole congregation.');
+
+  // AND IT IS A NARROWING, NOT A BLACKOUT. The people who must have it still do, or this "fix" would take the
+  // session key away from the volunteer holding the creche.
+  assert.equal((await asks(ada, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] })).length, 1,
+    'the rostered helper lost their own session key');
+  assert.equal((await asks(dan, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] })).length, 1,
+    'the helper who is NOT a member of the congregation lost their key — the grant is his whole authority, ' +
+    'so he would be granted the register by the church and refused the key that opens it');
+  assert.equal((await asks(church, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] })).length, 1,
+    'the church cannot read its own grant');
+  assert.equal((await asks(sgLead, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] })).length, 1,
+    'the safeguarding lead lost the session key, so a helper\'s record becomes unopenable by the one steward ' +
+    'accountable for the register');
 });
 
 test('NOBODY BUT THE CHURCH KEY MAY MINT A GRANT — not a member, not even the safeguarding lead', async () => {
   const t = now();
   const forge = (who) => {
     const { doc: body } = buildHelperGrant({ session: S_NOW, source: 'rota', lifetime: 'session', from: t - 60, until: t + 600,
-      helpers: [who.pub], keepers: [], sessionKeyHex: KEY_NOW, rev: 99,
+      helpers: [who.pub], keepers: [], sessionKeyHex: KEY_NOW,
       wrap: (p, pl) => nip44.encrypt(pl, nip44.utils.getConversationKey(who.sk, p)) });
     return finalizeEvent({ kind: 30078, created_at: t, tags: [['d', D.CHECKINHELPER + S_NOW], ['t', NET], ['church', church.pub]], content: JSON.stringify(body) }, who.sk);
   };
@@ -339,20 +427,58 @@ test('a grant may not be made permanent, nor claim a source nobody implemented',
 });
 
 test('a stale grant replayed after a newer one does not put a removed helper back', async () => {
-  // An addressable document is keyed by (kind, author, d-tag) and every superseded copy stays on disk, so
-  // without a newest-wins guard the winner is whoever replayed last — a rehydrate, or a late peer sync.
+  // THE REAL SHAPE OF A STALE REPLAY, and it is the shape this test did NOT drive until 2026-09-09. A copy
+  // arriving from a rehydrate or a peer sync carries its ORIGINAL created_at inside the signature; nobody can
+  // hand it a fresher one without the church's key. So the stale grant below is older, as a real one is.
+  //
+  // This test used to publish the stale grant with a NEWER created_at and a LOWER `rev`, which drove the only
+  // case the (now removed) rev counter could ever decide — see the restart test directly below for what that
+  // actually bought.
   const t = now();
-  await publishAs(church, grant(S_NOW, [ada.pub], t - 600, t + 3600, KEY_NOW, { rev: 2, at: t + 1 }));
+  await publishAs(church, grant(S_NOW, [ada.pub], t - 600, t + 3600, KEY_NOW, { at: t + 1 }));
   await sleep(150);
   assert.equal((await publishAs(dan, checkin(dan, 'r-now-dan2', S_NOW, hank.pub, KEY_NOW)))[0], false,
-    're-anchor: the rev-2 grant that drops dan was not applied, so the replay below proves nothing');
-  // now the OLD grant arrives again, later in wall time but at a lower rev
-  await publishAs(church, grant(S_NOW, [ada.pub, dan.pub], t - 600, t + 3600, KEY_NOW, { rev: 1, at: t + 5 }));
+    're-anchor: the grant that drops dan was not applied, so the replay below proves nothing');
+  // now the OLD grant arrives again — same helpers as before dan was removed, its own older timestamp
+  await publishAs(church, grant(S_NOW, [ada.pub, dan.pub], t - 600, t + 3600, KEY_NOW, { at: t - 3 }));
   await sleep(150);
   assert.equal((await publishAs(dan, checkin(dan, 'r-now-dan3', S_NOW, hank.pub, KEY_NOW)))[0], false,
     'a stale grant replayed a helper the church had already removed back onto the children\'s register');
   assert.equal((await publishAs(ada, checkin(ada, 'r-now-ada2', S_NOW, gina.pub, KEY_NOW)))[0], true,
     'the newest-wins guard also locked out the helper who IS on the current grant');
+});
+
+test('AND THE REMOVAL SURVIVES A RESTART — the relay\'s answer is the same after a reboot as before it', async () => {
+  // THE DEFECT THIS EXISTS FOR, measured on this branch on 2026-09-09 before it was fixed:
+  //
+  //     after the church removed dan          -> dan refused
+  //     after a stale grant came back         -> dan refused   (the rev guard held)
+  //     AFTER A RESTART                       -> DAN COULD WRITE TO THE CHILDREN'S REGISTER AGAIN
+  //
+  // The ingest carried a `rev` counter in front of its timestamp comparison. Where it fired it refused a
+  // document that put() had already STORED, so the relay's live map and the corpus underneath it disagreed —
+  // and the reboot resolved the disagreement in favour of the stale grant. The relay restarts itself, so that
+  // was a scheduled reversal of a safeguarding decision.
+  //
+  // WHAT IS ASSERTED IS THE INVARIANT, not one outcome: whatever this relay believes about who may open the
+  // children's register, it must still believe it after a restart, because the restart is what re-derives it
+  // from what was actually written down. Any future ordering rule that lives only in the map — a rev, a
+  // sequence number, an in-memory "seen" set — breaks this test rather than shipping quietly.
+  const beforeDan = (await publishAs(dan, checkin(dan, 'r-restart-dan-a', S_NOW, hank.pub, KEY_NOW)))[0];
+  const beforeAda = (await publishAs(ada, checkin(ada, 'r-restart-ada-a', S_NOW, gina.pub, KEY_NOW)))[0];
+  assert.equal(beforeDan, false, 're-anchor: dan is not the removed helper any more, so this proves nothing');
+  assert.equal(beforeAda, true, 're-anchor: ada is not the current helper any more, so this proves nothing');
+
+  await restart();
+
+  assert.equal((await publishAs(dan, checkin(dan, 'r-restart-dan-b', S_NOW, hank.pub, KEY_NOW)))[0], beforeDan,
+    'a restart changed the relay\'s mind about a helper the church REMOVED. The live map and the stored ' +
+    'corpus disagree, and the reboot resolved it from disk — so the removal was only ever true until the ' +
+    'next restart, and this relay restarts itself.');
+  assert.equal((await publishAs(ada, checkin(ada, 'r-restart-ada-b', S_NOW, gina.pub, KEY_NOW)))[0], beforeAda,
+    'a restart changed the relay\'s mind about the helper who IS rostered — the register goes down on reboot');
+  assert.equal((await asks(ada, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] })).length, 1,
+    'the grant itself did not come back through the rehydrate, so the helper has no key after a restart');
 });
 
 // ── THE PEOPLE WHO MUST KEEP WHAT THEY HAVE ───────────────────────────────────────────────────────────────
@@ -424,6 +550,43 @@ test('and the guardian link does not run BACKWARDS — a child is never their pa
   // same trap that produced a direct-message route between two children in sim round 3.
   const got = await asks(teen, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-gina'] });
   assert.deepEqual(got, [], 'a young person was served their guardian\'s other child\'s check-in record');
+});
+
+test('…AND IT DOES NOT RUN SIDEWAYS EITHER — a sibling the church never marked a minor is still refused', async () => {
+  // THE TRAP THE TEST ABOVE DOES NOT CATCH, and the reason it does not: `teen` is in `minors:`, so minorOf()
+  // refuses them and the direction of the guardian link is never actually exercised. The whole gate rested on
+  // one list, and it stops working the moment a church's two lists differ.
+  //
+  // `rhys` is that case. The church has him in `guardians:` as gina's child — he IS her child — and has NOT
+  // marked him in `minors:`. Two ordinary ways a church arrives here, both in reference/DOMAIN.md territory:
+  // he has aged out and somebody updated one list, or the church maintains guardian links and has never used
+  // the minors list at all.
+  //
+  // Measured on this branch before the fix: rhys was served `r-now-gina` — his sibling's check-in record.
+  // guardianLinkedIn(h=gina, authed=rhys) matched because gina appears in rhys's own parent set, and
+  // !minorOf(rhys) was true because he is not on the minors list. "A guardian of the person named" and "a
+  // child of the person named" are the same query when the query is symmetric.
+  //
+  // WHAT IT LEAKED, stated at its real size rather than inflated: metadata. That the record exists, its
+  // d-tag, the session id, the timestamp, and the parent pubkey already in the tag — the body stays sealed
+  // under the session key, which rhys does not hold, and everyone involved is one family. It is not a
+  // cleartext leak. It is a safeguarding gate that had quietly become a single-list check.
+  const mine = await asks(rhys, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-rhys'] });
+  assert.equal(mine.length, 1,
+    're-anchor: rhys cannot reach his OWN record either, so the refusal below proves nothing about direction');
+  const sibling = await asks(rhys, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-gina'] });
+  assert.deepEqual(sibling, [],
+    'a second child of the same parent — present in guardians: and NOT in minors: — was served the family\'s ' +
+    'other check-in record. The gate asked "is this pubkey LINKED to the one named", which matches a sibling ' +
+    'as readily as a parent, and minorOf() was the only thing left standing between them.');
+  const stranger = await asks(rhys, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-hank'] });
+  assert.deepEqual(stranger, [], 'and another family\'s record reached him too');
+  // AND THE PARENT KEEPS WHAT SHE MUST HAVE. A refusal that also refused gina would "fix" this by breaking
+  // the feature. §8 of the design is the standing rule here: an honest refusal beats a silent wrong answer,
+  // but a gate that locks a parent out of her own child's record is neither — it is the leak fixed by
+  // breaking the thing the leak was in.
+  assert.equal((await asks(gina, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-rhys'] })).length, 1,
+    'the direction fix locked a mother out of her own child\'s check-in record');
 });
 
 // ── THE CHURCH'S CHOICE OF LIFETIME, ENFORCED BY THE RELAY ────────────────────────────────────────────────

@@ -6510,8 +6510,14 @@ window.Steward = {
     const sessionKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
     let built;
     try {
+      // NO `rev`. This passed one until 2026-09-09 and it was always the literal 1 — `o.rev` had no caller and
+      // nothing anywhere incremented it, which is the defect CAP_KEYS's own comment lists among the five real
+      // bugs in the finance key ("`rev` written but never compared"). The relay's copy of the comparison is
+      // gone too, for reasons measured rather than argued: see scripts/checkin-role-source.mjs. What orders
+      // two grants is created_at, which is inside the signature and cannot be back-dated by anyone but the
+      // church that signs it.
       built = buildHelperGrant({ session, source, lifetime: policy.lifetime, from: win.from, until: win.until, helpers, keepers,
-        sessionKeyHex, rev: (Number.isInteger(o.rev) && o.rev > 0) ? o.rev : 1,
+        sessionKeyHex,
         wrap: (p2, plaintext) => nip44e(plaintext, nip44ck(sk, p2)) });
     } catch (e) { return null; }   // an unbounded window, an undeclared source, a bad key — refused here as at the relay
     // SAY SO when somebody was left out. A helper whose pubkey could not be wrapped to turns up on Sunday to an

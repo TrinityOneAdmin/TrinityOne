@@ -302,7 +302,7 @@ export function helperPolicy(settings) {
 // can be executed for real in a test without a browser, a bundle, or a relay.
 //
 // SHAPE, and why each field is where it is:
-//   { rev, session, source, from, until, pubs: [...], keys: { <pub>: <wrapped session key> } }
+//   { session, source, lifetime, from, until, pubs: [...], keys: { <pub>: <wrapped session key> } }
 //
 //   `pubs` is CLEARTEXT and is what the relay enforces. `keys` is the same set with the session key wrapped to
 //   each of them, and is what actually opens anything. They must agree, so they are built from ONE list in ONE
@@ -311,16 +311,37 @@ export function helperPolicy(settings) {
 //   _capAllows comment describes: "if those two ever disagreed, a rotation would quietly hand the key to
 //   someone the mint had excluded").
 //
-//   `rev` is a newest-wins counter, for the reason ROTA_VIS carries a timestamp: an addressable document is
-//   keyed by (kind, author, d-tag) and every past copy persists on disk. Without it, a stale grant replayed on
-//   a rehydrate or arriving late from a peer sync silently reinstates a helper the church already removed.
+//   THERE IS NO `rev`, AND THERE WAS ONE UNTIL 2026-09-09. It is recorded here rather than quietly dropped,
+//   because the reason it was added is written into a commit message that is now wrong: "newest wins, by rev
+//   then by timestamp … with a rev in front of it because a church may republish a corrected grant inside the
+//   same second." It cannot do that job. `scripts/event-store.mjs` tie-breaks a same-second addressable
+//   replacement by LOWEST EVENT ID and returns 'have-newer', and the gateway only calls note() when put()
+//   returned 'stored' — so a corrected same-second grant is rejected one layer BELOW the comparison, and `rev`
+//   is never looked at. Measured 2026-09-09 over 200 pairs of real signed events: 90 corrections rejected, a
+//   coin-flip on two sha256 ids.
+//
+//   Worse than useless, in the one case where it did fire — a grant carrying a NEWER created_at and a LOWER
+//   rev. Measured against a live relay the same day: the guard correctly kept a removed helper out, the store
+//   kept the newer document the guard had refused, and A RESTART PUT THE HELPER BACK ON THE CHILDREN'S
+//   REGISTER. The map and the corpus disagreed and the reboot resolved it the wrong way. This relay restarts
+//   itself, so that is a scheduled reversal, not a corner.
+//
+//   WHAT ACTUALLY ORDERS TWO GRANTS is created_at, enforced by put() before anything here runs, and it is the
+//   right rule rather than merely the surviving one: this document is OWNER-ONLY, so the only key that can
+//   produce a grant carrying a later timestamp is the church's own. A stale copy replayed by a rehydrate or a
+//   peer sync carries its ORIGINAL created_at inside the signature and cannot be given a fresher one. `rev`
+//   was the relay second-guessing the church's own signed timestamp, and then forgetting it had.
+//
+//   Nothing shipped ever incremented it either: src/steward.src.js sent `rev: 1` on every grant it minted and
+//   nothing anywhere bumped it, which is the same defect CAP_KEYS's own comment lists among the five real bugs
+//   in the finance key — "`rev` written but never compared".
 //
 // RECIPIENTS ARE NOT ONLY THE HELPERS. The church and its safeguarding stewards are wrapped in too, or a
 // record a helper writes is unreadable by the people accountable for the register — a check-in that nobody
 // but the volunteer who typed it can ever open is not a safeguarding record. That is also what keeps this
 // slice from narrowing existing access: the register's own key (trinityone/checkinkey:) is untouched, and the
 // people who hold it are additionally given each session's key.
-export function buildHelperGrant({ session, source, lifetime, from, until, helpers, keepers, sessionKeyHex, wrap, rev }) {
+export function buildHelperGrant({ session, source, lifetime, from, until, helpers, keepers, sessionKeyHex, wrap }) {
   const sid = String(session || '');
   if (!sid) throw new Error('buildHelperGrant: no session id');
   if (!isDeclaredSource(source)) throw new Error('buildHelperGrant: undeclared helper source ' + JSON.stringify(source));
@@ -348,7 +369,7 @@ export function buildHelperGrant({ session, source, lifetime, from, until, helpe
   // A grant that silently omitted somebody is a helper who turns up and finds an empty room with no error.
   // Report it; do not refuse the whole grant, or one damaged pubkey denies the session to everyone else —
   // the same judgement _warnUnsealed makes in the console for capability keys.
-  return { doc: { rev: Number.isInteger(rev) && rev > 0 ? rev : 1, session: sid, source, lifetime, from, until: end, pubs, keys }, failed };
+  return { doc: { session: sid, source, lifetime, from, until: end, pubs, keys }, failed };
 }
 
 // Read a grant back. Used by the relay's ingest and by any client that needs to know whether its turn is on,
@@ -369,7 +390,6 @@ export function readHelperGrant(content) {
   const until = (c.until === undefined) ? null : c.until;
   if (!session || !isDeclaredSource(source) || windowFault(from, until, lifetime)) return null;
   return {
-    rev: Number.isInteger(c.rev) && c.rev > 0 ? c.rev : 1,
     session, source, lifetime, from, until,
     pubs: clean(c.pubs),
     keys: (c.keys && typeof c.keys === 'object') ? c.keys : {},

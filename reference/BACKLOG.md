@@ -545,3 +545,72 @@ REPLACE church A's record."*
 check-in record already on every relay has no prefix. Copying that rule would make the existing register
 unwritable. It wants the `idOwnerOk` first-writer shape instead, plus a decision about records already on disk —
 which is a change to a safeguarding write path and deserves its own branch and its own audit.
+
+## Two more from the check-in helper audit (2026-09-09)
+
+Found by the independent audit of `feat/checkin-helper-capability` and recorded rather than fixed, per the
+standing rule that the deliverable of a look-around is the finding. Both were measured on this branch; neither
+was introduced by it.
+
+### 3. A check-in helper bypasses `MEMBER_DOC_CAP` entirely
+
+`MEMBER_DOC_CAP` (`gateway.mjs:99`) is 500: one member may not disk-exhaust the relay by publishing novel
+addressable d-tags. The `checkin:` write branch returns its answer **before** that cap is ever reached —
+
+    if (d.startsWith(CHECKIN_D)) {                       // gateway.mjs ~:2953
+      const cp = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
+      if (!cp) return false;
+      if (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')) return true;
+      const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
+      return !!sid && checkinHelperOf(e.pubkey, cp, sid);   // <-- returns here
+    }
+    if (!isMember) return false;                          // ~:2963, the cap lives below this
+
+**Measured against a live gateway, 2026-09-09, with a control:**
+
+    HELPER (in-window, NOT a member of the congregation), 560 novel `checkin:` d-tags
+        -> 560 accepted, 0 refused
+
+    CONTROL: an ordinary MEMBER, 560 novel `mydata:` d-tags
+        -> 500 accepted, then refused from #500 on
+           ("blocked: not a member or not permitted for this group")
+
+The control is the point: the cap is alive and working on the same relay, in the same run. The helper simply
+never reaches it.
+
+**Pre-existing, and that is the point rather than the excuse.** The church key and safeguarding stewards have
+always been above this cap, and that is defensible: they are the church. This slice hands the same exemption to
+a **rota volunteer who need not be a member of the congregation at all** — a far less trusted principal, whose
+whole authority is one grant, and of whom there may be a dozen on a Sunday. Bounded in time by the grant's
+window, which is the mitigation; not bounded in volume at all.
+
+**Do not fix it by deleting the early return.** Addressable writes to an EXISTING d-tag must keep working
+(that is how a child is signed out), and a delegated steward is legitimately not a member, so the plain member
+cap is the wrong shape here. What it wants is its own per-grant ceiling — a sane maximum number of children per
+session — decided with the owner, since it is a number about how a church runs rather than a security constant.
+
+### 4. `day` can be a SHORTER grant than `session`, and it is the one that sounds longer
+
+`HELPER_LIFETIMES.day` ends at local midnight of the service's own date; `session` ends three hours after the
+service starts. So the two cross over, and past **21:00 the "whole of that day" option grants less time than
+"the rostered session only"**. Measured through the shipped `lifetimeWindow()` on 2026-09-09:
+
+| service starts | `session` | `day` |
+|---|---|---|
+| 09:00 | 225 min | 945 min |
+| 18:00 | 225 min | 405 min |
+| 21:00 | 225 min | 225 min  (the crossover, exactly) |
+| 21:30 | 225 min | 195 min |
+| 23:50 | 225 min | **55 min** |
+
+**The direction is safe and the surprise is not.** A church picking the looser-sounding option gets a tighter
+grant, which never over-grants — but "Access ends at the end of the day the session is on" reads as *more* than
+"Access ends when the session does", and for an evening programme it is less. The failure it produces is
+mid-session expiry in a children's evening activity: the helper's key dies while the room is still full, which
+is exactly the "fails at the busiest ten minutes" case §8 of the design warns about.
+
+Three ways out, none obviously right, which is why this is a note and not a fix: floor `day` at whatever
+`session` would have given; say the actual end time on the screen that offers the choice, so the steward sees
+"until 00:00" before choosing; or leave it and accept that `day` is only meaningful for daytime sessions. The
+first is the least surprising and the third is the most honest. It is a policy question, so it is the owner's
+— *ship the gates, never the policy* (2026-08-27).

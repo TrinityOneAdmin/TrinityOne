@@ -182,8 +182,16 @@ test('a grant carrying nothing about any child', () => {
     helpers: [ADA], keepers: [CHI], sessionKeyHex: KEY, wrap });
   // The relay stores this in the clear, and must, because it has to read the window and the list it enforces.
   // So the test that matters is what is NOT in it.
-  assert.deepEqual(Object.keys(doc).sort(), ['from', 'keys', 'lifetime', 'pubs', 'rev', 'session', 'source', 'until'],
+  assert.deepEqual(Object.keys(doc).sort(), ['from', 'keys', 'lifetime', 'pubs', 'session', 'source', 'until'],
     'the cleartext grant grew or lost a field — every one of them is something the relay operator can read');
+  // `rev` WAS the eighth field and was removed on 2026-09-09. Named here so that re-adding it has to be a
+  // decision somebody makes against this line, rather than a field that quietly reappears: it could not do
+  // the same-second job it was added for (event-store.mjs drops that correction before the relay compares
+  // anything — 90 of 200 measured), and where it did fire it survived only until the next restart.
+  assert.equal(doc.rev, undefined,
+    '`rev` is back in the grant. It cannot order two same-second grants — put() rejects the correction by ' +
+    'lowest event id before note() runs — and the one case where it fires puts the relay\'s map out of step ' +
+    'with its own corpus until a restart resolves it in favour of the STALE grant.');
   assert.doesNotMatch(JSON.stringify(doc), /child|name|room|code|pickup/i,
     'the cleartext grant carries something about a child — it must be a session id, two timestamps, a source ' +
     'name and a set of pubkeys, and nothing else');

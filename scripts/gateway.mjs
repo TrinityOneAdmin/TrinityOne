@@ -1453,7 +1453,7 @@ const ROTA_VIS = new Map();
 // keeping the rota to the teams. Mirrors careAdmin()'s use of ROSTER_BY/ROSTER_PEOPLE, including grantorOk —
 // a roster published by a since-revoked steward must not keep granting reads.
 // ── THE CHECK-IN HELPER CAPABILITY ────────────────────────────────────────────────────────────────────────
-// cp -> Map(sessionId -> { from, until, pubs:Set, rev, ts }). One church-signed grant per session: these
+// cp -> Map(sessionId -> { from, until, lifetime, pubs:Set, ts }). One church-signed grant per session: these
 // pubkeys, this window, and nothing else. reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md §7.
 //
 // WHY THE RELAY HOLDS A LIST RATHER THAN ASKING THE ROTA. `rota:<serviceId>` is sealed under the church name
@@ -1757,6 +1757,23 @@ const approvedIn = (pub, cp) => {
 // their own church makes, and a request names the church it was made in.
 const childCareReader = (other, cp) => other === cp || networkOf(other, cp) || approvedIn(other, cp) || stewardCan(other, cp, 'safeguarding');
 const guardianLinkedIn = (a, b, cp) => { const m = GUARDIANS_BY.get(cp); if (!m) return false; const ga = m.get(a); if (ga && ga.has(b)) return true; const gb = m.get(b); return !!(gb && gb.has(a)); };
+// THE SAME QUESTION, ASKED IN ONE DIRECTION: is `guardian` recorded as a PARENT OF `child`, in this church's
+// own map? GUARDIANS_BY is childPub -> Set(parentPubs), so this is simply the map read the way it is written.
+//
+// guardianLinkedIn() above matches EITHER way round, and that is right wherever one side is already known to
+// be a child — safeguardAllows() has established `minorPub` is a minor before it asks. It is wrong wherever
+// the side being matched is an arbitrary pubkey out of a document, because "linked to" then quietly includes
+// SIBLING: two children of one parent are each linked to that parent, so a symmetric test plus a
+// "the reader is not a minor" guard admits any child of the family the church has not marked as a minor.
+//
+// Measured on this branch, 2026-09-09: a second child of the same parent, present in `guardians:` and NOT in
+// `minors:` — a teenager who has aged out, or a church that keeps one list up to date and not the other — was
+// served their sibling's check-in record. Metadata only (that it exists, its d-tag, the session, the
+// timestamp, the parent's pubkey; the body stays sealed under the session key) and within one family, so it
+// is not a cleartext leak; it is a gate whose entire strength had drifted onto minorOf(), which stops working
+// the moment a church's two safeguarding lists differ. reference/DOMAIN.md: churches maintain one list and
+// not the other, routinely.
+const guardianOfIn = (child, guardian, cp) => { const m = GUARDIANS_BY.get(cp); const g = m && m.get(child); return !!(g && g.has(guardian)); };
 // The churches whose safeguarding policy governs `pub`: ONLY churches that both list them as a minor AND
 // that they have actually joined.
 //
@@ -2447,13 +2464,37 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // whose d-tag and content disagree about which session it is for (that mismatch is how a grant for a
     // quiet Tuesday session would open the Sunday register).
     if (!g || g.session !== sid) { if (!(held && held.ts > ts)) byS.delete(sid); return; }
-    // NEWEST WINS, by rev then by timestamp. Addressable documents are keyed by (kind, author, d-tag) and
-    // every superseded copy stays on disk, so without this the winner is simply whoever replayed last: a stale
-    // grant naming a volunteer the church has since removed silently puts them back on the register. Same
-    // shape as ROTA_VIS's guard, with a rev in front of it because a church may republish a corrected grant
-    // inside the same second.
-    if (held && (held.rev > g.rev || (held.rev === g.rev && held.ts > ts))) return;
-    byS.set(sid, { from: g.from, until: g.until, lifetime: g.lifetime, pubs: new Set(g.pubs), rev: g.rev, ts });
+    // NEWEST WINS, BY TIMESTAMP — and by nothing else. Same shape as ROTA_VIS's guard, and it now IS that
+    // shape: this read `held.rev > g.rev || (held.rev === g.rev && held.ts > ts)` until 2026-09-09, and the
+    // `rev` half is gone because it could not do the job it was added for and did harm in the one case where
+    // it fired. Both halves measured that day rather than reasoned about:
+    //
+    //   • THE JOB IT WAS ADDED FOR — "a church may republish a corrected grant inside the same second" — is
+    //     not reachable from here. event-store.mjs tie-breaks a same-second addressable replacement by LOWEST
+    //     EVENT ID and returns 'have-newer', and every caller runs note() only when put() said 'stored'. The
+    //     correction is dropped a layer below this line, so `rev` is never compared. Over 200 pairs of real
+    //     signed events: 90 rejected. A coin-flip on two sha256 ids.
+    //
+    //   • WHERE IT DID FIRE — a grant with a NEWER created_at and a LOWER rev — it made this map disagree with
+    //     the corpus underneath it. Against a live relay: the church removed a helper, the stale grant came
+    //     back, this guard correctly refused it, put() had already stored it, AND THE NEXT RESTART PUT THAT
+    //     HELPER BACK ON THE CHILDREN'S REGISTER. This relay restarts itself, so that was a scheduled
+    //     reversal of a safeguarding decision, not a corner case.
+    //
+    // AND created_at IS THE RIGHT RULE, not merely the surviving one. This document is OWNER-ONLY: the only
+    // key that can produce a grant bearing a later timestamp is the church's own, so a later timestamp IS the
+    // church speaking more recently. A stale copy replayed by a rehydrate or arriving from a peer sync carries
+    // its original created_at inside the signature and cannot be handed a fresher one — which is the case the
+    // guard was really for, and the case put() already refuses on its own. `rev` was this relay second-guessing
+    // the church's signed timestamp and then forgetting it had.
+    //
+    // KEPT, THOUGH put() MAKES IT UNREACHABLE TODAY, and said plainly rather than implied: put() only ever
+    // hands note() the newer of two versions, so this comparison should never be the thing that decides. It
+    // mirrors put()'s rule so that the map cannot drift from the corpus if that path ever changes. It is a
+    // backstop; it is not the protection. The protection is put(), and it survives a restart because the loser
+    // is never written down.
+    if (held && held.ts > ts) return;
+    byS.set(sid, { from: g.from, until: g.until, lifetime: g.lifetime, pubs: new Set(g.pubs), ts });
   }
   else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'any') ? cp : '');
@@ -3316,10 +3357,12 @@ function canRead(e, authed) {
     //     whose child this is. That is the entire mechanism by which a parent sees their own child's record
     //     and provably not another family's — there is nothing to compare against `guardians:` when the child
     //     has no pubkey to appear in it.
-    //   • and, for the older young person who DOES have an account, that person's guardian, via the church's
-    //     own parent-child map. Scoped with minorOf() exactly as safeguardAllows is, because guardianLinkedIn
-    //     matches in EITHER direction: without it, marking a parent as a child would turn their child into
-    //     their guardian.
+    //   • and, for the older young person who DOES have an account, THAT PERSON'S GUARDIAN — read out of the
+    //     church's own parent-child map IN ONE DIRECTION, via guardianOfIn(). This asked guardianLinkedIn()
+    //     until 2026-09-09, which matches EITHER way round, so "a guardian of the person named" also matched
+    //     "a sibling of the person named": a second child of the same parent who is in `guardians:` and not in
+    //     `minors:` was served the family's other check-in record, with minorOf() the only thing left standing
+    //     between them. That guard is kept as a second refusal, not as the gate.
     //
     // AND NOBODY ELSE — including an ordinary member, which is the change. Nothing in the shipped product
     // reads `checkin:` as an ordinary member (the register is a console screen and there is no member-app
@@ -3336,10 +3379,43 @@ function canRead(e, authed) {
     // named there, and the session key is NIP-44-wrapped per recipient, so the rest of the envelope is opaque
     // to them. The window is deliberately NOT applied here — a helper reading their key ten minutes early is
     // how a Sunday actually starts, and the key is useless without the records, which ARE window-gated.
+    //
+    // AND NOBODY ELSE — IT RETURNS. Until 2026-09-09 this branch granted the named helper and then FELL
+    // THROUGH to the ordinary effective-member rule at the bottom of this function, so the grant was served to
+    // the whole congregation. Measured against a live gateway on this branch, with `rota-settings` set to
+    // `visibility: 'stewards'`: an ordinary member was correctly refused `rota:` and was still handed
+    // `checkinhelper:<session>` in full — the cleartext `pubs` array naming everyone rostered to children's
+    // work that morning, and the keeper set readable off the `keys{}` object beside it.
+    //
+    // THAT SILENTLY REVERSES A DECISION THE CHURCH MADE. A steward who narrows rota visibility is saying "the
+    // congregation does not get to see who is on which team"; publishing a second, ungated document carrying
+    // the children's-work half of the same answer takes it back without telling anybody. The relay needs
+    // `pubs` because it is what it enforces (the same reason `roster:` and `rota-settings` are cleartext); the
+    // congregation does not need it at all.
+    //
+    // NOT CONDITIONAL ON THE ROTA SETTING, deliberately, and this is the part that matters. Gating this on
+    // `ROTA_VIS` would mean a church that never opened that settings page — which is every church that exists
+    // today, since the default is 'church' — keeps publishing the children's rota to everyone. The protection
+    // a church gets should not depend on it having found a screen. This is the shape of the members-list rule
+    // and of `careavail:`: withhold from the congregation, not from the people accountable.
+    //
+    // WHO STILL READS IT: the church, its network, any steward and a care admin, all of whom returned true at
+    // the privileged short-circuit above, and a pubkey NAMED IN THE GRANT ITSELF — including one who is not a
+    // member of the congregation, which is the whole reason this branch exists. A helper reading a grant for a
+    // session they are not on is now refused rather than served; they have no use for last week's envelope and
+    // no client asks for one.
+    //
+    // ONE CONSEQUENCE FOR WHOEVER BUILDS THE SCREEN, recorded here rather than discovered there: a REVOKED
+    // grant is dropped from CHECKIN_HELPERS by the ingest, so after a revocation this returns false for the
+    // helper too — the tombstone is not delivered to the person it revokes. Nothing reads this document in
+    // the member app today, so it breaks nothing now. When a helper screen exists it must learn its turn is
+    // over from being REFUSED, loudly, at the moment it tries to use the register — which is what §8 of the
+    // design asks for anyway ("fail LOUDLY at the moment of check-in") — and not from waiting for a document
+    // it will never be sent.
     if (d.startsWith(CHECKINHELPER_D)) {
       const byS = CHECKIN_HELPERS.get(cp);
       const g = byS && byS.get(d.slice(CHECKINHELPER_D.length));
-      if (g && authed && g.pubs.has(authed)) return true;
+      return !!(g && authed && g.pubs.has(authed));
     }
     if (d.startsWith(CHECKIN_D)) {
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
@@ -3349,7 +3425,14 @@ function canRead(e, authed) {
         const h = toHexPub(t[1]) || t[1];
         if (!h) continue;
         if (h === authed) return true;
-        if (guardianLinkedIn(h, authed, cp) && !minorOf(authed, cp)) return true;
+        // DIRECTIONAL, and both halves are load-bearing. guardianOfIn() asks whether the church's own map
+        // records `authed` as a PARENT OF the person the record names — not merely "linked to", which also
+        // matches a SIBLING and handed a family's non-minor teenager their brother's or sister's record.
+        // minorOf() stays as a second, independent refusal rather than as the whole gate: a young person is
+        // never served somebody else's check-in whatever any map says, which is the same belt-and-braces
+        // safeguardAllows() carries for the same reason (a person the church marks as a child is never a
+        // valid guardian, owner's decision 2026-09-06).
+        if (guardianOfIn(h, authed, cp) && !minorOf(authed, cp)) return true;
       }
       return false;
     }
