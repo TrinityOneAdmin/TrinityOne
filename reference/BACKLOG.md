@@ -338,3 +338,30 @@ the existing bulk join slips: install from us, then scan to join.
   that, it is a liability rather than a feature.
 - Consider whether this belongs with the relay auto-update work (owner, 08-28 and 09-08): a box that
   updates itself should probably keep its APKs current at the same time, or explicitly say it does not.
+
+## An empty relay tells its operator the wrong thing, and nobody can find it
+
+Owner, 2026-09-09, asking a fair question: *"How are people meant to just run relays in support, if they
+don't have a church running?"*
+
+**They can, and it works.** Measured on a brand-new relay, default settings, no operator involvement: a
+church self-registered onto it and got a **200**. The `!CHURCH_PUBS.size` refusal (`gateway.mjs:2148`) is
+narrower than it reads — it means "until I know whose data I hold, I store nobody's", and the door to
+REGISTER stays open. The reason for it is good and should stay: a relay restored from a backup that lost
+its `church.json` would otherwise silently accept the whole world's data. Loud beats wrong.
+
+Two things make it *look* like a barrier, and both are cheap:
+
+1. **The status line points at the wrong person.** `gateway.mjs:5471` prints "NO CHURCH CONFIGURED — this
+   relay refuses every write until one is set up in the control dashboard". That tells a supporter THEY
+   must add a church. Untrue. It should say a church can register itself, and that the box is waiting for
+   its first one.
+
+2. **A support relay is invisible.** `offerHosting` defaults false (`:99`), so it never appears in
+   Auto-find, no church ever discovers it, and it sits empty for ever — looking exactly like the broken
+   thing the status line implied. An empty relay in particular should say plainly that nobody can find it
+   until "Offer to host other churches" is on.
+
+Belongs with `reference/PENDING-CHURCH-REQUESTS-2026-09-08.md`, which exists because these defaults leave
+willing relays and homeless churches unable to find each other. This is the same fault seen from the
+relay's side rather than the church's.
