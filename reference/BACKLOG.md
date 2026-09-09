@@ -486,3 +486,45 @@ danger that no longer exists.
 **Workaround today:** the API cannot do it. `scripts/relay-reset.sh <dir> --churches` on the box clears
 `church.json` directly, and a relay left empty will accept the first church that self-registers with no
 operator action (measured 2026-09-09: 200).
+
+## Two things found while building the check-in helper capability (2026-09-09)
+
+Both are PRE-EXISTING and neither was introduced or fixed by that branch. Recorded rather than acted on, per
+the standing rule that the deliverable of a look-around is the finding.
+
+### 1. `finance/journal:` is declared `read: 'church'` and the relay has no such gate
+
+`scripts/trinity-doc-types.mjs` says the church books are `read: 'church'`. `canRead()` in `scripts/gateway.mjs`
+has **no `finance/` branch at all** — the journal resolves its church from the treasurer's `['church']` tag, is
+listed in `retractionExempt`, and then falls through to the ordinary effective-member rule. Measured against a
+live gateway on 2026-09-09: an ordinary member of the church fetched `finance/journal:1` and got it.
+
+**Not a plaintext leak.** Entries are church-encrypted and the member holds no finance key, which is why this is
+an assurance gap rather than an incident — and it is exactly the class of gap the registry exists to make
+visible ("the type nobody thought about is where the next leak comes from"). What it does hand an ordinary
+member is the SHAPE of the books: how many entries there are, how often they are written, and when. On a seized
+relay that is already visible; from a member's phone it need not be.
+
+Two ways to close it and they are not equivalent: give `finance/` a read branch mirroring its write gate
+(church / finance steward), or change the declaration to say what the relay does. The first is the right one,
+and it needs a test that an ordinary member is refused BEFORE the change is made, so the fix is provable.
+Asserted as-is in `scripts/checkin-helper-capability.test.mjs` with a re-anchor message, so whoever changes it
+is told the note here is stale.
+
+### 2. `checkin:<id>` is not namespaced to the church that created it
+
+`carereq:` has `carereqIdOk()`, and `group:`/`roster:` have `idOwnerOk()`, both because ids are a relay-GLOBAL
+namespace on a shared box. `checkin:` has neither. `src/steward.src.js` mints `'ci' + Date.now().toString(36) +
+Math.random()...`, and the write gate resolves the church from the writer's OWN `['church']` tag:
+
+    if (d.startsWith(CHECKIN_D)) { const cp = namedChurch(e) || ...; ... }
+
+So on a multi-tenant relay, church B's safeguarding steward can publish `checkin:<A's id>` tagged `['church', B]`
+and — because these are addressable — REPLACE church A's record. A's child disappears from A's register with
+nothing to explain it. Not exploitable to READ anything (the record is sealed under A's key), but a safeguarding
+record being destroyable across tenants is the same shape as AUDIT-2026-07-24 CRITICAL-2.
+
+**Not fixed on the helper branch on purpose:** `carereqIdOk` REFUSES an id with no owner prefix, and every
+check-in record already on every relay has no prefix. Copying that rule would make the existing register
+unwritable. It wants the `idOwnerOk` first-writer shape instead, plus a decision about records already on disk —
+which is a change to a safeguarding write path and deserves its own branch and its own audit.

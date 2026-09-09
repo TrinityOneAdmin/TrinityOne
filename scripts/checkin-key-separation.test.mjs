@@ -241,9 +241,15 @@ test('the relay refuses a check-in write from anyone but the church or a SAFEGUA
   // member of the church could overwrite a child's presence record with anything and it would vanish from the
   // register. Reading it was never possible; destroying it needed no key at all.
   const gw = stripComments(GW);
-  const rule = gw.match(/if \(d\.startsWith\(CHECKIN_D\)\)[^\n]*/);
+  // RE-ANCHORED 2026-09-09. This matched `[^\n]*` — the rest of ONE LINE — which was right while the rule was a
+  // one-liner and became silently wrong the moment the check-in helper capability made it a block: the match
+  // then captured `if (d.startsWith(CHECKIN_D)) {` and nothing else, and every assertion below it would have
+  // failed for a reason that has nothing to do with what they are about. Slice the whole BLOCK instead, so
+  // this test survives the rule growing a third branch without either passing or failing by accident.
+  const rule = gw.match(/if \(d\.startsWith\(CHECKIN_D\)\) \{[\s\S]*?\n    \}/) || gw.match(/if \(d\.startsWith\(CHECKIN_D\)\)[^\n]*/);
   assert.ok(rule, 'the relay has no rule for checkin: docs, so they fall to the member catch-all and any ' +
     'member of the church can overwrite a child\'s check-in record');
+  assert.ok(rule[0].split('\n').length < 40, 're-anchor: the checkin: write rule slice ran away past its own block');
   assert.match(rule[0], /stewardCan\(e\.pubkey, cp, ['"]safeguarding['"]\)/,
     'the check-in write rule does not admit a safeguarding steward, so the capability grants nothing');
   assert.match(rule[0], /e\.pubkey === cp/, 'the church itself cannot write its own register');

@@ -204,8 +204,14 @@ export async function moveRelay(relay) {
 // ── the old build ───────────────────────────────────────────────────────────────────────────────────────
 // A relay running the code from BEFORE this work, so "new client, old relay" is rehearsed rather than hoped
 // for. `git show <rev>:scripts/<file>` gives us the old bytes without touching the working tree or checking
-// anything out; gateway.mjs has exactly two local imports (event-store.mjs, trinity-doc-types.mjs) and we
-// take those from the same commit, so the box really is that build and not a hybrid.
+// anything out; we take gateway.mjs's local imports AS THEY WERE AT THAT REV, so the box really is that build
+// and not a hybrid.
+//
+// OLD_LOCALS IS THE OLD BUILD'S IMPORT LIST, NOT THE CURRENT ONE'S, and must not be "kept up to date" with
+// whatever gateway.mjs imports today. The current gateway has a THIRD local import — checkin-role-source.mjs,
+// added 2026-09-09 with the check-in helper capability — and adding it here would make `git show <rev>:` fail
+// against any rev from before it existed, which is every rev this function is pointed at. If a newer rev is
+// pinned that needs a fourth file, add it then: the list belongs to the rev, not to main.
 //
 // It is written to a directory DIRECTLY UNDER THE REPO ROOT for two reasons, both load-bearing:
 //   • node resolves `ws` / `nostr-tools` by walking up from the file, so anywhere outside the repo fails;
