@@ -181,3 +181,58 @@ of session this feature serves.
   persecuted church and the developing world, where the assumption above is false. Check-in is a feature
   of the settled, well-connected church, and should be described that way rather than presented as
   universal.
+
+## 9. What ChurchSuite does, and what we should take from it
+
+Looked at 2026-09-09 at the owner's suggestion. ChurchSuite is the reference product for UK churches, so
+its conventions are what a church coming to us will expect. Their support articles block automated
+fetching; this is from their public documentation summaries, so treat the detail as indicative and check
+before copying anything closely.
+
+### It validates the helper capability
+
+Check-In permissions are granted per user, and **no underlying module access is required** — a church can
+deny someone the Children module entirely and still grant Check-In alone. That is the capability in §2,
+already proven in a mature product. Good sign that the shape is right.
+
+### Three things we had missed
+
+**1. TEAM MEMBERS CHECK IN TOO, so the adult-to-child ratio can be watched.** This is the important one
+and it changes the model. It is not "children check in" — it is **a session**, with team and children
+both present, and the ratio between them is a thing a UK church is inspected on. A church can be within
+policy at 10:00 and outside it at 10:20 when a helper leaves, and nobody notices.
+
+Consequences for our design:
+- A helper does not merely *hold a key*, they are *present at a session*. Those are different facts and
+  the second is the safeguarding-relevant one.
+- The ratio itself is **policy, not mechanism** — every church sets its own, and some set different ones
+  per age group. Ship the count and the church's own threshold; never a number of ours.
+- It pairs with §7's rota decision: the rota already says who was *meant* to be there, and check-in says
+  who *is*.
+
+**2. A PIN on the leader's admin area.** Theirs is a 4-digit PIN set in the Children module settings,
+guarding the screen that shows medical details and contacts. Ours has no equivalent. A helper's phone
+left on a table in a busy room is exactly the case for it, and it is cheap. Note the console already has
+PIN-at-rest machinery to follow rather than invent.
+
+**3. Retention is configurable, and is a church decision.** When a visiting child's profile is deleted,
+a text record of the name is kept against historic attendance for safeguarding, and the retention period
+is a setting. Same class as expiry in §7 — the church chooses, we ship the mechanism. Also a reminder
+that a check-in record is a **safeguarding record**, so "delete the person" and "delete the evidence they
+were in the room" are different operations and must not be the same button. Compare
+`accept-is-not-a-retention-rule`: replaying a write gate over an import once deleted a whole finance
+journal.
+
+### One thing to scope, not to copy yet
+
+Their leader sees **medical and allergy details, photo/video consent, and emergency contacts** at a
+glance during a session. That is a genuine need — a helper with a wheezing child should not be hunting
+through a members list — and it is also the most sensitive screen in the product. It belongs in a later
+slice, on top of an audited boundary, and its own design note. Photo/video consent already exists here
+in part (`NOPHOTO_D`, and the children's-photos toggle in Rules & privacy).
+
+### What this does NOT change
+
+The boundary being built in slice 1 is unaffected: a helper key opens the register and provably nothing
+else. Everything above is about what a *session* is and what a helper may see once inside it — later
+slices, on a foundation that has been proved.
