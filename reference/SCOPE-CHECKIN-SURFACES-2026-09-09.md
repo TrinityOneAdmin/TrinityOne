@@ -10,7 +10,8 @@ Built and merged: `publishCheckinHelpers`, `revokeCheckinHelpers`, `checkinLifet
 enforcing in the relay.
 
 **And nothing consumes any of it.** `grep -rl` over `src/` and `app/` for `helperKeyFor` and `grantAdmits`
-returns nothing. A helper's record cannot currently be displayed by anything that exists. That is not a
+returns nothing. (Still true after the 2026-09-09 restructure: the console now has `grantCheckinPermission`,
+`revokeCheckinPermission` and `issueCheckinSessionKeys`, and no screen calls any of them.) A helper's record cannot currently be displayed by anything that exists. That is not a
 defect — it is what "boundary first, screens second" means — but it does mean **slice 2 is what makes
 slice 1 real**, and until then the boundary is proved only by tests.
 
@@ -19,10 +20,21 @@ slice 1 real**, and until then the boundary is proved only by tests.
 Deliberately three, not one. Each is independently useful, independently auditable, and the risk rises
 sharply across them.
 
-### Slice 2 — the steward grants and revokes (console)
+### Slice 2 — the steward CLEARS A PERSON and revokes (console)
 
-The smallest thing that makes slice 1 usable. A steward picks a session, sees who the rota says is
-serving, grants them, chooses a lifetime, and can revoke.
+**REWRITTEN 2026-09-09**, after `reference/FINDING-CHECKIN-GRANTS-SHOULD-BE-PER-PERSON-2026-09-09.md` and the
+restructure it led to. It said: *"A steward picks a session, sees who the rota says is serving, grants them,
+chooses a lifetime, and can revoke."* That screen would have hard-coded "pick a service" into a steward's
+habits, which is the mismatch the finding was about — churches clear volunteers annually and church-wide.
+
+The screen is now: **a steward picks a PERSON, chooses how long they are cleared for (just today / until a
+date / until we end it), and can withdraw it.** Once a year, not once a Sunday. `checkinPermissionSuggestions`
+fills the list from the rota or a named team so nobody retypes twelve names, but the decision is per person,
+because a DBS certificate and a lead's sign-off are facts this product does not hold.
+
+**The session keys are NOT on this screen.** `issueCheckinSessionKeys` mints them from the permissions whenever
+the console is open. What the screen owes the steward is honesty about that: it is the console that issues, so
+a church whose console never opens has helpers with no keys. Say it once, plainly, where it is useful.
 
 - Lowest risk of the three: console-only, one reader, and the church key is already there.
 - Everything it needs exists. It is wiring, not invention.
@@ -30,7 +42,10 @@ serving, grants them, chooses a lifetime, and can revoke.
   required to consult is not a feature.
 - Watch: the mint derives keepers as `[cp, ...stewards]`, so a screen that omits the safeguarding lead
   silently gives her no session key. That is a known gap from the audit and **this is the slice that must
-  close it**.
+  close it** — and it now applies to `issueCheckinSessionKeys`, which takes the same `stewards` argument.
+- Watch: **nothing may block a check-in.** The permission gate keeps other people OUT of the register; the
+  church key and every safeguarding steward write it with no permission at all, and a screen must not grow a
+  "you are not cleared" refusal in front of the desk.
 
 ### Slice 3 — the room and the register (member app)
 

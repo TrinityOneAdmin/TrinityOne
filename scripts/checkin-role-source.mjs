@@ -1,5 +1,48 @@
 // WHO MAY HOLD THE CHECK-IN HELPER KEY. Asked once, here, and nowhere else.
 //
+// ══ TWO DOCUMENTS, TWO QUESTIONS — RESTRUCTURED 2026-09-09 ═════════════════════════════════════════════════
+// reference/FINDING-CHECKIN-GRANTS-SHOULD-BE-PER-PERSON-2026-09-09.md, the owner's DECIDED block.
+//
+// The first cut of this file answered ONE question — "who may hold the key for THIS SERVICE" — and the answer
+// document was structurally per-service (`checkinhelper:<serviceId>`). The owner, reading it back:
+//
+//     "in general most people approved as safeguarding adults, are approved church wide on a yearly basis.
+//      If I'm reading this correctly, we probably don't need per session permissions."
+//
+// He was right, and the mismatch was real: UK churches clear volunteers ANNUALLY AND CHURCH-WIDE (DBS, a
+// safeguarding lead's sign-off, a training course). A system that made twelve cleared people be re-authorised
+// every Sunday was not reflecting the church's policy, it was substituting a stricter one — the exact mistake
+// reference/DOMAIN.md records him correcting the day before ("we are not the policy and we are not the
+// inspector").
+//
+// THE TRADE HE WAS OFFERED, and the one he refused: a person-scoped grant that simply wrapped a longer-lived
+// register key. Simpler, and a lost phone would then expose the whole YEAR's register instead of one Sunday.
+// He kept the blast radius and paid for it in machinery. So there are now two documents:
+//
+//   • A PERMISSION — `trinityone/checkinperm:<personPub>` — says A PERSON IS CLEARED. Scoped to the person,
+//     lasting until the church ends it. This is what a steward grants, ONCE, matching the annual clearance the
+//     church already does. It carries NO KEY AT ALL: it is an authorisation, not an envelope.
+//   • A SESSION KEY — `trinityone/checkinhelper:<serviceId>` — stays per session, and is ISSUED TO WHOEVER THE
+//     PERMISSION ADMITS WITHOUT A STEWARD DOING ANYTHING WEEKLY. Same shape as before, same enforcement, and
+//     it can no longer be open-ended (see HELPER_LIFETIMES).
+//
+// BOTH ARE REQUIRED, AND THAT CONJUNCTION IS THE LOAD-BEARING PART. The relay admits a helper to a session's
+// records iff the session envelope names them AND a live permission covers them. Without it, revoking a
+// person's clearance would leave every envelope already issued for future Sundays still admitting them, and
+// "lasts until the church ends it" would need a steward to hunt down one document per service — which is the
+// per-service chore this restructure exists to delete.
+//
+// WHAT THAT BUYS, and it is the property the extra machinery is for: a compromised helper phone holds the
+// session keys it actually fetched. It cannot obtain a key for a session that closed before its permission
+// opened, nor for any session after the permission is revoked or lapses, nor for one more than
+// KEY_LEAD_SECONDS in the future. One Sunday, or a fortnight at the very worst — never the year.
+//
+// WHAT IT COSTS, said here because it is a PRODUCT problem and not an implementation detail: the session key
+// must be wrapped to each recipient with the church's own key, so THE ISSUER IS THE CONSOLE, and a console has
+// to open at some point between the permission being granted and the Sunday. Nothing on the relay can do it —
+// a relay that could wrap the key could read the register. See issueCheckinSessionKeys in src/steward.src.js.
+//
+// ══ AND THE ORIGINAL QUESTION, UNCHANGED ══════════════════════════════════════════════════════════════════
 // reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md §7, the owner's decision:
 //
 //     "Holding the helper key will be a rota role, but we may change that to be more specifically a
@@ -89,19 +132,19 @@ export const HELPER_LIFETIMES = Object.freeze({
       return { from: start - before, until: endOfDay };
     },
   },
-  // For the small church where the same three people cover everything and re-issuing a grant every week is a
-  // chore that would simply be skipped — which would leave them on the console, or on paper. Its safety comes
-  // from revocation being immediate rather than from a clock, and a screen offering it must SAY that, because
-  // "until a steward ends it" is only as good as somebody remembering to end it.
-  open: {
-    id: 'open', max: null,
-    label: 'Until a steward ends it',
-    describe: 'Access continues until a steward revokes it. Nothing expires on its own.',
-    window(start, o) {
-      const before = Number.isFinite(o.before) ? Math.max(0, Math.floor(o.before)) : 45 * 60;
-      return { from: start - before, until: null };
-    },
-  },
+  // THERE IS NO `open` HERE ANY MORE, AND ITS ABSENCE IS THE POINT OF THE 2026-09-09 RESTRUCTURE.
+  //
+  // It used to live here — "until a steward ends it" — because a session grant was ALSO the thing that said a
+  // person was cleared, so the small church that re-staffs nothing had to be able to say "leave it open". Now
+  // that "is this person cleared" is its own document with its own lifetimes (PERMISSION_LIFETIMES below), an
+  // open-ended SESSION KEY would be a standing key to the children's register and nothing else. Worse under
+  // the new model than under the old one: session keys are now issued WITHOUT A STEWARD ACTING, so an
+  // open-ended one could be minted by machinery nobody watched.
+  //
+  // So every lifetime in this table has a `max`, windowFault refuses a missing `until` under all of them, and
+  // NO SESSION KEY THIS PRODUCT CAN MINT OUTLIVES 26 HOURS. The church's "until a steward ends it" is not
+  // lost — it moved to the permission, where it means what a church means by it: this person is cleared until
+  // we say otherwise.
 });
 
 // THE DEFAULT IS THE TIGHTEST OPTION, and it is asserted by name in the tests so that a later, well-meant
@@ -113,6 +156,199 @@ export const isDeclaredLifetime = (id) => typeof id === 'string' && Object.proto
 // The ceiling above every capped lifetime. A lifetime may be tighter than this and none may be looser, so
 // adding a fourth shape cannot quietly extend the longest EXPIRING grant this product will store.
 export const MAX_SESSION_SECONDS = 26 * 3600;
+
+// ── HOW LONG A PERMISSION LIVES: THE ANNUAL CLEARANCE, IN THE CHURCH'S OWN WORDS ───────────────────────────
+// The finding: "Expiry moves from a window around a service to a date the church sets."
+//
+// THREE SHAPES AGAIN, and deliberately not the same three. A session key's lifetimes are about a morning; a
+// permission's are about a person's standing in the church, so they are the three sentences a safeguarding
+// lead would actually say:
+//
+//   • "just today"  — the parent helping out this week, the visiting speaker's assistant, a one-off holiday
+//     club. The finding asks for this explicitly: "Keep per-session as the narrower option, because it has a
+//     real use … those are exactly the people a church has NOT cleared for the year."
+//   • "until this date" — the annual clearance, which is what almost every church will pick. The DATE is the
+//     church's; we only cap how far it can reach.
+//   • "until we say otherwise" — the small church that clears three people and reviews it when something
+//     changes. Its safety is revocation, which is immediate, and a screen offering it must SAY so.
+//
+// THE DEFAULT IS THE TIGHTEST, as it is for session keys, and for the same reason: a church that never opens
+// the screen gets the safest behaviour rather than the most convenient one.
+//
+// WHY `open` IS LEGAL HERE AND NOT FOR A SESSION KEY. This document carries no key material. An open-ended
+// permission means "we have not withdrawn her clearance"; an open-ended session key would mean "this phone
+// opens the children's register for ever". The first is a fact about a person that the church maintains; the
+// second is a standing key. That distinction IS the restructure.
+export const PERMISSION_LIFETIMES = Object.freeze({
+  // THE DEFAULT, and the tightest.
+  day: {
+    id: 'day', max: 26 * 3600,
+    label: 'Just that day',
+    describe: 'Cleared for that one day. Ends at the end of it.',
+  },
+  // The annual clearance. 400 days is a year plus slack for a church that renews late — long enough that
+  // "annually" is expressible, short enough that a clearance nobody ever revisits still lapses.
+  dated: {
+    id: 'dated', max: 400 * 24 * 3600,
+    label: 'Until a date the church sets',
+    describe: 'Cleared until the date you choose. Nothing renews it on its own.',
+  },
+  // No end. Ended by a steward, and by nothing else.
+  open: {
+    id: 'open', max: null,
+    label: 'Until a steward ends it',
+    describe: 'Cleared until somebody removes it. Nothing expires on its own.',
+  },
+});
+
+// THE DEFAULT IS THE TIGHTEST OPTION, asserted by name in the tests so a later, well-meant change of it fails
+// rather than ships.
+export const DEFAULT_PERMISSION_LIFETIME = 'day';
+export const isDeclaredPermissionLifetime = (id) =>
+  typeof id === 'string' && Object.prototype.hasOwnProperty.call(PERMISSION_LIFETIMES, id);
+
+// The ceiling above every capped PERMISSION lifetime, the sibling of MAX_SESSION_SECONDS. Adding a fourth
+// shape cannot quietly extend the longest EXPIRING clearance this product will store.
+export const MAX_PERMISSION_SECONDS = 400 * 24 * 3600;
+
+// ── HOW FAR AHEAD A PHONE MAY FETCH A SESSION KEY ─────────────────────────────────────────────────────────
+// THE BLAST RADIUS, ENFORCED BY THE RELAY RATHER THAN CHOSEN BY A CONSOLE, and this is what makes the owner's
+// decision worth its machinery.
+//
+// Session keys are now issued automatically, ahead of time, for every service a console can see. Without this
+// number a helper cleared for the year could fetch every envelope the console had run ahead and minted — which
+// is the whole-year exposure he refused, arriving through the back door of an automatic issuer.
+//
+// So: a named helper may fetch a session key from `until` back to `from - KEY_LEAD_SECONDS`, and outside that
+// the relay refuses it. A console that issues a year ahead therefore leaks a fortnight, not a year, and the
+// limit lives in the box rather than in a client's judgement. It is NOT a limit on working: the records
+// themselves are gated on the session's own window, which is unchanged.
+export const KEY_LEAD_SECONDS = 14 * 24 * 3600;
+
+// The window a permission covers. Same division of labour as lifetimeWindow(): the caller passes the church's
+// chosen shape and gets a window or null, and never does the arithmetic itself.
+//
+//   `date`  — 'YYYY-MM-DD', required by `day`: the one day the person is cleared for.
+//   `until` — 'YYYY-MM-DD', required by `dated`: the last day of the clearance.
+//   `from`  — unix seconds, when the clearance starts. Defaults to `at`, which defaults to now.
+//
+// LOCAL TIME, matching lifetimeWindow() and every other date comparison in this product. A church saying
+// "cleared to the 31st of December" means their own 31st of December.
+export function permissionWindow(lifetimeId, opts) {
+  const o = opts || {};
+  if (!isDeclaredPermissionLifetime(lifetimeId)) return null;   // FAIL CLOSED: an unknown shape is no clearance
+  const at = Number.isFinite(o.at) ? Math.floor(o.at) : Math.floor(Date.now() / 1000);
+  const dayBounds = (str) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(str || ''));
+    if (!m) return null;
+    const y = Number(m[1]), mo = Number(m[2]) - 1, dd = Number(m[3]);
+    const a = Math.floor(new Date(y, mo, dd, 0, 0, 0, 0).getTime() / 1000);
+    const b = Math.floor(new Date(y, mo, dd, 23, 59, 59, 0).getTime() / 1000);
+    return (Number.isFinite(a) && Number.isFinite(b)) ? { a, b } : null;
+  };
+  if (lifetimeId === 'day') {
+    const b = dayBounds(o.date);
+    if (!b) return null;                       // no date we can place → NO permission. Never a default one.
+    return { from: b.a, until: b.b, lifetime: 'day' };
+  }
+  if (lifetimeId === 'dated') {
+    const b = dayBounds(o.until);
+    if (!b) return null;
+    const from = Number.isFinite(o.from) ? Math.floor(o.from) : at;
+    if (b.b <= from) return null;              // a clearance that ended before it began is a typo, not a window
+    if (b.b - from > PERMISSION_LIFETIMES.dated.max) return null;   // refused, not silently shortened: a church
+    return { from, until: b.b, lifetime: 'dated' };                 // that typed 2099 must see it, not get 2027
+  }
+  return { from: Number.isFinite(o.from) ? Math.floor(o.from) : at, until: null, lifetime: 'open' };
+}
+
+// Is this window one the relay will accept, under the PERMISSION lifetime it declares? The sibling of
+// windowFault, kept separate rather than generalised because the two tables answer different questions and one
+// of them permits an open end. Returns a REASON on refusal, for the same reason windowFault does.
+export function permissionFault(from, until, lifetimeId) {
+  if (!isDeclaredPermissionLifetime(lifetimeId)) return 'unknown permission lifetime ' + JSON.stringify(lifetimeId);
+  const life = PERMISSION_LIFETIMES[lifetimeId];
+  if (!Number.isInteger(from) || from <= 0) return 'from must be a positive whole unix second';
+  if (until === null || until === undefined) {
+    // AN OPEN-ENDED PERMISSION IS ONLY EVER LEGAL FOR THE LIFETIME WHOSE POINT IT IS. Omitting `until` under
+    // `day` or `dated` is how "cleared for today" would quietly become "cleared for ever".
+    return life.max == null ? '' : 'a ' + lifetimeId + ' permission must carry an end';
+  }
+  if (life.max == null) return 'an open-ended permission must not carry an end — revoke it to end it';
+  if (!Number.isInteger(until) || until <= 0) return 'until must be a positive whole unix second';
+  if (until <= from) return 'the clearance closes before it opens';
+  if (until - from > life.max) return 'a ' + lifetimeId + ' permission may not exceed ' + life.max + ' seconds';
+  if (until - from > MAX_PERMISSION_SECONDS) return 'no expiring permission may exceed ' + MAX_PERMISSION_SECONDS + ' seconds';
+  return '';
+}
+
+// Build the permission body the console publishes. Pure, and it does NO CRYPTO — there is nothing to wrap.
+// That absence is the whole reason a permission may be open-ended and a session key may not.
+//
+// SHAPE: { person, source, lifetime, from, until }
+//
+//   `person` is repeated inside the body even though it is already the d-tag suffix, and the relay refuses a
+//   document where the two disagree. Same rule as the grant's `session`, and for the same reason: a permission
+//   whose d-tag names one member and whose body names another is how a clearance meant for one person would
+//   admit somebody else entirely.
+//
+//   `source` records WHICH question said this person is cleared — the rota, a named safeguarding team, or a
+//   steward naming them directly. It may NOT be 'permission': a permission cannot cite itself as its own
+//   provenance, and isPermissionSource is what refuses that.
+//
+//   THERE IS NO KEY AND NO `keys` OBJECT. If you find yourself adding one, stop: that is the collapse back to
+//   "a person-scoped grant wrapping a longer-lived register key", which the owner considered and refused
+//   because a lost phone would then expose the year rather than the Sunday.
+export function buildCheckinPermission({ person, source, lifetime, from, until }) {
+  const who = String(person || '').trim().toLowerCase();
+  if (!HEX64.test(who)) throw new Error('buildCheckinPermission: person must be a 64-hex pubkey');
+  if (!isPermissionSource(source)) throw new Error('buildCheckinPermission: undeclared permission source ' + JSON.stringify(source));
+  if (!isDeclaredPermissionLifetime(lifetime)) throw new Error('buildCheckinPermission: undeclared lifetime ' + JSON.stringify(lifetime));
+  const end = (until === undefined) ? null : until;
+  const fault = permissionFault(from, end, lifetime);
+  if (fault) throw new Error('buildCheckinPermission: ' + fault);
+  return { person: who, source, lifetime, from, until: end };
+}
+
+// Read a permission back. One parser, used by the relay's ingest, by its write gate, and by the console's
+// issuer — so "what a permission means" is decided once. Returns null for anything it cannot vouch for, and a
+// caller must treat null as "no permission", NEVER as "no limits".
+export function readCheckinPermission(content) {
+  let c;
+  try { c = JSON.parse(content || ''); } catch { return null; }
+  if (!c || typeof c !== 'object') return null;
+  const person = String(c.person || '').trim().toLowerCase();
+  const until = (c.until === undefined) ? null : c.until;
+  if (!HEX64.test(person)) return null;
+  if (!isPermissionSource(c.source)) return null;
+  if (permissionFault(c.from, until, c.lifetime)) return null;
+  return { person, source: c.source, lifetime: c.lifetime, from: c.from, until };
+}
+
+// Is this permission live at `at`? Inclusive at both ends, and `at` is a parameter rather than a clock read so
+// a test can prove the boundary instead of asserting around it — exactly as grantAdmits does.
+//
+// A PERMISSION THAT HAS NOT OPENED YET ADMITS NOBODY, which is what makes granting a January clearance in
+// December safe.
+export function permissionAdmits(perm, at) {
+  if (!perm || !Number.isFinite(at)) return false;
+  if (!HEX64.test(String(perm.person || ''))) return false;
+  // THE SHAPE, NOT ONLY THE WINDOW — and this checked only the window until it was measured wrong on
+  // 2026-09-09, by the issuer test in checkin-helper-mint-is-the-shipped-one.test.mjs. An object of the form
+  // { person, from: 1, until: null } with NO declared source and NO declared lifetime was admitted, because
+  // every field this function looked at was fine and the ones that make a permission a permission were not
+  // looked at at all.
+  //
+  // WHY THAT MATTERED. Real permissions reach here through readCheckinPermission, which does validate both, so
+  // nothing shipped was reachable — but this is the function every caller asks, and "an unknown shape clears
+  // NOBODY" is the rule the whole module is built on. A window-only check quietly made the opposite true for
+  // anything that had not been through the parser: an unbounded, sourceless clearance would have been honoured.
+  if (!isPermissionSource(perm.source)) return false;
+  if (permissionFault(perm.from, perm.until == null ? null : perm.until, perm.lifetime)) return false;
+  if (at < perm.from) return false;
+  if (perm.until != null && at > perm.until) return false;
+  return true;
+}
 
 // ── THE SOURCES ───────────────────────────────────────────────────────────────────────────────────────────
 // Each source answers exactly one question: given what the console knows, which pubkeys may hold the helper
@@ -198,7 +434,47 @@ export const HELPER_SOURCES = Object.freeze({
       return clean(pubs);
     },
   },
+  // A STEWARD NAMED THEM, BY HAND. Added 2026-09-09 with the permission layer, and it is the ordinary case
+  // rather than an escape hatch: an annual clearance is a HUMAN decision — a DBS certificate, a lead's
+  // sign-off, a training course — and none of those facts are in this product. A steward types the names.
+  //
+  // It also stops `helpers`/`people` being a way AROUND the source system. Before this, publishCheckinHelpers
+  // took an explicit `helpers` array and recorded whatever `source` it was told, so a hand-picked list could be
+  // filed under 'rota' provenance and nothing would notice. Now naming somebody by hand IS a declared source
+  // and says so in the enforced record.
+  steward: {
+    id: 'steward',
+    label: 'A steward named them',
+    resolve(ctx) { return clean((ctx && ctx.people) || []); },
+  },
+  // THE ONLY SOURCE A SESSION ENVELOPE MAY DECLARE, and the one that makes the weekly steward act disappear.
+  //
+  // It is not interchangeable with the three above: they answer "who should the church CLEAR", which is a
+  // question about people, and this answers "who HAS the church cleared, right now", which is a question about
+  // documents the church has already signed. isPermissionSource() is what keeps them apart — a permission may
+  // not cite this as its provenance (that would be circular) and an envelope may cite nothing else (that would
+  // be the pre-restructure model, where a rota decided who held a key).
+  //
+  // `ctx.permissions` is an array of parsed permissions (readCheckinPermission's output) and `ctx.at` the
+  // instant to judge them at. It reads a clock from nowhere.
+  permission: {
+    id: 'permission',
+    label: 'Whoever the church has cleared',
+    resolve(ctx) {
+      const at = Number.isFinite(ctx && ctx.at) ? ctx.at : Math.floor(Date.now() / 1000);
+      return clean(((ctx && ctx.permissions) || []).filter(pm => permissionAdmits(pm, at)).map(pm => pm && pm.person));
+    },
+  },
 });
+
+// WHICH SOURCES MAY SAY A PERSON IS CLEARED — every declared one EXCEPT 'permission'. A permission citing
+// 'permission' as its own provenance is a loop, and a loop in a safeguarding record is not a shape to leave
+// legal on the grounds that nothing writes one today.
+export const isPermissionSource = (id) => isDeclaredSource(id) && id !== GRANT_SOURCE;
+
+// The one source name a session envelope may declare. Named rather than spelled out at four call sites,
+// because a typo in one of them is a grant the relay refuses on a Sunday morning.
+export const GRANT_SOURCE = 'permission';
 
 export const DEFAULT_HELPER_SOURCE = 'rota';
 
@@ -218,6 +494,15 @@ export function eligibleHelpers(sourceId, ctx) {
   if (!isDeclaredSource(sourceId)) return [];
   try { return HELPER_SOURCES[sourceId].resolve(ctx || {}); } catch { return []; }
 }
+
+// WHO HAS THE CHURCH CLEARED, RIGHT NOW. The finding asked for exactly this rename of the question:
+// "eligibleHelpers currently answers 'who is rostered to THIS service'. It would answer 'who has the church
+// cleared', with the rota as one possible source."
+//
+// A THIN ALIAS OVER eligibleHelpers, not a second implementation — the same reason sessionWindow is a thin
+// alias over lifetimeWindow. This is what the ISSUER calls, once per service, and it is the only thing that
+// decides who a session envelope is wrapped to.
+export const permittedHelpers = (permissions, at) => eligibleHelpers(GRANT_SOURCE, { permissions, at });
 
 // ── THE WINDOW ────────────────────────────────────────────────────────────────────────────────────────────
 // A service says `{ date: 'YYYY-MM-DD', time: 'HH:MM' }` in LOCAL time, as strings, and nothing else — no
@@ -266,12 +551,13 @@ export function windowFault(from, until, lifetimeId) {
   const life = HELPER_LIFETIMES[lifetimeId];
   if (!Number.isInteger(from) || from <= 0) return 'from must be a positive whole unix second';
   if (until === null || until === undefined) {
-    // AN OPEN-ENDED GRANT IS ONLY EVER LEGAL FOR THE LIFETIME WHOSE POINT IT IS. Omitting `until` under any
-    // other lifetime is how a `session` grant would quietly become permanent, so it is refused rather than
-    // defaulted — the mismatch is the mistake, and a mistake a church needs to see.
-    return life.max == null ? '' : 'a ' + lifetimeId + ' grant must carry an end';
+    // NO SESSION KEY MAY BE OPEN-ENDED, under any lifetime. This read `life.max == null ? '' : …` until
+    // 2026-09-09, when `open` was a helper lifetime; now the open-ended shape belongs to a PERMISSION, and a
+    // session key with no end would be a standing key to the children's register minted by machinery rather
+    // than by a steward. Refused rather than defaulted: the mismatch is the mistake, and a mistake a church
+    // needs to see.
+    return 'a ' + lifetimeId + ' key must carry an end — only a PERMISSION may be open-ended';
   }
-  if (life.max == null) return 'an open-ended grant must not carry an end — revoke it to end it';
   if (!Number.isInteger(until) || until <= 0) return 'until must be a positive whole unix second';
   if (until <= from) return 'the window closes before it opens';
   if (until - from > life.max) return 'a ' + lifetimeId + ' grant may not exceed ' + life.max + ' seconds';
@@ -291,8 +577,28 @@ export function windowFault(from, until, lifetimeId) {
 export function helperPolicy(settings) {
   const s = settings || {};
   return {
-    source: isDeclaredSource(s.source) ? s.source : DEFAULT_HELPER_SOURCE,
+    // `source` NARROWED TO A PERMISSION SOURCE, 2026-09-09. It used to be the envelope's provenance; the
+    // envelope's is pinned to GRANT_SOURCE now, and this is the question it always really answered — which
+    // list a steward is shown when deciding WHO TO CLEAR. A church whose stored setting says 'permission'
+    // (nothing writes one, but a hand-edited or future document could) falls to the default rather than being
+    // honoured, because "clear whoever is already cleared" is not an answer.
+    source: isPermissionSource(s.source) ? s.source : DEFAULT_HELPER_SOURCE,
+    // The SESSION KEY's lifetime. A church that stored 'open' before 2026-09-09 falls back to the tightest
+    // here rather than keeping a shape that no longer exists — the safe direction, and the one this function's
+    // own comment above already commits to.
     lifetime: isDeclaredLifetime(s.lifetime) ? s.lifetime : DEFAULT_HELPER_LIFETIME,
+  };
+}
+
+// THE SAME, FOR A PERMISSION. Kept as its own function rather than a third field on helperPolicy: "how long is
+// this person cleared for" and "how long does a Sunday's key last" are different decisions taken on different
+// screens, and a single object would let a caller apply one where it meant the other. Two functions cannot be
+// confused by accident; two fields of one object can.
+export function permissionPolicy(settings) {
+  const s = settings || {};
+  return {
+    source: isPermissionSource(s.source) ? s.source : DEFAULT_HELPER_SOURCE,
+    lifetime: isDeclaredPermissionLifetime(s.lifetime) ? s.lifetime : DEFAULT_PERMISSION_LIFETIME,
   };
 }
 
@@ -326,11 +632,29 @@ export function helperPolicy(settings) {
 //   REGISTER. The map and the corpus disagreed and the reboot resolved it the wrong way. This relay restarts
 //   itself, so that is a scheduled reversal, not a corner.
 //
-//   WHAT ACTUALLY ORDERS TWO GRANTS is created_at, enforced by put() before anything here runs, and it is the
-//   right rule rather than merely the surviving one: this document is OWNER-ONLY, so the only key that can
-//   produce a grant carrying a later timestamp is the church's own. A stale copy replayed by a rehydrate or a
-//   peer sync carries its ORIGINAL created_at inside the signature and cannot be given a fresher one. `rev`
-//   was the relay second-guessing the church's own signed timestamp, and then forgetting it had.
+//   WHAT ACTUALLY ORDERS TWO GRANTS is created_at, enforced by put() before anything here runs. It is THE
+//   SURVIVING RULE, AND IT IS NOT THE RIGHT ONE — corrected 2026-09-09, because the sentence that stood here
+//   until then was measured false and a false claim in the permanent record is worse than the bug it hides.
+//
+//   WHAT IT SAID: "this document is OWNER-ONLY, so the only key that can produce a grant carrying a later
+//   timestamp is the church's own" — therefore a later timestamp IS the church speaking more recently.
+//
+//   WHY THAT IS FALSE: scripts/event-store.mjs:149 accepts a created_at up to +900s ahead of the relay's own
+//   clock. A church device whose clock runs fast writes a grant stamped up to fifteen minutes in the future,
+//   and every HONEST correction the same church signs in that window carries a LOWER timestamp and is refused
+//   as stale. The signing key is the church's in both cases; the timestamps are what disagree. So an honest
+//   revocation can be refused for up to fifteen minutes by the church's own fast clock.
+//
+//   WHY IT STANDS ANYWAY: the owner judged mid-session revocation unlikely in practice and chose not to spend
+//   on it (2026-09-09). The window is bounded at 900 seconds, it needs the church's OWN device to be running
+//   fast, and the restructure below narrows what a stale grant can even do — a session key is now useless
+//   without a live PERMISSION, and revoking the permission is a DIFFERENT document, so it is not exposed to
+//   this window at all. That is the mitigation; it is not a fix, and nobody should read this paragraph as one.
+//
+//   A stale copy replayed by a rehydrate or arriving from a peer sync carries its ORIGINAL created_at inside
+//   the signature and cannot be given a fresher one — that case, which is the one this guard was really for,
+//   created_at does handle. `rev` was the relay second-guessing the church's own signed timestamp and then
+//   forgetting it had, which is a different and worse failure than the one described above.
 //
 //   Nothing shipped ever incremented it either: src/steward.src.js sent `rev: 1` on every grant it minted and
 //   nothing anywhere bumped it, which is the same defect CAP_KEYS's own comment lists among the five real bugs
@@ -344,7 +668,14 @@ export function helperPolicy(settings) {
 export function buildHelperGrant({ session, source, lifetime, from, until, helpers, keepers, sessionKeyHex, wrap }) {
   const sid = String(session || '');
   if (!sid) throw new Error('buildHelperGrant: no session id');
-  if (!isDeclaredSource(source)) throw new Error('buildHelperGrant: undeclared helper source ' + JSON.stringify(source));
+  // THE ENVELOPE'S SOURCE IS PINNED, NOT MERELY DECLARED — tightened 2026-09-09 with the permission layer.
+  // This read `isDeclaredSource(source)` until then, which was right when a rota decided who held a key. It no
+  // longer does: an envelope is issued from the church's PERMISSIONS and from nothing else. Refusing every
+  // other name here (and in readHelperGrant, and so at the relay) means a console that tried to mint a
+  // rota-derived envelope — the pre-restructure shape — is refused rather than quietly honoured. That is the
+  // regression this pin exists to catch, and it would otherwise look exactly like working software.
+  if (source !== GRANT_SOURCE) throw new Error('buildHelperGrant: a session envelope must declare source ' +
+    JSON.stringify(GRANT_SOURCE) + ', not ' + JSON.stringify(source) + ' — who may hold a key is a PERMISSION now');
   // NO DEFAULT APPLIED HERE, deliberately. helperPolicy() is where the church's answer is read and where a
   // missing setting becomes the tightest lifetime; a second default in the builder would be a second opinion,
   // and the one place this feature must not have two opinions is how long a key to the children's register
@@ -388,7 +719,7 @@ export function readHelperGrant(content) {
   const lifetime = c.lifetime;
   const from = c.from;
   const until = (c.until === undefined) ? null : c.until;
-  if (!session || !isDeclaredSource(source) || windowFault(from, until, lifetime)) return null;
+  if (!session || source !== GRANT_SOURCE || windowFault(from, until, lifetime)) return null;
   return {
     session, source, lifetime, from, until,
     pubs: clean(c.pubs),

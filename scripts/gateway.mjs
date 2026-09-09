@@ -24,7 +24,13 @@ import { D } from './trinity-doc-types.mjs';   // durable event storage (node:sq
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
 // provenance nobody implemented). readHelperGrant applies the WINDOW CAP itself, which is why the cap is not
 // re-checked here: one parser, one rule, both paths.
-import { readHelperGrant, isDeclaredSource } from './checkin-role-source.mjs';
+//
+// SINCE 2026-09-09 IT IMPORTS THE PERMISSION PARSER TOO, and the same rule applies to it: this box parses, it
+// does not decide. `isPermissionSource` is the declared-provenance test for a permission (a permission may not
+// cite 'permission' as its own source); `KEY_LEAD_SECONDS` is how far ahead a named helper may fetch a session
+// key, and it lives beside the lifetimes rather than as a number typed into this file.
+import { readHelperGrant, readCheckinPermission, isDeclaredSource, isPermissionSource,
+         KEY_LEAD_SECONDS } from './checkin-role-source.mjs';
 import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
@@ -708,7 +714,8 @@ const NAME_D = D.NAME;           // a MEMBER's own display name for one church, 
 const CAREKEY_D = D.CAREKEY;     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
 const FINANCEKEY_D = D.FINANCEKEY;   // the church books' key, wrapped to the church + every finance-capable steward
 const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — d=checkin:<id>, sealed under the safeguarding key
-const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S check-in helpers + that session's key wrapped to each — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
+const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S key, wrapped to whoever the church's PERMISSIONS admit — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
+const CHECKINPERM_D = D.CHECKINPERM;   // A PERSON IS CLEARED for children's check-in — d=checkinperm:<personPub>. Owner-only, cleartext, and CARRIES NO KEY. The half of the old grant that says WHO, split out 2026-09-09 so a church can clear its volunteers once a year as it actually does, rather than once a service.
 const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to the church + every safeguarding-capable steward. Separate from FINANCEKEY_D on purpose: they shared one derived key until 2026-08-20, so a treasurer could read every child's name, room and pickup code.
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
@@ -1469,6 +1476,17 @@ const ROTA_VIS = new Map();
 // here on purpose: this document is owner-only, so the author IS the church, and accepting a ['church'] tag
 // would reintroduce exactly the shape AUDIT-2026-07-24 CRITICAL-2 closed.
 const CHECKIN_HELPERS = new Map();
+// cp -> Map(personPub -> { from, until, ts }) — WHO THIS CHURCH HAS CLEARED for children's check-in.
+//
+// Keyed by church first for the same reason CHECKIN_HELPERS is, and with the same absence of a namedChurch()
+// fallback: this document is owner-only, so the AUTHOR is the church, and honouring a ['church'] tag would
+// reintroduce the shape AUDIT-2026-07-24 CRITICAL-2 closed. A co-tenant on a shared box cannot clear anybody
+// for this congregation.
+//
+// It holds NO KEY MATERIAL and never will. A permission is an authorisation; the key lives in the session
+// envelope. That separation is the owner's decision of 2026-09-09 and the reason a lost helper phone exposes
+// the Sundays it held rather than the year.
+const CHECKIN_PERMITS = new Map();
 // Is `pub` a check-in helper for this church's session, RIGHT NOW?
 //
 // THE CLOCK IS THE SERVER'S, ALWAYS, and never the event's created_at. That is the whole enforcement: a helper
@@ -1486,13 +1504,45 @@ const checkinHelperOf = (pub, cp, sessionId) => {
   if (!g) return false;
   const t = Math.floor(Date.now() / 1000);
   if (t < g.from) return false;
-  // `until === null` is the church choosing "until a steward ends it" (HELPER_LIFETIMES.open). It is legal
-  // ONLY because readHelperGrant refused to store an absent end under any other lifetime — so a grant that
-  // reaches here with no end is one whose church said so in the enforced record, not one that lost its end on
-  // the way. Its safety is revocation, which is immediate and beats any lifetime; the ingest above drops the
-  // grant the moment the tombstone lands.
-  if (g.until != null && t > g.until) return false;
-  return g.pubs.has(pub);
+  // NO SESSION KEY IS OPEN-ENDED ANY MORE. This read `if (g.until != null && …)` because HELPER_LIFETIMES once
+  // carried an `open` shape; the open-ended choice moved to the PERMISSION on 2026-09-09, and readHelperGrant
+  // now refuses a grant with no end under every lifetime. The null test is KEPT rather than deleted so that a
+  // document written by an older console, replayed through a rehydrate, cannot reach this line as an unbounded
+  // one — belt over the braces, and it costs a comparison.
+  if (g.until == null || t > g.until) return false;
+  if (!g.pubs.has(pub)) return false;
+  // AND THE PERMISSION. THE CONJUNCTION IS THE RESTRUCTURE, and it is what makes "cleared until the church
+  // ends it" a single act rather than a hunt through one document per Sunday.
+  //
+  // Session keys are now ISSUED WITHOUT A STEWARD ACTING, ahead of time, for every service the console can
+  // see. If the envelope alone admitted, revoking a person's clearance on Tuesday would leave every envelope
+  // already minted for the next month still admitting them, and a steward would have to find and revoke each
+  // one — which is precisely the per-service chore the owner asked to be rid of.
+  //
+  // IT CAN ONLY EVER NARROW. A permission admits nobody the envelope does not already name; it is a second
+  // refusal, never a second route in. So this line cannot widen what a helper key opens, which is the one
+  // property no change to this feature may touch.
+  return checkinPermitted(pub, cp);
+};
+// IS `pub` CLEARED BY THIS CHURCH FOR CHILDREN'S CHECK-IN, RIGHT NOW?
+//
+// THE CLOCK IS THE SERVER'S, as it is for the grant window and for the same reason: created_at is the writer's
+// to choose. This takes no time argument so no caller can hand it a friendlier one. The boundary itself is
+// unit-tested against permissionAdmits() in checkin-role-source.mjs, where the time IS a parameter.
+//
+// A PERMISSION THAT HAS NOT OPENED YET CLEARS NOBODY — granting a January clearance in December is an ordinary
+// thing for a church to do and must be safe. `until === null` is the church choosing "until a steward ends
+// it"; legal here and refused for a session key, because this document carries no key material. Its safety is
+// revocation, which is immediate: the ingest drops the record the moment the tombstone lands.
+const checkinPermitted = (pub, cp) => {
+  if (!pub || !cp) return false;
+  const byP = CHECKIN_PERMITS.get(cp);
+  const pm = byP && byP.get(pub);
+  if (!pm) return false;
+  const t = Math.floor(Date.now() / 1000);
+  if (t < pm.from) return false;
+  if (pm.until != null && t > pm.until) return false;
+  return true;
 };
 const onAnyRoster = (pub, cp) => {
   if (!pub || !cp) return false;
@@ -2481,12 +2531,31 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     //     HELPER BACK ON THE CHILDREN'S REGISTER. This relay restarts itself, so that was a scheduled
     //     reversal of a safeguarding decision, not a corner case.
     //
-    // AND created_at IS THE RIGHT RULE, not merely the surviving one. This document is OWNER-ONLY: the only
-    // key that can produce a grant bearing a later timestamp is the church's own, so a later timestamp IS the
-    // church speaking more recently. A stale copy replayed by a rehydrate or arriving from a peer sync carries
-    // its original created_at inside the signature and cannot be handed a fresher one — which is the case the
-    // guard was really for, and the case put() already refuses on its own. `rev` was this relay second-guessing
-    // the church's signed timestamp and then forgetting it had.
+    // AND created_at IS THE SURVIVING RULE. IT IS NOT THE RIGHT ONE — corrected 2026-09-09, because what stood
+    // here until then was measured false and a false claim in the permanent record is worse than the bug it
+    // hides.
+    //
+    // WHAT IT SAID: "this document is OWNER-ONLY: the only key that can produce a grant bearing a later
+    // timestamp is the church's own, so a later timestamp IS the church speaking more recently."
+    //
+    // WHY THAT IS FALSE: scripts/event-store.mjs:149 accepts a created_at up to +900 SECONDS ahead of this
+    // relay's own clock. A church device running fast pins the record with a timestamp up to fifteen minutes
+    // in the future, and every honest correction the SAME CHURCH signs inside that window carries a lower
+    // timestamp and is refused as stale. Both events are the church's; it is the clocks that disagree. So an
+    // honest revocation can be refused for up to fifteen minutes by the church's own fast device.
+    //
+    // WHY IT STANDS ANYWAY: the owner judged mid-session revocation unlikely in practice and chose not to
+    // spend on it (2026-09-09). The window is bounded at 900s, it needs the church's own device to be fast,
+    // and the 2026-09-09 restructure narrows what a stale grant can do at all — an envelope admits nobody
+    // without a live PERMISSION, and a permission is a DIFFERENT document, so revoking a person's clearance is
+    // not exposed to this race even when a re-issued envelope is. That is a mitigation. It is not a fix, and
+    // nobody should read this paragraph as one.
+    //
+    // WHAT created_at DOES HANDLE, correctly: a stale copy replayed by a rehydrate or arriving from a peer
+    // sync carries its original created_at inside the signature and cannot be handed a fresher one. That is
+    // the case the guard was really for, and put() already refuses it on its own. `rev` was this relay
+    // second-guessing the church's signed timestamp and then forgetting it had — a different and worse failure
+    // than the bounded one described above.
     //
     // KEPT, THOUGH put() MAKES IT UNREACHABLE TODAY, and said plainly rather than implied: put() only ever
     // hands note() the newer of two versions, so this comparison should never be the thing that decides. It
@@ -2495,6 +2564,28 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // is never written down.
     if (held && held.ts > ts) return;
     byS.set(sid, { from: g.from, until: g.until, lifetime: g.lifetime, pubs: new Set(g.pubs), ts });
+  }
+  else if (d.startsWith(CHECKINPERM_D) && CHURCH_PUBS.has(e.pubkey)) {   // A PERSON IS CLEARED — OWNER-ONLY, author IS the church
+    // THE SIBLING OF THE BRANCH ABOVE, and deliberately shaped the same way: keyed by the AUTHOR (never a
+    // ['church'] tag), newest-wins by created_at alone, a tombstone that cannot be undone by an older replay,
+    // and the SAME PARSER the write gate uses so a document cannot mean one thing at the door and another on
+    // disk. Enforced here as well as in accept() for the reason NEED_D and CHECKINHELPER_D both state: a
+    // document already on disk replays through note() on every boot with accept() nowhere in the path, and
+    // this relay restarts itself.
+    const who = String(d.slice(CHECKINPERM_D.length) || '').toLowerCase();
+    const ts = e.created_at || 0;
+    let byP = CHECKIN_PERMITS.get(e.pubkey);
+    if (!byP) { byP = new Map(); CHECKIN_PERMITS.set(e.pubkey, byP); }
+    const held = byP.get(who);
+    // A REVOCATION — the church withdrew somebody's clearance. It ends EVERY session at once, which is the
+    // whole point of moving "who is cleared" out of the per-service document: a steward acts once.
+    if (removed) { if (!(held && held.ts > ts)) byP.delete(who); return; }
+    const pm = readCheckinPermission(e.content);
+    // FAILS CLOSED, and refuses a d-tag that disagrees with the body: a permission filed under one member's
+    // pubkey that names another inside would clear the wrong person, and the d-tag is what every lookup uses.
+    if (!pm || pm.person !== who) { if (!(held && held.ts > ts)) byP.delete(who); return; }
+    if (held && held.ts > ts) return;
+    byP.set(who, { from: pm.from, until: pm.until, lifetime: pm.lifetime, source: pm.source, ts });
   }
   else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'any') ? cp : '');
@@ -2794,6 +2885,40 @@ function accept(e) {
       // the window cap and the declared-source test; isDeclaredSource is named again here only so this rule
       // states out loud what it depends on.
       return !!g && g.session === sid && isDeclaredSource(g.source);
+    }
+    // A PERSON IS CLEARED — OWNER-ONLY, for the same reason and by the same argument as the grant above.
+    //
+    // IT IS THE SHARPER CASE OF THE TWO, and worth saying rather than inheriting. A safeguarding steward can
+    // already read the whole children's register; what they must not gain is the power to say who ELSE may.
+    // This document is now the ONLY thing that says that — the grant merely carries the key to whoever it
+    // already names — so if the mint were widened here, widening it on the grant would be a formality. Both
+    // stay church-key-only in this slice. Widening to safeguarding stewards is a separate, already-scoped
+    // change and is deliberately NOT done here.
+    //
+    // Nothing trusts a ['church'] tag: the author must be a configured church, and note() keys the record by
+    // that author, so a co-tenant cannot clear anybody for another congregation.
+    if (d.startsWith(CHECKINPERM_D)) {
+      if (!CHURCH_PUBS.has(e.pubkey)) return false;
+      // ONE SPELLING OF THE D-TAG, AND ONLY ONE. `toHexPub` would have done here — it is what the sibling
+      // key-envelope rules use — but it also ACCEPTS AN NPUB and converts it, and this d-tag is what every
+      // lookup of a clearance keys on. Two spellings of the same suffix would be two addressable documents
+      // writing one map entry: a name the relay gates under one form and a client publishes under another,
+      // which is the shape scripts/doc-registry.test.mjs exists to prevent.
+      //
+      // A SECOND REFUSAL, NOT THE ONLY ONE, and said plainly rather than overclaimed. Measured by sabotage on
+      // 2026-09-09: replacing this line with `toHexPub(who)` changed no test result, because readCheckinPermission
+      // already requires `person` to be 64-hex and the comparison below requires it to equal this suffix — so an
+      // npub-spelled d-tag is refused either way. This line is belt over those braces and is worth its two
+      // lines; it is NOT what is holding the property up.
+      const who = String(d.slice(CHECKINPERM_D.length) || '');
+      if (!/^[0-9a-f]{64}$/.test(who)) return false;
+      if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // the church withdraws a clearance
+      const pm = readCheckinPermission(e.content);
+      // REFUSED AT THE DOOR, not merely ignored at ingest — a clearance that silently did not save is a
+      // volunteer who turns up next month and finds an empty room with nothing to look at. readCheckinPermission
+      // applies the lifetime cap and the declared-source test; isPermissionSource is named again here only so
+      // this rule states out loud what it depends on, exactly as the grant's rule names isDeclaredSource.
+      return !!pm && pm.person === who && isPermissionSource(pm.source);
     }
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
     // the per-church NAME key envelope — same authority as the care key.
@@ -3412,10 +3537,41 @@ function canRead(e, authed) {
     // over from being REFUSED, loudly, at the moment it tries to use the register — which is what §8 of the
     // design asks for anyway ("fail LOUDLY at the moment of check-in") — and not from waiting for a document
     // it will never be sent.
+    //
+    // TWO CLAUSES ADDED 2026-09-09 WITH THE PERMISSION LAYER, and both are refusals:
+    //
+    //   • A LIVE PERMISSION IS REQUIRED. Being named in an envelope is no longer enough. Envelopes are issued
+    //     ahead of time by machinery, so without this a person whose clearance was withdrawn on Tuesday would
+    //     keep collecting keys for every Sunday a console had already run ahead and minted.
+    //   • AND THE FETCH IS TIME-BOUNDED: from the session's `until` back to `from - KEY_LEAD_SECONDS`. Early
+    //     fetch is still how a Sunday starts — ten minutes, or a fortnight — but a phone belonging to somebody
+    //     cleared for the YEAR can no longer hoover up every envelope in one REQ. That is the blast radius the
+    //     owner paid machinery for, enforced by this box rather than by a console's good judgement. A CLOSED
+    //     session's envelope is refused outright, and costs nothing: its records are window-gated anyway, so
+    //     there was never anything the key could open.
     if (d.startsWith(CHECKINHELPER_D)) {
       const byS = CHECKIN_HELPERS.get(cp);
       const g = byS && byS.get(d.slice(CHECKINHELPER_D.length));
-      return !!(g && authed && g.pubs.has(authed));
+      if (!g || !authed || !g.pubs.has(authed)) return false;
+      if (!checkinPermitted(authed, cp)) return false;
+      const t = Math.floor(Date.now() / 1000);
+      return t >= g.from - KEY_LEAD_SECONDS && g.until != null && t <= g.until;
+    }
+    // A PERMISSION IS NOT SERVED TO THE CONGREGATION. It names the church's cleared safeguarding team, which is
+    // exactly what a church narrowing its rota visibility said the congregation does not get to see — the same
+    // reasoning, at the same size, as the grant rule above, and NOT conditional on that setting for the same
+    // reason: a protection that waits for a church to find a settings page is a reward for reading the manual.
+    //
+    // WHO STILL READS IT: the church, its network, any steward and a care admin, all of whom returned true at
+    // the privileged short-circuit above — and THE PERSON IT NAMES, who already knows they were cleared and
+    // whose own screen has to be able to say "your clearance ends on the 4th". Note they may not be a member of
+    // the congregation at all, which is why the ordinary member rule is not what serves it. IT RETURNS: no
+    // fall-through, because that fall-through is the defect this same rule had on the grant until 2026-09-09.
+    if (d.startsWith(CHECKINPERM_D)) {
+      // The same one spelling as the write gate above, and for the same reason — a read rule that accepted an
+      // npub form would serve a document the write gate can never have stored.
+      const who = String(d.slice(CHECKINPERM_D.length) || '');
+      return /^[0-9a-f]{64}$/.test(who) && !!authed && authed === who;
     }
     if (d.startsWith(CHECKIN_D)) {
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
