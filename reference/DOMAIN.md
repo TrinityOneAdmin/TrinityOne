@@ -448,3 +448,30 @@ a child. TrinityOne does not decide who is a child; it decides what follows from
 and after the pilot we may know whether they want a **subset** of permissions — helping, without the
 guardian rights that carry private-message access. Recorded in BACKLOG.md. Until that exists the answer is
 the simple one above: a child is never a guardian.
+
+## Check-in supports a safeguarded church; it does not enforce safeguarding
+
+Owner, 2026-09-09, correcting the framing of the check-in design:
+*"remember, this isn't meant for enforcement so much as a tool to support the already safeguarded church."*
+
+The church already has a safeguarding policy, a lead, cleared volunteers and its own practice. **We are
+not the policy and we are not the inspector.** The software's job is to make what the church already does
+easier to do well — a legible register, a pickup that is hard to get wrong, a record afterwards.
+
+**What this rules out:**
+
+- **Do not block.** A ratio outside policy, a helper whose clearance has lapsed, a rota with a gap — none
+  of these may stop a child being checked in. Blocking at the door harms the child in the room to satisfy
+  a rule in a database, and the person on the door already knows more about the situation than we do.
+- **Do not accuse.** Manual sign-out when a parent's phone is dead is an ordinary Sunday, not an attack.
+  It is recorded because a register that omits it is incomplete, not because we suspect the helper.
+- **Do not nag.** Say the thing once, plainly, where it is useful. A church that runs its children's work
+  differently from our assumptions is not making a mistake.
+
+**What it means in practice:** show the ratio, do not gate on it. Say a key has expired, do not lock
+someone out of a room mid-session. Record a manual release plainly and let the safeguarding lead see it,
+rather than treating it as an incident.
+
+Same principle as `safeguarding-mechanism-not-policy` (owner, 2026-08-27) and the wider ethos that the
+product trusts people and gates outward, not inward. Every gate in this feature exists to keep OTHER
+people out of the children's register — never to police the church's own team.

@@ -135,15 +135,16 @@ for that session holds the key for that session. Two consequences that must be b
 fall back so the helper key can sign them out manually."* A flat battery, a grandparent, a childminder —
 these are ordinary Sunday events, not edge cases.
 
-**This manual release is the most dangerous thing in the feature, and it should be built as if it is.**
-It is the route round every other protection here, so it is the one an attacker aims at. It needs, at
-minimum:
+**Manual release is an ordinary Sunday event, and must be built as one.** It is also the route round the
+pickup code, so it is recorded — but it is recorded because a register that omits it is incomplete, NOT
+because we suspect the helper. See the framing note in §10. It needs, at minimum:
 
 - to be **recorded** — who released the child, when, and that it was manual rather than by code. A manual
   release that leaves no different trace than a normal one is not a fallback, it is a hole;
 - to be **visible to the guardian afterwards**, so a parent can see their child was collected without
   their code;
 - to be **unavailable to anyone without the helper key**, tested by its refusal and not only its success.
+  That gate keeps strangers out of the register; it is not there to police the church's own team.
 
 
 ## 8. DECIDED: design for a connected hall
@@ -236,3 +237,32 @@ in part (`NOPHOTO_D`, and the children's-photos toggle in Rules & privacy).
 The boundary being built in slice 1 is unaffected: a helper key opens the register and provably nothing
 else. Everything above is about what a *session* is and what a helper may see once inside it — later
 slices, on a foundation that has been proved.
+
+## 10. FRAMING: this supports a safeguarded church, it does not enforce safeguarding
+
+Owner, 2026-09-09: *"remember, this isn't meant for enforcement so much as a tool to support the already
+safeguarded church."*
+
+Written into `reference/DOMAIN.md` as well, per CLAUDE.md rule 7. It corrects §9, which drifted toward
+inspection language when reading how another product frames the same job.
+
+The church already has a policy, a safeguarding lead, cleared volunteers and its own practice. **We are
+not the policy and not the inspector.** The job is to make what the church already does easier to do well.
+
+**Nothing in this feature blocks.** A ratio outside policy, a lapsed clearance, a gap in the rota — none
+may stop a child being checked in. Blocking at the door harms the child in the room to satisfy a rule in
+a database, and the person on the door knows more about the situation than we do.
+
+So, concretely:
+
+- **Show the ratio; do not gate on it.** §9 said the ratio is policy not mechanism — this goes further:
+  even the church's own threshold is something we display against, not something we enforce.
+- **Say a key has expired; do not lock a helper out of a room mid-session.** Expiry protects the register
+  from people outside the church, not the church from its own team.
+- **Record a manual release plainly** and let the safeguarding lead see it. It is a fact in a register,
+  not an incident.
+- **Say things once.** A church that runs its children's work differently from our assumptions is not
+  making a mistake.
+
+The gates in this feature exist to keep OTHER people out of the children's register. They are never there
+to police the church's own team.
