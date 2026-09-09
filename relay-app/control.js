@@ -646,9 +646,11 @@
       m.textContent = s.imported ? '\u2713 pulled ' + s.imported + ' new' + across : '\u2713 nothing new' + across;
     } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
   });
-  // Ask on load what this box is handing out. Repeated on the same cadence as the software-update card,
-  // because an installer goes stale exactly while nobody is looking at the panel.
-  loadApkStatus();
+  // Re-ask on a timer, because an installer goes stale exactly while nobody is looking at the panel.
+  // The FIRST read is deliberately not here: it belongs after the admin token has been settled (the
+  // /local-token block below, and the unlock handler). A bare call at this point races that block, gets a
+  // 401, hides the card — and if it lands after the authenticated read, the card an operator needs stays
+  // hidden with nothing on screen to say why.
   setInterval(() => { if (!document.hidden) loadApkStatus(); }, 300000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadApkStatus(); });
   document.getElementById('dlSubs')?.addEventListener('click', () => {
