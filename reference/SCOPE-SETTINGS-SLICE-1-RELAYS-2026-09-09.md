@@ -77,10 +77,24 @@ New tests should cover, at the point of use and by running the code rather than 
 - The relay panel. It has the worse problem (`column-count`, so cards genuinely hop), but doing it second
   means it inherits a pattern that has already survived contact with a real page.
 
-## Open question for the owner
+## DECIDED: the list replaces the four tabs
 
-**Where does the settings list live on the console?** The mockup puts it in a second column inside the
-Settings page. The console already has a left sidebar for the main sections, so this would be a sidebar
-next to a sidebar. The alternative is replacing the four tabs (Church / Features / Network & relays /
-Security) with the list itself. The mockup shows the first; the second is probably better and is a bigger
-change to the page's frame.
+Owner, 2026-09-09: *"yeah, I think replace the 4 tabs."*
+
+So Church / Features / Network & relays / Security stop being tabs across the top. The list of pages
+takes their place, grouped the way the mockup groups them (Church, People, Infrastructure, Security).
+A sidebar beside the existing sidebar was the alternative and is worse.
+
+**This makes slice 1 bigger than "move some cards", and that is the right call anyway** — it changes the
+page's frame, so it should happen once rather than be retrofitted after four sections have been built
+against the old tabs. Consequences to handle in this slice:
+
+- The tab strip and its `section` state are replaced by page selection. `DashSettings` currently takes
+  `initialSection` and `onSectionConsumed`; both now address pages, not tabs.
+- Every caller that navigates into a Settings tab has to point at a page instead. Enumerate them all
+  before editing — CLAUDE.md rule 2, and this is exactly the "signature change has two caller lists"
+  trap: the code that calls it AND the tests that slice it by name.
+- `settings-cards-sit-in-authored-stacks.test.mjs` asserts `role="tabpanel"` and the tab-per-section
+  shape. It must be rewritten to the new shape, not relaxed.
+- On the phone the list is the first screen and a page opens on tap, which is what the mockup shows.
+  Today's stacked-card layout is what a page uses once opened, so the approved phone layout survives.
