@@ -113,16 +113,38 @@ consult it**, or the test drives something that is not the shipped path.
    the one feature where a simulation of two people is not evidence.
 8. **Audit every two changes, not at the end** (rule 5).
 
-## 7. Open questions for the owner
+## 7. ANSWERED by the owner, 2026-09-09
 
-- **Does a child need an account?** Today a young person can have one. Check-in could work purely from the
-  guardian's record, which would suit under-5s where no phone exists.
-- **Who may hold the helper key — a rota role, or named people?** The rota already knows who is serving on
-  a Sunday. Tying the capability to the rota is elegant and means a volunteer's access ends when their
-  turn does; it is also more machinery.
-- ~~**What happens when the relay is unreachable mid-session?**~~ **DECIDED 2026-09-09 — see §8.**
-- **Does the pickup code need to survive a phone dying?** If the answer is yes, the desk needs a way to
-  release a child without it, and that route is the one an attacker would aim at.
+**A child does not need an account.** *"most children getting checked in, will not have a phone."* So a
+check-in record hangs off the **guardian's** record, not the child's. The child is a person the church
+knows about, named in the family's record, with no key and no device of their own. That is the normal
+case, not the fallback — design for it first and let an older young person with their own account be the
+exception.
+
+**The helper key is a ROTA ROLE.** *"Holding the helper key will be a rota role, but we may change that
+to be more specifically a 'safeguarding team' after the pilot."* Whoever is rostered onto children's work
+for that session holds the key for that session. Two consequences that must be built in from the start:
+
+- **Access ends when the turn does.** That is the whole appeal of tying it to the rota, and it is only
+  true if it is enforced rather than assumed.
+- **The source of the role must be swappable.** The owner has already said it may become a named
+  safeguarding team after the pilot. So "who may hold the helper key" is one question asked in one place,
+  answered by the rota today, answerable by a team list tomorrow, without unpicking the feature.
+
+**A worker with the helper key can release a child manually.** *"If a parent has no phone, we need a
+fall back so the helper key can sign them out manually."* A flat battery, a grandparent, a childminder —
+these are ordinary Sunday events, not edge cases.
+
+**This manual release is the most dangerous thing in the feature, and it should be built as if it is.**
+It is the route round every other protection here, so it is the one an attacker aims at. It needs, at
+minimum:
+
+- to be **recorded** — who released the child, when, and that it was manual rather than by code. A manual
+  release that leaves no different trace than a normal one is not a fallback, it is a hole;
+- to be **visible to the guardian afterwards**, so a parent can see their child was collected without
+  their code;
+- to be **unavailable to anyone without the helper key**, tested by its refusal and not only its success.
+
 
 ## 8. DECIDED: design for a connected hall
 
