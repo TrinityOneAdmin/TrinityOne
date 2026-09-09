@@ -419,8 +419,13 @@ const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 
 // Compile one construct out of an app/*.jsx file with the real esbuild — the same binary and flags
 // scripts/sync-web.sh uses — and hand back the named values.
+// `anchor` may be one anchor or several. Several are concatenated into ONE module, which is how a test
+// gets the real decision function under the real component instead of stubbing the thing it is named
+// after — see "A stub answers the question": running real code proves nothing if a stub supplies the
+// answer being asserted.
 function liftFromJsx(src, anchor, name, exportNames, globals) {
-  const body = fnBody(src, anchor, name);
+  const anchors = Array.isArray(anchor) ? anchor : [[anchor, name]];
+  const body = anchors.map(([a, n]) => fnBody(src, a, n)).join('\n\n');
   const tmp = join(tmpdir(), 'installslip-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -485,8 +490,13 @@ test('the console actually OFFERS the slip, and pressing it prints this church�
   const printed = [];
   const church = { npub: 'npub1grace', name: 'Grace Chapel', nip05: '' };
   const stub = () => null;
-  const { JoinCard } = liftFromJsx(DASH, 'function JoinCard(', 'JoinCard', ['JoinCard'], {
-    React,
+  const { JoinCard } = liftFromJsx(DASH,
+    // The staleness check the card now runs is lifted WITH it — real code, given a relay that refuses.
+    // These two cases are about the SLIP, and a failed check must leave every part of the card standing.
+    [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'],
+     ['async function readInstallerConcern(', 'readInstallerConcern'], ['function JoinCard(', 'JoinCard']],
+    'JoinCard', ['JoinCard'], {
+    React, AbortSignal, fetch: async () => { throw new Error('ECONNREFUSED'); },
     window: {
       useStewardChurch: () => church,
       Steward: {
@@ -527,8 +537,13 @@ test('the console actually OFFERS the slip, and pressing it prints this church�
 test('a church with only a loopback relay is not offered a slip it cannot use', () => {
   const { React, draw } = miniReact();
   const stub = () => null;
-  const { JoinCard } = liftFromJsx(DASH, 'function JoinCard(', 'JoinCard', ['JoinCard'], {
-    React,
+  const { JoinCard } = liftFromJsx(DASH,
+    // The staleness check the card now runs is lifted WITH it — real code, given a relay that refuses.
+    // These two cases are about the SLIP, and a failed check must leave every part of the card standing.
+    [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'],
+     ['async function readInstallerConcern(', 'readInstallerConcern'], ['function JoinCard(', 'JoinCard']],
+    'JoinCard', ['JoinCard'], {
+    React, AbortSignal, fetch: async () => { throw new Error('ECONNREFUSED'); },
     window: {
       useStewardChurch: () => ({ npub: 'npub1grace', name: 'Grace', nip05: '' }),
       Steward: { npub: 'npub1grace', joinUrl: () => 'https://app.trinityone.church/?follow=npub1grace&relay=', joinLinkIsPrivate: () => true, qrSVG: () => '' },
@@ -543,4 +558,204 @@ test('a church with only a loopback relay is not offered a slip it cannot use', 
   });
   assert.equal(button(draw(JoinCard, {}), 'Install slip').length, 0,
     'the console offered a printable slip to a church whose box has no address anyone else can reach');
+});
+
+// ── §7 · the church that does NOT run the relay ──────────────────────────────────────────────────────────
+// The gap this feature left behind. /relay-app/apk-status is the operator's, and most churches are not the
+// operator — they are hosted on somebody else's box, they hand out the slip, and they had no way at all to
+// learn that the file behind it had gone stale. Everything below reads PUBLIC data only.
+
+test('the box states the same facts as its page, without a token, for something that is not a person', async () => {
+  const r = await fetch(base + '/install.json');
+  assert.equal(r.status, 200, 'a church that does not run the relay cannot ask how old the installer is');
+  const j = await r.json();
+  const f = j.files.find((x) => x.name === 'trinityone.apk');
+  assert.ok(f, 'the machine-readable form lists nothing, so the console has nothing to read');
+  assert.equal(f.versionName, '0.9.99', 'it does not say which build is on offer');
+  assert.equal(typeof f.ageDays, 'number', 'it does not say how old the copy is, which is the whole point');
+
+  // IT MUST CARRY NO MORE THAN THE PAGE. Anything about what the UPDATE SOURCE is offering costs an
+  // outbound request per call, which is exactly what an unauthenticated endpoint must not be made to do —
+  // and it is the operator's question besides.
+  const raw = JSON.stringify(j);
+  for (const leak of ['origin', 'behind', 'keepCurrent', 'shareUrl', 'originBytes', 'state']) {
+    assert.ok(!raw.includes('"' + leak + '"'),
+      `/install.json carries "${leak}", which the install page does not show and which belongs behind adminOK`);
+  }
+});
+
+const LIFT_CONCERN = [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS']];
+
+function concernFn() {
+  const { installerConcern } = liftFromJsx(DASH, LIFT_CONCERN, 'installerConcern', ['installerConcern'], {});
+  return installerConcern;
+}
+
+test('a current installer produces no sentence at all', () => {
+  const say = concernFn();
+  assert.equal(say({ files: [{ name: 'trinityone.apk', versionName: '0.9.72', versionCode: 207, ageDays: 2 }] }, 207), '',
+    'a church whose relay is up to date was told something. The console\'s manner is to describe a ' +
+    'consequence when there is one, never to fill the space.');
+  assert.equal(say({ files: [] }, 207), '', 'a relay holding no installer at all produced a staleness warning about nothing');
+});
+
+test('an installer older than the page’s own threshold gets one plain sentence', () => {
+  const say = concernFn();
+  const out = say({ files: [{ name: 'trinityone.apk', versionName: '0.9.72', versionCode: 207, ageDays: 47 }] }, 207);
+  assert.match(out, /put there/, 'a 47-day-old installer produced nothing — the majority case is still unserved');
+  assert.match(out, /47 days/, 'it does not say how old, so the steward cannot judge whether it matters');
+  assert.doesNotMatch(out, /must|should|please|urgent/i,
+    'the sentence prescribes or nags. The console describes the consequence and leaves the decision alone.');
+});
+
+test('a relay whose CODE has moved past its installer is named as such', () => {
+  // The structural drift the whole feature exists for, read off one box with no token: relay-update.sh
+  // unpacks with --exclude='relay/*', so a relay updates its code and keeps handing out the old APK.
+  const say = concernFn();
+  const out = say({ files: [{ name: 'trinityone.apk', versionName: '0.9.71', versionCode: 206, ageDays: 3 }] }, 207);
+  assert.match(out, /older version/, 'a relay running 207 while handing out 206 said nothing, because the copy was only 3 days old');
+  assert.match(out, /0\.9\.71/, 'the sentence does not say which version is being handed out');
+});
+
+test('the sentence says who can fix it, and does not send a self-hosting church looking for someone else', () => {
+  const say = concernFn();
+  for (const out of [
+    say({ files: [{ name: 'a', versionName: '0.9.72', versionCode: 207, ageDays: 47 }] }, 207),
+    say({ files: [{ name: 'a', versionName: '0.9.71', versionCode: 206, ageDays: 3 }] }, 207),
+  ]) {
+    assert.match(out, /whoever looks after that machine/i,
+      'the steward reading this usually CANNOT fix it — they do not run the relay and have no panel. A ' +
+      'warning that does not say who to ask is a warning they can only worry about.');
+    assert.match(out, /if your church runs its own relay, that is you/i,
+      'a self-hosting church is told to go and ask somebody else, when the somebody else is them and the ' +
+      'button is in their own relay panel.');
+  }
+});
+
+test('an unknown relay build cannot be reported as behind', () => {
+  // codeVersionCode 0 means /apk-latest.json could not be read — a relay-only box does not serve it at all.
+  // Absence of an answer must never become an accusation.
+  const say = concernFn();
+  assert.equal(say({ files: [{ name: 'a', versionName: '0.9.71', versionCode: 206, ageDays: 3 }] }, 0), '',
+    'a relay whose own version could not be read was reported as handing out an old build');
+});
+
+// ── the fetching, with every failure path driven ─────────────────────────────────────────────────────────
+// readInstallerConcern is lifted WITH installerConcern, so the decision under test is the real one rather
+// than a stub answering the question the test is named after.
+
+function readerFn(fetchImpl) {
+  return liftFromJsx(DASH,
+    [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'], ['async function readInstallerConcern(', 'readInstallerConcern']],
+    'readInstallerConcern', ['readInstallerConcern'], { fetch: fetchImpl, AbortSignal }).readInstallerConcern;
+}
+const jsonRes = (body) => ({ ok: true, status: 200, json: async () => body });
+
+test('the console reads the relay’s public facts and reaches the right conclusion', async () => {
+  const asked = [];
+  const read = readerFn(async (u) => {
+    asked.push(u);
+    if (u.endsWith('/install.json')) return jsonRes({ ok: true, files: [{ name: 'trinityone.apk', versionName: '0.9.72', versionCode: 207, ageDays: 47 }] });
+    if (u.endsWith('/apk-latest.json')) return jsonRes({ versionCode: 207 });
+    throw new Error('unexpected ' + u);
+  });
+  const out = await read('https://grace.example/install');
+  assert.match(out, /47 days/, 'the console did not report an installer its own relay says is 47 days old');
+  assert.deepEqual(asked, ['https://grace.example/install.json', 'https://grace.example/apk-latest.json'],
+    'the console asked for something other than the two public documents');
+  assert.ok(!asked.some((u) => u.includes('apk-status')),
+    'the console reached for the ADMIN-GATED endpoint. It has no token, should not have one, and asking ' +
+    'makes the box send an outbound request on demand.');
+});
+
+test('every way a relay can fail to answer leaves the card exactly as it was', async () => {
+  // A church must never be told its installer is stale because a fetch timed out. Each of these is a real
+  // relay in a real state — off, older, behind something that returns a login page, or simply slow.
+  const cases = {
+    'a relay that is switched off': async () => { throw new Error('ECONNREFUSED'); },
+    'an older build with no /install.json': async () => ({ ok: false, status: 404, json: async () => ({}) }),
+    'something that answers with HTML': async () => ({ ok: true, status: 200, json: async () => { throw new Error('not json'); } }),
+    'a body that is not the shape we expect': async () => jsonRes({ ok: true }),
+    'a relay that answers with no files': async () => jsonRes({ ok: true, files: [] }),
+    'a request that timed out': async () => { const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; },
+  };
+  for (const [what, impl] of Object.entries(cases)) {
+    const read = readerFn(impl);
+    assert.equal(await read('https://grace.example/install'), '',
+      `${what} produced a staleness warning. An absence of an answer is not evidence of a stale installer, ` +
+      `and a church acting on it would go and ask an operator about a problem that may not exist.`);
+  }
+  assert.equal(await readerFn(async () => jsonRes({}))('not a url at all'), '',
+    'an unparseable address produced a warning rather than silence');
+});
+
+test('an unreadable apk-latest.json still leaves the AGE signal working', async () => {
+  // A relay-only box does not serve /apk-latest.json at all (it sits behind the serveApp gate). The weaker
+  // signal must survive that, or every relay-only church is back where it started.
+  const read = readerFn(async (u) => {
+    if (u.endsWith('/install.json')) return jsonRes({ ok: true, files: [{ name: 'a', versionName: '0.9.72', versionCode: 207, ageDays: 61 }] });
+    return { ok: false, status: 404, json: async () => ({}) };
+  });
+  assert.match(await read('https://grace.example/install'), /2 months ago/,
+    'a relay-only box that does not publish its own version silenced the age warning as well');
+});
+
+// ── on the screen, which is the only place it counts ─────────────────────────────────────────────────────
+
+async function joinCardWith(fetchImpl) {
+  const { React, draw } = miniReact();
+  const stub = () => null;
+  const { JoinCard } = liftFromJsx(DASH,
+    [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'],
+     ['async function readInstallerConcern(', 'readInstallerConcern'], ['function JoinCard(', 'JoinCard']],
+    'JoinCard', ['JoinCard'], {
+      React, fetch: fetchImpl, AbortSignal,
+      window: {
+        useStewardChurch: () => ({ npub: 'npub1grace', name: 'Grace Chapel', nip05: '' }),
+        Steward: {
+          npub: 'npub1grace',
+          joinUrl: () => 'https://app.trinityone.church/?follow=npub1grace&relay=' + encodeURIComponent('wss://grace.example/relay'),
+          joinLinkIsPrivate: () => false, qrSVG: () => '<svg/>',
+        },
+        TrinityTemplates: { printInstallSheet: () => {} },
+      },
+      navigator: {},
+      document: { createElement: () => ({ style: {}, getContext: () => ({}) }) },
+      installPageUrl: () => ({ url: 'https://grace.example/install', lan: false }),
+      useGoPublicGate: () => ({ blocking: false }),
+      GoPublicPanel: stub, GoPublicNote: stub, SkQR: stub, InvitePosterModal: stub, Icon: stub,
+      copyText: () => true, churchHandle: () => '', shortNpub: (s) => s,
+    });
+  draw(JoinCard, {});                       // first draw fires the effect
+  await new Promise((r) => setTimeout(r, 30));   // let the two reads settle
+  return texts(draw(JoinCard, {})).join(' ');    // second draw renders what came back
+}
+
+test('a hosted church SEES the warning on its own console when the relay’s copy is old', async () => {
+  const screen = await joinCardWith(async (u) => {
+    if (u.endsWith('/install.json')) return jsonRes({ ok: true, files: [{ name: 'trinityone.apk', versionName: '0.9.72', versionCode: 207, ageDays: 47 }] });
+    return jsonRes({ versionCode: 207 });
+  });
+  assert.match(screen, /put there 47 days ago/,
+    'nothing reached the screen. A church hosted on somebody else’s box hands members a slip pointing ' +
+    'at a stale installer and the only way to find out is to open the page and read the date themselves — ' +
+    'which is this feature’s own fault moved one party along.');
+  assert.match(screen, /whoever looks after that machine/i, 'the steward is warned and not told who can act');
+});
+
+test('a hosted church whose relay is current sees nothing added to the screen', async () => {
+  const screen = await joinCardWith(async (u) => {
+    if (u.endsWith('/install.json')) return jsonRes({ ok: true, files: [{ name: 'trinityone.apk', versionName: '0.9.72', versionCode: 207, ageDays: 1 }] });
+    return jsonRes({ versionCode: 207 });
+  });
+  assert.doesNotMatch(screen, /put there|older version/,
+    'a church whose installer is a day old was warned about it. Every needless line here is one a steward ' +
+    'learns to scroll past, and the one that matters goes with it.');
+});
+
+test('a relay that cannot be reached adds nothing to the screen', async () => {
+  const screen = await joinCardWith(async () => { throw new Error('ECONNREFUSED'); });
+  assert.doesNotMatch(screen, /put there|older version|whoever looks after/i,
+    'a relay that did not answer put a staleness warning on a steward’s screen');
+  assert.match(screen, /Install slip/, 'the rest of the card did not survive a failed check');
 });

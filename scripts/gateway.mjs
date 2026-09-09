@@ -5132,6 +5132,33 @@ function serveStatic(req, res) {
     })();
     return;
   }
+  // THE SAME FACTS THE PAGE STATES, FOR SOMETHING THAT IS NOT A PERSON.
+  //
+  // A church that does NOT run its own relay was unserved by the staleness half of this feature. The
+  // operator gets /relay-app/apk-status and the warning card; the church depending on them got nothing,
+  // and on current numbers most churches will not self-host. Their console needs to read the age of the
+  // installer their members are being sent to — and it must do that WITHOUT a token, because it does not
+  // have one and should not.
+  //
+  // SO THIS CARRIES EXACTLY WHAT /install ALREADY PRINTS, FIELD FOR FIELD, and nothing else. No origin, no
+  // verdict, no setting, no share URL. Anything about what the UPDATE SOURCE is offering stays behind
+  // adminOK: that answer costs an outbound request per call, which is precisely what an unauthenticated
+  // endpoint must not be able to make a box do. The console gets "how old is this copy", which is the
+  // weaker question, is already on a page anyone can open, and is enough to tell a church to go and ask.
+  //
+  // Sits above the serveApp gate with /install, for the same reason: a relay-only box still hands out the
+  // installer, and its church still deserves to know how old the file is.
+  if (p === '/install.json' || p === '/apks.json') {
+    const files = heldApks().filter((h) => h.present).map((h) => ({
+      name: h.name, title: APK_TITLES[h.name] || h.name,
+      versionName: h.versionName, versionCode: h.versionCode, builtOn: h.builtOn,
+      bytes: h.bytes, sha256: h.sha256,
+      ageDays: Math.max(0, Math.floor((Date.now() - h.at) / APK_DAY)),
+    }));
+    const body = Buffer.from(JSON.stringify({ ok: true, files }), 'utf8');
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': body.length, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS });
+    res.end(body); return;
+  }
   // The install page's QR on its own, so the operator's panel can show it with a plain <img src> under a
   // strict CSP. It encodes THIS BOX's install address and nothing a caller supplies — a QR endpoint that
   // rendered arbitrary text would be a small open redirect dressed as an image.

@@ -1674,6 +1674,75 @@ function installPageUrl() {
   return { url: u.origin + '/install', lan };
 }
 
+// IS THE APP OUR MEMBERS INSTALL FROM OUR RELAY OUT OF DATE? — the question a church that does NOT run
+// its own relay could not ask.
+//
+// The relay panel's warning ("BEHIND — the update source is offering a different build") belongs to whoever
+// runs the box. Most churches will not be that person: they are hosted on a community relay, they can see
+// the install page and hand out the slip, and they had no way at all to learn that the file behind it had
+// gone stale. That is this feature's own fault moved one party along — the operator gets told, the church
+// depending on them does not.
+//
+// TWO SIGNALS, BOTH FROM PUBLIC DATA ON THE RELAY ITSELF. No token is asked for and none is held.
+//   · /install.json — exactly what the install PAGE already prints, including how old the copy is.
+//   · /apk-latest.json — the version this relay's own CODE was released alongside, already publicly served
+//     from that host. A relay whose code has moved past its installer is the exact structural drift this
+//     whole feature exists for (relay-update.sh unpacks with --exclude='relay/*'), and it is legible from
+//     that one box without asking anybody's permission.
+//
+// WHAT IT HONESTLY CANNOT SEE, so that nobody later reads more into it than it says: whether the RELEASE
+// HOST has an even newer build than either. That needs an outbound request from the box to its update
+// source, which is why /relay-app/apk-status is admin-gated. So this catches a neglected installer and a
+// relay that has updated its code and not its APK; it does not catch a relay whose code and installer are
+// in step while a newer build exists elsewhere. The operator's card is still the only place that knows.
+const INSTALLER_OLD_DAYS = 30;   // the same threshold the install page itself warns a member at
+
+// Pure, and deliberately separate from the fetching, so a test can run the decision over real inputs.
+// `facts` is /install.json's body; `codeVersionCode` is the relay's own apk-latest.json versionCode, or 0
+// when that could not be read. Returns the sentence to show, or '' for "say nothing".
+function installerConcern(facts, codeVersionCode) {
+  const files = (facts && Array.isArray(facts.files)) ? facts.files : [];
+  if (!files.length) return '';
+  // The oldest thing on offer decides: a member handed the slip may install either one.
+  const oldest = files.reduce((a, b) => ((+b.ageDays || 0) > (+a.ageDays || 0) ? b : a));
+  const behind = files.filter(f => (+f.versionCode || 0) > 0 && codeVersionCode > 0 && codeVersionCode > +f.versionCode);
+  // Who can fix it is part of the sentence, because the steward reading it usually cannot — and the one
+  // church that CAN is the self-hosting one, which must not be sent looking for somebody else.
+  const who = ' Whoever looks after that machine can refresh it from the relay’s control panel — if your church runs its own relay, that is you.';
+  if (behind.length) {
+    const v = behind[0].versionName ? ' (' + behind[0].versionName + ')' : '';
+    return 'The app people install from your relay is an older version' + v + ' than the relay itself has been updated to.' + who;
+  }
+  const days = +oldest.ageDays || 0;
+  if (days >= INSTALLER_OLD_DAYS) {
+    const how = days >= 60 ? Math.round(days / 30) + ' months' : days + ' days';
+    return 'The app people install from your relay was put there ' + how + ' ago.' + who;
+  }
+  return '';
+}
+
+// Read those two public documents off the relay the church already points at. EVERY failure path returns
+// '' — a relay that does not answer, an older build with no /install.json, a body that is not what we
+// expect, a slow link. A church must never be told its installer is stale because a fetch timed out, so
+// the only thing that can produce a sentence here is a successful read that genuinely says so.
+async function readInstallerConcern(installUrl) {
+  let origin = '';
+  try { origin = new URL(installUrl).origin; } catch (e) { return ''; }
+  const get = async (path) => {
+    try {
+      const r = await fetch(origin + path, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) { return null; }
+  };
+  const facts = await get('/install.json');
+  if (!facts || !Array.isArray(facts.files)) return '';
+  // Optional by design: a relay-only box does not serve this one at all, and the age signal still works.
+  const man = await get('/apk-latest.json');
+  const code = (man && +man.versionCode) || 0;
+  try { return installerConcern(facts, code); } catch (e) { return ''; }
+}
+
 // rasterise an SVG string to a PNG data URI (jsPDF can't embed SVG directly). Force explicit pixel
 // dims so it renders even when the source SVG is scalable (width/height 100%).
 function svgToPng(svgStr, size) {
@@ -2057,6 +2126,15 @@ function JoinCard({ qrSize = 92, center = false }) {
   // "Install slip": the paper that tells a member how to get the app from the church's OWN box. Only
   // offered when there is an address worth printing — see installPageUrl().
   const install = installPageUrl();
+  // Ask the relay, once, how old the app it hands out is. Silent unless there is something to say, and
+  // silent on every failure — see readInstallerConcern.
+  const [installerNote, setInstallerNote] = React.useState('');
+  React.useEffect(() => {
+    if (!install) { setInstallerNote(''); return; }
+    let dead = false;
+    readInstallerConcern(install.url).then(t => { if (!dead) setInstallerNote(t || ''); }).catch(() => {});
+    return () => { dead = true; };
+  }, [install ? install.url : '']);
   const printInstall = () => {
     if (!install || !window.TrinityTemplates) return;
     window.TrinityTemplates.printInstallSheet({
@@ -2110,6 +2188,9 @@ function JoinCard({ qrSize = 92, center = false }) {
           <button onClick={() => setPoster(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Show the invite poster (QR + link) to display, print, or save"><Icon name="receipt" size={14} color="currentColor" /> Invite poster</button>
           {install ? <button onClick={printInstall} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a slip that tells people how to install the app from your church's own machine — no app store, no mobile data"><Icon name="qr" size={14} color="currentColor" /> Install slip</button> : null}
         </div>
+        {/* One plain statement, and only when there is one to make. Nothing is shown while the installer is
+            current, and nothing is shown when the relay could not be asked. */}
+        {installerNote ? <div role="status" style={{ marginTop: 10, padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{installerNote}</div> : null}
       </div>
       {poster ? <InvitePosterModal church={church} url={url} svg={svg} onClose={() => setPoster(false)} /> : null}
     </div>
