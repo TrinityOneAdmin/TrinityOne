@@ -557,6 +557,52 @@
   setInterval(() => { if (!updateBusy() && !document.hidden) loadUpdate(); }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !updateBusy()) loadUpdate(); });
 
+  // ── the installer this box hands out ─────────────────────────────────────────────────────────────────
+  // WHY THIS READS AN ENDPOINT INSTEAD OF /apk-latest.json, WHICH IS WHAT IT USED TO DO.
+  // The old line fetched THIS RELAY'S OWN apk-latest.json and printed "latest: 0.9.71 (206)". That file
+  // describes the build the relay's CODE was released alongside; it says nothing whatever about the APK
+  // sitting in relay/apks/, which is the file members actually download. The two drift apart by design —
+  // relay-update.sh unpacks with --exclude='relay/*' — so the panel confidently printed a version number
+  // for a file it had not looked at. Measured on a8 on 2026-09-09: the box handed out 206 while 207 had
+  // been built the day before, and this line was the only thing on screen claiming to know.
+  // /relay-app/apk-status reads the bytes on disk and compares them with what the update source would
+  // actually serve.
+  async function loadApkStatus() {
+    const box = document.getElementById('apkHeld');
+    const card = document.getElementById('installerCard');
+    if (!box) return;
+    let s = null;
+    try {
+      const r = await fetch('/relay-app/apk-status', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { if (card) card.style.display = 'none'; return; }
+      if (!r.ok) throw new Error('the relay could not answer (' + r.status + ')');
+      s = await r.json();
+    } catch (e) {
+      if (card) card.style.display = 'block';
+      box.textContent = 'Couldn’t check the installer — ' + (e.message || 'no answer from the relay');
+      return;
+    }
+    if (card) card.style.display = 'block';
+    const rows = (s.files || []).map((f) => {
+      const held = !f.present ? 'nothing yet'
+        : (f.versionName ? esc(f.versionName) + (f.versionCode ? ' (build ' + esc(f.versionCode) + ')' : '')
+                         : 'a copy with no version recorded');
+      const age = f.present ? (f.ageDays === 0 ? ', added today' : f.ageDays === 1 ? ', added yesterday' : ', added ' + esc(f.ageDays) + ' days ago') : '';
+      return '<div class="apk-row"><b>' + esc(f.title || f.name) + '</b> — this box hands out ' + held + age + '. ' + esc(f.say || '') + '</div>';
+    }).join('');
+    // THE HEADLINE IS THE POINT OF THE WHOLE CARD. An operator must not have to read three rows of version
+    // numbers to find out that the thing they are handing to their congregation is out of date.
+    const head = s.behind
+      ? '<div class="apk-note warn">This box is handing out an installer that is behind. Press “Update the installer now”.</div>'
+      : s.holding
+        ? '<div class="apk-note ok">Members can install from this box.</div>'
+        : '<div class="apk-note warn">This box holds no installer yet, so there is nothing for members to install. Press “Update the installer now”.</div>';
+    box.innerHTML = head + rows;
+    const keep = document.getElementById('keepApkCurrent'); if (keep) keep.checked = s.keepCurrent === true;
+    const url = document.getElementById('installUrl'); if (url) url.textContent = s.shareUrl || '';
+    const open = document.getElementById('openInstall'); if (open && s.shareUrl) open.href = s.shareUrl;
+  }
+
   document.getElementById('fetchApk')?.addEventListener('click', async () => {
     const m = document.getElementById('apkMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'fetching…';
     try {
@@ -569,6 +615,21 @@
       m.style.color = bad.length ? 'var(--clay)' : 'var(--sage)';
       m.textContent = '✓ ' + ok.join(', ') + (bad.length ? ' · ✗ ' + bad.join('; ') : '');
     } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
+    // NEVER RENDER THE WRITE'S OWN ECHO. Re-read what is on disk, so the card reports the file that landed
+    // rather than the request we made — including a fetch that half worked.
+    loadApkStatus();
+  });
+  document.getElementById('keepApkCurrent')?.addEventListener('change', async (e) => {
+    const on = e.target.checked, m = document.getElementById('apkMsg');
+    m.style.color = 'var(--ink-3)'; m.textContent = 'saving…';
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ keepApkCurrent: on }) });
+      if (!r.ok) throw new Error('save failed');
+      m.style.color = 'var(--sage-ink)';
+      m.textContent = on ? '✓ this box will fetch a new installer on its own' : '✓ off — update the installer by hand when it suits you';
+      setTimeout(() => { m.textContent = ''; }, 4000);
+      if (on) setTimeout(loadApkStatus, 2500);   // it starts fetching immediately; show the result
+    } catch (err) { e.target.checked = !on; m.style.color = 'var(--clay-ink)'; m.textContent = '✗ ' + (err.message || 'failed'); }
   });
   document.getElementById('syncNow')?.addEventListener('click', async () => {
     // Feedback goes to #syncNowMsg, which sits under THIS button in the Settings card. It used to write to
@@ -585,8 +646,13 @@
       m.textContent = s.imported ? '\u2713 pulled ' + s.imported + ' new' + across : '\u2713 nothing new' + across;
     } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
   });
-  // on load, show the latest available APK version in the fetch area (so you can see which build is current)
-  fetch('/apk-latest.json?t=' + Date.now()).then(r => r.json()).then(m => { const el = document.getElementById('apkMsg'); if (el && m && m.versionName) el.textContent = 'latest: ' + m.versionName + ' (' + m.versionCode + ')'; }).catch(() => {});
+  // Re-ask on a timer, because an installer goes stale exactly while nobody is looking at the panel.
+  // The FIRST read is deliberately not here: it belongs after the admin token has been settled (the
+  // /local-token block below, and the unlock handler). A bare call at this point races that block, gets a
+  // 401, hides the card — and if it lands after the authenticated read, the card an operator needs stays
+  // hidden with nothing on screen to say why.
+  setInterval(() => { if (!document.hidden) loadApkStatus(); }, 300000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadApkStatus(); });
   document.getElementById('dlSubs')?.addEventListener('click', () => {
     const csvCell = (v) => { v = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const rows = [['email', 'signed_up', 'source']].concat(subsCache.map(s => [csvCell(s.email), csvCell(s.at ? new Date(s.at).toISOString() : ''), csvCell(s.src || '')]));
@@ -627,7 +693,7 @@
     } catch (e) { if (gm) { gm.style.color = 'var(--clay-ink)'; gm.textContent = '\u2717 Couldn\u2019t reach the relay.'; } return; }
     adminToken = t; localStorage.setItem(TOKEN_KEY, adminToken);
     if (gm) gm.textContent = '';
-    loadConfig(); gpTick(); loadRelayName(); maybeFirstRun();
+    loadConfig(); gpTick(); loadRelayName(); maybeFirstRun(); loadApkStatus();
   };
   document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
   // When this panel is opened ON the relay machine (e.g. the TrinityOne Suite's own window), the relay hands
@@ -640,6 +706,7 @@
     loadConfig();
     loadRelayName();
     maybeFirstRun();
+    loadApkStatus();
   })();
 
   // ── "Go public" wizard: bring the node onto Tailscale + turn on Funnel (public HTTPS/WSS) ──

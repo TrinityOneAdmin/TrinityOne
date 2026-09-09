@@ -282,6 +282,18 @@
   .wz-p.danger-text { color:var(--clay-deep); }
   .wz-actions { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
   .wz-meta { font-size:11.5px; color:var(--ink-3); line-height:1.4; }
+  /* the installer card: what this box hands out, whether it is stale, and the thing a church shares */
+  .apk-row { font-size:13px; color:var(--ink-2); line-height:1.5; padding:6px 0; }
+  .apk-row b { color:var(--ink); }
+  .apk-note { font-size:13px; font-weight:700; line-height:1.5; border-radius:12px; padding:10px 12px; margin-bottom:8px; }
+  .apk-note.warn { color:var(--clay-deep); background:rgba(194,90,56,.09); border:1px solid rgba(194,90,56,.22); }
+  .apk-note.ok { color:var(--sage-ink); background:rgba(94,140,106,.10); border:1px solid rgba(94,140,106,.24); }
+  .share-box { display:flex; gap:15px; align-items:center; flex-wrap:wrap; margin-top:14px; padding-top:13px; border-top:1px solid var(--line-2); }
+  .share-qr { width:150px; height:150px; background:#fff; border-radius:12px; padding:7px; flex-shrink:0; }
+  .share-words { flex:1; min-width:210px; }
+  .share-h { font-weight:700; font-size:14px; margin-bottom:4px; }
+  .share-p { font-size:12.5px; color:var(--ink-2); line-height:1.5; margin-bottom:8px; }
+  .share-u { font-family:ui-monospace,monospace; font-size:12.5px; color:var(--clay-deep); word-break:break-all; user-select:all; }
   .wz-line { display:flex; align-items:center; gap:9px; font-size:13px; color:var(--ink-2); }
   .ic-spin { width:16px; height:16px; color:var(--clay); flex-shrink:0; animation:spin 1.1s linear infinite; display:flex; }
   .ic-spin svg { width:16px; height:16px; display:block; }
@@ -554,10 +566,46 @@
         <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-2)">
           <div class="wz-actions">
             <button class="btn btn-ghost" id="syncNow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg>Check sync now</button>
-            <button class="btn btn-ghost" id="fetchApk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Fetch latest APK</button>
           </div>
           <div class="hint" id="syncNowMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
-          <div class="hint"><span id="apkMsg">—</span> · pulls the latest member + steward APK so the website's download buttons serve the current build.</div>
+          <div class="hint">Updating the relay's software does <b>not</b> update the app installer it hands out — those are separate, and the installer has its own card below.</div>
+        </div>
+      </section>
+
+      <!-- LET MEMBERS INSTALL THE APP FROM THIS BOX.
+           This used to be one ghost button labelled "Fetch latest APK" tucked under the software-update card,
+           with a hint describing what it technically did. Nothing said what the capability was FOR, and
+           nothing at all said which build the box was actually handing out — so a8 served a two-day-old
+           installer for four days with every screen looking healthy. The card now leads with the purpose,
+           states what it holds, and says plainly when the update source has moved past it. -->
+      <section class="card" id="installerCard" style="display:none" aria-label="Let members install the app from this box">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Let members install the app from this box</div>
+            <div class="card-desc">Your congregation can install TrinityOne straight from this machine over your own wifi — no app store, and nobody spends mobile data. Share the page below and they tap once to install.</div>
+          </div>
+        </div>
+        <div id="apkHeld" class="muted">Checking what this box hands out…</div>
+        <div class="wz-actions" style="margin-top:13px">
+          <button class="btn btn-ghost" id="fetchApk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Update the installer now</button>
+          <a class="btn btn-ghost" id="openInstall" href="/install" target="_blank" rel="noopener" style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>Open the page members see</a>
+        </div>
+        <div class="hint" id="apkMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
+        <div class="toggle-row" style="margin-top:6px">
+          <div class="toggle-main">
+            <div class="toggle-t">Keep the installer up to date automatically</div>
+            <div class="toggle-s">Off by default: it downloads about 80&nbsp;MB whenever a new build appears. On a metered or slow connection, leave this off and press the button above when it suits you.</div>
+          </div>
+          <input type="checkbox" class="sw" id="keepApkCurrent" aria-label="Keep the installer up to date automatically">
+        </div>
+        <div class="share-box">
+          <img id="installQr" class="share-qr" src="/apks/qr.svg" width="150" height="150" alt="QR code linking to this box's install page">
+          <div class="share-words">
+            <div class="share-h">Give people this</div>
+            <div class="share-p">Point a phone camera at the code, or share the address. It opens the install page — no password, nothing to sign into.</div>
+            <div class="share-u" id="installUrl">—</div>
+          </div>
         </div>
       </section>
 

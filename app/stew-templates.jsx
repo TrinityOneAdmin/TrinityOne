@@ -142,6 +142,44 @@ function inviteSheetHtml({ name, tag, url, qrSvg }) {
   </div>`;
 }
 
+// ── the printable "install from our own box" slip ──
+//
+// The other half of the invite sheet. That one says "join our church"; this one says "get the app in the
+// first place", and it is the piece a church with no app store — Play blocked, or a congregation on
+// expensive mobile data — has never had. The pair is the whole flow: install from us over the hall wifi,
+// then scan the invite to join.
+//
+// `lan` is not decoration. A box on the church wifi is very often reachable ONLY at a private address, and
+// that is a legitimate, common configuration rather than a fault — but a slip carrying it that goes home in
+// somebody's pocket simply will not load, and the reader has no way to know why. So the slip says which
+// kind of address it is carrying. (The same trap, from the other side, as joinLinkIsPrivate.)
+function installSheetHtml({ name, url, qrSvg, lan }) {
+  const safeName = TMPL_ESC(name) || 'our church';
+  const where = lan
+    ? `<div class="warn"><span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><path d="M12 19.5h.01"/><path d="M2 9a15 15 0 0 1 20 0"/></svg></span><p>This address works <b>on the church’s own wifi</b>. Join the wifi first, then scan the code. It will not open from home.</p></div>`
+    : '';
+  return `
+  <div class="sheet">
+    <div class="eyebrow">${HALO_SVG(40, '#1d1810', 'var(--clay)')}<span>TRINITYONE</span></div>
+    <h1>Get the app from ${safeName}</h1>
+    <p class="lede">The app is served from our own computer here. You do not need an app store, and it costs you nothing in mobile data.</p>
+    <div class="scan">
+      <div class="lab">Scan this with your phone camera, or type this into your browser:</div>
+      <div class="qr-box">${qrSvg || ''}</div>
+      <div class="url">${TMPL_ESC(url)}</div>
+    </div>
+    ${where}
+    <ol class="steps">
+      <li>Point your phone camera at the code above and open the page it offers.</li>
+      <li>Tap <b>Download and install</b>.</li>
+      <li>Android will ask whether to allow installing apps from your browser. Say yes — it applies to this one file.</li>
+      <li>Open the downloaded file and tap <b>Install</b>.</li>
+      <li>Open TrinityOne, then scan the church’s join code to follow <b>${safeName}</b>.</li>
+    </ol>
+    <div class="foot">${HALO_SVG(16, '#9a8f7c', 'var(--clay)')} TrinityOne · served from our own machine</div>
+  </div>`;
+}
+
 // ── the devotional contributor doc markup ──
 function devoDocHtml() {
   return `
@@ -207,6 +245,13 @@ window.TrinityTemplates = {
   printInviteSheet({ name, tag, url, qrSvg } = {}) {
     tmplOpen(inviteSheetHtml({ name, tag, url, qrSvg }), (name || 'TrinityOne') + ' — invite', { autoPrint: true });
   },
+  // Print the "get the app from us" slip (QR to the church's own box + install steps). Auto-opens print.
+  printInstallSheet({ name, url, qrSvg, lan } = {}) {
+    tmplOpen(installSheetHtml({ name, url, qrSvg, lan }), (name || 'TrinityOne') + ' — install', { autoPrint: true });
+  },
+  // Exposed so a test can render the slip and read it, rather than matching text in a file that ships
+  // unbundled (CLAUDE.md rule 3: `false && ` in front of a condition leaves every word of it in place).
+  installSheetHtml,
   // Open the devotional contributor template (readable + copyable + printable). No auto-print.
   openDevoTemplate() {
     tmplOpen(devoDocHtml(), 'Devotional template', { injectTpl: true });
