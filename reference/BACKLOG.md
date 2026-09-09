@@ -427,3 +427,37 @@ Ideas worth weighing before touching CSS again, in rough order of how much they 
 
 Do NOT start with more `@container` tuning. Measure what the remaining height is made of first, per
 card, the way round 1 found the stack imbalance — the win was structural both times, not typographic.
+
+## "Removing every church would let anyone write here" is not true, and it blocks a legitimate operation
+
+Owner, 2026-09-09, trying to empty a8 down to nothing: *"How can we get around this 'must have a church'
+issue?"*
+
+Two API paths refuse to leave a relay with no churches, both with the same reason:
+
+- per-church delete, `gateway.mjs:4211` — "that is the only church on this relay — removing it would let
+  anyone on the internet write here"
+- bulk `churches:` write — "removing every church would let anyone on the internet write to this relay"
+
+**The premise is measurably false.** On a relay that has NEVER had a church, a stranger's writes are all
+refused — a note, a profile and a church document, all `blocked: not a member or not permitted`. That is
+`gateway.mjs:2148`, `if (!CHURCH_PUBS.size) return false`, which the comment at :2144 describes correctly
+as "unconfigured = holds nobody's data yet". An empty relay is the most CLOSED state a relay has.
+
+The guard almost certainly predates that refusal and was true when written. It now blocks a legitimate
+operation — emptying a relay so it can be handed on, repurposed, or run as a pure community box — for a
+danger that no longer exists.
+
+**What to change:**
+
+1. Fix the copy at minimum. It tells an operator something false about their own relay's security, which
+   is worse than the inconvenience.
+2. Decide whether the guard should stay at all. There is still a reasonable "are you sure" case — emptying
+   a relay orphans every console holding those keys (see FINDING-REGISTRATION-DEADLOCK) — but that is a
+   confirmation, not a refusal, and it is a different warning from the one being shown.
+3. Whatever it becomes, it needs a test that would fail if `:2148` were ever removed, because that is what
+   the guard's reason silently depends on.
+
+**Workaround today:** the API cannot do it. `scripts/relay-reset.sh <dir> --churches` on the box clears
+`church.json` directly, and a relay left empty will accept the first church that self-registers with no
+operator action (measured 2026-09-09: 200).
