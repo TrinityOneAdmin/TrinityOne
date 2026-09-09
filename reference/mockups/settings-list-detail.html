@@ -1,0 +1,157 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settings — list &amp; detail mockup</title>
+<style>
+:root{--ink:#221C16;--ink2:#6B6052;--ink3:#A89E8E;--surface:#FFFDF8;--surface2:#FBF5EA;
+--line:rgba(34,28,22,.12);--clay:#C25A38;--clay-ink:#9C4327;--sage:#7A8B6F;--paper:#EFECE6}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--paper);font-size:14px;line-height:1.5}
+.bar{background:var(--surface);border-bottom:1px solid var(--line);padding:14px 22px;display:flex;align-items:center;gap:14px}
+.bar b{font-size:17px}
+.note{background:#FFF6E6;border-bottom:1px solid var(--line);padding:10px 22px;font-size:12.5px;color:var(--ink2)}
+.shell{display:grid;grid-template-columns:230px minmax(0,1fr);gap:0;max-width:1180px;margin:0 auto;min-height:calc(100vh - 96px)}
+.list{border-right:1px solid var(--line);padding:16px 12px;background:var(--surface2)}
+.grp{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--ink3);margin:14px 10px 6px;font-weight:700}
+.item{display:block;width:100%;text-align:left;border:0;background:none;font:inherit;color:var(--ink);
+padding:9px 11px;border-radius:9px;cursor:pointer;margin-bottom:2px}
+.item:hover{background:rgba(34,28,22,.05)}
+.item.on{background:var(--clay);color:#fff;font-weight:700}
+.item small{display:block;font-size:11.5px;color:var(--ink3);font-weight:400}
+.item.on small{color:rgba(255,255,255,.8)}
+.detail{padding:26px 30px 60px;max-width:720px}
+h2{font-size:19px;margin:0 0 4px}
+.sub{color:var(--ink2);font-size:13px;margin:0 0 20px}
+.row{display:flex;align-items:center;gap:14px;padding:11px 0;border-top:1px solid var(--line)}
+.row:last-child{border-bottom:1px solid var(--line)}
+.row .t{flex:1;min-width:0}
+.row .t b{display:block;font-weight:700;font-size:14px}
+.row .t span{font-size:12.5px;color:var(--ink2)}
+.sw{width:44px;height:26px;border-radius:99px;background:var(--line);position:relative;flex:0 0 auto;cursor:pointer;border:0}
+.sw.on{background:var(--clay)}
+.sw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:99px;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.sw.on i{left:21px}
+.hd{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--ink3);font-weight:700;margin:26px 0 2px}
+.fld{background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:ui-monospace,monospace;font-size:12.5px;margin:8px 0;overflow-wrap:anywhere}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:8px 13px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+.btn.p{background:var(--clay-ink);color:#fff;border-color:transparent}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--sage)}
+.pill i{width:7px;height:7px;border-radius:99px;background:var(--sage);display:inline-block}
+.hide{display:none!important}
+.phcap{font-size:11.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--ink3);font-weight:700;margin-bottom:8px;text-align:center}
+.phone{width:300px;height:600px;border:10px solid #221C16;border-radius:34px;overflow:hidden;box-shadow:0 10px 30px rgba(34,28,22,.18);background:#221C16}
+.phin{background:var(--paper);height:100%;overflow-y:auto}
+.phbar{background:var(--surface);border-bottom:1px solid var(--line);padding:13px 15px;font-weight:700;font-size:15px;position:sticky;top:0}
+.phbody{padding:10px 14px 30px}
+.pitem{display:block;width:100%;text-align:left;border:0;background:var(--surface);font:inherit;color:var(--ink);
+padding:12px 13px;border-radius:11px;margin-bottom:7px;border:1px solid var(--line)}
+.pitem b{display:block;font-size:14px}
+.pitem small{color:var(--ink3);font-size:11.5px}
+.prow{display:flex;align-items:center;gap:11px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);margin-bottom:7px}
+.prow .t{flex:1;min-width:0}
+.prow .t b{display:block;font-size:13.5px}
+.prow .t span{font-size:12px;color:var(--ink2)}
+@media(max-width:820px){.shell{grid-template-columns:1fr}.list{border-right:0;border-bottom:1px solid var(--line)}}
+</style></head><body>
+<div class="bar"><b>Settings</b><span style="color:var(--ink3);font-size:12.5px">mockup</span>
+<span style="margin-left:auto;display:flex;gap:6px">
+<button class="btn p" id="vDesk">Browser</button><button class="btn" id="vPhone">Phone</button></span></div>
+<div class="note"><b>What changed:</b> one panel at a time, full width. Nothing is packed into columns, so nothing moves when a card grows. The phone keeps today's stacked cards.</div>
+<div class="shell" id="deskView">
+  <nav class="list" id="nav"></nav>
+  <main class="detail" id="detail"></main>
+</div>
+
+<div id="phoneView" class="hide" style="padding:26px 16px 60px">
+  <div style="max-width:900px;margin:0 auto;display:flex;gap:34px;flex-wrap:wrap;justify-content:center">
+    <div>
+      <div class="phcap">Phone — the list</div>
+      <div class="phone"><div class="phin">
+        <div class="phbar">Settings</div>
+        <div class="phbody" id="phList"></div>
+      </div></div>
+    </div>
+    <div>
+      <div class="phcap">Phone — one page open</div>
+      <div class="phone"><div class="phin">
+        <div class="phbar"><span style="color:var(--clay-ink)">&lsaquo;</span> Rules &amp; privacy</div>
+        <div class="phbody">
+          <div class="prow"><div class="t"><b>Encrypt all group chat</b><span>Off — chat is readable on the relay</span></div><button class="sw"><i></i></button></div>
+          <div class="prow"><div class="t"><b>Allow member photos</b><span>On — adults may set a real photo</span></div><button class="sw on"><i></i></button></div>
+          <div class="prow"><div class="t"><b>Allow children's photos</b><span>Off — children use a colour or initial</span></div><button class="sw"><i></i></button></div>
+          <div class="hd" style="margin:18px 0 2px">Joining</div>
+          <div class="prow"><div class="t"><b>Require approval to join</b><span>On — new joiners wait until you approve</span></div><button class="sw on"><i></i></button></div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+  <p style="max-width:720px;margin:26px auto 0;color:var(--ink2);font-size:13px">
+    <b>Same shape, one column.</b> The left-hand list becomes the first screen; tapping a row opens that
+    one page. Identical rows, identical wording, identical spacing to today's app — so the two surfaces
+    read as one product, and nothing about the phone layout you approved has to change.</p>
+</div>
+<script>
+const S=[
+ {g:"Church",items:[
+  {k:"identity",n:"Church identity",d:"Name, picture, joining handle",
+   body:`<h2>Church identity</h2><p class="sub">What members see when they find you.</p>
+   <div class="hd">Church name</div><div class="fld">PrePilotTest_01</div>
+   <div class="hd">npub</div><div class="fld">npub1ryj052ry9h32t5qsp3hd2pv75hfnpm54dq4ngsc8chgxvg6rxfestmzx68</div>
+   <div class="hd">Joining handle</div><div class="fld">@prepilottest_01</div>
+   <p style="margin-top:18px"><button class="btn">Edit name</button> <button class="btn">Edit web address</button></p>`},
+  {k:"branding",n:"Branding",d:"Colours and church mark"},
+  {k:"media",n:"Video &amp; audio",d:"Watch and Listen tabs"},
+  {k:"backup",n:"Backup &amp; data",d:"Export, import, recovery"}]},
+ {g:"People",items:[
+  {k:"features",n:"Congregation features",d:"What members see",
+   body:`<h2>Congregation features</h2><p class="sub">Choose which parts of the app your members see.</p>
+   <div class="row"><div class="t"><b>Bible</b><span>Scripture reading, plans &amp; devotionals</span></div><button class="sw on"><i></i></button></div>
+   <div class="row"><div class="t"><b>Community</b><span>Group chat, prayer &amp; people</span></div><button class="sw on"><i></i></button></div>
+   <div class="row"><div class="t"><b>Library</b><span>Books, commentaries &amp; study tools</span></div><button class="sw on"><i></i></button></div>
+   <div class="hd">Extras</div>
+   <div class="row"><div class="t"><b>Kids check-in</b><span>Check children in and out with a secure pickup code</span></div><button class="sw"><i></i></button></div>
+   <div class="row"><div class="t"><b>Practical care</b><span>Meals, rides and visits when someone is unwell or grieving</span></div><button class="sw"><i></i></button></div>`},
+  {k:"rules",n:"Rules &amp; privacy",d:"Photos, encryption, joining",
+   body:`<h2>Rules &amp; privacy</h2><p class="sub">How your church handles people's information.</p>
+   <div class="row"><div class="t"><b>Encrypt all group chat</b><span>Off — chat is readable on the relay</span></div><button class="sw"><i></i></button></div>
+   <div class="row"><div class="t"><b>Allow member photos</b><span>On — adults may set a real photo</span></div><button class="sw on"><i></i></button></div>
+   <div class="row"><div class="t"><b>Allow children's photos</b><span>Off — children use a colour or initial. Recommended for safeguarding.</span></div><button class="sw"><i></i></button></div>
+   <div class="hd">Joining</div>
+   <div class="row"><div class="t"><b>Require approval to join</b><span>On — new joiners wait until you approve</span></div><button class="sw on"><i></i></button></div>`},
+  {k:"tags",n:"Chat message tags",d:"Prayer request and your own"}]},
+ {g:"Infrastructure",items:[
+  {k:"relays",n:"Relays",d:"Where your church publishes",
+   body:`<h2>Relays</h2><p class="sub">Where your church publishes. <span class="pill"><i></i>3/3 answering</span></p>
+   <div class="row"><div class="t"><b>trinityone.tailbeaac0.ts.net</b><span>Self-hosted</span></div><span class="pill"><i></i>Answering</span></div>
+   <div class="row"><div class="t"><b>app.trinityone.church</b><span>Shared</span></div><span class="pill"><i></i>Answering</span></div>
+   <div class="row"><div class="t"><b>trinityone-master-01.tailbeaac0.ts.net</b><span>Shared</span></div><span class="pill"><i></i>Answering</span></div>
+   <p style="margin-top:18px"><button class="btn p">Add relay</button> <button class="btn">Auto-find relays</button></p>
+   <p style="color:var(--ink2);font-size:12.5px;margin-top:22px"><b>Note:</b> everything below used to sit on this same card — connect by name, copy history, keep in sync, run your own box. They are their own pages now.</p>`},
+  {k:"ownbox",n:"Run your own box",d:"Self-host with the Suite"},
+  {k:"sync",n:"Keep relays in sync",d:"Mirror between your relays"},
+  {k:"network",n:"Network",d:"Belong to a group of churches"}]},
+ {g:"Security",items:[
+  {k:"key",n:"Church key",d:"Recovery phrase and backup"},
+  {k:"stewards",n:"Stewards &amp; handoff",d:"Who helps run the church"},
+  {k:"delegated",n:"Delegated stewards",d:"What each steward may do"}]}
+];
+const nav=document.getElementById("nav"), det=document.getElementById("detail");
+let cur="features";
+function draw(){
+  nav.innerHTML=S.map(s=>'<div class="grp">'+s.g+'</div>'+s.items.map(i=>
+    '<button class="item'+(i.k===cur?" on":"")+'" data-k="'+i.k+'">'+i.n+'<small>'+i.d+'</small></button>').join("")).join("");
+  const all=S.flatMap(s=>s.items), it=all.find(i=>i.k===cur);
+  det.innerHTML=it.body||('<h2>'+it.n+'</h2><p class="sub">'+it.d+'</p><p style="color:var(--ink3)">Not mocked — this page would hold just this one thing, full width.</p>');
+  nav.querySelectorAll(".item").forEach(b=>b.onclick=()=>{cur=b.dataset.k;draw();});
+}
+function drawPhone(){
+  document.getElementById("phList").innerHTML = S.map(s=>
+    '<div class="hd" style="margin:14px 2px 6px">'+s.g+'</div>'+
+    s.items.map(i=>'<button class="pitem"><b>'+i.n+'</b><small>'+i.d+'</small></button>').join("")).join("");
+}
+drawPhone();
+const dv=document.getElementById("deskView"), pv=document.getElementById("phoneView");
+const bd=document.getElementById("vDesk"), bp=document.getElementById("vPhone");
+bd.onclick=()=>{dv.classList.remove("hide");pv.classList.add("hide");bd.classList.add("p");bp.classList.remove("p");};
+bp.onclick=()=>{pv.classList.remove("hide");dv.classList.add("hide");bp.classList.add("p");bd.classList.remove("p");};
+draw();
+</script></body></html>
