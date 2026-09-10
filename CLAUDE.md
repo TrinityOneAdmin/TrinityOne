@@ -4,6 +4,15 @@ Written 2026-08-29 after three independent audits found defects in five of seven
 sitting. Every rule below exists because breaking it cost real money or real safety, and the example
 is named so nobody has to take it on faith.
 
+## 0. START BY READING `HANDOFF.md`
+
+Its top section is the previous session's state: what is on which branch, what is device-verified, what is
+merged, what is decided, what is open, and — deliberately — **what that session got wrong**. Read it before
+touching code, and **measure the shas rather than quoting them**; they move.
+
+The scope documents in `reference/SCOPE-*.md` carry the detail and the owner's decisions verbatim. Where a
+handoff and the code disagree, the code wins — say so and correct the handoff.
+
 ## 1. Test at the point of USE, not the point of change
 
 Every fix needs at least one test that fails **if the feature is deleted from the screen**, not only
