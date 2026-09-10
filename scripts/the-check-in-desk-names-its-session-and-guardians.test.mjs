@@ -141,6 +141,17 @@ test('THE DESK NAMES TODAY\'S SESSION ON THE RECORD IT WRITES', async () => {
     'checkinHelperOf() has nothing else to go on, so every cleared helper is refused this record and the ' +
     'whole helper capability is unreachable — item 1 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, ' +
     'reintroduced at the point of use while the writer\'s own tests stay green.');
+  // ⚠ AND SINCE PIECE 1 THIS ARGUMENT DECIDES ONE MORE THING, recorded here because it is the coupling that
+  // is easiest to break from the screen. `_encSealedCopies` derives the helper's copy from `obj.session` — no
+  // session, no key lookup, no ['ck'] tag, and a cleared helper is served a record with nothing in it they
+  // can open. So this single field is now the whole of what connects the desk to the second lock, and
+  // deleting it from the call above breaks the sealing as well as the relay's read gate.
+  //
+  // reference/SCOPE-CHECKIN-SEALING-2026-09-10.md, piece 1. The sealing itself is proved in
+  // scripts/checkin-key-separation.test.mjs against real NIP-44; this is the point of use.
+  assert.ok(d.written[0].session,
+    'the screen supplied no session, so no helper copy can be sealed for this record at all — the register ' +
+    'stays readable by the church and a cleared helper gets a ciphertext they hold no key for');
 });
 
 test('THE DESK NAMES THE CHILD\'S ADULT GUARDIANS ON THE RECORD IT WRITES', async () => {

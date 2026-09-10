@@ -158,6 +158,11 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     // "newest generation, and it is the one that settled". Equal values are what that means.
     _ckKeysGen: 0,
     _ckKeysSettledGen: 0,
+    // THE SESSION KEYS THIS CONSOLE HOLDS, added 2026-09-10 with piece 1. subscribeCheckinSessionKeys now
+    // unwraps OUR OWN slot into this map as each envelope arrives, and forgets it on a stand-down — because
+    // the envelope was the only place that key existed, so a console keeping a copy would go on sealing new
+    // records under a key it can no longer re-derive. A fresh Map per harness: it is module state.
+    _ckSessionKeys: new Map(),
     // AND AN AUTHENTICATED SOCKET, because the settle above happens only on an authenticated
     // end-of-stored-events — see the oneose in subscribeCheckinSessionKeys.
     _isRelayAuthed: () => true,
@@ -432,13 +437,28 @@ test('THE ONE THING A KEEPER SLOT REALLY BUYS: a key this console cannot recover
   assert.equal(h.banners[0].what, 'check-in session key', 're-anchor: the warning went down a different channel');
   assert.match(h.banners[0].message, /NEW register key/,
     'the warning does not say a key was REPLACED, which is the whole of what happened: ' + h.banners[0].message);
-  // ⚠ AND IT MUST NOT OVERCLAIM. Nothing seals anything under a session key yet — piece 1 of the scope note
-  // (the `ck` tag) is not built — so a rotation today loses no readable data, and copy saying otherwise is
-  // rule 4's territory. When piece 1 lands this assertion must be INVERTED and the message must gain that
-  // sentence; it is here so that lands as a deliberate edit rather than a silent one.
-  assert.doesNotMatch(h.banners[0].message, /lost|cannot be opened|unreadable|orphan/i,
-    'the rotation warning claims records were lost. Nothing is sealed under a session key yet, so today that ' +
-    'is a false claim in shipped UI copy — see _warnCheckinKeyRotated');
+  // ⚠ INVERTED 2026-09-10 WITH PIECE 1, which is exactly what the assertion this replaces existed for.
+  //
+  // It used to REFUSE any claim of loss — `doesNotMatch(/lost|cannot be opened|unreadable|orphan/)` — because
+  // nothing was sealed under a session key, so a rotation cost a helper's phone one re-read of the new
+  // envelope and no data at all. Piece 1 adds the ['ck'] copy, so replacing a session key now PERMANENTLY
+  // ORPHANS the helper's copy of every record already written into that session. Nothing re-seals them.
+  //
+  // A NOTE ON HOW NEARLY THIS WENT WRONG, because it is the reason the assertion is now positive rather than
+  // merely relaxed: the first wording of the inverted banner said "can no longer be opened", and the old
+  // doesNotMatch pattern spelled `cannot be opened` — so it PASSED over copy that had already been inverted,
+  // and would equally have passed over copy that never was. A negative assertion cannot pin a claim that has
+  // to be MADE; only a positive one can.
+  assert.match(h.banners[0].message, /can no longer be opened by a helper/,
+    'THE ROTATION WARNING DOES NOT SAY WHAT WAS LOST. Since piece 1 a record carries a helper copy sealed ' +
+    'under the session key, so replacing that key orphans every one already written for that session — and ' +
+    'nothing else in the product will ever tell the steward: ' + h.banners[0].message);
+  // AND IT STILL SAYS WHAT WAS *NOT* LOST. "some records can no longer be read" and "the register is gone"
+  // are different facts, and a safeguarding lead who reads the second when the first is true will act on it.
+  // `content` is the ring's ciphertext and no session-key rotation goes near it.
+  assert.match(h.banners[0].message, /can still read every record/,
+    'the warning no longer says the church\'s own copy survives, so it reads as "the register is gone": ' +
+    h.banners[0].message);
   // ⚠ AND IT MUST NOT BLAME A CAUSE THAT CANNOT PRODUCE IT — the audit's second truthfulness finding,
   // 2026-09-10. The first wording said this "happens when the envelope was issued from a different device or
   // this church's key was restored from a backup". Neither can: only the owner console mints

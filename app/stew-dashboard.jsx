@@ -5912,11 +5912,20 @@ function CheckinSessionKeys() {
       )}
       {/* WHAT THE LAST PASS ACTUALLY DID, reported rather than implied. `settled: false` is its own state and
           is said as one: the engine refused because this church's existing keys had not finished arriving,
-          which is a wait and not a fault. */}
+          which is a wait and not a fault.
+
+          ⚠ THE ROTATION LINE WAS INVERTED 2026-09-10, with piece 1 of the check-in sealing scope. It used to
+          end "The register itself is unaffected", which was the whole truth for exactly as long as nothing
+          was sealed under a session key. Records now carry a SECOND copy sealed under the session key (the
+          ['ck'] tag), so replacing that key permanently orphans the helper's copy of every check-in already
+          written for the session — there is no re-wrap, because the old key is precisely what this console
+          could not open. The church's own access is genuinely unaffected, since `content` is sealed to the
+          safeguarding ring and never to a session, and that half is what the second clause keeps. Saying
+          only the reassuring half is how a steward rotates a key believing it costs nothing. */}
       {last && last.settled === false ? (
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Waiting for this church’s existing keys to arrive before issuing — issuing now could replace a key a helper already has.</div>
       ) : last && Array.isArray(last.rotated) && last.rotated.length ? (
-        <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 10, lineHeight: 1.45 }}>{last.rotated.length === 1 ? 'One session was given a new key' : last.rotated.length + ' sessions were given a new key'} because this console could not open the one already issued{last.rotated.length === 1 ? '' : ' for them'}. The register itself is unaffected.</div>
+        <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 10, lineHeight: 1.45 }}>{last.rotated.length === 1 ? 'One session was given a new key' : last.rotated.length + ' sessions were given a new key'} because this console could not open the one already issued{last.rotated.length === 1 ? '' : ' for them'}. Any check-in already written for {last.rotated.length === 1 ? 'it' : 'them'} is now unreadable to cleared helpers — you and the church can still read {last.rotated.length === 1 ? 'it' : 'them'} in the register.</div>
       ) : last && Array.isArray(last.issued) && last.issued.length ? (
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Issued keys for {last.issued.length} session(s) · {clearedNow.length} person(s) cleared right now.</div>
       ) : null}

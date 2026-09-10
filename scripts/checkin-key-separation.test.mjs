@@ -19,7 +19,13 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
-import { fnBody, stripComments } from './test-slice.mjs';
+import { fnBody, stripComments, stmt } from './test-slice.mjs';
+// THE SHIPPED GRANT BUILDER AND THE SHIPPED READERS, out of the module esbuild inlines into
+// vendor/steward.js. The acceptance tests at the foot of this file drive the whole double-lock chain, and a
+// test-local envelope or a test-local `ck` reader would be the test answering the question it is named after.
+import { buildHelperGrant, readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
+         GRANT_SOURCE } from './checkin-role-source.mjs';
+import { D } from './trinity-doc-types.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const STEW = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
@@ -170,6 +176,7 @@ test('a fresh check-in is sealed with the SAFEGUARDING key, not the legacy one',
 // encPublish falls back to its 'finance' default) is a one-character change that looks identical on screen
 // and reinstates the entire leak.
 function publishedCheckin({ finance, checkin, ownerKey }) {
+  const subs = [];
   const events = [];
   const stubs = {
     _capState: {
@@ -189,6 +196,28 @@ function publishedCheckin({ finance, checkin, ownerKey }) {
     now: () => 1787280000, NET: 'trinityone', _todayISO: () => '2026-08-20',
     Date: { now: () => 1787280000000 }, Math: globalThis.Math,
     window: { Steward: {} },   // filled in below with the very functions we lift, so the chain is the real one
+    // WHICH SESSION KEYS THIS CONSOLE HOLDS — module state in the console, written by
+    // subscribeCheckinSessionKeys as each envelope arrives and read by the sealer. A fresh Map per harness,
+    // and EMPTY by default: the default fixture below is therefore a record with NO helper copy, which is
+    // exactly what a church with no envelope for today still gets. Tests that want the copy put a key in it.
+    _ckSessionKeys: new Map(),
+    // AND THE WORLD encSubscribe NEEDS — added 2026-09-10 with piece 1, because the READER half of the
+    // double lock had to be executed rather than described. The pool is captured, not dialled: the events
+    // fed to it below are the ones the SHIPPED WRITER in this same harness really produced, so what comes
+    // out the other end is what a console would actually hold.
+    pool: { subscribeMany: (_r, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; } },
+    relays: () => ['wss://relay.test/relay'],
+    _careRoster: new Set(),
+    _capWaiters: { finance: new Set(), checkin: new Set() },
+    // PIECE 3's READ STAMP, which subscribeCheckinSessionKeys also writes. Nothing in THIS file is about the
+    // EOSE gate — that is driven in scripts/checkin-session-keys-are-not-issued-early.test.mjs — but the
+    // lifted subscription bumps and stamps these, so they have to exist.
+    _ckKeysSettled: '', _ckKeysGen: 0, _ckKeysSettledGen: -1,
+    _isRelayAuthed: () => true,
+    CHECKINHELPER_D: 'trinityone/checkinhelper:',
+    // THE SHARED READERS, imported from the module esbuild inlines into the bundle rather than stubbed —
+    // they are the rules about what a malformed record means, which is what the reader tests are about.
+    readCheckinHelperCopy, checkinSessionOf,
   };
   const scope = new Proxy(stubs, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
@@ -204,13 +233,35 @@ function publishedCheckin({ finance, checkin, ownerKey }) {
   stubs._encCleartextTags = new Function(
     fnBody(VENDOR, 'function _encCleartextTags(kind, obj) {', '_encCleartextTags') +
     '\nreturn _encCleartextTags;')();
+  // AND THE HELPER'S-COPY BUILDER, LIFTED THE SAME WAY — added 2026-09-10 with piece 1 of
+  // reference/SCOPE-CHECKIN-SEALING-2026-09-10.md. It decides whether a record carries a second ciphertext
+  // sealed under the session key, and it is the subject of the three tests at the foot of this file, so a
+  // stub would be the test answering its own question. Unlike _encCleartextTags it CLOSES OVER the harness
+  // (`_ckSessionKeys`, `nip44e`, `_unhex`), so it is evaluated with the scope.
+  stubs._encSealedCopies = new Function('scope',
+    'with (scope) { return (' + stmt(VENDOR, 'var _encSealedCopies = (kind, obj) =>', '_encSealedCopies')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(scope);
   // All three lifted together into ONE object, so publishCheckin's `window.Steward.encPublish` really is the
   // shipped encPublish, and encPublish's `encSeal` really is the shipped encSeal.
-  const src = ['publishCheckin(rec)', 'encPublish(dtag', 'encSeal(kind']
-    .map((sig, i) => fnBody(VENDOR, sig, ['publishCheckin', 'encPublish', 'encSeal'][i])).join(',\n');
+  // AND THE BRIDGE FROM THE CONSOLE TO THE SHARED READER — which session (from the cleartext tag), which key
+  // we hold for it, then readCheckinHelperCopy. Lifted, not stubbed: it is the decision the reader tests are
+  // named after. It closes over _ckSessionKeys, nip44d and _unhex, so it needs the scope.
+  stubs._encOpenSealedCopy = new Function('scope',
+    'with (scope) { return (' + stmt(VENDOR, 'var _encOpenSealedCopy = (kind, tags) =>', '_encOpenSealedCopy')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(scope);
+  // FIVE FUNCTIONS IN ONE OBJECT, so publishCheckin's `window.Steward.encPublish` really is the shipped
+  // encPublish, encPublish's `encSeal` really is the shipped encSeal, and encSubscribe's
+  // `window.Steward.encOpen` really is the shipped encOpen. Nothing in the chain is a stand-in.
+  const src = ['publishCheckin(rec)', 'encPublish(dtag', 'encSeal(kind', 'encOpen(kind', 'encSubscribe(prefix, cb, kind) {']
+    .map((sig, i) => fnBody(VENDOR, sig, ['publishCheckin', 'encPublish', 'encSeal', 'encOpen', 'encSubscribe'][i])).join(',\n');
   const api = new Function('scope', `with (scope) { return { ${src} }; }`)(scope);
   Object.assign(stubs.window.Steward, api);
-  return { api, events };
+  // `stubs` IS RETURNED so a test can seed _ckSessionKeys — the module state subscribeCheckinSessionKeys
+  // writes. Seeding it is how a test says "this console holds that session's key" without stubbing the
+  // decision of whether a copy gets sealed, which is the thing under test.
+  // `scope` and `subs` are returned so the session-key SUBSCRIPTION can be lifted against the same world —
+  // the map it writes has to be the map the sealer reads, or the gate is untestable by construction.
+  return { api, events, stubs, subs, scope };
 }
 
 test('publishCheckin seals with the SAFEGUARDING key — the whole chain, not just encSeal', async () => {
@@ -392,4 +443,524 @@ test('the pickup code is labelled where it can actually be read', () => {
   assert.match(row, /split\(''\)\.join\(' '\)/,
     'the accessible name reads the code as one number rather than digit by digit, which is how it gets ' +
     'misheard on a phone call');
+});
+
+
+// ══ PIECE 1: THE DOUBLE LOCK — A HELPER'S OWN COPY OF A CHECK-IN RECORD ═══════════════════════════════════
+//
+// reference/SCOPE-CHECKIN-SEALING-2026-09-10.md, piece 1, and the owner's decision of that date. `content`
+// stays the safeguarding ring's ciphertext, byte for byte; the helper's copy rides in an added signed
+// `['ck', …]` tag sealed under that session's key, with the marker bumped to `['enc','2']`.
+//
+// EVERYTHING HERE IS THE SHIPPED CHAIN WITH REAL NIP-44. The writer is lifted out of vendor/steward.js
+// (publishCheckin → encPublish → encSeal + _encSealedCopies); the envelope is built by the shipped
+// buildHelperGrant; the helper's key comes back through the shipped readHelperGrant → helperKeyFor; the copy
+// is opened by the shipped readCheckinHelperCopy. Nothing between the church sealing a record and a helper
+// reading it is this file's own code.
+//
+// ⚠ WHAT THESE TESTS CANNOT PROVE, stated here rather than in a report nobody reads with the code: A HELPER
+// HAS NO CLIENT. `grep -c checkin src/fellowship.src.js` finds one unrelated line, so there is no member-app
+// check-in surface at all, and `publishCheckin` is reachable only from the steward console. So "a cleared
+// helper opens a record THEY wrote" is unbuildable today in its literal form — the write half belongs to
+// slice 3. What is proved is the sealing contract end to end: a record written AT THE DESK for a session a
+// helper is cleared for opens with the key that helper's own envelope gives them, and with nothing else.
+const helper = (() => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; })();
+const other = (() => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; })();   // cleared for a DIFFERENT session
+const treasurer = (() => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; })();
+const AT = 1787280000;                    // the harness clock, so a window is never what decides a test
+const SESSION = 'svc-sunday-am';
+const OTHER_SESSION = 'svc-sunday-pm';
+
+// AN ENVELOPE THE CHURCH REALLY SIGNED, built by the shipped builder with real NIP-44 wrapping. This is the
+// only place a session key exists in the product, so a hand-written one would prove nothing about what a
+// helper can actually get hold of.
+function envelopeFor(session, pubs, sessionKeyHex) {
+  const built = buildHelperGrant({ session, source: GRANT_SOURCE, lifetime: 'session', from: AT - 3600,
+    until: AT + 3600, helpers: pubs, keepers: [church.pub], sessionKeyHex,
+    wrap: (p2, plaintext) => nip44.encrypt(plaintext, nip44.utils.getConversationKey(church.sk, p2)) });
+  assert.deepEqual(built.failed, [], 'fixture: the shipped builder could not wrap somebody, so this envelope is short');
+  return JSON.stringify(built.doc);
+}
+// AND THE HELPER'S OWN ROUTE TO THE KEY — the shipped parser and the shipped time-scoped membership test,
+// unwrapping with the HELPER'S secret. Returns '' exactly as it does in the product when a turn is not on.
+const keyAsSeenBy = (envelopeContent, who, at = AT) => {
+  const grant = readHelperGrant(envelopeContent);
+  assert.ok(grant, 'fixture: the shipped parser refused the envelope the shipped builder just made');
+  return helperKeyFor(grant, who.pub, at, (ct) => nip44.decrypt(ct, nip44.utils.getConversationKey(who.sk, church.pub)));
+};
+const unseal = (ct, k) => nip44.decrypt(ct, unhex(k));
+const tagOf = (e, name) => (e.tags.find(t => t[0] === name) || [])[1];
+
+test('A CLEARED HELPER OPENS A RECORD WRITTEN AT THE DESK — the whole double lock, shipped end to end', async () => {
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const envelope = envelopeFor(SESSION, [helper.pub], sessionKey);
+
+  // THE CONSOLE'S SIDE: it holds this session's key because subscribeCheckinSessionKeys unwrapped its own
+  // slot out of that envelope. Put it where the sealer reads it, which is the state that subscription leaves.
+  const { api, events, stubs } = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  stubs._ckSessionKeys.set(SESSION, sessionKey);
+  await api.publishCheckin({ id: 'ci-am', child: 'k'.repeat(64), childName: 'Esther Ncube', code: '4417',
+    session: SESSION, guardians: [], room: 'Lambs' });
+  assert.equal(events.length, 1, 're-anchor: publishCheckin published nothing');
+  const e = events[0];
+
+  // ── the shape, before anyone opens anything ──
+  assert.equal(tagOf(e, 'enc'), '2', 'the marker was not bumped, so nothing downstream can tell there is a second copy');
+  assert.ok(tagOf(e, 'ck'), 'THE HELPER\'S COPY IS NOT ON THE RECORD. A cleared helper is served this event ' +
+    'by the relay and holds the session key; without the ck tag there is nothing that key opens, which is ' +
+    'the state this whole slice exists to end');
+  assert.equal(tagOf(e, 'session'), SESSION,
+    'the cleartext session tag is missing, so neither the relay nor a reader can tell which key to reach for');
+
+  // ── ⚠ `content` IS UNTOUCHED, and this is the assertion that stands between this change and every console
+  // on the current bundle rendering an empty register. The ring must still open it, on its own, exactly as
+  // before.
+  const churchCopy = JSON.parse(nip44.decrypt(e.content, unhex(checkinKey)));
+  assert.equal(churchCopy.code, '4417', 'the safeguarding ring can no longer open `content` — the additive ' +
+    'shape has stopped being additive, and every console on the shipped bundle now renders an EMPTY ' +
+    'REGISTER WITH NO ERROR (measured by the audit against a reshaped content)');
+  assert.equal(churchCopy.childName, 'Esther Ncube');
+
+  // ── THE HELPER, through their own envelope and nothing else ──
+  const key = keyAsSeenBy(envelope, helper);
+  assert.match(key, /^[0-9a-f]{64}$/, 'the shipped helperKeyFor gave this cleared helper no key at all');
+  assert.equal(key, sessionKey, 're-anchor: the key a helper recovers is not the one the desk sealed with');
+  const helperCopy = readCheckinHelperCopy(e.tags, key, unseal);
+  assert.ok(helperCopy, 'A CLEARED HELPER COULD NOT OPEN THE RECORD. This is the acceptance test for the ' +
+    'whole slice: the relay serves them the event, their envelope gives them the key, and the key must open ' +
+    'the copy the desk sealed');
+  assert.equal(helperCopy.code, '4417', 'the helper opened something, but not the pickup code — which is the ' +
+    'one field a leader at the door actually needs');
+  assert.equal(helperCopy.childName, 'Esther Ncube');
+  // BOTH COPIES ARE THE SAME BODY. A helper reading a different record from the church's is worse than a
+  // helper reading nothing: two screens disagreeing about which child is present.
+  assert.deepEqual(helperCopy, churchCopy,
+    'the two copies of one record are not the same body, so the church and the helper would show different ' +
+    'things about the same child');
+  // AND THE ROW IDENTITY AGREES WITH THE ADDRESS. encSubscribe does `byId.set(id, { id, ...obj, ts })`, so a
+  // body whose `id` disagrees with its d-tag FORKS the record — the same child present on one row and
+  // collected on another. The scope note moved that finding into piece 1 because piece 1 edits this body.
+  assert.equal(helperCopy.id, tagOf(e, 'd').slice('trinityone/checkin:'.length),
+    'the sealed body\'s `id` disagrees with the record\'s own address, which forks the row');
+});
+
+test('…AND A HELPER CLEARED FOR A DIFFERENT SESSION OPENS NOTHING', async () => {
+  // The point of a per-session key. Last Sunday's helper, or the helper on the other room's rota, is served
+  // the ciphertext by the relay and must get nowhere with it.
+  const amKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const pmKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  assert.notEqual(amKey, pmKey, 're-anchor: the fixture gave both sessions the same key');
+  const pmEnvelope = envelopeFor(OTHER_SESSION, [other.pub], pmKey);
+
+  const { api, events, stubs } = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  stubs._ckSessionKeys.set(SESSION, amKey);
+  await api.publishCheckin({ id: 'ci-am', childName: 'Esther Ncube', code: '4417', session: SESSION, guardians: [] });
+  const e = events[0];
+
+  const theirKey = keyAsSeenBy(pmEnvelope, other);
+  assert.match(theirKey, /^[0-9a-f]{64}$/, 'fixture: the other helper holds no key at all, so this proves nothing');
+  assert.equal(readCheckinHelperCopy(e.tags, theirKey, unseal), null,
+    'A HELPER CLEARED FOR ANOTHER SESSION OPENED THIS ONE\'S RECORD. Per-session keys are the mechanism that ' +
+    'makes a clearance narrow — "last Sunday\'s helper holds last Sunday\'s key" — and it has just failed');
+  // AND THEY ARE NOT ON THIS SESSION'S ENVELOPE EITHER, so the two halves agree: the relay would refuse them
+  // and the key would not work if it did not.
+  const amEnvelope = envelopeFor(SESSION, [helper.pub], amKey);
+  assert.equal(keyAsSeenBy(amEnvelope, other), '',
+    'the shipped helperKeyFor handed this session\'s key to somebody the church did not clear for it');
+});
+
+test('…AND A FINANCE-ONLY STEWARD OPENS NOTHING, though the relay serves them the ciphertext', async () => {
+  // gateway.mjs:3604 serves EVERY check-in record to any steward, a Finance-only one included. That is
+  // deliberate and unchanged by this slice — which makes the ciphertext the only thing standing between a
+  // treasurer and a child's pickup code, exactly as it was before the second copy existed.
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const { api, events, stubs } = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  stubs._ckSessionKeys.set(SESSION, sessionKey);
+  await api.publishCheckin({ id: 'ci-am', childName: 'Esther Ncube', code: '4417', session: SESSION, guardians: [] });
+  const e = events[0];
+
+  // NOT `content` — that is the original defect and the tests above already hold it. THE NEW SURFACE IS THE
+  // TAG, and a second ciphertext is a second chance to have sealed it with the wrong key.
+  for (const k of [financeKey, legacyKey]) {
+    assert.throws(() => nip44.decrypt(tagOf(e, 'ck'), unhex(k)),
+      'THE HELPER\'S COPY OPENS WITH A KEY FROM THE BOOKS RING. The second lock has re-created the exact ' +
+      'defect this file exists for, on a new surface: every treasurer can read a child\'s pickup code again.');
+  }
+  // …and the treasurer's own conversation key gets nowhere either, since they are not a helper.
+  assert.throws(() => nip44.decrypt(tagOf(e, 'ck'), nip44.utils.getConversationKey(treasurer.sk, church.pub)),
+    'the helper copy is readable by anyone the church ever talked to');
+  // AND THE SHIPPED READER REFUSES A NON-KEY rather than handing a cipher an empty string. helperKeyFor
+  // returns '' for "not a helper", and '' must never be treated as a key.
+  assert.equal(readCheckinHelperCopy(e.tags, '', unseal), null, 'the reader accepted an empty key');
+  assert.equal(readCheckinHelperCopy(e.tags, financeKey, unseal), null, 'the reader opened the copy with a books key');
+});
+
+test('NO SESSION KEY MEANS NO SECOND COPY — AND THE RECORD IS STILL WRITTEN', async () => {
+  // ⚠ THE RULE THAT MATTERS MOST IN THIS SLICE. publishCheckin already returns null and publishes nothing
+  // when the RING is empty; piece 1 must not add a second such path. A church with no service document for
+  // today, or one whose envelope has not arrived, still checks children in — reference/DOMAIN.md and design
+  // §10: nothing may stand between a child and the desk. What is lost is who else can open the record.
+  const { api, events, stubs } = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  assert.equal(stubs._ckSessionKeys.size, 0, 're-anchor: this fixture was supposed to hold no session keys');
+  await api.publishCheckin({ id: 'ci-nokey', childName: 'Esther Ncube', code: '4417', session: SESSION, guardians: [] });
+  assert.equal(events.length, 1,
+    'A CHECK-IN WAS REFUSED BECAUSE NO SESSION KEY WAS AVAILABLE. That is the one thing this feature may ' +
+    'never do: a child is at the door and the register did not record them');
+  const e = events[0];
+  assert.equal(tagOf(e, 'ck'), undefined, 'a ck tag was emitted with no key to seal it under, so it is write-only garbage');
+  assert.equal(tagOf(e, 'enc'), '1',
+    'the marker claims a second copy that is not there. A record with no helper copy must be byte-identical ' +
+    'to what this writer produced yesterday, which is what keeps a mixed corpus honest');
+  assert.equal(JSON.parse(nip44.decrypt(e.content, unhex(checkinKey))).code, '4417',
+    'and the church cannot read its own register');
+
+  // AND A SESSION-LESS RECORD IS THE SAME — a church running three rooms off one service, or none at all.
+  events.length = 0;
+  stubs._ckSessionKeys.set(SESSION, hex(webcrypto.getRandomValues(new Uint8Array(32))));
+  await api.publishCheckin({ id: 'ci-nosess', childName: 'Esther Ncube', code: '4417', guardians: [] });
+  assert.equal(events.length, 1, 'a record with no session was refused');
+  assert.equal(tagOf(events[0], 'ck'), undefined,
+    'a record with no session got a helper copy anyway — sealed under some other session\'s key, which is a ' +
+    'record one set of helpers can open and the church did not intend');
+  assert.equal(tagOf(events[0], 'enc'), '1', 'and the marker was bumped for a copy that is not there');
+});
+
+test('THE WRITER SEALS UNDER THIS SESSION\'S KEY OR NONE — never under whichever one it happens to hold', async () => {
+  // ⚠ FOUND BY SABOTAGE, NOT BY DESIGN, and it is the gap worth recording. Making _encSealedCopies fall back
+  // to "any session key in the map" when the named session has none passed EVERY other test in this file:
+  // the positives always hold exactly the right key, and the no-key case holds none at all. So the one shape
+  // nothing covered was the console holding SOME OTHER Sunday's key — which is the ordinary state of a
+  // console two weeks into a fortnight's horizon.
+  //
+  // What it would cost: a record for the morning session sealed under the evening session's key. Every helper
+  // cleared for the evening reads the morning's register, and no gate anywhere notices — the relay checks
+  // that they are an in-window helper of the session THEY name, and the ciphertext is what decides the rest.
+  const pmKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const { api, events, stubs } = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  stubs._ckSessionKeys.set(OTHER_SESSION, pmKey);           // we hold the EVENING key…
+  await api.publishCheckin({ id: 'ci-am', childName: 'Esther Ncube', code: '4417',
+    session: SESSION, guardians: [] });                     // …and write a MORNING record
+  assert.equal(events.length, 1, 'the record was refused, which is the one thing this feature may never do');
+  const e = events[0];
+  assert.equal(tagOf(e, 'ck'), undefined,
+    'A RECORD WAS SEALED UNDER A DIFFERENT SESSION\'S KEY. Every helper cleared for that other session can ' +
+    'now read this one\'s register, which is precisely the narrowing per-session keys exist to provide');
+  assert.equal(tagOf(e, 'enc'), '1', 'and the marker claims a second copy that nobody the church intended can open');
+  // The evening's helper must get nowhere with the morning's record, checked through the shipped reader.
+  const pmEnvelope = envelopeFor(OTHER_SESSION, [other.pub], pmKey);
+  assert.equal(readCheckinHelperCopy(e.tags, keyAsSeenBy(pmEnvelope, other), unseal), null,
+    'the evening session\'s helper opened a morning record');
+  // …and the church can still read it, because that half never depended on a session key.
+  assert.equal(JSON.parse(nip44.decrypt(e.content, unhex(checkinKey))).code, '4417');
+});
+
+test('THE SECOND WRITER INHERITS IT — migrateCheckinKeys cannot strip the helper copy off a re-keyed record', async () => {
+  // ⚠ THE TRAP THE SCOPE NOTE NAMES. `trinityone/checkin:` HAS TWO WRITERS: publishCheckin, and
+  // migrateCheckinKeys — which re-publishes an existing body onto the safeguarding key AUTOMATICALLY, on a
+  // 1200 ms timer from app/stew-dashboard.jsx, with no user action. A migration that did not re-emit this tag
+  // would silently strip the helper's copy off every record it touched: the register stays visible to the
+  // church and quietly stops being readable by the helper, with nothing on screen to look at.
+  //
+  // IT IS PREVENTED STRUCTURALLY RATHER THAN BY REMEMBERING, and that is what this test pins. The derivation
+  // lives inside encPublish, which is the ONLY way either writer reaches the wire — so migrate gets the tag
+  // without knowing it exists. Two assertions, because either alone can be satisfied by the wrong thing:
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const { api, events, stubs } = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  stubs._ckSessionKeys.set(SESSION, sessionKey);
+
+  // 1. encPublish ITSELF emits it — driven exactly as migrateCheckinKeys drives it, with a body recovered
+  //    from a decrypted record rather than through publishCheckin.
+  const recovered = { id: 'ci-old', childName: 'Esther Ncube', code: '4417', session: SESSION, guardians: [], date: '2026-08-20' };
+  await api.encPublish('trinityone/checkin:ci-old', recovered, 'checkin');
+  assert.equal(events.length, 1, 're-anchor: encPublish published nothing');
+  assert.ok(tagOf(events[0], 'ck'),
+    'A RE-KEYED RECORD LOST ITS HELPER COPY. migrateCheckinKeys re-publishes through this exact call, on a ' +
+    'timer, for every record still on the legacy key — so this is every record in a migrating church going ' +
+    'quietly unreadable to the helper who wrote it');
+  assert.equal(readCheckinHelperCopy(events[0].tags, sessionKey, unseal).code, '4417',
+    'the re-keyed record carries a ck tag that does not open');
+
+  // 2. …and the migration really does go through it, rather than building its own event. If it ever stopped,
+  //    assertion 1 would still pass while the product silently regressed.
+  const mig = fnBody(VENDOR, 'async migrateCheckinKeys(timeoutMs) {', 'migrateCheckinKeys');
+  assert.match(mig, /window\.Steward\.encPublish\(PRE \+ id, rec, "checkin"\)/,
+    're-anchor: migrateCheckinKeys no longer re-publishes through encPublish, so it no longer inherits the ' +
+    'helper copy and needs its own test');
+  assert.doesNotMatch(mig, /finalizeEvent|_publishToRelays/,
+    'migrateCheckinKeys has started building its own event instead of going through encPublish, which is ' +
+    'how the two writers come to disagree about what a check-in record carries');
+});
+
+test('THE DERIVATION IS A NO-OP FOR EVERY OTHER KIND — encPublish is shared with five other call sites', async () => {
+  // app/stew-finance.jsx x4 and src/steward-manna.src.js publish through the same function. A `ck` tag on a
+  // ledger entry would be a second ciphertext of the church's accounts, sealed under a children's session
+  // key, and nothing would ever read it.
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const { api, events, stubs } = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  stubs._ckSessionKeys.set(SESSION, sessionKey);
+  // A ledger-shaped body that HAS a `session` field, which is the case that would slip through a check on the
+  // body instead of on the kind.
+  await api.encPublish('finance/journal:7', { id: '7', amount: 2500, session: SESSION }, 'finance');
+  assert.equal(events.length, 1, 're-anchor: the finance publish went nowhere');
+  assert.equal(tagOf(events[0], 'ck'), undefined,
+    'A LEDGER ENTRY WAS GIVEN A CHECK-IN HELPER\'S COPY. encPublish is shared, so the second copy has to be ' +
+    'gated on the KIND and not on what the body happens to contain');
+  assert.equal(tagOf(events[0], 'enc'), '1', 'and the marker was bumped on a document with no second copy');
+  assert.equal(tagOf(events[0], 'session'), undefined, 're-anchor: the cleartext tag derivation has stopped being checkin-only too');
+});
+
+
+// ── AND THE POINT OF USE FOR THE READER: THE REGISTER THE SCREEN RENDERS ──────────────────────────────────
+// The tests above prove readCheckinHelperCopy opens the tag. This proves the CONSOLE'S REGISTER does — the
+// array `subscribeCheckins` emits, which `window.useStewardCheckins` hands to DashCheckin and which becomes
+// the rows a leader reads names off. A reader function nothing consults is not a feature (CLAUDE.md rule 1),
+// and until this test the fallback in encSubscribe's take() was exactly that.
+//
+// THE SHIPPED encSubscribe IS EXECUTED, not text-matched: its pool is captured, and it is fed the very event
+// the shipped writer in this harness produced.
+function registerFrom(h, events) {
+  let rows = null;
+  const stop = h.api.encSubscribe('trinityone/checkin:', (r) => { rows = r; }, 'checkin');
+  const sub = h.subs[h.subs.length - 1];
+  assert.ok(sub, 'the lifted encSubscribe never opened a subscription — the pool stub was not reached, so ' +
+    'this harness is running nothing');
+  for (const e of events) sub.handlers.onevent({ ...e, pubkey: church.pub, created_at: e.created_at || 1787280000 });
+  sub.handlers.oneose();
+  stop();
+  assert.ok(Array.isArray(rows), 'the shipped subscription emitted nothing at all, not even an empty list');
+  return rows;
+}
+
+test('POINT OF USE: A CONSOLE WITH NO RING BUT A SESSION KEY STILL SEES THE REGISTER', async () => {
+  // WHO THIS IS FOR, and it is a real person in a real state rather than a contrivance: a DELEGATED
+  // SAFEGUARDING STEWARD whose `checkinkey:` envelope has not arrived — or never will, because the church has
+  // not re-wrapped it since granting them — but who holds a session key from that envelope's KEEPER SLOT.
+  // Before piece 1 such a steward saw an empty register with every record sitting in encSubscribe's holding
+  // pen and nothing on screen to explain it. The piece-3 audit recorded those keeper slots as "written and
+  // never read by any code path"; this is the path that reads them.
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+
+  // 1. THE CHURCH WRITES THE RECORD, ring and all — the shipped writer, real crypto.
+  const desk = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  desk.stubs._ckSessionKeys.set(SESSION, sessionKey);
+  await desk.api.publishCheckin({ id: 'ci-am', childName: 'Esther Ncube', code: '4417', session: SESSION,
+    guardians: [], date: '2026-08-20' });
+  const record = desk.events[0];
+  assert.ok(tagOf(record, 'ck'), 'fixture: the writer produced no helper copy, so this proves nothing');
+
+  // 2. A CONSOLE THAT HOLDS NO REGISTER RING AT ALL, but does hold the session key.
+  const delegate = publishedCheckin({ finance: [], checkin: [], ownerKey: false });
+  assert.equal(delegate.api.encOpen('checkin', record.content), null,
+    're-anchor: this console can open `content` after all, so the fallback is not what is being tested');
+  const blind = registerFrom(delegate, [record]);
+  assert.deepEqual(blind, [],
+    're-anchor: a console with neither key produced a register row, so nothing below is about the session key');
+
+  // 3. …AND THE SAME CONSOLE ONCE ITS SESSION KEY ARRIVES.
+  const helperSide = publishedCheckin({ finance: [], checkin: [], ownerKey: false });
+  helperSide.stubs._ckSessionKeys.set(SESSION, sessionKey);
+  const rows = registerFrom(helperSide, [record]);
+  assert.equal(rows.length, 1,
+    'THE REGISTER IS EMPTY FOR A CONSOLE THAT HOLDS THE SESSION KEY. The record was served, the key was ' +
+    'held, and the row never reached the screen — which looks exactly like "no children are checked in", ' +
+    'the failure DashCheckin already carries a comment about');
+  assert.equal(rows[0].code, '4417', 'the row arrived without the pickup code, which is the field the door needs');
+  assert.equal(rows[0].childName, 'Esther Ncube');
+  assert.equal(rows[0].id, 'ci-am',
+    'the row is keyed by something other than the record\'s own address, which forks it — the same child ' +
+    'present on one row and collected on another');
+});
+
+test('…AND THE HOLDING PEN KEEPS THE TAGS, so a record parked before its key arrives still opens', async () => {
+  // THE HALF THAT IS EASY TO MISS AND HARD TO NOTICE. take() is called from TWO places: a live delivery, and
+  // a retry once a key lands. The pen between them stored only { content, ts } — so had the tags not been
+  // added to it, the fallback would work on a live delivery and silently not on a retry, which is the commoner
+  // path on a cold start (the documents and the envelopes race, and the documents usually win).
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const desk = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  desk.stubs._ckSessionKeys.set(SESSION, sessionKey);
+  await desk.api.publishCheckin({ id: 'ci-am', childName: 'Esther Ncube', code: '4417', session: SESSION, guardians: [] });
+  const record = desk.events[0];
+
+  // The record arrives FIRST, with no key held: it goes into the pen.
+  const late = publishedCheckin({ finance: [], checkin: [], ownerKey: false });
+  let rows = null;
+  const stop = late.api.encSubscribe('trinityone/checkin:', (r) => { rows = r; }, 'checkin');
+  const sub = late.subs[late.subs.length - 1];
+  sub.handlers.onevent({ ...record, pubkey: church.pub, created_at: 1787280000 });
+  sub.handlers.oneose();
+  assert.deepEqual(rows, [], 're-anchor: the record opened straight away, so it was never in the pen');
+
+  // NOW the envelope lands, the key is learned, and the ring-changed waiter fires the retry — exactly as
+  // subscribeCapKey's _capRingChanged does in the product.
+  late.stubs._ckSessionKeys.set(SESSION, sessionKey);
+  assert.equal(late.stubs._capWaiters.checkin.size, 1,
+    're-anchor: encSubscribe registered no retry, so nothing here can be triggered');
+  for (const fn of late.stubs._capWaiters.checkin) fn();
+  stop();
+  assert.equal(rows.length, 1,
+    'A RECORD PARKED IN THE HOLDING PEN NEVER OPENED, even once its key arrived. The pen must carry the tags ' +
+    'as well as the content, or the helper copy is reachable only on a live delivery — and on a cold start ' +
+    'the documents beat the envelopes, so the retry is the usual path');
+  assert.equal(rows[0].code, '4417');
+});
+
+test('POINT OF USE: THE READER ROUTES BY SESSION — the right key filed under the WRONG session opens nothing', async () => {
+  // ⚠ THE READER HALF OF THE CROSS-SESSION LEAK, and it was unguarded until this test. The writer half is
+  // covered ('THE WRITER SEALS UNDER THIS SESSION'S KEY OR NONE'); reintroducing the SAME fallback in
+  // _encOpenSealedCopy instead — `_ckSessionKeys.get(sid) || [..._ckSessionKeys.values()][0]` — passed every
+  // other test in this file. That is the direction that leaks: it hands a morning register to an evening
+  // helper on the READ side, where no writer decision is involved at all.
+  //
+  // WHY EVERYTHING ELSE WAS BLIND TO IT. Every other fixture here files the key under the record's OWN
+  // session, so routing and "try everything" are indistinguishable. The reader-side negative above
+  // ('…AND A HELPER CLEARED FOR A DIFFERENT SESSION OPENS NOTHING') calls readCheckinHelperCopy directly with
+  // the wrong key BY HAND, which proves the cipher refuses a wrong key — never in doubt — and says nothing
+  // about whether the routing picked the right one. This is the same vacuity shape as the `unseal`-that-throws
+  // finding one layer up: a negative that passes because the crypto happened to fail, not because a rule held.
+  //
+  // THE ONE CONSTRUCTION THAT SEPARATES THEM: the console holds THE VERY KEY THE RECORD IS SEALED WITH, filed
+  // under a DIFFERENT session id. The cipher cannot save us here — that key opens the tag perfectly. Only the
+  // lookup by session id stands between the record and the screen. Asserted through registerFrom, so the
+  // decision is made by the shipped encSubscribe, not by a parser call of the test's own.
+  const amKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+
+  // The morning record, sealed under the morning key by the shipped writer.
+  const desk = publishedCheckin({ finance: [financeKey, legacyKey], checkin: [checkinKey], ownerKey: true });
+  desk.stubs._ckSessionKeys.set(SESSION, amKey);
+  await desk.api.publishCheckin({ id: 'ci-am', childName: 'Esther Ncube', code: '4417', session: SESSION,
+    guardians: [], date: '2026-08-20' });
+  const record = desk.events[0];
+  assert.ok(tagOf(record, 'ck'), 'fixture: the writer produced no helper copy, so this proves nothing');
+  assert.equal(checkinSessionOf(record.tags), SESSION,
+    'fixture: the record does not name the morning session, so the lookup under test is not the one exercised');
+
+  // THE EVENING CONSOLE — holding the morning's key, but filed under the evening session. This is not a
+  // contrived state: it is what a console has after the evening envelope arrives and the morning one is
+  // re-wrapped, or simply after any two sessions' keepers overlap.
+  const evening = publishedCheckin({ finance: [], checkin: [], ownerKey: false });
+  evening.stubs._ckSessionKeys.set(OTHER_SESSION, amKey);
+  assert.equal(evening.api.encOpen('checkin', record.content), null,
+    're-anchor: this console can open `content`, so the row below would not come from the helper copy');
+  assert.equal(readCheckinHelperCopy(record.tags, amKey, unseal)?.code, '4417',
+    're-anchor: the key this console holds does NOT open the tag, so the cipher would refuse it anyway and ' +
+    'this fixture cannot tell routing from a lucky failure — which is the whole point of it');
+
+  const rows = registerFrom(evening, [record]);
+  assert.deepEqual(rows, [],
+    'A CONSOLE OPENED A RECORD FROM A SESSION IT HOLDS NO KEY FOR. The reader tried a key it holds for a ' +
+    'DIFFERENT session and it happened to fit, so the evening\'s helpers now read the morning\'s register — ' +
+    'names, pickup codes and guardians for children they were never cleared for. Nothing else notices: the ' +
+    'relay only checks that the reader is an in-window helper of the session THEY name, and the ciphertext ' +
+    'decides the rest. _encOpenSealedCopy must look up ONLY checkinSessionOf(tags) and refuse when that ' +
+    'session has no key');
+
+  // …AND THE SAME CONSOLE, ONE MAP ENTRY DIFFERENT, DOES SEE IT — so the emptiness above is the session
+  // lookup refusing, not this harness failing to deliver anything at all.
+  const morning = publishedCheckin({ finance: [], checkin: [], ownerKey: false });
+  morning.stubs._ckSessionKeys.set(SESSION, amKey);
+  assert.equal(registerFrom(morning, [record]).length, 1,
+    're-anchor: filed under the RIGHT session the same key still produced no row, so the assertion above ' +
+    'passes for the wrong reason and proves nothing about routing');
+});
+
+
+// ── AND WHERE THE KEY COMES FROM IN THE FIRST PLACE ───────────────────────────────────────────────────────
+// Every test above SEEDS `_ckSessionKeys`, which is the right shape for asking "what does the writer do with
+// a key it holds" — but it means none of them exercises the one line that puts a key there. That line is
+// inside subscribeCheckinSessionKeys' onevent, it unwraps OUR OWN slot out of a real envelope, and IT WAS
+// WRITTEN WRONG FIRST TIME:
+//
+//     const mine = c.keys[pub];   nip44d(mine, nip44ck(sk, pub))        ← wrong
+//     const mine = c.keys[churchPub];   nip44d(mine, nip44ck(sk, e.pubkey))   ← right
+//
+// `churchPub` IS THIS CONSOLE'S OWN KEY AND `pub` IS NOT. In delegated mode `pub` is the CHURCH's key and
+// `churchPub` is the steward's own; for an OWNER they are the same pubkey — so the wrong version worked
+// perfectly for every owner console and silently recovered nothing for every delegate. That is the shape of
+// bug this codebase keeps producing, and the reason it survives review is that the owner path is the one
+// anybody tests. So both are driven here.
+function sessionKeysFrom({ delegated }) {
+  const h = publishedCheckin({ finance: [], checkin: [], ownerKey: !delegated });
+  // A DELEGATE'S CONSOLE, as setActiveIdentity leaves it: `pub` is the CHURCH, `churchPub` is this console's
+  // OWN key, `sk` is this console's own secret. (For an owner the harness already has all three as the
+  // church.) The naming is historical and is the trap this test exists for.
+  if (delegated) { h.stubs.pub = church.pub; h.stubs.churchPub = delegated.pub; h.stubs.sk = delegated.sk; }
+  const read = new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, 'subscribeCheckinSessionKeys(cb) {', 'subscribeCheckinSessionKeys')} }).subscribeCheckinSessionKeys; }`)(h.scope);
+  const stop = read.call({}, () => {});
+  const sub = h.subs[h.subs.length - 1];
+  assert.ok(sub, 'the lifted subscription never opened one — this harness is running nothing');
+  return { h, sub, stop };
+}
+
+test('THE SESSION KEY IS RECOVERED FROM OUR OWN SLOT — for the owner AND for a delegate', async () => {
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const lead = (() => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; })();
+
+  // ONE REAL ENVELOPE, wrapped by the SHIPPED builder to the church AND to a safeguarding steward — which is
+  // exactly what publishCheckinHelpers produces (`keepers = [cp, ...stewards.filter(allowed)]`).
+  const content = (() => {
+    const built = buildHelperGrant({ session: SESSION, source: GRANT_SOURCE, lifetime: 'session',
+      from: AT - 3600, until: AT + 3600, helpers: [helper.pub], keepers: [church.pub, lead.pub],
+      sessionKeyHex: sessionKey,
+      wrap: (p2, pt) => nip44.encrypt(pt, nip44.utils.getConversationKey(church.sk, p2)) });
+    assert.deepEqual(built.failed, [], 'fixture: the shipped builder could not wrap somebody');
+    assert.ok(built.doc.keys[church.pub] && built.doc.keys[lead.pub],
+      'fixture: the envelope has no slot for the church or for the lead, so this proves nothing');
+    return JSON.stringify(built.doc);
+  })();
+  const envelope = { pubkey: church.pub, created_at: AT - 60, content,
+    tags: [['d', D.CHECKINHELPER + SESSION], ['t', 'trinityone'], ['church', church.pub], ['session', SESSION]] };
+
+  // ── THE OWNER CONSOLE ──
+  const own = sessionKeysFrom({ delegated: null });
+  own.sub.handlers.onevent(envelope);
+  own.sub.handlers.oneose();
+  own.stop();
+  assert.equal(own.h.stubs._ckSessionKeys.get(SESSION), sessionKey,
+    'THE OWNER CONSOLE DID NOT RECOVER THE SESSION KEY from an envelope it signed itself. Nothing can seal a ' +
+    'helper copy after this: publishCheckin looks the key up in exactly this map');
+
+  // ── A DELEGATED SAFEGUARDING STEWARD'S CONSOLE — the case the first version got wrong ──
+  const del = sessionKeysFrom({ delegated: lead });
+  del.sub.handlers.onevent(envelope);
+  del.sub.handlers.oneose();
+  del.stop();
+  assert.equal(del.h.stubs._ckSessionKeys.get(SESSION), sessionKey,
+    'A DELEGATED STEWARD RECOVERED NO SESSION KEY from their OWN keeper slot. `pub` is the CHURCH on a ' +
+    'delegate\'s console and `churchPub` is their own key — reading keys[pub] there fetches the CHURCH\'S ' +
+    'slot and tries to open it with the delegate\'s conversation key, which fails silently and leaves the ' +
+    'keeper slots as decorative as the piece-3 audit found them');
+
+  // ── AND A CONSOLE WITH NO SLOT AT ALL RECOVERS NOTHING, rather than something. The negative that stops
+  // both assertions above passing on a harness that simply writes the key whatever arrives.
+  const stranger = (() => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; })();
+  const out = sessionKeysFrom({ delegated: stranger });
+  out.sub.handlers.onevent(envelope);
+  out.sub.handlers.oneose();
+  out.stop();
+  assert.equal(out.h.stubs._ckSessionKeys.size, 0,
+    'a console the church never wrapped a slot to recovered the session key anyway');
+});
+
+test('…AND A STAND-DOWN FORGETS IT — the envelope was the only place that key existed', async () => {
+  // revokeCheckinHelpers replaces the envelope with a tombstone, and the envelope was the only copy of the
+  // key. So after a stand-down NOBODY can open that session's helper copies, the church included — and a
+  // console keeping a stale copy in memory would go on sealing NEW records under a key it can no longer
+  // re-derive after a reload, which is write-only garbage by any other name.
+  const sessionKey = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const built = buildHelperGrant({ session: SESSION, source: GRANT_SOURCE, lifetime: 'session',
+    from: AT - 3600, until: AT + 3600, helpers: [helper.pub], keepers: [church.pub], sessionKeyHex: sessionKey,
+    wrap: (p2, pt) => nip44.encrypt(pt, nip44.utils.getConversationKey(church.sk, p2)) });
+  const base = { pubkey: church.pub, content: JSON.stringify(built.doc),
+    tags: [['d', D.CHECKINHELPER + SESSION], ['t', 'trinityone'], ['church', church.pub], ['session', SESSION]] };
+
+  const s2 = sessionKeysFrom({ delegated: null });
+  s2.sub.handlers.onevent({ ...base, created_at: AT - 120 });
+  assert.equal(s2.h.stubs._ckSessionKeys.get(SESSION), sessionKey, 'fixture: the key was never learned');
+  s2.sub.handlers.onevent({ ...base, created_at: AT - 60, content: '',
+    tags: [...base.tags, ['deleted', '1']] });
+  s2.stop();
+  assert.equal(s2.h.stubs._ckSessionKeys.has(SESSION), false,
+    'A STOOD-DOWN SESSION\'S KEY IS STILL IN MEMORY. Every record written after this is sealed under a key ' +
+    'that exists nowhere else — unopenable by anyone, including this console, the moment it reloads');
 });

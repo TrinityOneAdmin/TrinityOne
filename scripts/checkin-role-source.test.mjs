@@ -18,7 +18,8 @@ import {
   windowFault, buildHelperGrant, readHelperGrant, grantAdmits, helperKeyFor, GRANT_SOURCE, isPermissionSource,
   permittedHelpers, permissionPolicy, permissionWindow, permissionFault, buildCheckinPermission,
   readCheckinPermission, permissionAdmits, PERMISSION_LIFETIMES, DEFAULT_PERMISSION_LIFETIME,
-  isDeclaredPermissionLifetime, MAX_PERMISSION_SECONDS, KEY_LEAD_SECONDS
+  isDeclaredPermissionLifetime, MAX_PERMISSION_SECONDS, KEY_LEAD_SECONDS,
+  readCheckinHelperCopy, checkinSessionOf
 } from './checkin-role-source.mjs';
 import { D, DOC_TYPES } from './trinity-doc-types.mjs';
 
@@ -689,4 +690,88 @@ test('A HELPER CANNOT REACH BACK: the fetch lead is a bounded number, not a cons
     'the lead is under a day, so a church whose console opens weekly leaves its helpers with no key at all');
   assert.ok(KEY_LEAD_SECONDS > MAX_SESSION_SECONDS,
     'the lead is shorter than a session key\'s own life, so no key could ever be fetched before it opened');
+});
+
+
+// ══ THE OTHER END OF THE KEY: READING A RECORD'S HELPER COPY ══════════════════════════════════════════════
+// Piece 1 of reference/SCOPE-CHECKIN-SEALING-2026-09-10.md. `helperKeyFor` above hands back a session key;
+// `readCheckinHelperCopy` is what that key opens. The rules live in this module so the console, the relay and
+// whichever client slice 3 builds cannot disagree about what a malformed record means.
+//
+// ⚠ `unseal` IS A PARAMETER, AND THAT IS WHY THESE TESTS PASS ONE THAT DOES NOT THROW. Every negative here
+// was first written against real NIP-44 in checkin-key-separation.test.mjs, and SABOTAGE PROVED THEM
+// VACUOUS: deleting the key guard from readCheckinHelperCopy changed nothing, because nip44.decrypt happens
+// to throw on a zero-length key and the catch turned that into the same null. The guard was untested and the
+// assertion was passing for the wrong reason. A permissive `unseal` — which any future caller might supply,
+// and which is the whole point of the parameter — is what actually exercises the refusals.
+const CK_YES = () => JSON.stringify({ id: 'ci1', childName: 'Esther Ncube', code: '4417' });   // opens anything
+const CK_KEY = 'a'.repeat(64);
+const CK_TAGS = (ct) => [['d', 'trinityone/checkin:ci1'], ['t', 'trinityone'], ['enc', '2'], ['session', 'svc-am'], ['ck', ct]];
+
+test('THE HELPER COPY OPENS WITH A GOOD KEY, and carries the body the door needs', () => {
+  const got = readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, CK_YES);
+  assert.ok(got, 'a well-formed record with a valid key opened nothing');
+  assert.equal(got.code, '4417', 'the copy opened without the pickup code');
+  assert.equal(got.id, 'ci1');
+});
+
+test('A KEY THAT IS NOT 32 BYTES OF HEX IS REFUSED BEFORE ANY CIPHER SEES IT', () => {
+  // helperKeyFor returns '' for "my turn is not on" and "I am not a helper" — both ordinary answers — so ''
+  // reaches this function in normal operation and must never be handed to a cipher as if it were a key.
+  // Every case below uses an `unseal` that WOULD hand back a readable body, so only the guard can refuse it.
+  for (const bad of ['', null, undefined, 'not-a-key', 'A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), 0, {}]) {
+    assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), bad, CK_YES), null,
+      'a check-in record was opened with ' + JSON.stringify(bad) + ' as the key. helperKeyFor hands back \'\' ' +
+      'as an ORDINARY answer, so this is reachable without anything going wrong — and an unseal that returns ' +
+      'garbage instead of throwing would turn it into a readable safeguarding record');
+  }
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY.toUpperCase(), CK_YES), null,
+    'an upper-case key was accepted. Session keys are lower-case hex everywhere they are produced, and ' +
+    'accepting both spellings is how two callers come to disagree about whether a key matches');
+});
+
+test('NO ck TAG IS AN ORDINARY RECORD, NOT A FAULT — and never an empty register', () => {
+  // Every record written before this feature has none, and so does every record for a session the console
+  // held no key for. A reader that treated this as an error would show a leader at the door an empty room.
+  const noCk = [['d', 'trinityone/checkin:ci1'], ['enc', '1'], ['session', 'svc-am']];
+  assert.equal(readCheckinHelperCopy(noCk, CK_KEY, CK_YES), null, 'a record with no helper copy did not return null');
+  assert.equal(readCheckinHelperCopy([], CK_KEY, CK_YES), null, 'an event with no tags at all');
+  assert.equal(readCheckinHelperCopy(null, CK_KEY, CK_YES), null, 'a missing tag list threw or returned something');
+  assert.equal(readCheckinHelperCopy(CK_TAGS(''), CK_KEY, CK_YES), null, 'an empty ck value was treated as a ciphertext');
+});
+
+test('THE FIRST ck ONLY — an author may not offer alternatives', () => {
+  // The event is signed, so only its author can add a tag; but an author can add several. Trying each in
+  // turn would let a writer present one body to a reader that tries hardest and another to a reader that
+  // stops early. Taking the first is the rule the d-tag and session readers already apply.
+  const seen = [];
+  const two = [...CK_TAGS('first'), ['ck', 'second']];
+  readCheckinHelperCopy(two, CK_KEY, (ct) => { seen.push(ct); return CK_YES(); });
+  assert.deepEqual(seen, ['first'],
+    'the reader tried more than the first ck tag, so a record can carry two bodies and which one a helper ' +
+    'sees depends on which reader they are running');
+});
+
+test('A BODY THAT IS NOT AN OBJECT IS REFUSED — a string would spread into a row as characters', () => {
+  // encSubscribe does `byId.set(id, { id, ...obj, ts })`. Spreading a string produces {0:'{',1:'"'…} and a
+  // row that renders as nothing recognisable; spreading an array is no better.
+  for (const body of ['"just a string"', '[1,2,3]', 'null', '42', 'true']) {
+    assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, () => body), null,
+      'a ck copy containing ' + body + ' was accepted as a record body');
+  }
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, () => 'not json at all'), null, 'unparseable JSON');
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, () => { throw new Error('wrong key'); }), null,
+    'an unseal that threw was not caught, so one bad record takes the whole register down with it');
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, 'not a function'), null, 'a non-function unseal');
+});
+
+test('THE SESSION IS READ FROM THE CLEARTEXT TAG, because the answer is needed before anything can open', () => {
+  // A reader must know WHICH session key to reach for, and the sealed body cannot tell it — the body is
+  // inside the ciphertext it is trying to open. `_encCleartextTags` in the console emits this tag for exactly
+  // that purpose, and the relay's own read gate keys on the same one.
+  assert.equal(checkinSessionOf(CK_TAGS('x')), 'svc-am');
+  assert.equal(checkinSessionOf([['d', 'trinityone/checkin:ci1']]), '', 'a record with no session tag');
+  assert.equal(checkinSessionOf([['session', '  svc-am  ']]), 'svc-am', 'the value is not trimmed');
+  assert.equal(checkinSessionOf(null), '', 'a missing tag list threw');
+  assert.equal(checkinSessionOf([['session']]), '', 'a session tag with no value');
 });

@@ -119,6 +119,11 @@ function engine({ authed = true, publishOk = true, delegated = null } = {}) {
     // authenticated oneose copies it into `_ckKeysSettledGen` — that is the code under test.
     _ckKeysGen: 0,
     _ckKeysSettledGen: -1,
+    // AND THE SESSION KEYS, added 2026-09-10 with piece 1: the subscription now unwraps OUR OWN slot out of
+    // each envelope into this map, and forgets it on a stand-down. Nothing in THIS file is about that — the
+    // sealing is proved in scripts/checkin-key-separation.test.mjs against real NIP-44 — but the lifted
+    // subscription reaches for it, so it has to be here. A fresh Map per harness: it is module state.
+    _ckSessionKeys: new Map(),
     _isRelayAuthed: () => { return authed; },
     // THE REAL DECISION-MAKERS, out of the module esbuild inlines into the bundle under test.
     buildHelperGrant, helperPolicy, lifetimeWindow, eligibleHelpers, GRANT_SOURCE, KEY_LEAD_SECONDS,
@@ -929,11 +934,27 @@ test('POINT OF USE: A ROTATION IS REPORTED ON THE SCREEN, and does not overclaim
   assert.match(words, /new.{0,30}key/i,
     'the screen replaced a live session key and said nothing. It is the one consequential act the issuer ' +
     'takes that a steward can neither see nor undo: ' + words);
-  // ⚠ AND NOT MORE THAN THAT. Nothing is sealed under a session key yet (piece 1 of the scope note is not
-  // built), so copy claiming records were lost would be a false claim in shipped UI. When piece 1 lands this
-  // must be inverted deliberately.
-  assert.doesNotMatch(words, /lost|unreadable|orphan/i,
-    'the screen claims records were lost. Nothing is sealed under a session key yet, so that is untrue today');
+  // ⚠ INVERTED 2026-09-10, DELIBERATELY, AS THE COMMENT THAT STOOD HERE REQUIRED. It used to assert
+  // doesNotMatch(/lost|unreadable|orphan/) because nothing was sealed under a session key, so copy claiming
+  // records were lost would have been a false claim in shipped UI. Piece 1 has landed: check-ins now carry a
+  // second copy sealed under the session key, and replacing that key permanently orphans the helper's copy
+  // of every record already written for the session. The old assertion did not merely go stale — it actively
+  // FORBADE the screen from telling the truth, so leaving it would have pinned the reassuring untruth in
+  // place with a passing test over it.
+  assert.match(words, /unreadable to cleared helpers/i,
+    'THE SCREEN STILL TELLS A STEWARD THE ROTATION COSTS NOTHING. Replacing a session key orphans the ' +
+    'helper\'s copy of every check-in already written for it, with no re-wrap possible — the old key is ' +
+    'exactly what this console could not open. A steward who reads "the register is unaffected" has been ' +
+    'told the opposite of what just happened: ' + words);
+  // AND THE OTHER HALF IS STILL TRUE AND STILL SAID. `content` is sealed to the safeguarding ring, never to
+  // a session, so the church's own access really is unaffected. Dropping that clause would send a steward
+  // hunting for records that are sitting right there in front of them.
+  assert.match(words, /still read/i,
+    'the screen now says the helper copies are lost without saying the register still opens for the church, ' +
+    'which reads as "the check-ins are gone": ' + words);
+  assert.doesNotMatch(words, /register itself is unaffected/i,
+    'the screen carries BOTH the truthful line and the old reassurance, so a steward reads a contradiction ' +
+    'and believes the half that costs them nothing: ' + words);
 });
 
 // ── 3. AND THE PAGE ACTUALLY RENDERS IT ───────────────────────────────────────────────────────────────────

@@ -25,19 +25,24 @@
 // both of those requests were REFUSED, which is a different failure from "served and unreadable" and looks
 // nothing like it from a phone.
 //
-// IT DOES NOT PROVE EITHER OF THEM CAN OPEN IT, and that must not be glossed (CLAUDE.md rule 4). Measured
-// while writing this file, and recorded in the scope note for slice 3:
+// ⚠ THE HEADER BELOW WAS TRUE UNTIL 2026-09-10 AND HALF OF IT IS NOW WRONG — corrected rather than left as a
+// stale warning (CLAUDE.md rule 4), because a comment that says a feature does not exist is exactly what a
+// later reader trusts.
 //
-//   • `publishCheckin` seals through `encSeal('checkin', …)`, which uses the SAFEGUARDING CAPABILITY KEY
-//     ring (`trinityone/checkinkey:`, wrapped to the church and its safeguarding stewards). It does NOT use
-//     the session key from `checkinhelper:`. So a helper handed this ciphertext holds the wrong key for it.
-//   • a GUARDIAN holds neither key, so a parent served their own child's record can open nothing at all.
-//   • `helperKeyFor()` — the function that hands a helper their session key — still has no product caller
-//     anywhere in src/ or app/.
+// IT USED TO SAY: "this proves DELIVERY and says nothing about decryption", and the reasons were —
 //
-// The tags were necessary and are not sufficient. Which key a check-in record should be sealed under is a
-// design decision for slice 3 (the member-app reader), not something to invent inside a tag fix, and the
-// tests below therefore assert DELIVERY and say nothing about decryption.
+//   • `publishCheckin` seals through `encSeal('checkin', …)`, the SAFEGUARDING ring, and not the session key
+//     from `checkinhelper:`, so a helper handed the ciphertext holds the wrong key for it. — HALF TRUE STILL:
+//     `content` is exactly that ring's ciphertext and always will be. What changed is that piece 1 adds a
+//     SECOND copy in a ['ck'] tag sealed under the session key, so the helper now has something their key
+//     opens. The test '…AND SHE CAN OPEN IT' below proves that end to end, through this file's real relay.
+//   • `helperKeyFor()` has no product caller anywhere in src/ or app/. — NO LONGER TRUE of the reader chain:
+//     `readCheckinHelperCopy` beside it is called by the console's own encSubscribe, and both are exercised
+//     here against a record a real gateway stored and served.
+//   • a GUARDIAN holds neither key, so a parent served their own child's record can open nothing. — STILL
+//     TRUE, and deliberately: that is piece 2, which has an open owner decision attached (a guardian-readable
+//     copy turns inert blobs into readable safeguarding records cached in phone storage). No ['gk'] tag is
+//     emitted, and the guardian tests below still assert DELIVERY only.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -45,12 +50,13 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
-import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { requireFreePort } from './test-ports.mjs';
 import { fnBody, stmt } from './test-slice.mjs';
-import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE } from './checkin-role-source.mjs';
+import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE,
+         readHelperGrant, helperKeyFor, readCheckinHelperCopy } from './checkin-role-source.mjs';
 import { D } from './trinity-doc-types.mjs';
 
 const PORT = 8908;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
@@ -93,9 +99,20 @@ function shippedWriter() {
     now,
     NET,
     _todayISO: () => new Date().toISOString().slice(0, 10),
-    // THE REGISTER'S OWN KEY RING, as capKeyRing('checkin') would hold it. This is the fixture that makes
-    // the sealing gap visible: it is not SESSION_KEY, and nothing here can make it be.
+    // THE REGISTER'S OWN KEY RING, as capKeyRing('checkin') would hold it. It is deliberately NOT SESSION_KEY
+    // — `content` is sealed to the safeguarding ring and always was.
+    //
+    // THE COMMENT HERE UNTIL 2026-09-10 SAID "this is the fixture that makes the sealing gap visible… nothing
+    // here can make it be [SESSION_KEY]", and that gap is now closed rather than merely described. Piece 1 of
+    // reference/SCOPE-CHECKIN-SEALING-2026-09-10.md double-locks the record: `content` stays exactly this
+    // ring's ciphertext, and a SECOND copy rides in an added ['ck'] tag sealed under the session key. So both
+    // keys appear below, they seal different halves of one record, and the test at the foot of this file
+    // proves a helper opens the half meant for them AFTER A REAL RELAY HAS SERVED IT.
     _capState: { checkin: { ring: [SG_CAP_KEY], rev: 1, docKeys: {} }, finance: { ring: [], rev: 0, docKeys: {} } },
+    // WHICH SESSION KEYS THIS CONSOLE HOLDS. In the product subscribeCheckinSessionKeys unwraps our own slot
+    // out of each envelope into this map; here it is seeded with the same SESSION_KEY the grant below wraps
+    // to Ada, so the writer seals the helper's copy under the key her envelope will really hand her.
+    _ckSessionKeys: new Map([[S_NOW, SESSION_KEY]]),
     _unhex: unhex,
     nip44e: (pt, k) => nip44.encrypt(pt, k),
     encrypt: (pt, k) => nip44.encrypt(pt, k),
@@ -133,6 +150,12 @@ function shippedWriter() {
   // The tag derivation is a top-level function declaration, so it evaluates as itself.
   const tagFn = new Function('scope', `with (scope) { ${fnBody(VENDOR, 'function _encCleartextTags(kind, obj) {', '_encCleartextTags')} return _encCleartextTags; }`)(scope);
   stubs._encCleartextTags = tagFn;
+  // AND THE HELPER'S-COPY BUILDER, lifted the same way — it is the writer half of piece 1, so a stub would be
+  // the test answering the question it is named after. Unlike _encCleartextTags it closes over the harness
+  // (`_ckSessionKeys`, `nip44e`, `_unhex`), so it is evaluated with the scope.
+  stubs._encSealedCopies = new Function('scope',
+    'with (scope) { return (' + stmt(VENDOR, 'var _encSealedCopies = (kind, obj) =>', '_encSealedCopies')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(scope);
   const lift = (sig, name) => {
     const body = fnBody(VENDOR, sig, name);
     return new Function('scope', `with (scope) { return ({ ${body} }).${name}; }`)(scope);
@@ -232,7 +255,20 @@ test('the shipped writer emits BOTH tags the relay\'s read gates key on', async 
   assert.deepEqual(tag('p'), [gina.pub],
     'NO [\'p\'] TAG. The guardian rule in canRead walks these, and design §7 says the record hangs off the ' +
     'GUARDIAN\'s key because the child has no phone. Without it a parent sees nothing of their own child.');
-  assert.deepEqual(tag('enc'), ['1'], 're-anchor: the record stopped declaring itself encrypted');
+  // '2', NOT '1' — CHANGED 2026-09-10 WITH PIECE 1, and deliberately rather than by flipping a fixture.
+  // The marker declares that a SECOND ciphertext rides in the tags, after the ['enc','care1'] precedent in
+  // src/fellowship.src.js. It follows the copy and only the copy: the test below on a record with no session
+  // asserts '1', because a record with no helper copy must stay byte-identical to what this writer produced
+  // yesterday. THE MARKER RESCUES NO OLD READER — only leaving `content` alone does that, which is what the
+  // ring assertions here and in checkin-key-separation.test.mjs hold.
+  assert.deepEqual(tag('enc'), ['2'],
+    're-anchor: a record carrying a helper copy no longer declares it. Nothing in this codebase reads `enc` ' +
+    'on a check-in path, so this is a marker for whoever comes next rather than a gate — but a marker that ' +
+    'disagrees with the tags is worse than none.');
+  assert.equal(tag('ck').length, 1,
+    'NO [\'ck\'] TAG. The relay serves a cleared helper this record (the tests below prove it), and without ' +
+    'this tag there is nothing on it their session key opens — served but unreadable, which is the state ' +
+    'piece 1 exists to end and which looks nothing like being refused from a phone.');
   assert.equal(tag('d')[0], D.CHECKIN + 'r1', 're-anchor: the d-tag is not the registry\'s');
   // AND THE BODY CARRIES THEM TOO — which is not duplication for its own sake. migrateCheckinKeys()
   // republishes this body through the same encPublish, and the body is the only place the tags can be
@@ -273,6 +309,66 @@ test('THE HELPER OF THAT SESSION IS SERVED THE SHIPPED RECORD — the request th
   assert.equal(got.length, 1,
     'A CLEARED, IN-WINDOW HELPER WAS REFUSED THE RECORD THE CONSOLE ACTUALLY WROTE. This is item 1 of the ' +
     'scope note in one assertion: the gate is right, and the writer emitted nothing for it to read.');
+});
+
+test('…AND SHE CAN OPEN IT — the double lock, end to end, through a real relay', async () => {
+  // ⚠ THE ONE THING reference/SCOPE-CHECKIN-SEALING-2026-09-10.md LISTS AS UNVERIFIED: "the writer shape is
+  // proved compatible and the relay is proved to serve it, but not that a helper or guardian client can open
+  // it end to end." This is that assertion, and every link in it is shipped code:
+  //
+  //   the shipped writer seals the record  →  a real gateway stores and serves it  →  the shipped
+  //   readHelperGrant parses the envelope the shipped buildHelperGrant made  →  the shipped helperKeyFor
+  //   hands Ada her key  →  the shipped readCheckinHelperCopy opens the tag.
+  //
+  // Nothing between the church sealing the record and Ada reading it is this file's own code, and the record
+  // is the one the RELAY handed back rather than the one the writer kept — so a relay that dropped or
+  // rewrote the tag would fail here rather than pass.
+  const written = await putShipped({ id: 'live-open', childName: 'Esther Ncube', code: '7742',
+    session: S_NOW, guardians: [gina.pub] });
+  await sleep(200);
+  const got = await asks(ada, { kinds: [30078], '#d': [D.CHECKIN + 'live-open'] });
+  assert.equal(got.length, 1, 'fixture: the in-window helper was not served the record at all');
+  const served = got[0];
+  assert.equal(served.id, written.id,
+    'THE RELAY CHANGED THE EVENT. The ck tag is inside the event id, so this is the property piece 1 relies ' +
+    'on to say a relay cannot strip the helper copy undetected — if the id still matched a modified event, ' +
+    'that reasoning would be wrong.');
+  assert.equal(verifyEvent(served), true, 'the served event does not verify, so the tag could have been altered');
+
+  // ── ADA'S OWN ROUTE TO THE KEY: her envelope, parsed and unwrapped by the shipped functions ──
+  const env = await asks(ada, { kinds: [30078], '#d': [D.CHECKINHELPER + S_NOW] });
+  assert.equal(env.length, 1, 'fixture: the cleared helper was not served her own session envelope');
+  const parsed = readHelperGrant(env[0].content);
+  assert.ok(parsed, 'the shipped parser refused the envelope the shipped builder made and the relay stored');
+  const key = helperKeyFor(parsed, ada.pub, now(),
+    (ct) => nip44.decrypt(ct, nip44.utils.getConversationKey(ada.sk, church.pub)));
+  assert.equal(key, SESSION_KEY,
+    'the key Ada recovers from her own envelope is not the one the desk sealed with, so the two halves of ' +
+    'this feature were built against different fixtures');
+
+  // ── AND THE RECORD OPENS ──
+  const opened = readCheckinHelperCopy(served.tags, key, (ct, k) => nip44.decrypt(ct, unhex(k)));
+  assert.ok(opened, 'A CLEARED, IN-WINDOW HELPER WAS SERVED THE RECORD AND COULD NOT OPEN IT. That is the ' +
+    '"served but unreadable" state the scope note warns looks nothing like being refused from a phone: the ' +
+    'room shows empty and nothing anywhere says why.');
+  assert.equal(opened.code, '7742', 'she opened something other than the pickup code, which is the field the door needs');
+  assert.equal(opened.childName, 'Esther Ncube');
+
+  // ── AND `content` STILL BELONGS TO THE CHURCH ALONE. The additive shape's whole promise.
+  assert.equal(JSON.parse(nip44.decrypt(served.content, unhex(SG_CAP_KEY))).code, '7742',
+    'the safeguarding ring can no longer open `content` on a record that has been through a real relay');
+  assert.throws(() => nip44.decrypt(served.content, unhex(SESSION_KEY)),
+    're-anchor: the session key opens `content` too, so the two locks are not two locks');
+
+  // ── AND BEN, CLEARED FOR LAST WEEK, GETS NOWHERE EVEN WITH THE CIPHERTEXT IN HAND. The relay refuses him
+  // the record (the next test proves that); this proves the ciphertext would not yield to him either, which
+  // is what makes one revocation enough.
+  const benKey = helperKeyFor(readHelperGrant(env[0].content), ben.pub, now(),
+    (ct) => nip44.decrypt(ct, nip44.utils.getConversationKey(ben.sk, church.pub)));
+  assert.equal(benKey, '', 'fixture: last week\'s helper is on THIS session\'s envelope');
+  assert.equal(readCheckinHelperCopy(served.tags, LAST_KEY, (ct, k) => nip44.decrypt(ct, unhex(k))), null,
+    'LAST WEEK\'S SESSION KEY OPENED THIS WEEK\'S RECORD. Per-session keys are the mechanism that makes a ' +
+    'clearance narrow, and it has just failed at the only layer that still works if every gate does not.');
 });
 
 test('THE GUARDIAN THE RECORD NAMES IS SERVED IT, and the other family\'s guardian is not', async () => {

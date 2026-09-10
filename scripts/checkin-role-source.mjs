@@ -749,3 +749,59 @@ export function helperKeyFor(grant, pub, at, unwrap) {
   if (!ct) return '';
   try { const k = unwrap(ct); return /^[0-9a-f]{64}$/.test(String(k || '')) ? String(k) : ''; } catch { return ''; }
 }
+
+// ── THE OTHER END OF THAT KEY: OPEN THE HELPER'S COPY OF A CHECK-IN RECORD ────────────────────────────────
+//
+// Piece 1 of reference/SCOPE-CHECKIN-SEALING-2026-09-10.md. `helperKeyFor` above hands back a session key;
+// until this function existed there was nothing that key opened, because a record was sealed only to the
+// church's safeguarding ring. The owner's decision of 2026-09-10 double-locks each record: `content` stays
+// the ring's ciphertext, byte for byte, and a SECOND copy rides in a `['ck', …]` tag sealed under the session
+// key. This is the reader for that tag.
+//
+// IT LIVES HERE, beside the grant parser, for the reason the rest of this module exists: the writer is in the
+// steward console, the first product reader is also the console (encSubscribe's fallback), and the client that
+// actually needs it — a cleared helper's own app — DOES NOT EXIST YET. A copy of these rules in each would be
+// three chances to disagree about what a malformed record means.
+//
+// `unseal(ciphertext, keyHex)` IS CALLER-SUPPLIED, exactly as `unwrap` is in buildHelperGrant and
+// helperKeyFor, and for the same reason: this module must not depend on a crypto implementation, and the
+// relay imports it too.
+//
+// RETURNS null FOR ANYTHING IT CANNOT VOUCH FOR, and a caller must read null as "no helper copy" and NEVER as
+// "no record". The distinction matters on this data more than most: the register still exists and the church
+// can still read it through `content`. A reader that treated null as an empty register would show a leader at
+// the door an empty room.
+//
+// FOUR REFUSALS, each for a measured reason rather than for tidiness:
+//   • NO `ck` TAG — the ordinary case, not a fault. Every record written before this feature, and every
+//     record written for a session this console held no key for, has none. reference/DOMAIN.md and design
+//     §10: nothing may block a check-in, so the writer omits the copy rather than refusing to write.
+//   • A KEY THAT IS NOT 32 BYTES OF HEX — helperKeyFor returns '' for "my turn is not on" and "I am not a
+//     helper", and '' must not be handed to a cipher as if it were a key.
+//   • THE FIRST `ck` ONLY. Tags are attacker-controlled in the sense that matters here: the event is signed,
+//     so only its author can add one, but an author could add several. Trying each in turn would let a
+//     writer offer alternatives; taking the first is the same rule the d-tag and session-tag readers apply.
+//   • A BODY THAT IS NOT AN OBJECT — a JSON string or array parses fine and would spread into a row as
+//     characters.
+export function readCheckinHelperCopy(tags, keyHex, unseal) {
+  if (!Array.isArray(tags)) return null;
+  if (!/^[0-9a-f]{64}$/.test(String(keyHex || ''))) return null;
+  if (typeof unseal !== 'function') return null;
+  const ct = (tags.find(t => Array.isArray(t) && t[0] === 'ck') || [])[1] || '';
+  if (!ct) return null;
+  try {
+    const obj = JSON.parse(unseal(String(ct), String(keyHex)));
+    return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : null;
+  } catch { return null; }
+}
+
+// WHICH SESSION A RECORD BELONGS TO, read from its CLEARTEXT tag rather than from the sealed body.
+//
+// This is the one thing a reader must know BEFORE it can open anything: which session key to reach for. The
+// body would answer the same question and is no use — it is inside the ciphertext this is trying to open.
+// `_encCleartextTags` in the console emits it for exactly this purpose, and the relay's own read gate keys on
+// the same tag, so the client and the box agree about which session a record is in by construction.
+export function checkinSessionOf(tags) {
+  if (!Array.isArray(tags)) return '';
+  return String(((tags.find(t => Array.isArray(t) && t[0] === 'session') || [])[1] || '')).trim();
+}

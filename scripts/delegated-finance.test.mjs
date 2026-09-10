@@ -166,6 +166,14 @@ function ledgerReader({ ringArrivesFirst }) {
     nip44d: (c, k) => nip44.decrypt(c, k), _unhex: unhex,
     decrypt: (c, k) => nip44.decrypt(c, k),
     churchSkHeld: () => false,          // a DELEGATE console: no legacy-key fallback, the ring is all it has
+    // THE CHECK-IN HELPER-COPY FALLBACK, added to encSubscribe 2026-09-10 with piece 1 of
+    // reference/SCOPE-CHECKIN-SEALING-2026-09-10.md: when the ring will not open a record, a check-in record
+    // can still be opened from its ['ck'] tag with that session's key. THIS FILE IS ABOUT THE LEDGER, where
+    // it is a no-op by kind — so it is stubbed to the answer the shipped function gives for 'finance', which
+    // is null, rather than lifted. If a ledger ever gained a second copy this stub would be hiding it, and
+    // the assertion below is what says so.
+    _encOpenSealedCopy: (kind) => { assert.notEqual(kind, 'checkin', 'this harness reads the LEDGER; a ' +
+      'check-in kind reaching it means the test is no longer about what it says'); return null; },
     CAP_KEYS: { finance: { d: 'trinityone/financekey:', cap: 'finance', legacy: true } },
     window: { Steward: {} },
   };

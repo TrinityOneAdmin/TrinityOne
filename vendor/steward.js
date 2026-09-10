@@ -15124,6 +15124,23 @@ zoo`.split("\n");
     }
     return { doc: { session: sid, source, lifetime, from, until: end, pubs, keys }, failed };
   }
+  function readCheckinHelperCopy(tags, keyHex, unseal) {
+    if (!Array.isArray(tags)) return null;
+    if (!/^[0-9a-f]{64}$/.test(String(keyHex || ""))) return null;
+    if (typeof unseal !== "function") return null;
+    const ct = (tags.find((t) => Array.isArray(t) && t[0] === "ck") || [])[1] || "";
+    if (!ct) return null;
+    try {
+      const obj = JSON.parse(unseal(String(ct), String(keyHex)));
+      return obj && typeof obj === "object" && !Array.isArray(obj) ? obj : null;
+    } catch {
+      return null;
+    }
+  }
+  function checkinSessionOf(tags) {
+    if (!Array.isArray(tags)) return "";
+    return String((tags.find((t) => Array.isArray(t) && t[0] === "session") || [])[1] || "").trim();
+  }
 
   // src/steward.src.js
   async function _sealToChurch(bytes, churchPubHex, fmt) {
@@ -15371,7 +15388,7 @@ zoo`.split("\n");
     try {
       window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
         what: "check-in session key",
-        message: (many ? fresh.length + " sessions were given a NEW register key" : "One session was given a NEW register key") + " \u2014 the key already issued for " + (many ? "them" : "it") + " was damaged, so this console could not reuse it. There is nothing to go and put right: the register itself is unaffected, and you and your safeguarding stewards can still read every record."
+        message: (many ? fresh.length + " sessions were given a NEW register key" : "One session was given a NEW register key") + " \u2014 the key already issued for " + (many ? "them" : "it") + " was damaged, so this console could not reuse it. Anything a helper had already written into " + (many ? "those sessions" : "that session") + " can no longer be opened by a helper. You and your safeguarding stewards can still read every record, including those \u2014 the church\u2019s own copy is not affected by this."
       } }));
     } catch (e) {
     }
@@ -15402,6 +15419,27 @@ zoo`.split("\n");
     }
     return out;
   }
+  var _encSealedCopies = (kind, obj) => {
+    if (kind !== "checkin") return [];
+    const sid = String(obj && obj.session || "").trim();
+    if (!sid) return [];
+    const keyHex = _ckSessionKeys.get(sid) || "";
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) return [];
+    try {
+      return [["ck", encrypt3(JSON.stringify(obj), _unhex(keyHex))]];
+    } catch (e) {
+      return [];
+    }
+  };
+  var _ckSessionKeys = /* @__PURE__ */ new Map();
+  var _encOpenSealedCopy = (kind, tags) => {
+    if (kind !== "checkin") return null;
+    const sid = checkinSessionOf(tags);
+    if (!sid) return null;
+    const keyHex = _ckSessionKeys.get(sid) || "";
+    if (!keyHex) return null;
+    return readCheckinHelperCopy(tags, keyHex, (ct, k) => decrypt3(ct, _unhex(k)));
+  };
   var FINKEY_D = CAP_KEYS.finance.d;
   var churchSkHeld = () => !actingChurch && !!churchSk && !!churchPub;
   var _ckIssuerHeld = () => !!sk && churchSkHeld() && !actingChurch;
@@ -16227,6 +16265,7 @@ zoo`.split("\n");
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
+    _ckSessionKeys.clear();
     _authedRelays.clear();
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
@@ -20388,7 +20427,9 @@ zoo`.split("\n");
       const content = window.Steward.encSeal(kind || "finance", obj);
       if (content == null) return Promise.resolve(null);
       const extra = _encCleartextTags(kind || "finance", obj);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", "1"], ...extra], content }));
+      const sealed = _encSealedCopies(kind || "finance", obj);
+      const encVer = sealed.length ? "2" : "1";
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", encVer], ...extra, ...sealed], content }));
     },
     encRemove(dtag) {
       if (!sk) return Promise.resolve(null);
@@ -20408,14 +20449,15 @@ zoo`.split("\n");
       const kk = kind || "finance";
       const held = /* @__PURE__ */ new Map();
       const HELD_CAP = 2e3;
-      const take = (id, content, ts) => {
-        const obj = window.Steward.encOpen(kk, content);
+      const take = (id, content, ts, tags) => {
+        let obj = window.Steward.encOpen(kk, content);
+        if (obj == null) obj = _encOpenSealedCopy(kk, tags);
         if (obj == null) {
           if (!held.has(id) && held.size >= HELD_CAP) {
             const oldest = held.keys().next().value;
             held.delete(oldest);
           }
-          held.set(id, { content, ts });
+          held.set(id, { content, ts, tags });
           return false;
         }
         held.delete(id);
@@ -20428,7 +20470,7 @@ zoo`.split("\n");
         if (!held.size) return;
         let opened = 0;
         for (const [id, h] of [...held]) {
-          if (take(id, h.content, h.ts)) opened++;
+          if (take(id, h.content, h.ts, h.tags)) opened++;
         }
         if (opened) emit();
       };
@@ -20451,7 +20493,7 @@ zoo`.split("\n");
             emit();
             return;
           }
-          if (!take(id, e.content, e.created_at)) return;
+          if (!take(id, e.content, e.created_at, e.tags)) return;
           emit();
         },
         oneose() {
@@ -21155,6 +21197,7 @@ zoo`.split("\n");
           const held = byId.get(session);
           if (held && (held.ts || 0) > (e.created_at || 0)) return;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            _ckSessionKeys.delete(session);
             byId.set(session, { session, standDown: true, ts: e.created_at });
             emit();
             return;
@@ -21171,6 +21214,14 @@ zoo`.split("\n");
               keys: c.keys && typeof c.keys === "object" ? c.keys : {},
               ts: e.created_at
             });
+            try {
+              const mine = c.keys && c.keys[churchPub];
+              if (mine) {
+                const k = String(decrypt3(mine, getConversationKey(sk, e.pubkey)) || "");
+                if (/^[0-9a-f]{64}$/.test(k)) _ckSessionKeys.set(session, k);
+              }
+            } catch (x) {
+            }
             emit();
           } catch (err2) {
           }
@@ -22168,6 +22219,7 @@ zoo`.split("\n");
       for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
       _checkinMigrated = "";
       _ckKeysSettled = "";
+      _ckSessionKeys.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;
