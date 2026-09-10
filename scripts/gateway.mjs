@@ -550,8 +550,40 @@ function _exportAuth(req, host, path) {
   return cp && ev.pubkey === cp ? cp : null;
 }
 // resync gate: a fresh NIP-98 proof bound to /sync, signed by a relay the church TRUSTS (its pubkey is in the
-// church-signed trusted-relays doc) — or by the church key / a steward. Only they receive the FULL corpus (incl.
+// church-signed trusted-relays doc) — or by the church key itself. Only they receive the FULL corpus (incl.
 // safeguarding-gated cleartext), because a trusted relay re-enforces canRead() when it serves members. Returns cp.
+//
+// ── NO STEWARD BRANCH. RED TEAM 2026-09-10, F2 ────────────────────────────────────────────────────────────
+// This ended `|| stewardCan(ev.pubkey, cp, 'any')` until 2026-09-10, and that was the SAME LEAK _exportAuth
+// was narrowed to close, left open on the neighbouring route. Measured on a live relay, as a steward the
+// church had ticked for FINANCE ONLY: `/export` → 401, and `/sync?church=<cp>&since=0` → 200 with the whole
+// corpus, `minors:` and `guardians:` both in the stream in cleartext. Over the WEBSOCKET the same steward is
+// correctly served 0 for both. Control: an ordinary member → 401 on both.
+//
+// THE JUSTIFICATION ON THIS ROUTE IS TRUE OF A RELAY AND NOT OF A STEWARD. "A trusted relay re-enforces
+// canRead() when it serves members" is why a full-corpus stream is safe to hand a peer BOX: the corpus lands
+// behind another copy of the same read gate. A steward's phone is an endpoint, not a gate — nothing
+// re-enforces anything once the stream arrives — so the two branches were never the same argument, and the
+// comment covering both hid that.
+//
+// WHO ACTUALLY NEEDS /sync, established by enumerating the callers rather than assuming (CLAUDE.md rule 2).
+// The six routes this gate fronts have exactly three callers between them, and NONE is a steward tool:
+//   • syncChurchFromPeer()      → GET /sync                                     — relay-to-relay, relayProof()
+//   • reconcileChurchWithPeer() → GET /sync-digest, /sync-ids, POST /sync-events — relay-to-relay, relayProof()
+//   • syncMediaFromPeer()       → GET /sync-media, GET /sync-blob/<sha>          — relay-to-relay, relayProof()
+// All three sign with RELAY_SK and are admitted by the TRUSTED_RELAYS branch. The only other caller in the
+// tree is scripts/relay-network-harness.mjs corpus(), which signs with the CHURCH KEY and says so on itself
+// ("_syncAuth accepts ev.pubkey === cp"). No app screen, no console screen and no steward tool fetches any of
+// them — `/sync-now`, which the relay control panel does call, is a different route behind the admin Bearer
+// token and is untouched. So the steward branch had no user to lose.
+//
+// THE CHURCH KEY STAYS, for the reason /export keeps it: the church is entitled to its own corpus, it is what
+// the restore/clone path is built on, and it is what the convergence tests measure a box's contents with.
+//
+// SIX ROUTES, ONE GATE, so this narrowing lands on all of them at once: /sync, /sync-media, /sync-blob/<sha>,
+// /sync-digest, /sync-ids and /sync-events. They differ only in what they stream — the whole corpus, a media
+// manifest, one blob, a bucket digest, a bucket's ids, and a set of events by id — and every one of them is a
+// slice of the same church corpus, so none of them wants a looser gate than the corpus itself.
 function _syncAuth(req, host, path) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
@@ -563,7 +595,7 @@ function _syncAuth(req, host, path) {
   if (!cp) return null;
   const trusted = TRUSTED_RELAYS.get(cp);
   if (trusted && trusted.has(ev.pubkey)) return cp;              // a relay the church authorised -> full corpus
-  if (ev.pubkey === cp || stewardCan(ev.pubkey, cp, 'any')) return cp;   // the church key / a steward
+  if (ev.pubkey === cp) return cp;                               // and the church's own key, as on /export
   return null;
 }
 
@@ -4703,8 +4735,11 @@ function serveStatic(req, res) {
     return;
   }
   // relay resync (pull side): stream this church's events at/after ?since to a TRUSTED peer relay (or the church
-  // key / steward). Because a trusted relay re-enforces the read-gate for its own members, serving the FULL corpus
+  // key itself). Because a trusted relay re-enforces the read-gate for its own members, serving the FULL corpus
   // — including safeguarding-gated cleartext — is safe. The peer imports + advances its cursor. See syncAllChurches().
+  // NOT to a steward: that argument is about a peer BOX re-applying canRead(), and a phone re-applies nothing.
+  // RED TEAM 2026-09-10 F2 — a Finance-only steward was served minors: and guardians: here in cleartext while
+  // /export correctly refused them 401. See _syncAuth for the measurement and the caller list.
   if (route === '/sync' && req.method === 'GET') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync');
     const q = new URL(req.url, 'http://x').searchParams;
