@@ -39,11 +39,16 @@ apks.html
 SECURITY-AUDIT-*.md
 *-handoff*.zip
 reference/archive/
-# HANDOFF.md is listed here to keep it OUT OF A PUBLIC MIRROR — but it IS tracked (33 commits since July)
-# and this line does not affect it, because .gitignore only governs UNtracked files. It must stay tracked:
-# CLAUDE.md §0 and the memory index both send a new session to it for continuity, so `git rm --cached` on it
-# would silently stop it being versioned and leave continuity depending on one machine's disk.
+# HANDOFF.md is the session-to-session working note. It is ALSO tracked (33 commits since July) and this
+# line does not untrack it — .gitignore only governs UNtracked files. THE REPO IS PUBLIC, so anything left
+# tracked here is published. Owner, 2026-09-11: "Why would I want my Claude stuff on the public repo?"
 HANDOFF.md
+
+# THE PUBLIC REPO IS THE SOFTWARE. Owner, 2026-09-11: "I just want the software."
+# reference/ is working material — audits, handoffs, findings, design docs, fix plans, session notes, and
+# working exploit reproductions. None of it is the product, and a live exploit in a public repo tells anyone
+# running an older relay exactly what to do. Keep it on disk; never publish it.
+reference/
 
 # local/agent cruft — never publish
 .claude/
