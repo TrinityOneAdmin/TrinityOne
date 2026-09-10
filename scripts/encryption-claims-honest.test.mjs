@@ -40,7 +40,11 @@ test('no screen claims a delegatable record is readable by "only this console"',
 
 test('the check-in blurb names the SAFEGUARDING key, not the church key', () => {
   const src = stripComments(files['app/stew-dashboard.jsx']);
-  const note = (src.match(/Check children in and give the parent[\s\S]{0,400}?DismissibleNote>/) || [''])[0];
+  // RE-ANCHORED 2026-09-10 on the note's own id, not on a sentence inside it. The old anchor was the words
+  // "Check children in and give the parent", which is exactly the kind of desk instruction that moved into
+  // the console-checkin guide that day — so this guard silently anchored on nothing and fell to its own
+  // `re-anchor` assertion. An id is what the note IS; the sentences in it are what the copy pass changes.
+  const note = (src.match(/id="kids-checkin-intro"[\s\S]{0,900}?DismissibleNote>/) || [''])[0];
   assert.ok(note, 're-anchor: the kids check-in intro note is gone');
   assert.match(note, /safeguarding key/i,
     'the check-in note does not say which key seals the register, so a steward cannot tell who can read a ' +

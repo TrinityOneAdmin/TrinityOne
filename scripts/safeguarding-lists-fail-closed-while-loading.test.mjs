@@ -124,6 +124,10 @@ test('CHECK-IN SAYS WHICH EMPTY IT IS: no children marked, or the list has not a
       useStewNarrow: () => false, CheckinClearances: Stub('CheckinClearances'),
       // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
       CheckinSessionKeys: Stub('CheckinSessionKeys'),
+      // StewHelpLink arrived 2026-09-10 with the check-in copy cut: the register's intro note ends in a link
+      // to the 'console-checkin' guide instead of carrying the desk routine itself. It lives in
+      // app/stew-help.jsx, which loads into the same global scope in the real console.
+      StewHelpLink: Stub('StewHelpLink'),
       setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
     });
     return texts(draw(Comp, {})).join(' ');
@@ -185,6 +189,8 @@ test('…and check-in says loading rather than claiming the church marked nobody
     useStewNarrow: () => false, CheckinClearances: Stub('CheckinClearances'),
     // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
     CheckinSessionKeys: Stub('CheckinSessionKeys'),
+    // StewHelpLink arrived 2026-09-10 with the check-in copy cut — see the note in the fixture above.
+    StewHelpLink: Stub('StewHelpLink'),
     setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
   });
   const words = texts(draw(Comp, {})).join(' ');

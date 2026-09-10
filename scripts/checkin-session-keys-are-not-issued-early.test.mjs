@@ -44,7 +44,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody, stmt } from './test-slice.mjs';
-import { miniReact, texts } from './render-jsx-screen.mjs';
+import { miniReact, texts, flow, reads, glued } from './render-jsx-screen.mjs';
 import { buildHelperGrant, helperPolicy, lifetimeWindow, eligibleHelpers, GRANT_SOURCE, KEY_LEAD_SECONDS,
          permittedHelpers, permissionPolicy, permissionWindow, buildCheckinPermission, readCheckinPermission,
          readHelperGrant, PERMISSION_LIFETIMES } from './checkin-role-source.mjs';
@@ -549,49 +549,14 @@ const btn = (tree, label) => shown(tree, n => n.type === 'button' && texts(n).jo
 // assertion pinning that sentence PASSED, because said() had put the missing space back in. A test that
 // certifies copy it cannot see is worse than no test (CLAUDE.md rule 4).
 const said = (tree) => texts(tree).join(' ').replace(/\s+/g, ' ');
-// ── SO: THE TEXT AS A BROWSER WOULD LAY IT OUT ────────────────────────────────────────────────────────────
-// Children only, in order. INLINE pieces are joined with NOTHING — which is what the DOM does with adjacent
-// inline nodes, the visible spacing coming from whitespace that is actually inside the text nodes — and a
-// BLOCK element is fenced with newlines, because a <div> starts a new line on screen whatever its neighbour
-// ends with. One rule, and it is what makes both instruments below faithful at once.
-//
-// Deliberately NOT `texts()`: that also collects string PROPS (title, aria-label), and gluing a tooltip onto
-// the copy beside it would invent adjacencies no reader ever sees.
-//
-// The inline list is the tags this panel actually uses for emphasis. A COMPONENT (a function type — Panel,
-// DismissibleNote, Icon) counts as a block: it is a box of its own, and treating it as inline is how the
-// first version of this reported four junctions that are perfectly fine on screen.
-const INLINE = new Set(['b', 'i', 'em', 'strong', 'span', 'code', 'a', 'small', 'Fragment']);
-const isInline = (n) => n == null || typeof n !== 'object' || Array.isArray(n)
-  || (typeof n.type === 'string' && INLINE.has(n.type)) || n.type === 'Fragment';
-function flow(n) {
-  if (n == null || n === false) return '';
-  if (typeof n === 'string' || typeof n === 'number') return String(n);
-  if (Array.isArray(n)) return n.map(flow).join('');
-  const inner = (n.kids || []).map(flow).join('');
-  return isInline(n) ? inner : '\n' + inner + '\n';
-}
-const reads = (tree) => flow(tree).replace(/\s+/g, ' ').trim();
-// ── AND THE GENERAL GUARD FOR THE WHOLE BUG CLASS ─────────────────────────────────────────────────────────
-// Fixing the one sentence the device caught would leave every other line in this panel one reflow away from
-// the same defect, and none of them carries an exact-wording assertion. So this checks the JUNCTIONS rather
-// than the sentences: every place one inline piece of copy ends on a word character and the next begins on
-// one, i.e. where the two run together with no separator a reader can see.
-//
-// It is quiet on correct markup for two reasons, both load-bearing: `{HORIZON_DAYS}` followed by ' days…' is
-// fine because the next node starts with a space, and a <div> beside a <button> is fine because flow() fences
-// blocks with a newline, so neither side ends or starts on a word character.
-function glued(n, out = []) {
-  if (!n || typeof n !== 'object') return out;
-  if (Array.isArray(n)) { n.forEach(c => glued(c, out)); return out; }
-  const kids = (n.kids || []).filter(k => k != null && k !== false && k !== '');
-  for (let i = 0; i < kids.length - 1; i++) {
-    const a = flow(kids[i]), b = flow(kids[i + 1]);
-    if (a && b && /\w$/.test(a) && /^\w/.test(b)) out.push('…' + a.slice(-28) + '][' + b.slice(0, 28) + '…');
-  }
-  kids.forEach(k => glued(k, out));
-  return out;
-}
+// ── THE TEXT AS A BROWSER WOULD LAY IT OUT ────────────────────────────────────────────────────────────────
+// flow() / reads() / glued() were written here on 2026-09-10 and LIFTED into scripts/render-jsx-screen.mjs on
+// the same day, when the check-in page's own layout test needed the same instrument
+// (scripts/the-check-in-page-fits-the-phone.test.mjs). One copy, because two would drift and the whole point
+// of these three is that they are faithful. The reasoning — why a space-join cannot see the JSX newline trap,
+// why a component counts as a block, why glued() is quiet on correct markup — moved with them; the two
+// self-checks at the end of the COPY test below still prove the imported instrument can see the junction it
+// exists to find, and does not report correct markup as broken.
 
 async function screen({ settled = true, held = true, name = 'St Mary\'s', keys = [], perms = CLEARED,
                         services = [svc('svc-a', SERVICE), svc('svc-b', SERVICE_2)], stewards = [SGLEAD],
@@ -986,6 +951,9 @@ test('THE CHECK-IN PAGE MOUNTS THE ISSUER PANEL — or none of the tests above i
     CheckoutModal: Mark('CheckoutModal'),
     CheckinClearances: Mark('CheckinClearances'),
     CheckinSessionKeys: Mark('CheckinSessionKeys'),
+    // Supplied 2026-09-10 with the check-in copy cut: the register's intro note now ends in a link to the
+    // 'console-checkin' guide, so a slice of DashCheckin needs this name in scope.
+    StewHelpLink: Stub('StewHelpLink'),
     useStewNarrow: () => false,
     todayISO: () => SERVICE.date,
     window: {

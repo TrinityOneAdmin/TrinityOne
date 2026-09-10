@@ -161,6 +161,9 @@ async function checkin({ minors, guardians, present }) {
     CheckinClearances: () => null,
     // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
     CheckinSessionKeys: () => null,
+    // StewHelpLink arrived 2026-09-10 with the check-in copy cut — the register's intro note ends in a link
+    // to the 'console-checkin' guide. It lives in app/stew-help.jsx, same global scope in the real console.
+    StewHelpLink: () => null,
   };
   const mod = await loadSlices(
     [['function DashCheckin()', 'DashCheckin'], ['function CheckinPicker(', 'CheckinPicker'],
