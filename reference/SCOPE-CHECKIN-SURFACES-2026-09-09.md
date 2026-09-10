@@ -53,6 +53,35 @@ list.
   ⚠ **THE RULE THIS DECISION RESTS ON:** the room code must never carry key material or authority. If anyone
   later puts either into it, the printed-sheet decision is void and it must rotate.
 
+- **DECIDED 2026-09-10 — THREE presentations of the one identifier: printed, numeric, and a QR on a phone.**
+  Owner: *"as well as a printed code, we should provide a numeric code as well, and a qr on mobile app if
+  possible."* All three render the **same session identifier**, so this does not disturb the rule above —
+  none of them carries authority.
+
+  **Printed sheet — the floor.** Works with no device, no power, no screen. Everything else is a
+  convenience on top; nothing may make the printed route second-class.
+
+  **Numeric code — for when a camera will not do.** A QR needs a working camera and enough light; a number
+  can be read aloud, chalked on a board, or told to a parent who cannot use a camera at all. Shape it as
+  follows, and note this is the **first short human-typed code in the product** — `joinCode()` returns a full
+  63-character npub, so there is no precedent and this one sets it:
+    - **Derive it, do not assign it.** A deterministic short digest of the service id means the printed
+      sheet, the app and the relay agree with no registry and no allocation step. An assigned code needs
+      something to own it.
+    - **Scope uniqueness to the church's LIVE sessions**, not globally. A parent is already scoped to their
+      church, so four digits is ample for the handful of sessions a church runs at once. Check for a
+      collision at issue time, not at type time.
+    - **Guessability does not matter; typos do.** The code carries no authority, so the defence is not
+      length — it is a **confirmation that names the session back** ("Toddlers · Sun 13 Sept — is that
+      right?") before anything is written. A longer code would trade real usability for no security.
+
+  **QR on a phone — a convenience for churches that have a device at the door.** Both halves already exist
+  and should be reused rather than rebuilt: generation lives in `src/identity.src.js`, `src/steward.src.js`,
+  `app/stew-schedule.jsx` and `app/giving-ln.jsx`; scanning is `vendor/jsqr.js` with readers already in
+  `app/screens-church.jsx`, `app/ui.jsx` and `app/stew-dashboard.jsx`. Caveats worth designing around: the
+  screen must be awake (a sleeping phone is a dead QR), and it puts a device between a parent and the door,
+  which is precisely what the printed sheet avoids.
+
 - **DECIDED 2026-09-10 — one session per service; the ROOM is a field and a filter, never a key boundary.**
   Three rooms on one Sunday morning are one session. The model already says so: a check-in record carries
   **both** `session` and `room`, and the envelope is keyed to the service (`checkinhelper:<serviceId>`).
