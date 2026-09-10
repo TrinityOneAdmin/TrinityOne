@@ -436,6 +436,62 @@ window.safeImgUrl = function (v) {
     if(got !== expected) throw new Error("integrity check failed for " + (url || "module") + " — refusing a tampered download");
   }
 
+  // ── does the copy on this phone match the one that is PUBLISHED? ──────────
+  //
+  // THIS IS AN UPDATE MECHANISM, NOT A SECURITY BOUNDARY. Do not describe it as one. Refused bytes never
+  // enter the cache (verifyIntegrity runs before cachePut, guarded by a test that bites), and on native an
+  // attacker who can write this IndexedDB can already patch the APK. What this function is for is the
+  // thing that was actually broken: a phone that installed v1 of a module kept v1 for ever, silently,
+  // because every cache-hit path returned the cached bytes without ever looking at the catalogue's pin
+  // again. Republishing at the same url was a provable no-op for existing installs — which collides with
+  // the pilot rule "add, never repurpose" (reference/RELAY-COMPAT-AND-AUTOUPDATE.md:26), and stranded ten
+  // of slice 2's languages on their first build.
+  //
+  // The pin therefore doubles as a VERSION IDENTITY: if the catalogue's sha256 is not the hash of the
+  // bytes we hold, the publisher has shipped a different build and this copy is a previous version.
+  //
+  // Same "no pin means nothing to check" rule as verifyIntegrity, deliberately reusing the same
+  // expression so the two can never drift apart. That rule is the common case, not the corner: nothing
+  // in catalog.json except the study notes carries a sha256, and all 1,290 entries in
+  // ebible-catalog.json are un-pinned. An un-pinned module must keep working exactly as it does now —
+  // making those re-download, or fail, would be worse than the bug being fixed here.
+  //
+  // Cost, measured on the Oppo CPH2477 (Chrome 152 WebView, 2026-09-10, median of 5 after a warm-up):
+  // 1.99 MB — the real study-notes module — hashes in 11.5 ms, and 19.94 MB (ten languages' worth, i.e.
+  // all of slice 2 installed at once) in 78.2 ms. That is why this hashes the bytes on every cache hit
+  // instead of persisting "the pin these bytes were verified against" and comparing pin to pin. The
+  // cheaper shape was considered and rejected: it saves ~11.5 ms per module per launch, needs a new
+  // persisted field, needs a migration rule for entries installed before it existed, and it cannot
+  // notice a cached copy that has been corrupted rather than superseded. Not worth three new branches.
+  async function cachedCopyIsCurrent(url, u8, declaredHash){
+    const expected = (declaredHash || (url && KNOWN_HASHES[url]) || "").toLowerCase();
+    if(!expected) return true;
+    return (await sha256hex(u8)) === expected;
+  }
+
+  // The pins as PUBLISHED right now, url -> sha256, read from the catalogue rather than from anything
+  // this phone wrote down at install time. "What's published" is the whole point: a pin recorded locally
+  // is the OLD pin and could never detect its own replacement.
+  //
+  // Best-effort by design. Offline, or with the gateway down, getCatalog() resolves to { categories: [] }
+  // and this returns {} — every installed module then has no pin, which is exactly today's behaviour:
+  // load the cached copy. A phone with no signal must still open its Bible.
+  //
+  // ⚠ A moved pin reaches a phone ONE LAUNCH LATE, and so does a brand-new catalogue entry: sw.js:133
+  // serves catalog.json cache-first with a background refresh, so the launch that republication happens
+  // on still reads the previous catalogue and sees nothing to do. The launch after that updates. That is
+  // accepted (measured on the device 2026-09-10) and is half of what "publishing a module" means today.
+  async function publishedPins(){
+    const out = {};
+    try{
+      const cat = await getCatalog();
+      for(const c of (cat && cat.categories) || [])
+        for(const it of (c.items || []))
+          if(it && it.url && it.sha256) out[it.url] = String(it.sha256).toLowerCase();
+    }catch(e){}
+    return out;
+  }
+
   // Fetch a module asset, trying the ON-DEVICE copy first.
   //
   // scripts/sync-web.sh puts the default Bible in www/modules/, and Capacitor serves it from the APK at
@@ -475,7 +531,14 @@ window.safeImgUrl = function (v) {
 
   async function fetchAndCacheModule(url, meta){
     const cached = await cacheGet(url);
-    if(cached) return loadModuleBytes(cached, url.split("/").pop(), meta);
+    // A CACHE HIT IS ONLY GOOD IF IT IS THE PUBLISHED BUILD. This used to be an unconditional
+    // `if(cached) return ...`, so once a module was on the phone the catalogue's pin was never consulted
+    // again and a corrected module could not reach anyone who already had the old one. On a mismatch we
+    // deliberately fall THROUGH to the download below, which verifies before it caches — so the stale
+    // copy is replaced rather than merely refused, and a phone that is offline keeps reading (the fetch
+    // throws and the caller reports it, exactly as it does for a first install with no signal).
+    if(cached && await cachedCopyIsCurrent(url, cached, meta && meta.sha256))
+      return loadModuleBytes(cached, url.split("/").pop(), meta);
     const res = await fetchAsset(url);
     // SECURITY-AUDIT-2026-06-24 L4: size cap (matches the JSON branch in installModule). The
     // ceiling is well above any real module: BSB ≈ 3 MB, the KJV+S MySword ≈ 9 MB. A compromised
@@ -558,6 +621,11 @@ window.safeImgUrl = function (v) {
       let loaded = null;
       if((item.format || "").toUpperCase() === "JSON"){
         let bytes = await cacheGet(item.url);
+        // A THIRD CACHE-HIT SITE, not named in the brief and the same defect as the other two: a cached
+        // lexicon was handed straight to loadDictJSON without the pin being looked at again, so a
+        // republished dictionary could not reach a phone that had the old one either. Dropping the
+        // reference re-enters the download branch below, which verifies before it caches.
+        if(bytes && !(await cachedCopyIsCurrent(item.url, bytes, item.sha256))) bytes = null;
         if(!bytes){
           const res = await fetchAsset(item.url);   // local-first, then the gateway — see fetchAsset
           // SECURITY-AUDIT-2026-06-24 L4: size cap before arrayBuffer + JSON.parse. A compromised /
@@ -595,11 +663,42 @@ window.safeImgUrl = function (v) {
   // re-load everything previously installed (boot, before autoLoad)
   async function restoreInstalled(){
     const m = getInstalled();
+    // THE COLD-BOOT PATH, which until 2026-09-10 verified nothing at all: it read the cached bytes and
+    // handed them to loadModuleBytes on every launch, so a phone that installed v1 of a module re-loaded
+    // v1 for ever no matter what the catalogue said. This is the worse of the two named sites, because it
+    // runs unattended on every single launch rather than only when somebody taps Install.
+    //
+    // The pins come from the CATALOGUE, not from the installed map, so what is compared is the published
+    // build against the copy on disk. Un-pinned modules get {} here and behave exactly as before. One
+    // small await is added to boot; in the normal case it is a service-worker cache read, and on a
+    // first-ever launch this loop is empty because nothing is installed yet.
+    const pins = Object.keys(m).length ? await publishedPins() : {};
     for(const url of Object.keys(m)){
       const meta = m[url];
       try{
         const bytes = await cacheGet(url);
         if(!bytes) continue;  // cache cleared — user can re-download
+        if(!(await cachedCopyIsCurrent(url, bytes, pins[url]))){
+          // The catalogue pins a different build: this module was republished after the phone installed
+          // it. Re-install through the ordinary path — installModule re-downloads, verifies before it
+          // caches, and loads the result — so there is one download-and-verify implementation, not two.
+          //
+          // If that fails we fall through and load the copy we already have, with a warning. That is the
+          // deliberate choice for an UPDATE mechanism: a member on a thin pipe or no pipe at all keeps
+          // reading the version they have instead of losing the module until they next get signal. It
+          // would be the wrong choice for a security boundary, which this is not.
+          try{
+            await installModule({ url, id: meta.id, abbr: meta.abbr, name: meta.name, kind: meta.kind,
+                                  format: meta.format, category: meta.category, sha256: pins[url] });
+            continue;
+          }catch(e){
+            // installModule sets window.Bible._error ("Couldn't install …") on its way out, which the UI
+            // shows. That message is wrong here: the module IS installed and about to load, it just could
+            // not be UPDATED. Clear it rather than tell a member their module failed.
+            console.warn("a republished module could not be fetched; reading the cached copy", url, e);
+            try{ window.Bible._error = null; }catch(e2){}
+          }
+        }
         if((meta.format || "").toUpperCase() === "JSON") { const raw = bytes; _pendingDicts.push(() => loadDictJSON(JSON.parse(new TextDecoder().decode(raw)))); }
         else await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
       }catch(e){ console.error("restore failed for", url, e); }
