@@ -44,7 +44,8 @@ import { pubSet, isPhotoSuppressed } from '../scripts/trinity-rules.mjs';
 // today and may become a named safeguarding team after the pilot, so the console must not know which.
 import { eligibleHelpers, helperPolicy, lifetimeWindow, buildHelperGrant, HELPER_LIFETIMES,
          permittedHelpers, permissionPolicy, permissionWindow, buildCheckinPermission,
-         readCheckinPermission, PERMISSION_LIFETIMES, GRANT_SOURCE, KEY_LEAD_SECONDS } from '../scripts/checkin-role-source.mjs';
+         readCheckinPermission, PERMISSION_LIFETIMES, GRANT_SOURCE, KEY_LEAD_SECONDS,
+         permissionFault } from '../scripts/checkin-role-source.mjs';
 
 // ---- backup encryption: seal an export to the CHURCH KEY, so only the church private key can open it ----
 // Hybrid ECIES: a throwaway ephemeral key does an ECDH (via NIP-44's key agreement) with the church PUBLIC
@@ -425,12 +426,115 @@ const _capAllows = (spec, caps) => (p2) => {
   if (!Array.isArray(c)) return !spec.explicit;   // unscoped: everything, unless this capability demands a tick
   return c.indexOf(spec.cap) >= 0;
 };
+// WHO THE CHURCH HAS TICKED FOR THE REGISTER AND THE CALLER DID NOT NAME.
+//
+// ⚠ reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the audit's second item, and the gap it left open for
+// this slice. Both mints derive their keepers as `[cp, ...stewards.filter(allowed)]`, so a caller that omits
+// `o.stewards` produces `keepers = [cp]` — THE SAFEGUARDING LEAD IS GIVEN NO SESSION KEY, and cannot open
+// what a helper writes. A check-in only the volunteer who typed it can ever read is not a safeguarding
+// record; the register looks staffed and is unreadable by the one steward accountable for it.
+//
+// A PREVIOUS BUILDER DECLINED TO WARN ON THE PREMISE THAT THE TWO CASES ARE INDISTINGUISHABLE. They are not,
+// and the reason is one line of CAP_KEYS: `checkin` is `explicit: true`, so _capAllows admits a pubkey ONLY
+// if the caps map holds an array for it containing 'safeguarding'. An unscoped steward — no entry at all —
+// is refused this capability by that same flag. Therefore EVERY pubkey that could ever be a keeper is a KEY
+// OF THE CAPS MAP, the caps map is already in hand one line above the keeper list, and:
+//
+//   • a church with no safeguarding steward yields [] here, and `keepers = [cp]` is exactly right;
+//   • a church that HAS one, whose caller left them out, yields their pubkey.
+//
+// So the difference is measurable, and this measures it.
+//
+// IT WARNS, IT DOES NOT REFUSE. Publishing the short envelope is still the right move, for the same reason
+// _warnUnsealed's is: one missing keeper must not deny the whole session a key, and reference/DOMAIN.md is
+// explicit that nothing in this feature blocks. What must not happen is reporting it as a clean success.
+const _checkinKeepersMissing = (caps, stewards) => {
+  const src = (caps && typeof caps === 'object') ? caps : _stewardCaps;
+  const allowed = _capAllows(CAP_KEYS.checkin, src);
+  const named = new Set((Array.isArray(stewards) ? stewards : []).filter(Boolean));
+  return Object.keys(src || {}).filter(p2 => allowed(p2) && !named.has(p2));
+};
+// SAY IT ONCE, PLAINLY, AND DESCRIBE THE CONSEQUENCE RATHER THAN PRESCRIBING A FIX (reference/DOMAIN.md:
+// "do not nag", "describe the consequence"). Same channel as _warnUnsealed, because it is the same class of
+// event: the document went out, and somebody who should be able to read it cannot.
+// ONCE PER CONSOLE SESSION PER SET OF PEOPLE, and this is not politeness — it is a correctness requirement
+// of where the call sits. `issueCheckinSessionKeys` mints EVERY service inside a fortnight's horizon in one
+// pass, all with the same `stewards` argument, so warning from the mint would raise the identical banner
+// once per Sunday for the same single omission. reference/DOMAIN.md: "say the thing once, plainly, where it
+// is useful". Keyed on WHO is missing, so a different omission still gets said.
+const _ckKeeperWarned = new Set();
+const _warnCheckinKeeperLeftOut = (missing) => {
+  if (!missing || !missing.length) return;
+  const sig = [...missing].sort().join(',');
+  if (_ckKeeperWarned.has(sig)) return;
+  _ckKeeperWarned.add(sig);
+  const who = missing.map(p2 => (_stewardNames && _stewardNames[p2]) || (p2 || '').slice(0, 10) + '\u2026').join(', ');
+  try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in session key',
+    message: 'This session\u2019s register was NOT shared with ' + who + ' \u2014 they hold Safeguarding, so they should be able to read what a helper writes, and cannot. Re-issue the session keys from the Check-in page.' } })); } catch (e) {}
+};
 const _warnUnsealed = (cap, failed) => {
   if (!failed || !failed.length) return;
   const who = failed.map(p2 => (_stewardNames && _stewardNames[p2]) || (p2 || '').slice(0, 10) + '…').join(', ');
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'steward permissions',
     message: 'Could not give ' + cap + ' access to ' + who + ' — their steward code looks damaged. Everyone else was updated. Remove and re-add them from the roster.' } })); } catch (e) {}
 };
+// ── THE CLEARTEXT TAGS A SEALED CHECK-IN RECORD MUST CARRY ────────────────────────────────────────────────
+// ⚠ THIS IS THE DEFECT reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md CALLS ITEM 1, and it is §6 of the
+// design note happening in this file: *the gate was correct and the screen did not consult it.*
+//
+// Two read rules were added to the relay on 2026-09-09 and BOTH KEY ON A TAG THIS WRITER DID NOT EMIT
+// (gateway.mjs, the CHECKIN_D branch of canRead):
+//
+//   • an in-window HELPER of the session is admitted — the session comes from `['session']`;
+//   • THE GUARDIAN THE RECORD NAMES is admitted — walked out of the `['p']` tags, because §7 of the design
+//     says most children have no phone, so a record hangs off the GUARDIAN's key and there is nothing to
+//     compare against `guardians:` when the child has no pubkey to appear in one.
+//
+// encPublish wrote exactly `[['d'], ['t'], ['enc','1']]`. So against every check-in record any church holds
+// today, a helper key opens NOTHING and a guardian sees NOTHING — while the relay's own tests pass, because
+// they hand-build records carrying both tags. Nothing was broken in the relay; the writer had to start
+// emitting them.
+//
+// WHY THE DERIVATION IS HERE AND NOT AT THE CALL SITE. `trinityone/checkin:` HAS TWO WRITERS, and the
+// second is the one that would have been forgotten: publishCheckin() writes a new record, and
+// migrateCheckinKeys() REPUBLISHES an existing body onto the safeguarding key. A migration that dropped
+// these tags would silently un-share every record it touched — the register would still be there, and the
+// helper and the parent would stop being able to open it, with nothing to look at. One derivation, off the
+// document's own body, cannot diverge between them. (CLAUDE.md rule 2: both callers are named above.)
+//
+// IT IS A NO-OP FOR EVERY OTHER KIND. The books, the funds, the accounts and Manna's records get exactly
+// the tags they got before — asserted rather than assumed, because encPublish is shared code with five
+// other call sites (app/stew-finance.jsx x4, src/steward-manna.src.js).
+//
+// WHAT THESE TAGS DISCLOSE, stated rather than glossed: `session` names a service id the church already
+// publishes in the clear, and `p` names a guardian pubkey the relay ALREADY holds in cleartext in this
+// church's `guardians:` map — which is what guardianOfIn() reads. So the marginal disclosure to a relay
+// operator is "this guardian had a child present at this session", which the existence of the record it is
+// attached to already implies. The child's name, the pickup code and the times stay sealed.
+function _encCleartextTags(kind, obj) {
+  if (kind !== 'checkin') return [];
+  const rec = obj || {};
+  const out = [];
+  // ONE SESSION, and the service's own id — the same string `issueCheckinSessionKeys` keys an envelope on
+  // (`svc.session || svc.id`), because checkinHelperOf() looks the record's session up in the envelopes it
+  // holds and a second spelling would match nothing. A record with NO session is still published: nothing
+  // in this feature may block a child being checked in (reference/DOMAIN.md), and a church with no service
+  // document for today is an ordinary Sunday, not an error. It simply cannot be opened by a helper.
+  const sid = String(rec.session || '').trim();
+  if (sid) out.push(['session', sid]);
+  // AND THE GUARDIANS, ONE TAG EACH, lower-cased 64-hex only. `toHexPub(t[1]) || t[1]` is what the relay
+  // applies to these, so anything that is not already a hex pubkey would be compared as a literal and match
+  // nobody; refusing it here means a malformed entry is absent rather than present-and-inert. De-duplicated
+  // because a child listed twice in one guardian map would otherwise put the same tag on twice.
+  const seen = new Set();
+  for (const g of (Array.isArray(rec.guardians) ? rec.guardians : [])) {
+    const h = String(g || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(h) || seen.has(h)) continue;
+    seen.add(h);
+    out.push(['p', h]);
+  }
+  return out;
+}
 const FINKEY_D = CAP_KEYS.finance.d;
 // "Have we actually LOOKED for an envelope?" — the same gate as _careKeyChecked, and for the same reason: a
 // mint decided on an incomplete read of the corpus republishes a stale ring as new and orphans everything the
@@ -6043,7 +6147,11 @@ window.Steward = {
   encPublish(dtag, obj, kind) {
     if (!sk) return Promise.resolve(null);
     const content = window.Steward.encSeal(kind || 'finance', obj); if (content == null) return Promise.resolve(null);
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', dtag], ['t', NET], ['enc', '1']], content }));
+    // THE CLEARTEXT TAGS A SEALED DOCUMENT NEEDS THE RELAY TO BE ABLE TO READ. `_encCleartextTags` is a
+    // no-op for every kind but 'checkin' — see it for why the check-in register cannot do without them, and
+    // why the derivation lives HERE rather than at either call site.
+    const extra = _encCleartextTags(kind || 'finance', obj);
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', dtag], ['t', NET], ['enc', '1'], ...extra], content }));
   },
   encRemove(dtag) {                    // tombstone an encrypted doc
     if (!sk) return Promise.resolve(null);
@@ -6428,11 +6536,28 @@ window.Steward = {
   // used, so a steward given Finance — a treasurer, with no safeguarding role at all — could open every
   // child's name, room and pickup code. Records written before the split still open for the OWNER only, via
   // the legacy fallback in encOpen; migrateCheckinKeys() re-seals them onto the safeguarding key. ----
+  //
+  // TWO FIELDS ADDED 2026-09-10, AND THEY ARE WHAT MAKES THE RELAY'S TWO READ RULES REACHABLE AT ALL:
+  //
+  //   `session`   — the service this presence belongs to. _encCleartextTags lifts it into a ['session'] tag,
+  //                 which is the only thing checkinHelperOf() has to go on.
+  //   `guardians` — the adults who may collect this child. Lifted into one ['p'] tag each, which is how a
+  //                 parent is served their OWN child's record and provably not another family's.
+  //
+  // THEY ARE KEPT IN THE SEALED BODY AS WELL AS IN THE TAGS, on purpose and not as duplication for its own
+  // sake: migrateCheckinKeys() re-publishes this body through the same encPublish, so the body is the only
+  // place the tags can be re-derived from. A record whose tags lived only in the tags would lose them the
+  // first time it was re-keyed. Same reasoning as `person` inside a permission body.
+  //
+  // NEITHER IS REQUIRED. A church with no service document for today, or a child with no adult guardian
+  // linked yet, still gets a record written — reference/DOMAIN.md: nothing may block a child being checked
+  // in. What is lost is who else can OPEN it, and the screen says so once rather than refusing.
   publishCheckin(rec) {
     const id = rec.id || ('ci' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
     return window.Steward.encPublish('trinityone/checkin:' + id, {
       id, child: rec.child || '', childName: rec.childName || '', date: rec.date || _todayISO(),
       in: rec.in || Math.floor(Date.now() / 1000), out: rec.out != null ? rec.out : null, code: rec.code || '', room: rec.room || '', note: rec.note || '',
+      session: rec.session || '', guardians: Array.isArray(rec.guardians) ? rec.guardians : [],
     }, 'checkin');
   },
   removeCheckin(id) { return window.Steward.encRemove('trinityone/checkin:' + id); },
@@ -6484,6 +6609,38 @@ window.Steward = {
   checkinPermissionLifetimes() {
     return Object.keys(PERMISSION_LIFETIMES).map(k => ({ id: k, label: PERMISSION_LIFETIMES[k].label,
       describe: PERMISSION_LIFETIMES[k].describe, expires: PERMISSION_LIFETIMES[k].max != null }));
+  },
+  // WOULD THIS CLEARANCE BE ACCEPTED, AND IF NOT, WHY NOT — asked BEFORE anything is published.
+  //
+  // ⚠ reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the audit's fifth item: "a 400-day-plus `dated`
+  // clearance returns bare `null`, reason discarded", against permissionWindow's own promise that "a church
+  // that typed 2099 must see it". The refusal is right; the silence is not, and grantCheckinPermission
+  // cannot fix it without changing what `null` means to the issuer and to five tests that rely on it.
+  //
+  // So the reason is asked for separately, OFF THE SAME TWO FUNCTIONS the grant itself uses —
+  // permissionWindow to build the window and permissionFault to name what is wrong with it. A screen that
+  // restated the 400-day rule would be free to disagree with the relay about it; this cannot.
+  //
+  // Returns { ok, from, until, why }. `why` is '' when ok, and a sentence a steward can act on otherwise.
+  checkinPermissionPreview(opts) {
+    const o = opts || {};
+    const lifetime = permissionPolicy({ lifetime: o.lifetime }).lifetime;
+    const win = permissionWindow(lifetime, { date: o.date, until: o.until, from: o.from, at: o.at });
+    // permissionWindow returns null for BOTH "no date this console can place" and "a date past the cap", and
+    // the two need different sentences. permissionFault can only speak about a window that exists, so the
+    // date is re-read here to tell them apart — the arithmetic stays in permissionWindow, and only the
+    // DIAGNOSIS is here.
+    if (!win) {
+      const raw = String((lifetime === 'dated' ? o.until : o.date) || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return { ok: false, from: 0, until: null, why: 'Pick a date first.' };
+      const cap = Math.floor(PERMISSION_LIFETIMES[lifetime].max / 86400);
+      return { ok: false, from: 0, until: null,
+        why: lifetime === 'dated'
+          ? ('That date is too far ahead. A clearance can run for at most ' + cap + ' days — about a year — so this one was not saved. Pick a nearer date, or choose \u201cuntil a steward ends it\u201d.')
+          : 'That date is one this console cannot place, so nothing was saved.' };
+    }
+    const fault = permissionFault(win.from, win.until, lifetime);
+    return { ok: !fault, from: win.from, until: win.until, why: fault ? ('That clearance would be refused: ' + fault + '.') : '' };
   },
 
   // -- 1. A PERSON IS CLEARED ------------------------------------------------------------------------------
@@ -6655,6 +6812,10 @@ window.Steward = {
     // it: the roster lives in a React hook in the console (useStewardStewards), not in this module.
     const allowed = _capAllows(CAP_KEYS.checkin, o.caps || _stewardCaps);
     const keepers = [cp, ...(Array.isArray(o.stewards) ? o.stewards : []).filter(allowed)];
+    // AND SAY SO IF THE CHURCH'S OWN SAFEGUARDING STEWARD IS NOT AMONG THEM. See _checkinKeepersMissing for
+    // why this is knowable rather than a guess. Measured BEFORE publishing, on the same caps map the keeper
+    // list was just built from, so it cannot describe a different set from the one that went out.
+    const _short = _checkinKeepersMissing(o.caps || _stewardCaps, o.stewards);
     // REUSE THE KEY THIS SERVICE ALREADY HAS, if the caller recovered one. Re-issuing an envelope with a FRESH
     // key would orphan every record already sealed under the old one — the helper who wrote them could no longer
     // read them back and neither could the safeguarding lead, which is the "rotation must never drop a key that
@@ -6680,6 +6841,7 @@ window.Steward = {
     // session to everyone else), but it must not be reported as a clean success. Same judgement as
     // _warnUnsealed, whose wording this borrows.
     if (built.failed.length) _warnUnsealed('check-in helper', built.failed);
+    _warnCheckinKeeperLeftOut(_short);
     const ok = await _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
       tags: [['d', CHECKINHELPER_D + session], ['t', NET], ['church', cp], ['session', session]],
       content: JSON.stringify(built.doc) }, sk));

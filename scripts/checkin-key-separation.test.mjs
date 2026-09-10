@@ -196,6 +196,14 @@ function publishedCheckin({ finance, checkin, ownerKey }) {
       const b = String(k).replace(/[0-9]+$/, ''); if (b in t) return t[b];
       throw new ReferenceError('needs a stub for ' + String(k)); },
   });
+  // AND THE TAG DERIVATION, LIFTED RATHER THAN STUBBED — added 2026-09-10, when encPublish started asking
+  // for it. It decides the CLEARTEXT tags on a check-in record (['session'] and one ['p'] per guardian), so a
+  // stub here would hide it from the one test that runs this whole chain, and this file's subject is exactly
+  // "what does the shipped chain actually produce". It is a top-level function declaration closed over
+  // nothing, so it evaluates as itself.
+  stubs._encCleartextTags = new Function(
+    fnBody(VENDOR, 'function _encCleartextTags(kind, obj) {', '_encCleartextTags') +
+    '\nreturn _encCleartextTags;')();
   // All three lifted together into ONE object, so publishCheckin's `window.Steward.encPublish` really is the
   // shipped encPublish, and encPublish's `encSeal` really is the shipped encSeal.
   const src = ['publishCheckin(rec)', 'encPublish(dtag', 'encSeal(kind']

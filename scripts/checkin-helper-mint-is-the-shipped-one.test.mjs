@@ -76,6 +76,11 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   const published = [];
   const warnings = [];
   const subs = [];
+  // EVERY BANNER THIS CONSOLE RAISES, captured. `steward-write-blocked` is the one channel the console uses
+  // to tell a steward that something did not happen, and the keeper warning added on 2026-09-10 goes down it
+  // — so it has to be READ here, not stubbed away. `window: { dispatchEvent: () => true }` was silently
+  // swallowing it, which is how a warning ships and warns nobody.
+  const banners = [];
   const stubs = {
     sk: new Uint8Array(32).fill(9),
     pub: CHURCH,
@@ -130,7 +135,11 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     relays: () => ['wss://relay.test/relay'],
     pool: { subscribeMany: (_relays, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; } },
     _warnUnsealed: (cap, failed) => { warnings.push({ cap, failed: [...failed] }); },
-    window: { dispatchEvent: () => true },
+    window: { dispatchEvent: (e) => { banners.push((e && e.detail) || {}); return true; } },
+    // A FRESH ONE PER HARNESS. `_ckKeeperWarned` is module state in the console — "say it once per console
+    // session" — so sharing one across tests would let the first test's warning silence the second's.
+    _ckKeeperWarned: new Set(),
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
   };
   const scope = proxyOf(stubs);
   // _capAllows and CAP_KEYS come OUT OF THE BUNDLE. They live in steward.src.js, so restating them here would
@@ -143,6 +152,13 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   const lifted = new Function(`${capKeysSrc} ${capAllowsSrc} return { CAP_KEYS, _capAllows };`)();
   stubs.CAP_KEYS = lifted.CAP_KEYS;
   stubs._capAllows = lifted._capAllows;
+  // AND THE KEEPER CHECK, OUT OF THE SAME BUNDLE. This is the decision the audit's second item is about —
+  // "the code CAN tell the difference between a church with no lead and a lead who was left out" — so a
+  // test-local reimplementation of it would be the test answering its own question. It closes over
+  // _capAllows, CAP_KEYS and _stewardCaps, so unlike the two above it needs the harness scope.
+  const liftScoped = (sig, name) => new Function('scope', `with (scope) { return (${stmt(VENDOR, sig, name).replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '')}); }`)(scope);
+  stubs._checkinKeepersMissing = liftScoped('var _checkinKeepersMissing = (caps, stewards) =>', '_checkinKeepersMissing');
+  stubs._warnCheckinKeeperLeftOut = liftScoped('var _warnCheckinKeeperLeftOut = (missing) =>', '_warnCheckinKeeperLeftOut');
   assert.equal(stubs.CAP_KEYS.checkin.cap, 'safeguarding', 'lifted CAP_KEYS is not the shipped one — re-anchor');
   assert.equal(stubs.CAP_KEYS.checkin.explicit, true,
     'the register key stopped being an EXPLICIT capability, so an unscoped steward now gets it by default');
@@ -181,7 +197,7 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     assert.ok(Array.isArray(last), 'the shipped subscription emitted nothing at all, not even an empty list');
     return last;
   };
-  return { stubs, published, warnings, subs, sessionKeysFrom,
+  return { stubs, published, warnings, banners, subs, sessionKeysFrom,
     publishCheckinHelpers: (o) => mint.call({}, o),
     grantCheckinPermission: (o) => grantPerm.call({}, o),
     revokeCheckinPermission: (who) => revokePerm.call({}, who),
@@ -280,10 +296,18 @@ test('A CALLER THAT FORGETS THE ROSTER MINTS A GRANT ONLY THE CHURCH CAN OPEN �
   //
   // NOT MADE INTO A REFUSAL, deliberately, and this is a judgement worth writing down: a church with NO
   // safeguarding-ticked steward is legitimate and common — the small church where the owner does safeguarding
-  // herself. `keepers = [cp]` is the CORRECT grant for her. From inside this function an omitted roster and an
-  // empty roster are indistinguishable in their result, so refusing one would refuse her too, and a church
-  // that cannot mint a grant cannot staff its creche. The guard belongs at the screen, and this is the test
-  // that will tell whoever writes it.
+  // herself. `keepers = [cp]` is the CORRECT grant for her, and a church that cannot mint a grant cannot
+  // staff its creche.
+  //
+  // ONE SENTENCE THAT STOOD HERE UNTIL 2026-09-10 WAS WRONG, and is corrected rather than softened
+  // (CLAUDE.md rule 4). It said: "from inside this function an omitted roster and an empty roster are
+  // INDISTINGUISHABLE in their result, so refusing one would refuse her too… the guard belongs at the
+  // screen." The first half is false and the conclusion it carried — that this function cannot tell — kept
+  // the warning unwritten for a day. `CAP_KEYS.checkin.explicit === true`, so a keeper must hold an explicit
+  // 'safeguarding' tick, so every eligible pubkey is a KEY OF THE CAPS MAP — which the line above already
+  // reads. The two cases are therefore distinguishable, and the three tests below drive the difference.
+  //
+  // What survives is the DECISION: it warns, it does not refuse. See _checkinKeepersMissing.
   const h = harness();
   await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: [perm(ADA)] });   // no `stewards`
   const { raw } = grantOf(h);
@@ -292,6 +316,66 @@ test('A CALLER THAT FORGETS THE ROSTER MINTS A GRANT ONLY THE CHURCH CAN OPEN �
     'refusal or a default, this test is the record that it used to be silent — update it deliberately.');
   assert.equal(raw.keys[SGLEAD], undefined,
     're-anchor: the lead got a key with no roster passed, so this test no longer describes the shipped path');
+});
+
+// ── AND IT NOW SAYS SO: THE AUDIT'S SECOND ITEM ────────────────────────────────────────────────────────────
+// reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md: "the mint derives keepers as [cp, ...stewards], so a
+// caller omitting the lead silently leaves her unable to read that session's register… An audit MEASURED
+// that the code can tell the difference. A previous builder declined this on the false premise that the two
+// were indistinguishable. Warn."
+//
+// The check itself is LIFTED OUT OF THE BUNDLE (see harness) rather than restated, so these four tests are
+// driving the shipped rule and not a copy of it.
+
+test('A LEAD LEFT OFF THE ENVELOPE IS NAMED IN A WARNING — not left to find out on Sunday', async () => {
+  const h = harness();   // the church HAS a safeguarding steward: SGLEAD
+  await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: [perm(ADA)] });   // no `stewards`
+  const { raw } = grantOf(h);
+  assert.equal(raw.keys[SGLEAD], undefined, 'fixture: the lead was supposed to be missing from this envelope');
+  assert.equal(h.banners.length, 1,
+    'THE SAFEGUARDING LEAD WAS GIVEN NO SESSION KEY AND NOTHING WAS SAID. She can read the register today ' +
+    'and cannot read what a helper writes into it, and the only way she finds out is a parent asking her ' +
+    'about a check-in she has no record of. banners: ' + JSON.stringify(h.banners));
+  assert.equal(h.banners[0].what, 'check-in session key', 're-anchor: the warning went down a different channel');
+  assert.match(h.banners[0].message, new RegExp(SGLEAD.slice(0, 10)),
+    'the warning does not name WHO was left out, so a steward cannot act on it: ' + h.banners[0].message);
+});
+
+test('…AND A CHURCH WITH NO SAFEGUARDING STEWARD IS NOT WARNED AT ALL — keepers [church] is correct for her', async () => {
+  // The small church where the owner does safeguarding herself. This is the case that made a previous builder
+  // decline to warn, and it is the one that must stay silent: nagging her about a steward she has not got is
+  // exactly what reference/DOMAIN.md forbids ("a church that runs its children's work differently from our
+  // assumptions is not making a mistake").
+  const h = harness({ stewardCaps: {} });
+  await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: [perm(ADA)] });
+  const { raw } = grantOf(h);
+  assert.deepEqual(Object.keys(raw.keys).sort(), [ADA, CHURCH].sort(), 'fixture: keepers should be [church] here');
+  assert.deepEqual(h.banners, [],
+    'a church with no safeguarding steward was warned that somebody was left out. Nobody was left out; ' +
+    'this is the nag reference/DOMAIN.md rules out, raised on the commonest small-church setup');
+});
+
+test('…AND THE FINANCE-ONLY STEWARD BEING ABSENT IS NOT A WARNING — she was never eligible', async () => {
+  // `checkin` is an EXPLICIT capability, so the treasurer is not a keeper whether she is passed or not. A
+  // warning here would train a steward to ignore the banner, which is worse than no banner.
+  const h = harness({ stewardCaps: { [TREASURER]: ['finance'] } });
+  await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: [perm(ADA)] });
+  grantOf(h);
+  assert.deepEqual(h.banners, [],
+    'omitting a FINANCE-only steward raised the safeguarding-lead warning — the check is reading the roster ' +
+    'rather than the capability tick');
+});
+
+test('…AND IT IS SAID ONCE, not once per Sunday in the issuer\'s horizon', async () => {
+  // The issuer mints every service inside a fortnight in ONE pass with ONE `stewards` argument, so a warning
+  // raised from the mint fires per service for a single omission. reference/DOMAIN.md: "say the thing once".
+  const h = harness();
+  const out = await h.issueCheckinSessionKeys({ at: AT, permissions: CLEARED, horizonDays: 14,
+    services: [svc('s1', SERVICE), svc('s2', SERVICE_2)] });   // no `stewards`
+  assert.equal(out.issued.length, 2, 'fixture: the issuer was supposed to mint two envelopes here');
+  assert.equal(h.banners.length, 1,
+    'the same omission was reported ' + h.banners.length + ' times. A banner that repeats per Sunday is one ' +
+    'a steward learns to dismiss without reading, which is how the next real one gets missed');
 });
 
 // ── WHAT THE MINT PUTS ON THE WIRE, AND WHAT THE RELAY WILL MAKE OF IT ────────────────────────────────────
@@ -786,6 +870,102 @@ test('AND THE ISSUER LEAVES IT ALONE — it does not re-staff it, and it does no
     'the session was skipped for some other reason, so this test would keep passing if the stand-down check ' +
     'were deleted: ' + JSON.stringify(again));
   assert.equal(firstKey, JSON.parse(envelope.content).keys[CHURCH], 're-anchor: the key read back is not the minted one');
+});
+
+// ── THE GUARD NOTHING PROVED: A CO-TENANT CHURCH CANNOT UNSTAFF OUR CRECHE ────────────────────────────────
+// Item 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md:
+//
+//     "src/steward.src.js `if (e.pubkey !== pub) return;` refuses a stand-down tombstone from anyone but the
+//      church key. It is CORRECT (an auditor lifted it and fed it eight attacks, all refused) but deleting
+//      the line leaves the suite 25/25 green, because the harness stamps the church pubkey on every fixture.
+//      Write the test."
+//
+// WHY THE CASE IS REAL and not a hypothetical about a modified console. This relay is multi-tenant: one box
+// can hold several congregations. accept()'s CHECKINHELPER_D rule asks only `CHURCH_PUBS.has(e.pubkey)` and
+// then that the d-tag's session id is well formed — it does NOT require the author to be the church the
+// ['church'] tag names, because note() keys the grant by the AUTHOR, so a co-tenant's document cannot touch
+// OUR map at the relay. Nothing there is broken.
+//
+// The CONSOLE is where it lands. subscribeCheckinSessionKeys subscribes with two filters, and the second is
+// `{ kinds:[30078], '#church':[pub] }` — "anything tagged to us, whoever wrote it". So a co-tenant church key
+// on the same box can store `checkinhelper:<our session>` carrying `['church', <us>]` and `['deleted','1']`,
+// and our console will be SERVED it (the church reads everything tagged to itself).
+//
+// WHAT IT WOULD COST: the console believes that Sunday was stood down, issueCheckinSessionKeys skips it
+// ("a steward's decision outranks the schedule"), and the creche is unstaffed with a correct-looking reason
+// on a screen nobody reads. One other congregation, one document, and a children's session quietly has no key.
+//
+// THESE EVENTS ARE HAND-BUILT AND THAT IS THE POINT: the harness's finalizeEvent stamps `pubkey: CHURCH` on
+// everything it signs, which is exactly why no existing fixture could reach this line. The document under
+// test is the one a co-tenant would write, so it has to be written here.
+const COTENANT = '9'.repeat(64);        // another church configured on the same box
+const MEMBER = '8'.repeat(64);          // an ordinary member of ours
+const foreignTomb = (by, session, at = 1789300000) => ({
+  pubkey: by, created_at: at, content: '',
+  tags: [['d', D.CHECKINHELPER + session], ['t', 'trinityone'], ['church', CHURCH], ['deleted', '1']],
+});
+
+test('A CO-TENANT CHURCH\'S TOMBSTONE DOES NOT STAND OUR SESSION DOWN', async () => {
+  const h = harness();
+  await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)], permissions: CLEARED, stewards: [SGLEAD] });
+  const envelope = h.published[0];
+  assert.equal(envelope.pubkey, CHURCH, 're-anchor: the envelope under test is not ours');
+
+  const rows = h.sessionKeysFrom([envelope, foreignTomb(COTENANT, 'svc-a')]);
+  const a = rows.find(r => r.session === 'svc-a');
+  assert.ok(a, 'our own envelope vanished from the console\'s list when a foreign tombstone arrived');
+  assert.notEqual(a.standDown, true,
+    'ANOTHER CONGREGATION ON THIS BOX STOOD OUR CRECHE DOWN. accept() only asks that the author be SOME ' +
+    'configured church, and this console asks the relay for everything tagged to us — so `e.pubkey !== pub` ' +
+    'is the only thing between a co-tenant and an unstaffed children\'s session.');
+  assert.ok(a.keys && a.keys[CHURCH],
+    'the row survived as a shell with no key material, which the issuer would treat as an envelope it cannot ' +
+    'recover and re-mint over — orphaning every record already sealed under the real key');
+});
+
+test('…AND THE ISSUER GOES ON STAFFING IT — the refusal is measured where it matters', async () => {
+  // The row above is the console's list; THIS is the consequence. Without the guard the issuer sees
+  // `standDown: true` and skips, which is the defect in its finished form.
+  const h = harness();
+  await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)], permissions: CLEARED, stewards: [SGLEAD] });
+  const envelope = h.published[0];
+  const rows = h.sessionKeysFrom([envelope, foreignTomb(COTENANT, 'svc-a')]);
+  // Somebody new is cleared, so there is real work for the issuer to do and "skipped: unchanged" cannot be
+  // mistaken for "skipped: stood down".
+  const again = await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)],
+    permissions: [...CLEARED, perm(BEN)], stewards: [SGLEAD], existing: rows });
+  assert.deepEqual(again.skipped, [],
+    'the issuer skipped a session on the strength of a foreign tombstone: ' + JSON.stringify(again.skipped));
+  assert.equal(again.issued.length, 1, 'the session was not re-staffed at all: ' + JSON.stringify(again));
+  assert.ok(again.issued[0].pubs.includes(BEN), 'the newly cleared helper was not added');
+  assert.equal(again.issued[0].reused, true,
+    're-anchor: the re-issue minted a fresh key, so this test is no longer about the stand-down path');
+});
+
+test('…AND NEITHER DOES AN ORDINARY MEMBER\'S', async () => {
+  // A member cannot get one past accept() today (the write rule is owner-only), so this is belt over the
+  // braces — and belt is what the relay's own comment asks for, because a document already on disk replays
+  // through note() on every boot with accept() nowhere in the path. The console must not believe it either.
+  const h = harness();
+  await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)], permissions: CLEARED, stewards: [SGLEAD] });
+  const rows = h.sessionKeysFrom([h.published[0], foreignTomb(MEMBER, 'svc-a')]);
+  assert.notEqual((rows.find(r => r.session === 'svc-a') || {}).standDown, true,
+    'one member of this congregation published a ["church"]-tagged tombstone and unstaffed a children\'s session');
+});
+
+test('…AND OUR OWN STAND-DOWN STILL WORKS, or the three tests above prove nothing', async () => {
+  // The positive control. A guard that refused EVERY tombstone would pass all three refusals above and break
+  // the feature, which is the shape a mis-aimed fix takes.
+  const h = harness();
+  await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)], permissions: CLEARED, stewards: [SGLEAD] });
+  const envelope = h.published[0];
+  await h.revokeCheckinHelpers('svc-a');
+  const ours = h.published[h.published.length - 1];
+  assert.equal(ours.pubkey, CHURCH, 're-anchor: our own tombstone is not authored by the church key');
+  const rows = h.sessionKeysFrom([envelope, ours]);
+  assert.equal((rows.find(r => r.session === 'svc-a') || {}).standDown, true,
+    'the church\'s OWN stand-down was refused, so the guard is now refusing everything and the refusals ' +
+    'above are vacuous');
 });
 
 // AND THE ONE I GOT WRONG, LEFT AS A NOTE RATHER THAN AS A TEST. A third guard was written here on

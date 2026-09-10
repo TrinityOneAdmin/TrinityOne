@@ -15352,6 +15352,27 @@ zoo`.split("\n");
     if (!Array.isArray(c)) return !spec.explicit;
     return c.indexOf(spec.cap) >= 0;
   };
+  var _checkinKeepersMissing = (caps, stewards) => {
+    const src = caps && typeof caps === "object" ? caps : _stewardCaps;
+    const allowed = _capAllows(CAP_KEYS.checkin, src);
+    const named = new Set((Array.isArray(stewards) ? stewards : []).filter(Boolean));
+    return Object.keys(src || {}).filter((p2) => allowed(p2) && !named.has(p2));
+  };
+  var _ckKeeperWarned = /* @__PURE__ */ new Set();
+  var _warnCheckinKeeperLeftOut = (missing) => {
+    if (!missing || !missing.length) return;
+    const sig = [...missing].sort().join(",");
+    if (_ckKeeperWarned.has(sig)) return;
+    _ckKeeperWarned.add(sig);
+    const who = missing.map((p2) => _stewardNames && _stewardNames[p2] || (p2 || "").slice(0, 10) + "\u2026").join(", ");
+    try {
+      window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+        what: "check-in session key",
+        message: "This session\u2019s register was NOT shared with " + who + " \u2014 they hold Safeguarding, so they should be able to read what a helper writes, and cannot. Re-issue the session keys from the Check-in page."
+      } }));
+    } catch (e) {
+    }
+  };
   var _warnUnsealed = (cap, failed) => {
     if (!failed || !failed.length) return;
     const who = failed.map((p2) => _stewardNames && _stewardNames[p2] || (p2 || "").slice(0, 10) + "\u2026").join(", ");
@@ -15363,6 +15384,21 @@ zoo`.split("\n");
     } catch (e) {
     }
   };
+  function _encCleartextTags(kind, obj) {
+    if (kind !== "checkin") return [];
+    const rec = obj || {};
+    const out = [];
+    const sid = String(rec.session || "").trim();
+    if (sid) out.push(["session", sid]);
+    const seen = /* @__PURE__ */ new Set();
+    for (const g of Array.isArray(rec.guardians) ? rec.guardians : []) {
+      const h = String(g || "").trim().toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(h) || seen.has(h)) continue;
+      seen.add(h);
+      out.push(["p", h]);
+    }
+    return out;
+  }
   var FINKEY_D = CAP_KEYS.finance.d;
   var churchSkHeld = () => !actingChurch && !!churchSk && !!churchPub;
   var _legacyBookKeyHex = () => {
@@ -20346,7 +20382,8 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const content = window.Steward.encSeal(kind || "finance", obj);
       if (content == null) return Promise.resolve(null);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", "1"]], content }));
+      const extra = _encCleartextTags(kind || "finance", obj);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", "1"], ...extra], content }));
     },
     encRemove(dtag) {
       if (!sk) return Promise.resolve(null);
@@ -20799,6 +20836,22 @@ zoo`.split("\n");
     // used, so a steward given Finance — a treasurer, with no safeguarding role at all — could open every
     // child's name, room and pickup code. Records written before the split still open for the OWNER only, via
     // the legacy fallback in encOpen; migrateCheckinKeys() re-seals them onto the safeguarding key. ----
+    //
+    // TWO FIELDS ADDED 2026-09-10, AND THEY ARE WHAT MAKES THE RELAY'S TWO READ RULES REACHABLE AT ALL:
+    //
+    //   `session`   — the service this presence belongs to. _encCleartextTags lifts it into a ['session'] tag,
+    //                 which is the only thing checkinHelperOf() has to go on.
+    //   `guardians` — the adults who may collect this child. Lifted into one ['p'] tag each, which is how a
+    //                 parent is served their OWN child's record and provably not another family's.
+    //
+    // THEY ARE KEPT IN THE SEALED BODY AS WELL AS IN THE TAGS, on purpose and not as duplication for its own
+    // sake: migrateCheckinKeys() re-publishes this body through the same encPublish, so the body is the only
+    // place the tags can be re-derived from. A record whose tags lived only in the tags would lose them the
+    // first time it was re-keyed. Same reasoning as `person` inside a permission body.
+    //
+    // NEITHER IS REQUIRED. A church with no service document for today, or a child with no adult guardian
+    // linked yet, still gets a record written — reference/DOMAIN.md: nothing may block a child being checked
+    // in. What is lost is who else can OPEN it, and the screen says so once rather than refusing.
     publishCheckin(rec) {
       const id = rec.id || "ci" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       return window.Steward.encPublish("trinityone/checkin:" + id, {
@@ -20810,7 +20863,9 @@ zoo`.split("\n");
         out: rec.out != null ? rec.out : null,
         code: rec.code || "",
         room: rec.room || "",
-        note: rec.note || ""
+        note: rec.note || "",
+        session: rec.session || "",
+        guardians: Array.isArray(rec.guardians) ? rec.guardians : []
       }, "checkin");
     },
     removeCheckin(id) {
@@ -20869,6 +20924,36 @@ zoo`.split("\n");
         describe: PERMISSION_LIFETIMES[k].describe,
         expires: PERMISSION_LIFETIMES[k].max != null
       }));
+    },
+    // WOULD THIS CLEARANCE BE ACCEPTED, AND IF NOT, WHY NOT — asked BEFORE anything is published.
+    //
+    // ⚠ reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the audit's fifth item: "a 400-day-plus `dated`
+    // clearance returns bare `null`, reason discarded", against permissionWindow's own promise that "a church
+    // that typed 2099 must see it". The refusal is right; the silence is not, and grantCheckinPermission
+    // cannot fix it without changing what `null` means to the issuer and to five tests that rely on it.
+    //
+    // So the reason is asked for separately, OFF THE SAME TWO FUNCTIONS the grant itself uses —
+    // permissionWindow to build the window and permissionFault to name what is wrong with it. A screen that
+    // restated the 400-day rule would be free to disagree with the relay about it; this cannot.
+    //
+    // Returns { ok, from, until, why }. `why` is '' when ok, and a sentence a steward can act on otherwise.
+    checkinPermissionPreview(opts) {
+      const o = opts || {};
+      const lifetime = permissionPolicy({ lifetime: o.lifetime }).lifetime;
+      const win = permissionWindow(lifetime, { date: o.date, until: o.until, from: o.from, at: o.at });
+      if (!win) {
+        const raw = String((lifetime === "dated" ? o.until : o.date) || "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return { ok: false, from: 0, until: null, why: "Pick a date first." };
+        const cap = Math.floor(PERMISSION_LIFETIMES[lifetime].max / 86400);
+        return {
+          ok: false,
+          from: 0,
+          until: null,
+          why: lifetime === "dated" ? "That date is too far ahead. A clearance can run for at most " + cap + " days \u2014 about a year \u2014 so this one was not saved. Pick a nearer date, or choose \u201Cuntil a steward ends it\u201D." : "That date is one this console cannot place, so nothing was saved."
+        };
+      }
+      const fault = permissionFault(win.from, win.until, lifetime);
+      return { ok: !fault, from: win.from, until: win.until, why: fault ? "That clearance would be refused: " + fault + "." : "" };
     },
     // -- 1. A PERSON IS CLEARED ------------------------------------------------------------------------------
     // d=checkinperm:<personPub>. OWNER-ONLY, and this is the sharper of the two mints rather than the milder one.
@@ -21047,6 +21132,7 @@ zoo`.split("\n");
       const helpers = permittedHelpers(Array.isArray(o.permissions) ? o.permissions : [], at);
       const allowed = _capAllows(CAP_KEYS.checkin, o.caps || _stewardCaps);
       const keepers = [cp, ...(Array.isArray(o.stewards) ? o.stewards : []).filter(allowed)];
+      const _short = _checkinKeepersMissing(o.caps || _stewardCaps, o.stewards);
       const reuse = String(o.sessionKeyHex || "");
       const sessionKeyHex = /^[0-9a-f]{64}$/.test(reuse) ? reuse : _hex(crypto.getRandomValues(new Uint8Array(32)));
       let built;
@@ -21066,6 +21152,7 @@ zoo`.split("\n");
         return null;
       }
       if (built.failed.length) _warnUnsealed("check-in helper", built.failed);
+      _warnCheckinKeeperLeftOut(_short);
       const ok = await _publishToRelays(finalizeEvent2({
         kind: 30078,
         created_at: now(),

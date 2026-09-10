@@ -112,10 +112,16 @@ test('CHECK-IN SAYS WHICH EMPTY IT IS: no children marked, or the list has not a
     const { React, draw } = miniReact();
     const Comp = await loadFrom('app/stew-dashboard.jsx', 'DashCheckin', 'function DashCheckin()', {
       React,
+      // useStewardServices / useStewNarrow / CheckinClearances arrived 2026-09-10 with slice 2 of check-in:
+      // the panel now names its session on each record and sits beside the clearances panel. Neither is what
+      // this file is about — it is about which EMPTY the screen claims — so both are the neutral answer.
       window: { useStewardCheckins: () => [], useStewardSafeguard: () => sg, useStewardGuardians: () => ({}),
-                useStewardMembers: () => [], addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
+                useStewardMembers: () => [], useStewardServices: () => [],
+                useStewardIdv: () => 1, useStewardConn: () => 1,
+                addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
       Icon: Stub('Icon'), Panel: function Panel(p) { return p.children; }, SkPill: Stub('SkPill'),
       DismissibleNote: Stub('DismissibleNote'), todayISO: () => '2026-09-03',
+      useStewNarrow: () => false, CheckinClearances: Stub('CheckinClearances'),
       setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
     });
     return texts(draw(Comp, {})).join(' ');
@@ -169,9 +175,12 @@ test('…and check-in says loading rather than claiming the church marked nobody
   const Comp = await loadFrom('app/stew-dashboard.jsx', 'DashCheckin', 'function DashCheckin()', {
     React,
     window: { useStewardCheckins: () => [], useStewardSafeguard: () => ({ minors: [] }), useStewardGuardians: () => ({}),
-              useStewardMembers: () => [], addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
+              useStewardMembers: () => [], useStewardServices: () => [],
+              useStewardIdv: () => 1, useStewardConn: () => 1,
+              addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
     Icon: Stub('Icon'), Panel: function Panel(p) { return p.children; }, SkPill: Stub('SkPill'),
     DismissibleNote: Stub('DismissibleNote'), todayISO: () => '2026-09-03',
+    useStewNarrow: () => false, CheckinClearances: Stub('CheckinClearances'),
     setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
   });
   const words = texts(draw(Comp, {})).join(' ');

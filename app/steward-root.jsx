@@ -200,6 +200,11 @@ window.useStewardRosters = makeSub(S, 'subscribeRosters', () => []);
 window.useStewardServices = makeSub(S, 'subscribeServices', () => []);
 window.useStewardRunsheets = makeSub(S, 'subscribeRunsheets', () => []);
 window.useStewardCheckins = makeSub(S, 'subscribeCheckins', () => []);
+// WHO THE CHURCH HAS CLEARED FOR CHILDREN'S CHECK-IN. The first reader the check-in permission boundary has
+// ever had: until this line, `grep` over app/ for grantCheckinPermission / revokeCheckinPermission /
+// subscribeCheckinPermissions returned NOTHING, and a well-tested engine nobody is required to consult is
+// not a feature (CLAUDE.md rule 1).
+window.useStewardCheckinPermissions = makeSub(S, 'subscribeCheckinPermissions', () => []);
 window.useStewardEvents = makeSub(S, 'subscribeEvents', () => []);
 window.useStewardRooms = makeSub(S, 'subscribeRooms', () => []);
 window.useStewardBookings = makeSub(S, 'subscribeBookings', () => []);

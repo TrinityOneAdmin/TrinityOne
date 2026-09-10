@@ -5590,7 +5590,280 @@ function CheckoutModal({ rec, onConfirm, onClose }) {
     </CkModal>
   );
 }
+// ══ WHO THE CHURCH HAS CLEARED FOR CHILDREN'S CHECK-IN ═══════════════════════════════════════════════════
+// Slice 2 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md. It is the FIRST POINT-OF-USE the check-in
+// permission boundary has ever had: three audits passed over that boundary and found no way in, and the
+// reason is that until this panel existed `grep -r grantCheckinPermission app/` returned nothing at all.
+// CLAUDE.md rule 1: a well-tested engine nobody is required to consult is not a feature.
+//
+// WHAT A STEWARD DOES HERE, and it is deliberately not what the first design said. It said "pick a session,
+// see who the rota says is serving, grant them". reference/FINDING-CHECKIN-GRANTS-SHOULD-BE-PER-PERSON-2026-09-09.md
+// threw that out: UK churches clear volunteers ANNUALLY AND CHURCH-WIDE — DBS, a lead's sign-off, a training
+// course — so a screen shaped around a service would have taught a steward a weekly chore the church does
+// not actually have, and would have been substituting our policy for theirs (reference/DOMAIN.md: "we are
+// not the policy and we are not the inspector").
+//
+// So: A PERSON, AND HOW LONG. Once a year, not once a Sunday.
+//
+// WHY IT IS ON THIS PAGE and not in Settings — the owner's decision: *"A lot of space on that page."* It
+// belongs beside the register it governs. The alternative considered in the scope note was a Settings page
+// under Safeguarding; a clearance is not a setting, it is a decision about a named person, and it wants to
+// be visible next to the thing it lets them do.
+//
+// FOUR THINGS IT MUST NOT DO, all of them from reference/DOMAIN.md's check-in section:
+//   • it must not BLOCK anything. Nothing on this panel stands between a child and the desk; the register
+//     next to it writes with no clearance at all, because the church key and every safeguarding steward
+//     already hold it. This panel only lets OTHER people in.
+//   • it must not NAG. The one thing that has to be said — that a clearance is not by itself a key on
+//     somebody's phone — is said once, in a note that dismisses.
+//   • it must not ACCUSE. Withdrawing a clearance is an ordinary annual act, not an incident.
+//   • it must not CLAIM WHAT IT HAS NOT DONE. Every write here is awaited and a refusal is surfaced, the
+//     same discipline writeCheckin() below already carries for the same reason.
+function CheckinClearances() {
+  const perms = window.useStewardCheckinPermissions ? window.useStewardCheckinPermissions() : [];
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
+  const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const [clearing, setClearing] = React.useState(false);
+  const [asking, setAsking] = React.useState('');     // whose withdrawal is one more tap away
+  const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || ((pub || '').slice(0, 10) + '…'); };
+  // "NOBODY IS CLEARED YET" IS A CLAIM ABOUT THE CHURCH, and for the first moments of every mount the list
+  // is simply empty because it has not arrived. This is the exact defect the register beside it already
+  // carries a comment about — a leader read "No children marked yet" as fact and went looking in Members
+  // for records that were already there — and the same one `cached-paints-before-authority-arrives`
+  // describes. stewardStreamLoaded() flips only when the relay has actually DELIVERED, so the two states
+  // can be told apart instead of guessed at.
+  const loaded = !!(window.stewardStreamLoaded && window.stewardStreamLoaded('subscribeCheckinPermissions', idv));
+  const nowS = Math.floor(Date.now() / 1000);
+  // A DOCUMENT THIS CONSOLE CANNOT VOUCH FOR IS NOT A CLEARANCE. subscribeCheckinPermissions parses through
+  // readCheckinPermission — the relay's OWN parser — and hands back `{ _invalid: true }` for anything it
+  // will not stand behind. Showing one as a clearance would put a person on this list whom the relay
+  // refuses, which is the worst direction for this screen to be wrong in: the church would believe somebody
+  // is cleared and their key would open nothing.
+  const rows = perms.filter(p => p && !p._invalid && !p._locked && p.person)
+    .map(p => ({ ...p, live: p.from <= nowS && (p.until == null || p.until >= nowS) }))
+    .sort((a, b) => (Number(b.live) - Number(a.live)) || nameFor(a.person).localeCompare(nameFor(b.person)));
+  const fmtD = (ts) => { try { return new Date(ts * 1000).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }); } catch (e) { return ''; } };
+  // SAY THE SHAPE THE CHURCH CHOSE, not a computed date it never typed. A steward who picked "until a
+  // steward ends it" should read that sentence back, because an expiry date invented for display is how a
+  // church comes to believe a clearance lapses when nothing will ever lapse it.
+  const runsTo = (r) => r.lifetime === 'open' ? 'Until someone here ends it'
+    : r.lifetime === 'day' ? ('For ' + fmtD(r.from) + ' only')
+    : ('Until ' + fmtD(r.until));
+  const blocked = (message) => {
+    try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in clearance', message } })); } catch (e) {}
+  };
+  // WITHDRAWN, AND ONLY IF THE RELAY SAID SO. revokeCheckinPermission publishes an addressable tombstone
+  // through _publishToRelays (all-must-accept), and returns null/false when it reached nowhere. Dropping
+  // that answer would take the person off this list while every relay went on admitting them — the same
+  // fire-and-forget defect the register's own writeCheckin() was fixed for.
+  const withdraw = async (person) => {
+    setAsking('');
+    let ok = null;
+    try { ok = await window.Steward.revokeCheckinPermission(person); } catch (e) { ok = null; }
+    if (ok === false || ok == null) {
+      blocked(nameFor(person) + '’s clearance was NOT withdrawn — nothing reached the relay, so they are still cleared. Check you are online and try again.');
+    }
+  };
+  const list = (
+    <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rows.map(r => (
+        <div key={r.person} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: r.live ? 'var(--surface)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div style={{ width: 34, height: 34, borderRadius: 999, background: r.live ? 'var(--sage-soft, var(--surface-2))' : 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Icon name="shield" size={16} color={r.live ? 'var(--sage)' : 'var(--ink-3)'} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, color: r.live ? 'var(--ink)' : 'var(--ink-2)' }}>{nameFor(r.person)}</div>
+            {/* A LAPSED CLEARANCE IS SHOWN, NOT HIDDEN. It is the answer to "why can Margaret not open the
+                register any more", and a church renewing in January needs to see last year's list to renew
+                from it. reference/DOMAIN.md: say a key has expired; do not pretend it was never there. */}
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{r.live ? runsTo(r) : 'Ended ' + fmtD(r.until)}</div>
+          </div>
+          {asking === r.person ? (
+            <div style={{ display: 'flex', gap: 7, flexShrink: 0 }}>
+              <button onClick={() => setAsking('')} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5 }}>Keep</button>
+              <button onClick={() => withdraw(r.person)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }}>Withdraw</button>
+            </div>
+          ) : (
+            <button onClick={() => setAsking(r.person)} title={'Withdraw ' + nameFor(r.person) + '’s clearance'} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}>Withdraw</button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <Panel title="Cleared to help with children" action={
+      <button onClick={() => setClearing(true)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Clear someone</button>
+    } style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* SAID ONCE, AND ONLY WHAT IS TRUE. The temptation here is "and they'll get this Sunday's key
+          automatically" — which describes the design and not the shipped code: nothing calls
+          issueCheckinSessionKeys yet (recorded in the scope note). So this says what a clearance IS and
+          what it is NOT, and claims no wiring that does not exist. CLAUDE.md rule 4, applied to copy. */}
+      <DismissibleNote id="checkin-clearance-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>
+        A clearance records that <b>your church</b> has cleared this person for children’s work — the DBS, the
+        training, your lead’s sign-off. The relay checks it on <b>every</b> request, so withdrawing one ends
+        their access to every session at once. It is <b>not</b> by itself a key on their phone: each session’s
+        register key is issued separately by the console holding the church key.
+      </DismissibleNote>
+      {!rows.length && !loaded ? (
+        <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '34px 24px' }}><Icon name="shield" size={24} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>Loading who’s cleared…</p></div>
+      ) : !rows.length ? (
+        <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '34px 24px' }}>
+          <Icon name="shield" size={24} color="var(--ink-3)" />
+          <p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}><b>Nobody is cleared yet.</b> You and your safeguarding stewards can already run the register — clearing somebody is how a children’s worker who is <i>not</i> a steward gets in.</p>
+        </div>
+      ) : list}
+      {clearing ? <ClearPersonModal members={members} rosters={rosters} groups={groups} nameFor={nameFor}
+        already={rows.filter(r => r.live).map(r => r.person)} onClose={() => setClearing(false)} /> : null}
+    </Panel>
+  );
+}
+window.CheckinClearances = CheckinClearances;
+
+// PICK A PERSON, AND HOW LONG FOR. The two halves of the only decision this screen takes.
+//
+// WHERE THE NAMES COME FROM, and why it is a SUGGESTION and never an authority. checkinPermissionSuggestions
+// asks eligibleHelpers() — the one swappable question in scripts/checkin-role-source.mjs — so a steward
+// picking "one of our teams" gets that team's roster filled in rather than retyping twelve names. Nothing it
+// returns clears anybody: every row still has to be ticked, because a DBS certificate and a lead's sign-off
+// are facts this product does not hold and must not infer.
+//
+// AND THE PROVENANCE IS THE TRUE ONE. reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the audit's fourth
+// item: grantCheckinPermission files everything as 'rota' by default, "against checkin-role-source.mjs's
+// claim that naming somebody by hand IS a declared source and says so in the enforced record. The screen
+// knows which it was; pass it." So this passes 'team' when the list came from a team and 'steward' when a
+// steward picked from the whole membership — and never 'rota', because this screen never asks a rota.
+function ClearPersonModal({ members, rosters, groups, nameFor, already, onClose }) {
+  const S = window.Steward;
+  // THE SHAPES, FROM THE ONE PLACE THAT DEFINES THEM. A hand-written list here would be free to offer a
+  // fourth nothing enforces, or to disagree with the relay about what 'day' means — the reason
+  // checkinPermissionLifetimes() exists at all.
+  const lifetimes = (S && S.checkinPermissionLifetimes) ? S.checkinPermissionLifetimes() : [];
+  // THE TIGHTEST OPTION IS THE DEFAULT, and it is first in the table for that reason
+  // (DEFAULT_PERMISSION_LIFETIME === 'day'). A steward who never touches this control clears somebody for
+  // one day, not for ever.
+  const [lifetime, setLifetime] = React.useState(lifetimes.length ? lifetimes[0].id : 'day');
+  const [teamId, setTeamId] = React.useState('');
+  const [picked, setPicked] = React.useState([]);
+  const [dateStr, setDateStr] = React.useState(() => todayISO());
+  const [busy, setBusy] = React.useState(false);
+  const [failed, setFailed] = React.useState([]);
+  const teams = groups.filter(g => g && g.kind === 'team' && g.name);
+  const source = teamId ? 'team' : 'steward';
+  // THE SUGGESTION. Only ever narrows the list a steward chooses from; `pubs` is what the church's own team
+  // roster says, and an empty answer (a team nobody is on, a roster written before pubkeys were stored) is
+  // an empty list rather than a fallback to everybody — fail closed, exactly as eligibleHelpers does.
+  const suggested = (teamId && S && S.checkinPermissionSuggestions)
+    ? (S.checkinPermissionSuggestions({ source: 'team', rosters, teamId }).pubs || []) : null;
+  const already0 = new Set(already || []);
+  const candidates = (suggested !== null ? suggested.map(pub => ({ pubkey: pub })) : members)
+    .filter(m => m && m.pubkey && !already0.has(m.pubkey));
+  // WOULD THIS BE ACCEPTED, AND IF NOT WHY — asked before anything is published, off the same two functions
+  // the grant itself uses. reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the audit's fifth item: a
+  // 400-day-plus `dated` clearance returns a bare null and the reason is discarded, "against
+  // permissionWindow's own promise that a church that typed 2099 must see it". Now it sees it.
+  const preview = (S && S.checkinPermissionPreview)
+    ? S.checkinPermissionPreview({ lifetime, date: dateStr, until: dateStr })
+    : { ok: true, why: '' };
+  const needsDate = lifetime !== 'open';
+  const can = picked.length > 0 && (!needsDate || preview.ok) && !busy;
+  const pick = (pub) => setPicked(p => (p.indexOf(pub) >= 0 ? p.filter(x => x !== pub) : [...p, pub]));
+  // SWITCHING THE SHAPE RESETS THE DATE, because the field means a different thing under each: under 'day'
+  // it is the one day, under 'dated' it is the last day. Leaving today's date in place when a steward
+  // switches to "until a date" would offer them a clearance that closes before it opens.
+  const chooseLifetime = (id) => { setLifetime(id); setDateStr(id === 'dated' ? '' : todayISO()); };
+  // ONE DOCUMENT PER PERSON, and each answer read. grantCheckinPermission returns null for a refusal of any
+  // kind — no church key, a window past the cap, a relay that took nothing — so a loop that ignored the
+  // return would report twelve clearances over nothing. Whoever did not save is NAMED, and the modal stays
+  // open on them rather than closing over a partial success.
+  const clear = async () => {
+    // THE HANDLER REFUSES, NOT ONLY THE ATTRIBUTE. `disabled` on the button is what a person sees; a
+    // handler that trusts it is the "fix the control, not the label" defect this console has already had
+    // (six serving controls toasted success over a send that never happened). Measured while writing
+    // a-steward-clears-a-person-for-check-in.test.mjs: calling this with a 2099 date published a clearance
+    // the relay refuses, because the test could reach the handler and the attribute stopped nobody.
+    if (!can) return;
+    setBusy(true);
+    setFailed([]);
+    const bad = [];
+    for (const person of picked) {
+      let res = null;
+      try { res = await S.grantCheckinPermission({ person, source, lifetime, date: dateStr, until: dateStr }); }
+      catch (e) { res = null; }
+      if (!res) bad.push(person);
+    }
+    setBusy(false);
+    if (!bad.length) { onClose(); return; }
+    setFailed(bad);
+    setPicked(bad);
+    try {
+      window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in clearance',
+        message: bad.map(nameFor).join(', ') + (bad.length > 1 ? ' were' : ' was') + ' NOT cleared — nothing was saved for them. Only the console holding the church key can clear somebody, and it has to reach a relay.' } }));
+    } catch (e) {}
+  };
+  return (
+    <CkModal title="Clear someone for children’s check-in" onClose={onClose}>
+      {teams.length ? (
+        <div style={{ marginBottom: 14 }}>
+          <label htmlFor="ck-clear-team" style={{ display: 'block', fontSize: 11.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 6 }}>Take the names from</label>
+          <select id="ck-clear-team" value={teamId} onChange={e => { setTeamId(e.target.value); setPicked([]); }} style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>
+            <option value="">Everyone in the church</option>
+            {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+      ) : null}
+      <div style={{ fontSize: 11.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 6 }}>Who</div>
+      {candidates.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '10px 0 14px' }}>{teamId ? 'Nobody on that team who isn’t already cleared.' : 'Nobody left to clear.'}</div>
+      ) : (
+        <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 190, overflowY: 'auto', marginBottom: 16 }}>
+          {candidates.map(m => {
+            const on = picked.indexOf(m.pubkey) >= 0;
+            return (
+              <button key={m.pubkey} onClick={() => pick(m.pubkey)} aria-pressed={on} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)', background: on ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)') }}>
+                <Icon name={on ? 'check' : 'plus'} size={14} color={on ? 'var(--clay-ink)' : 'var(--ink-3)'} />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: on ? 700 : 500 }}>{(m.name || nameFor(m.pubkey))}</span>
+                {failed.indexOf(m.pubkey) >= 0 ? <span style={{ fontSize: 11.5, color: 'var(--clay-ink)', fontWeight: 700 }}>not saved</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ fontSize: 11.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 6 }}>For how long</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {lifetimes.map(l => (
+          <button key={l.id} onClick={() => chooseLifetime(l.id)} aria-pressed={lifetime === l.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)', background: lifetime === l.id ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (lifetime === l.id ? 'var(--clay)' : 'var(--line)') }}>
+            <Icon name={lifetime === l.id ? 'check' : 'clock'} size={14} color={lifetime === l.id ? 'var(--clay-ink)' : 'var(--ink-3)'} style={{ marginTop: 2, flexShrink: 0 }} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700 }}>{l.label}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{l.describe}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      {needsDate ? (
+        <div style={{ marginTop: 12 }}>
+          <label htmlFor="ck-clear-date" style={{ display: 'block', fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 6 }}>{lifetime === 'day' ? 'Which day' : 'Cleared until the end of'}</label>
+          <input id="ck-clear-date" type="date" value={dateStr} onChange={e => setDateStr(e.target.value)} aria-label={lifetime === 'day' ? 'The day this person is cleared for' : 'The last day of this clearance'} style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 11, border: '1px solid ' + (dateStr && !preview.ok ? 'var(--clay)' : 'var(--line)'), background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 13.5, fontFamily: 'var(--font-ui)' }} />
+          {/* THE REASON, NOT A DISABLED BUTTON. permissionWindow refuses a 400-day-plus clearance rather
+              than silently shortening it, precisely so a church that typed 2099 finds out; a screen that
+              only greyed the button out would put that refusal back into silence. */}
+          {!preview.ok ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 7, lineHeight: 1.45 }}>{preview.why}</div> : null}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.45 }}>Nothing will end this on its own. It stays until someone here withdraws it, which takes effect straight away.</div>
+      )}
+      <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
+        <button onClick={clear} disabled={!can} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: can ? 1 : 0.5 }}>{busy ? 'Clearing…' : (picked.length > 1 ? 'Clear ' + picked.length + ' people' : 'Clear for check-in')}</button>
+      </div>
+    </CkModal>
+  );
+}
+window.ClearPersonModal = ClearPersonModal;
 function DashCheckin() {
+  const narrow = useStewNarrow();
   const recs = window.useStewardCheckins ? window.useStewardCheckins() : [];
   const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
   const minors = sg.minors || [];
@@ -5600,8 +5873,36 @@ function DashCheckin() {
   // ADULT guardians only. A child wrongly left in another child's guardian list (D2) must never be printed as
   // the person who may collect them — this is the list a leader at the door reads a name off.
   const minorSet = new Set(minors);
-  const guardiansOf = (pub) => (guardians[pub] || []).filter(p => !minorSet.has(p)).map(nameFor).filter(Boolean);
+  // ONE FILTER, TWO SHAPES. The names are what a leader at the door reads out; the PUBKEYS are what goes
+  // into the record's ['p'] tags, which is the entire mechanism by which a parent is later served their own
+  // child's record and provably not another family's (gateway.mjs, the CHECKIN_D branch of canRead). Both
+  // come off the same adult-only list on purpose: if they could disagree, the printed pickup name and the
+  // person the relay lets read the record would be two different sets of people.
+  const guardianPubsOf = (pub) => (guardians[pub] || []).filter(p => !minorSet.has(p));
+  const guardiansOf = (pub) => guardianPubsOf(pub).map(nameFor).filter(Boolean);
   const today = todayISO();
+  // WHICH SESSION THIS DESK IS WRITING INTO.
+  //
+  // ⚠ THIS IS THE FIX FOR ITEM 1 OF reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, AT THE POINT OF USE.
+  // The relay has admitted an in-window check-in HELPER to a record since 2026-09-09, and the only thing
+  // checkinHelperOf() has to go on is the record's ['session'] tag — which encPublish did not emit and this
+  // screen did not supply. So against every check-in record any church holds today, a helper key opens
+  // nothing. The writer now emits the tag (see _encCleartextTags); this is the half that gives it a value.
+  //
+  // The id is the SERVICE's own id, because that is what issueCheckinSessionKeys keys an envelope on
+  // (`svc.session || svc.id`) and a second spelling would match no envelope at all.
+  //
+  // IT DOES NOT GATE ANYTHING. A church with no service in its calendar for today — or one running three
+  // rooms off one service — still checks children in; the record simply carries no session, and only the
+  // church and its safeguarding stewards can open it. reference/DOMAIN.md: nothing may block a child being
+  // checked in, and a church that runs its children's work differently from our assumptions is not making a
+  // mistake. When there is exactly one service today it is used without asking, which is the ordinary
+  // Sunday; more than one and the leader says which room they are on.
+  const services = window.useStewardServices ? window.useStewardServices() : [];
+  const todaysServices = services.filter(sv => sv && sv.date === today);
+  const [sessionPick, setSessionPick] = React.useState('');
+  const session = (todaysServices.length === 1) ? todaysServices[0].id
+    : (todaysServices.some(sv => sv.id === sessionPick) ? sessionPick : '');
   const todays = recs.filter(r => r.date === today);
   const present = todays.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
   const out = todays.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
@@ -5639,13 +5940,40 @@ function DashCheckin() {
   const checkIn = async (childPub) => {
     const code = String(Math.floor(1000 + Math.random() * 9000));
     setPicking(false);
-    await writeCheckin({ child: childPub, childName: nameFor(childPub), date: today, in: Math.floor(Date.now() / 1000), code }, nameFor(childPub) + '’s check-in');
+    // `session` AND `guardians` ARE NOT DECORATION. publishCheckin lifts them into the ['session'] and ['p']
+    // tags that the relay's two check-in read rules key on — a helper of this session, and the guardian the
+    // record names. Drop either from this call and the register goes back to being openable by the church
+    // and its safeguarding stewards alone, with every test over those gates still passing, which is exactly
+    // the shape §6 of the design note is about.
+    await writeCheckin({ child: childPub, childName: nameFor(childPub), date: today, in: Math.floor(Date.now() / 1000), code,
+      session, guardians: guardianPubsOf(childPub) }, nameFor(childPub) + '’s check-in');
   };
-  return (
+  // TWO PANELS ON ONE PAGE, at the owner's decision: *"A lot of space on that page."* The register on the
+  // left is the door operation; the clearances on the right are who — besides this console — may ever open
+  // one. They belong side by side because the second is the answer to a question the first raises, and
+  // burying it in Settings would have made granting a thing a steward has to go and find.
+  const registerPanel = (
     <Panel title="Kids check-in" action={
       <button onClick={() => setPicking(true)} disabled={!minors.length || !sgKey} title={!sgKey ? 'The register’s key hasn’t reached this console yet — a check-in written now would not be saved.' : ''} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (minors.length && sgKey) ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>This is a <b>door operation</b>, done by a leader on this device — parents do nothing in their own app, and nothing about check-in appears there. Say so when you announce it, or they will go looking. Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext, and the only people who can open them are you and anyone you have given <b>Safeguarding</b> to.</DismissibleNote>
+      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>This is a <b>door operation</b>, done by a leader on this device — parents do nothing in their own app, and nothing about check-in appears there. Say so when you announce it, or they will go looking. Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext. They can be opened by you, by anyone you have given <b>Safeguarding</b> to, and by a helper you have <b>cleared</b> who holds that session’s key. Nobody else, the relay included.</DismissibleNote>
+      {/* WHICH SESSION, SHOWN RATHER THAN ASSUMED — and never as a refusal. A record's ['session'] tag is
+          the only thing that lets a cleared helper open it, so a leader is entitled to know whether the
+          records they are writing carry one. This says so in a line, and offers the choice only where there
+          IS one to make; a church with no service in today's calendar is told what that costs and is not
+          stopped from checking anybody in (reference/DOMAIN.md). */}
+      {todaysServices.length > 1 ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14, flexWrap: 'wrap' }}>
+          <label htmlFor="ck-session" style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Which session</label>
+          <select id="ck-session" value={session} onChange={e => setSessionPick(e.target.value)} style={{ flex: 1, minWidth: 160, padding: '8px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 13, fontFamily: 'var(--font-ui)' }}>
+            <option value="">Not tied to a session</option>
+            {todaysServices.map(sv => <option key={sv.id} value={sv.id}>{sv.name || 'Gathering'} · {sv.time || ''}</option>)}
+          </select>
+        </div>
+      ) : null}
+      {minors.length && !session ? (
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 14, lineHeight: 1.45 }}>No session in today’s calendar, so today’s records can only be opened by you and your safeguarding stewards — a cleared helper’s key won’t open them. Check children in as normal.</div>
+      ) : null}
       {/* "No children marked yet" is a CLAIM ABOUT THE CHURCH, and for the first moments of every mount the
           list is simply empty because it has not arrived. A leader opening check-in at the door read it as
           "this church has marked nobody" and went looking in Members for records that were already there.
@@ -5698,6 +6026,12 @@ function DashCheckin() {
       {picking ? <CheckinPicker available={available} nameFor={nameFor} guardiansOf={guardiansOf} onPick={checkIn} onClose={() => setPicking(false)} /> : null}
       {checkout ? <CheckoutModal rec={checkout} onConfirm={async () => { const r = checkout; setCheckout(null); await writeCheckin({ ...r, out: Math.floor(Date.now() / 1000) }, (r.childName || 'That child') + '’s collection'); }} onClose={() => setCheckout(null)} /> : null}
     </Panel>
+  );
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : '1.35fr 1fr', gap: 18, height: '100%', minHeight: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{registerPanel}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}><CheckinClearances /></div>
+    </div>
   );
 }
 window.DashCheckin = DashCheckin;
