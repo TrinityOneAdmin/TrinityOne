@@ -57,7 +57,9 @@ export function requireFreePort(port, what = 'this test') {
   });
 }
 
-// Convenience for the browser tests, which hold two fixed ports (the relay and Chrome's debug port).
-export async function requireFreePorts(ports, what = 'this test') {
-  for (const p of ports) await requireFreePort(p, what);
-}
+// THERE IS NO PLURAL HELPER. There was one — requireFreePorts([PORT, CDP]) — and it had zero callers for its
+// whole life, because test-ports.test.mjs's structural guards read source text for `requireFreePort(NAME` and
+// a wrapper is invisible to them. The one file that did reach for it (a-tampered-module-is-refused) had to
+// back it out and leave a comment explaining why, which is a trap rather than a convenience. Deleted
+// 2026-09-10. Call requireFreePort once per port, by name; the guards can see that, and the failure message
+// then names WHICH port is held.
