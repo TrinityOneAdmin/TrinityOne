@@ -6964,10 +6964,30 @@ window.Steward = {
       // ── AND ONLY NOW IS THE CORPUS "READ" ────────────────────────────────────────────────────────────────
       // The one thing that makes wiring the issuer safe. Set here and nowhere else, so there is exactly one
       // place in the product that can answer "have we actually looked for this church's envelopes?" — and it
-      // answers yes only on an AUTHENTICATED end-of-stored-events. See _ckKeysSettled for what an
-      // unauthenticated one costs: nostr-tools calls a failed CONNECT an EOSE, the relay answers an
-      // unauthenticated read of this church with nothing, and the issuer reads either as "no envelope" and
-      // mints a fresh key over a live one.
+      // answers yes only on an AUTHENTICATED end-of-stored-events.
+      //
+      // ⚠ WHY AUTHENTICATED, WRITTEN OUT IN FULL HERE RATHER THAN CROSS-REFERENCED — AND THAT IS DELIBERATE.
+      // The long note above `_ckKeysSettled` is attached to a top-level `let`, and esbuild DROPS those
+      // comments: `grep 'HAS THE ENVELOPE CORPUS' vendor/steward.js` returns 0, while this one — inside a
+      // function body — survives into the bundle. So this is the copy anybody reading the shipped console
+      // sees, and a "see above" here points at nothing. Measured 2026-09-10.
+      //
+      // AN EOSE DOES NOT MEAN THE RELAY ANSWERED. Two things produce one, and NEITHER is the relay saying
+      // "this church has no envelopes":
+      //
+      //   • nostr-tools' OWN CLIENT-SIDE TIMER. `Subscription.fire()` arms
+      //     `setTimeout(this.receivedEose, this.eoseTimeout)` — measured firing at 2519 ms against a real
+      //     pool — so a relay that says nothing at all still produces an EOSE on schedule.
+      //   • A FAILED OR DROPPED CONNECTION. `handleClose()` calls `handleEose()` first.
+      //
+      // ⚠ AND NOT the thing the comment here claimed until 2026-09-10: "the relay answers an unauthenticated
+      // read of this church with nothing". IT DOES NOT ANSWER AT ALL. Measured on a raw socket against the
+      // real relay: `unauthed -> events: 0  eose: false  challenged: true  closed: null`. It issues an AUTH
+      // challenge and WAITS. The false version survived a first correction because it is a SECOND copy of the
+      // same sentence — the note above was fixed and this was not, and this is the one that ships.
+      //
+      // Either real source hands the issuer "no envelope for this Sunday", and it then mints a fresh key over
+      // a live one. Which is why this is gated on the auth and not merely on the EOSE.
       //
       // `pub === cp` because a church switch mid-stream must not stamp the church we switched AWAY from as
       // read — the same guard subscribeCapKey applies to _capState, and for the same reason.

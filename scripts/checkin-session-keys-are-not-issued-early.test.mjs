@@ -443,33 +443,85 @@ test('THE BANNER NAMES ONLY CAUSES THAT CAN ACTUALLY HAPPEN', () => {
     'the rotation banner no longer says WHY, or says something that cannot happen');
 });
 
-test('THE NIP-42 CLAIM IN THE STAMP\'S OWN NOTE IS GONE — the relay sends no EOSE at all', () => {
-  // The audit's first truthfulness finding. The note above `_ckKeysSettled` said an unauthenticated read of
-  // this church's documents "is answered with nothing at all (the relay's NIP-42 gate)". Measured on a raw
-  // socket against the real relay: `unauthed -> events: 0  eose: false  challenged: true  closed: null`. THE
-  // RELAY SENDS NO EOSE AT ALL — it issues an AUTH challenge and waits. The premature end-of-stored-events
-  // is nostr-tools' own: `Subscription.fire()` arms `setTimeout(this.receivedEose, this.eoseTimeout)`, and
-  // `handleClose()` calls `handleEose()` first. The conclusion was right; the named cause was not.
+test('THE FALSE NIP-42 MECHANISM IS GONE FROM BOTH COPIES — and the one that SHIPS is the one that was wrong', () => {
+  // The audit's first truthfulness finding, and then its follow-up: the sentence existed TWICE and the first
+  // correction fixed the copy that does not ship.
   //
-  // ⚠ WHY THIS ONE MATCHES SOURCE TEXT, AND WHY THAT IS NOT CLAUDE.md RULE 3. Rule 3 forbids asserting
-  // BEHAVIOUR by matching text, because a `false && ` leaves every word in place. This asserts nothing about
-  // behaviour: it is a claim about a COMMENT — the record left for whoever later asks whether this guard can
-  // be simplified — and a comment has no other instrument. It cannot be read out of the bundle either:
-  // measured just now, esbuild drops the comments attached to top-level `let` declarations (the ones inside
-  // function bodies survive), so `grep 'NIP-42 gate' vendor/steward.js` returns 0 whether the sentence is
-  // there or not. Asserting it against the bundle would have been a test that could never fail.
+  // The claim was that an unauthenticated read of a church's documents "is answered with nothing at all (the
+  // relay's NIP-42 gate)". Measured on a raw socket against the real relay:
+  // `unauthed -> events: 0  eose: false  challenged: true  closed: null`. THE RELAY DOES NOT ANSWER AT ALL —
+  // it issues an AUTH challenge and waits. The two things that really produce a premature
+  // end-of-stored-events are nostr-tools' own `setTimeout(this.receivedEose, this.eoseTimeout)` (measured
+  // firing at 2519 ms against a real pool) and `handleClose()` calling `handleEose()` first.
+  //
+  // ⚠ WHY THIS IS TWO SLICES AND A WHOLE-FILE SWEEP, not one match. The first version of this test sliced
+  // only the note above `_ckKeysSettled` — and the second copy, inside subscribeCheckinSessionKeys' `oneose`
+  // comment, was outside that range and stayed wrong. Worse, it is the copy a reader of the shipped console
+  // sees: esbuild drops comments attached to top-level `let` declarations and keeps comments inside function
+  // bodies, so the corrected note is absent from vendor/steward.js and the false one was present. Measured
+  // both ways below.
+  //
+  // AND WHY IT MATCHES SOURCE TEXT AT ALL, which is not CLAUDE.md rule 3's territory: rule 3 forbids
+  // asserting BEHAVIOUR by matching text, because `false && ` leaves every word in place. This asserts
+  // nothing about behaviour — it is a claim about a COMMENT, the record left for whoever later asks whether
+  // this guard can be simplified, and a comment has no other instrument.
   const SRC = readFileSync(join(ROOT, 'src/steward.src.js'), 'utf8');
+  // THE CLAIM IN ITS ASSERTIVE FORM ONLY. Both corrected comments QUOTE the false sentence in order to refute
+  // it, and a pattern that could not tell a quotation from an assertion would forbid the correction itself —
+  // a test that makes the honest version impossible to write. So the quote character is what separates them:
+  // `documents "is answered` is the refutation, `documents is answered` was the claim.
+  const CLAIM = /the relay answers an unauthenticated\s*(?:\n\s*\/\/)?\s*read of this church with nothing|documents\s*(?:\n\s*\/\/)?\s*is answered\s*(?:\n\s*\/\/)?\s*with nothing at all|read of this church\s*(?:\n\s*\/\/)?\s*with nothing/;
+  const REFUTED = /IT DOES NOT ANSWER AT ALL|RELAY SENDS NO EOSE AT ALL/;
+
+  // ── copy 1: the note above the stamp (dropped by the bundler, so source-only) ──
   const note = SRC.slice(SRC.indexOf('HAS THE ENVELOPE CORPUS ACTUALLY BEEN READ?'), SRC.indexOf('const _ckKeysRead ='));
   assert.ok(note.length > 500, 're-anchor: this slice is not the stamp\'s own note');
-  assert.doesNotMatch(note, /answered\s*\n?\s*\/\/ with nothing at all/,
-    'the note is back to claiming the relay answers an unauthenticated read with nothing at all. It sends no ' +
-    'EOSE — it challenges and waits — and a future reader deciding whether this guard is still needed would ' +
-    'be reasoning from a mechanism that does not exist');
-  assert.match(note, /RELAY SENDS NO EOSE AT ALL/,
-    'the note no longer says what the relay actually does with an unauthenticated read');
-  assert.match(note, /eoseTimeout/,
-    'the note does not name where the premature end-of-stored-events really comes from, which is the whole ' +
-    'reason the guard cannot be simplified away');
+  assert.doesNotMatch(note, CLAIM,
+    'the stamp\'s note is back to ASSERTING that the relay answers an unauthenticated read with nothing. ' +
+    '(Quoting the sentence in order to refute it is fine and is what the note does — see CLAIM.)');
+  assert.match(note, REFUTED, 'the stamp\'s note no longer says what the relay actually does');
+  assert.match(note, /eoseTimeout/, 'the stamp\'s note does not name where the premature EOSE really comes from');
+
+  // ── copy 2: the oneose comment INSIDE the subscription — THE ONE THAT SHIPS ──
+  // Sliced to the function first: subscribeCheckinPermissions sits immediately above with a near-identical
+  // oneose, so an unsliced match would read the neighbour's and report either way.
+  const sub = fnBody(SRC, '  subscribeCheckinSessionKeys(cb) {', 'subscribeCheckinSessionKeys');
+  const inFn = sub.slice(sub.indexOf('AND ONLY NOW IS THE CORPUS'), sub.indexOf('oneose() {'));
+  assert.ok(inFn.length > 500, 're-anchor: this slice is not the oneose comment inside the subscription');
+  assert.doesNotMatch(inFn, /an EOSE, the relay answers an unauthenticated/,
+    'THE SHIPPED COMMENT IS BACK TO PRESENTING THE RELAY\'S SILENCE AS ONE OF THE TWO WAYS AN EOSE ARRIVES. ' +
+    'It is not one of them — measured `eose: false` — and this is the copy that survives into ' +
+    'vendor/steward.js, so it is the account a reader of the shipped console gets');
+  assert.match(inFn, /IT DOES NOT ANSWER AT ALL/,
+    'the shipped comment no longer refutes the false mechanism. It is written out in full here rather than ' +
+    'cross-referenced precisely because the corrected top-level note is dropped by the bundler');
+  assert.match(inFn, /eoseTimeout/,
+    'the shipped comment does not name the client-side timer, which is the source that actually fires');
+
+  // ── AND NO THIRD COPY, ANYWHERE. This is the assertion that generalises: the sentence existed twice and
+  // one correction missed one, so what is forbidden is the claim appearing WITHOUT its refutation beside it,
+  // wherever in the file that happens. A new copy in a new place reddens this without anyone remembering to
+  // extend a slice.
+  let from = 0, unrefuted = [];
+  for (;;) {
+    const m = CLAIM.exec(SRC.slice(from));
+    if (!m) break;
+    const at = from + m.index;
+    const around = SRC.slice(Math.max(0, at - 1200), at + 1200);
+    if (!REFUTED.test(around)) unrefuted.push(SRC.slice(at, at + 90).split('\n')[0]);
+    from = at + m[0].length;
+  }
+  assert.deepEqual(unrefuted, [],
+    'the false NIP-42 mechanism is stated somewhere in src/steward.src.js with nothing nearby refuting it. ' +
+    'That sentence has now been wrong in two places at once, and a future reader deciding whether this guard ' +
+    'can be simplified would be reasoning from a mechanism that does not exist: ' + JSON.stringify(unrefuted));
+
+  // ── and the BUNDLE carries the correct account, since that is the copy anybody actually reads.
+  assert.match(VENDOR, /IT DOES NOT ANSWER AT ALL/,
+    're-anchor: the corrected account is not in vendor/steward.js at all. Comments inside function bodies ' +
+    'survive esbuild — if this fails, either the comment moved out of the function or the build is stale');
+  assert.doesNotMatch(VENDOR, /an EOSE, the relay answers an unauthenticated/,
+    'the SHIPPED bundle states the false mechanism');
 });
 
 // ── 2. THE POINT OF USE — the screen a steward actually has ───────────────────────────────────────────────
