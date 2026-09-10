@@ -18,18 +18,34 @@ import { readFileSync } from 'node:fs';
 
 const SRC = readFileSync(new URL('../app/screens-serving.jsx', import.meta.url), 'utf8');
 
-function runFallback({ tab, careOn, canSeeRota }) {
-  const a = SRC.indexOf('  const _tabs = [');
+// `checkinRegister` ARRIVED IN THIS SLICE ON 2026-09-10, with slice 3's Kids tab. The tab list now derives
+// `kidsOn` from ctx.checkinRegister, so the slice needs a `ctx` — without one this whole file failed on a
+// ReferenceError at the fixture, five tests at once, and none of them on the assertion it exists to make.
+// Defaults to the all-false register, which is what every member who does no children's work has.
+const NO_KIDS = { cleared: false, notYet: false, keysHeld: 0 };
+function runFallback({ tab, careOn, canSeeRota, checkinRegister = NO_KIDS }) {
+  const a = SRC.indexOf('  // ── AND THE KIDS TAB, WHICH MOST PEOPLE NEVER SEE ─');
   assert.ok(a >= 0, 're-anchor: the tab list is no longer hoisted, so nothing can check it against the active tab');
   const b = SRC.indexOf('}, [_tabKeys, tab]);', a);
   assert.ok(b > a, 're-anchor: the fallback effect has moved');
   const body = SRC.slice(a, b + '}, [_tabKeys, tab]);'.length);
+  assert.ok(body.includes('const _tabs = ['), 're-anchor: the slice no longer contains the tab list itself');
   const calls = [];
   // React.useEffect runs its callback immediately here — we only care what the callback decides.
   const React = { useEffect: (fn) => fn() };
-  new Function('React', 'canSeeRota', 'careOn', 'tab', 'setTab', body)(
-    React, canSeeRota, careOn, tab, (t) => calls.push(t));
+  new Function('React', 'canSeeRota', 'careOn', 'tab', 'setTab', 'ctx', body)(
+    React, canSeeRota, careOn, tab, (t) => calls.push(t), { checkinRegister });
   return calls;
+}
+// Which tabs that slice actually produced, so a test can assert the SET rather than only the fallback.
+function tabsFrom(opts) {
+  const a = SRC.indexOf('  // ── AND THE KIDS TAB, WHICH MOST PEOPLE NEVER SEE ─');
+  const b = SRC.indexOf('  const _tabKeys =', a);
+  assert.ok(b > a, 're-anchor: _tabKeys no longer follows the tab list');
+  const React = { useEffect: () => {} };
+  return new Function('React', 'canSeeRota', 'careOn', 'ctx',
+    SRC.slice(a, b) + '\nreturn _tabs.map(t => t[0]);')(
+    React, opts.canSeeRota !== false, !!opts.careOn, { checkinRegister: opts.checkinRegister || NO_KIDS });
 }
 
 test('switching care off while a member is ON the Care tab moves them somewhere real', () => {
@@ -52,6 +68,29 @@ test('an ordinary tab is never disturbed', () => {
     assert.deepEqual(runFallback({ tab, careOn: true, canSeeRota: true }), [],
       `the ${tab} tab was redirected for no reason — this would fight the member on every render`);
   }
+});
+
+// ── AND THE SAME INVARIANT FOR THE KIDS TAB, which is the newest way for a tab to vanish under somebody ──
+// A children's worker whose clearance is withdrawn mid-morning, or whose church stands the session down, loses
+// this tab while she is standing on it. That is the identical shape to Care being switched off, and it is
+// reachable the moment slice 3 ships.
+test('a worker cleared for check-in gets a Kids tab, and only she does', () => {
+  assert.ok(tabsFrom({ checkinRegister: { cleared: true, notYet: false, keysHeld: 1 } }).includes('kids'),
+    'the Kids tab is not produced for a cleared worker holding a session key');
+  assert.equal(tabsFrom({}).includes('kids'), false,
+    'the Kids tab is produced for a member the church has not cleared for children\'s check-in');
+});
+
+test('losing a check-in clearance while ON the Kids tab moves the worker somewhere real', () => {
+  assert.deepEqual(runFallback({ tab: 'kids', careOn: true, canSeeRota: true }), ['serving'],
+    'a worker whose clearance was withdrawn is left on a tab that no longer exists — the pane renders ' +
+    'nothing at all and no tab is selected, which is the silent-blank class this file exists for');
+});
+
+test('a worker still cleared is left on the Kids tab', () => {
+  assert.deepEqual(runFallback({ tab: 'kids', careOn: true, canSeeRota: true,
+    checkinRegister: { cleared: true, notYet: false, keysHeld: 1 } }), [],
+    'a worker reading the register was thrown off it for no reason — mid-session, at the door');
 });
 
 test('the fallback target is always a tab that actually exists', () => {

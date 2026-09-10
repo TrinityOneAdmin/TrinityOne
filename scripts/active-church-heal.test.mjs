@@ -102,8 +102,13 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // 34 → 35 on 2026-09-06: ctx.joinSent, the fourth state of the join question ("did a relay accept it?").
   // Identical in shape to joinQueued/joinFailed directly above it; an ordinary active-church read.
   // 35 → 36 on 2026-09-06: ctx.joinIntent, the join a locked phone promised to make once unlocked. Same shape.
-  assert.equal(sites.length, 36,
-    `the active-church resolution sites changed (${sites.length} vs 36) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 36 → 37 on 2026-09-10: the children's check-in register subscription (slice 3's worker view), which
+  // resolves the active church to its npub to open Fellowship.subscribeCheckinRegister. Identical in shape to
+  // the safeguarding subscription immediately below it, and it BENEFITS FROM THE HEAL for the same reason and
+  // then some: with a stale id it resolves to no npub, the effect falls back to the all-false default, and a
+  // cleared worker's Kids tab simply is not there — silent, and exactly the blank this heal exists for.
+  assert.equal(sites.length, 37,
+    `the active-church resolution sites changed (${sites.length} vs 37) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

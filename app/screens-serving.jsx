@@ -580,6 +580,181 @@ function MyMonth({ ctx, onManage, onRunsheet }) {
   );
 }
 
+// ════════════════ CHILDREN'S CHECK-IN — THE REGISTER A CLEARED WORKER READS ══════════════
+// Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, READ HALF ONLY. The first member-app surface for
+// check-in: nothing in this app has ever read a check-in document. Data comes from
+// Fellowship.subscribeCheckinRegister via ctx.checkinRegister — see that function for the chain.
+//
+// NOT BUILT HERE, and deliberately: the QR on the room door (the room code is still undecided — printed sheet
+// versus rotating screen code), a parent checking their own child in (needs the guardian copy, which is not
+// sealed yet, and a decision the owner has not taken), and checkout / manual release (slice 4).
+//
+// IT IS NOT THE BOUNDARY. The relay serves a record to a worker only when they are named in that session's
+// envelope AND their clearance is live, and both are enforced on the box. Nothing on this screen may read as
+// though it decided anything.
+//
+// AND IT MUST NEVER IMPLY A CHILD CANNOT BE CHECKED IN. reference/DOMAIN.md: "a ratio outside policy, a helper
+// whose clearance has lapsed, a rota with a gap — none of these may stop a child being checked in." This view
+// is read-only, so the discipline is that every empty state says what is TRUE and, where there is one, what to
+// do — and one of those states is "nothing is wrong, your church has not issued keys yet".
+//
+// COPY DISCIPLINE, owner 2026-09-10: "cut down on the instructional copy in the ui itself. Use tool tips and
+// help docs for this kind of information." So: a short label where the work happens, and the story behind
+// ctx.openHelp('checkin-register'). A `title` attribute is NOT the answer — it is invisible on a touch screen
+// and to a screen reader, and this product has already paid for that once (a pickup code labelled by `title`
+// alone: "I couldn't tell which one is 'the' pickup code — I'd have read 9079 to a parent, but I was
+// guessing"). The visible help button is the console's own pattern.
+function svWhen(ts) {
+  if (!Number.isFinite(ts)) return '';
+  try {
+    const d = new Date(ts * 1000);
+    return SV_DOW[d.getDay()] + ' ' + d.getDate() + ' ' + SV_MON[d.getMonth()];
+  } catch (e) { return ''; }
+}
+// ONE HELP BUTTON, VISIBLE, with real text — the member app's ctx.openHelp deep link, styled as the app's other
+// four help buttons are (screens-extras.jsx, the notifications one). Renders nothing if the host gave us no
+// openHelp, rather than a dead control.
+function KidsHelpLink({ ctx, label }) {
+  if (!ctx || typeof ctx.openHelp !== 'function') return null;
+  return (
+    <button onClick={() => ctx.openHelp('checkin-register')} title={'Open the guide: ' + label}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+        color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 'inherit', textDecoration: 'underline', textAlign: 'left' }}>
+      <Icon name="book" size={13} color="currentColor" /> {label}
+    </button>
+  );
+}
+// ONE CHILD'S ROW. The pickup code is COVERED until it is asked for — see the note on `shown` in KidsRegister.
+function KidsRow({ rec, open, onToggle }) {
+  const code = String((rec && rec.code) || '');
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderTop: '1px solid var(--line)' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.childName || 'Name not in this copy'}</div>
+        {rec.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Collected · {rec.out}</div> : null}
+      </div>
+      {code ? (
+        <button onClick={onToggle} aria-pressed={!!open}
+          aria-label={open ? 'Hide the pickup code for ' + (rec.childName || 'this child') : 'Show the pickup code for ' + (rec.childName || 'this child')}
+          style={{ flexShrink: 0, minWidth: 84, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer',
+            fontFamily: open ? 'var(--font-display)' : 'var(--font-ui)', fontWeight: 800, fontSize: open ? 17 : 13,
+            letterSpacing: open ? '1.5px' : 0, background: open ? 'var(--surface-2)' : 'var(--surface)', color: open ? 'var(--ink)' : 'var(--ink-2)' }}>
+          {open ? code : 'Show code'}
+        </button>
+      ) : (
+        // A COPY WITH NO CODE IN IT IS NOT A CHILD WITH NO CODE. Say which of the two this is.
+        <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No code in this copy</span>
+      )}
+    </div>
+  );
+}
+function KidsRegister({ ctx }) {
+  const reg = (ctx && ctx.checkinRegister) || {};
+  const sessions = Array.isArray(reg.sessions) ? reg.sessions : [];
+  // ── WHAT A WORKER'S PHONE SHOWS OF A PICKUP CODE ────────────────────────────────────────────────────────
+  // ONE CODE AT A TIME, COVERED UNTIL ASKED FOR, and revealing one covers the last. `rec.code` is what
+  // releases a child: CheckoutModal in the console matches on it and slice 4 will match on it here. A
+  // register that paints every code down the screen is a phone lying face-up on a table in a room full of
+  // people, or held up over a shoulder — and a worker needs exactly one of them at a time, for the family in
+  // front of them.
+  //
+  // IT IS NOT A GATE. One tap, no confirmation, no PIN, nothing to fail: DOMAIN.md's "do not block" means this
+  // must never be the reason somebody cannot do their job. It resets on its own because this component
+  // unmounts when the tab changes, so walking away from the screen covers the code again.
+  const [shown, setShown] = useSv('');
+  // WHETHER THIS TAB EXISTS AT ALL is decided in ServingScreen from the same three fields; kept here beside
+  // the states it selects so the two cannot drift.
+  const nothingKnown = !reg.cleared && !reg.notYet && !(reg.keysHeld > 0);
+  if (nothingKnown) return null;
+  return (
+    <React.Fragment>
+      <SectionLabel>Children’s check-in</SectionLabel>
+
+      {/* THE ONE LINE ABOUT MY OWN CLEARANCE. Three states, not two — and the third is not decoration. The
+          console shipped this as a binary on 2026-09-10 and told a churchwarden four times over that a
+          clearance she had just granted for NEXT SUNDAY had already "Ended". A window entirely in the future
+          is not live and has not ended. */}
+      {reg.notYet ? (
+        <div style={{ borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '12px 14px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+          <b style={{ color: 'var(--ink)' }}>Your clearance starts {svWhen(reg.from)}.</b>{' '}
+          Nothing to do until then.
+        </div>
+      ) : reg.lapsed ? (
+        /* DOMAIN.md: "say a key has expired, do not lock someone out of a room mid-session". So this says it
+           and changes nothing — every record this phone can already open stays on the screen below. */
+        <div style={{ borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '12px 14px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+          <b style={{ color: 'var(--ink)' }}>Your clearance ended {svWhen(reg.until)}.</b>{' '}
+          New records will stop reaching this phone.
+        </div>
+      ) : null}
+
+      {/* CLEARED — AND LIVE, WHICH IS THE HALF THAT WAS MISSING — AND NO KEY HAS BEEN ISSUED. Today this is the commonest state there is, and NOTHING IS
+          WRONG: a console mints session keys only while an owner console is open, so a church whose console
+          stays shut has cleared helpers holding no keys. Before this screen existed that state was invisible
+          from a phone, and the console's own panel was measured claiming the opposite. */}
+      {reg.cleared && reg.keysHeld === 0 ? (
+        <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: '15px 16px', fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
+          <b style={{ color: 'var(--ink)' }}>No session keys have reached this phone.</b>{' '}
+          Nothing is wrong — your church issues these from its console.
+        </div>
+      ) : null}
+
+      {/* ONE CARD PER SESSION THIS PHONE HOLDS A KEY FOR. A session with no rows is shown too: "nobody has
+          arrived yet" and "you hold no key for this room" are different things, and a card that only appeared
+          once it had a child in it could never say the first. */}
+      {sessions.map(sn => (
+        <div key={sn.session} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '13px 14px' }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="child" size={18} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{svWhen(sn.from) || 'This session'}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{sn.rows.length} checked in</div>
+            </div>
+          </div>
+          {sn.rows.length
+            ? sn.rows.map(r => (
+                <KidsRow key={r.id} rec={r} open={shown === r.id} onToggle={() => setShown(v => (v === r.id ? '' : r.id))} />
+              ))
+            : <div style={{ borderTop: '1px solid var(--line)', padding: '13px 14px', fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>Nobody has been checked in yet.</div>}
+        </div>
+      ))}
+
+      {/* SERVED, AND THIS PHONE CANNOT OPEN IT. "Refused" and "served but unreadable" are different failures
+          and look nothing like each other from a phone — both scope docs say so in those words — so this is
+          its own state and it says the register is not empty. A record carries the worker's copy in a ['ck']
+          tag only if the console held that session's key when it wrote it; publishCheckin OMITS the copy
+          rather than refusing to write, because nothing may block a check-in. */}
+      {reg.unreadable > 0 ? (
+        <div style={{ borderRadius: 20, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '14px 16px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
+          {/* ONE EXPRESSION, NOT THREE NODES. `{n} record{n === 1 ? '' : 's'}` renders correctly and makes
+              glued() — the guard that catches the JSX newline trap — report a false junction at "record][s",
+              which trains a reader to ignore it. The count and its plural are one string instead. */}
+          <b style={{ color: 'var(--ink)' }}>{reg.unreadable + (reg.unreadable === 1 ? ' record' : ' records') + ' this phone cannot open.'}</b>{' '}
+          They were written without a copy for you. The register is not empty.
+        </div>
+      ) : null}
+
+      {/* A KEY HELD, AND THIS SESSION IS NOT ONE OF THEM. Counted, never opened, never listed — a red-team
+          pass on 2026-09-10 found that trying each held key in turn hands a MORNING register to an EVENING
+          helper, so a record is only ever offered the key its own session tag names. */}
+      {reg.foreign > 0 ? (
+        <div style={{ borderRadius: 20, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '14px 16px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
+          <b style={{ color: 'var(--ink)' }}>{reg.foreign + (reg.foreign === 1 ? ' record belongs' : ' records belong') + ' to another session.'}</b>{' '}
+          This phone holds no key for it.
+        </div>
+      ) : null}
+
+      {/* ONE HELP LINK, ONCE, AT THE FOOT. It began as one per banner, and the test that resolves the article
+          id caught the consequence: a clearance that starts next Sunday is BOTH "not yet" and "no keys", so
+          two identical links rendered a few lines apart. One link for the pane is also the shorter answer to
+          the copy cull — the states say what is true, and the whole story is one tap away from all of them. */}
+      <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 2px 6px' }}>
+        <KidsHelpLink ctx={ctx} label="How check-in works" />
+      </div>
+    </React.Fragment>
+  );
+}
+
 // ════════════════════════ MAIN OVERLAY ════════════════════════
 function ServingScreen({ open, onClose, ctx, docked }) {
   const [tab, setTab] = useSv('serving');
@@ -647,7 +822,25 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // none was highlighted, and the only text on screen belonged to the Today screen underneath. It recovers by
   // itself the moment the tab comes back, so the state is stuck rather than corrupt, which is exactly the
   // silent-blank class this project keeps meeting. Fall back to the first tab that still exists.
-  const _tabs = [['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])];
+  // ── AND THE KIDS TAB, WHICH MOST PEOPLE NEVER SEE ────────────────────────────────────────────────────────
+  // Slice 3's worker view. It appears only for somebody the church has CLEARED for children's check-in, or
+  // whose phone already holds a session key — and its absence is the honest answer for everybody else, not a
+  // gap. A parent persona hunted this whole app on 2026-09-10 and found no check-in anywhere, and the finding
+  // was that the absence is CORRECT and, critically, that there were no dead ends: no menu item leading
+  // nowhere, no empty "No check-ins today" state, nothing implying check-in should be there. A tab that
+  // existed for the congregation would be exactly that dead end.
+  //
+  // THREE FIELDS, one of which is `notYet`, so a clearance granted for NEXT Sunday shows the tab and says so
+  // rather than hiding until the morning — and `keysHeld` is in there on its own so a worker whose clearance
+  // has since ENDED keeps the tab while their phone still holds a key. DOMAIN.md: do not lock someone out of a
+  // room mid-session. KidsRegister derives the same conjunction beside the states it selects.
+  //
+  // A LAPSED CLEARANCE WITH NO KEYS SHOWS NOTHING, and that is a choice: there is neither anything to read nor
+  // anything to do, and a tab reading "ended in June" for the rest of the year is the clutter the copy cull of
+  // 2026-09-10 was about.
+  const _ckReg = ctx.checkinRegister || {};
+  const kidsOn = !!(_ckReg.cleared || _ckReg.notYet || (_ckReg.keysHeld > 0));
+  const _tabs = [['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ...(kidsOn ? [['kids', 'Kids', 'child']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])];
   const _tabKeys = _tabs.map(t => t[0]).join(',');
   React.useEffect(() => {
     if (_tabs.some(t => t[0] === tab)) return;
@@ -998,6 +1191,8 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               ))}
             </div>
           </React.Fragment>
+        ) : tab === 'kids' ? (
+          <KidsRegister ctx={ctx} />
         ) : tab === 'care' ? (
           <React.Fragment>
             <SafetyBanner ctx={ctx} persistent />
@@ -1016,4 +1211,4 @@ function ServingScreen({ open, onClose, ctx, docked }) {
     </Overlay>
   );
 }
-Object.assign(window, { ServingScreen });
+Object.assign(window, { ServingScreen, KidsRegister });
