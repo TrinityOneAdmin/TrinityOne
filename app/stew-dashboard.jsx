@@ -5695,16 +5695,19 @@ function CheckinClearances() {
   return (
     <Panel title="Cleared to help with children" action={
       <button onClick={() => setClearing(true)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Clear someone</button>
-    } style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* SAID ONCE, AND ONLY WHAT IS TRUE. The temptation here is "and they'll get this Sunday's key
-          automatically" — which describes the design and not the shipped code: nothing calls
-          issueCheckinSessionKeys yet (recorded in the scope note). So this says what a clearance IS and
-          what it is NOT, and claims no wiring that does not exist. CLAUDE.md rule 4, applied to copy. */}
+    } style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* SAID ONCE, AND ONLY WHAT IS TRUE — and now in one sentence rather than five (2026-09-10, the
+          check-in copy cut). What a clearance is made of (the DBS, the training, your lead's sign-off) and
+          who issues the key instead are in the 'console-checkin' guide.
+
+          ⚠ THE TWO WORDS THAT CANNOT GO ARE `every` AND `not`. "Every request" is why a withdrawal takes
+          effect immediately and there is nothing to un-send; "not by itself a key" is the whole distinction
+          between this panel and the one under it, and the temptation the original note was written against
+          is "and they'll get this Sunday's key automatically", which describes the design and not the code.
+          CLAUDE.md rule 4, applied to copy. */}
       <DismissibleNote id="checkin-clearance-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>
-        A clearance records that <b>your church</b> has cleared this person for children’s work — the DBS, the
-        training, your lead’s sign-off. The relay checks it on <b>every</b> request, so withdrawing one ends
-        their access to every session at once. It is <b>not</b> by itself a key on their phone: each session’s
-        register key is issued separately by the console holding the church key.
+        Your church’s sign-off for children’s work. The relay re-checks it on <b>every</b> request, so
+        withdrawing one ends their access at once — but it is <b>not</b> by itself a key on their phone.
       </DismissibleNote>
       {!rows.length && !loaded ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '34px 24px' }}><Icon name="shield" size={24} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>Loading who’s cleared…</p></div>
@@ -5870,7 +5873,7 @@ function CheckinSessionKeys() {
       <button onClick={() => run()} disabled={!canIssue || busy || !settled}
         title={!canIssue ? 'Only the console holding the church key can issue session keys.' : (!settled ? 'Still reading this church’s existing keys — issuing now could replace one.' : 'Issue a register key for each of the next two weeks’ sessions')}
         className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (canIssue && settled && !busy) ? 1 : 0.5 }}>{busy ? 'Issuing…' : 'Re-issue'}</button>
-    } style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    } style={{ display: 'flex', flexDirection: 'column' }}>
       {/* SAY THE REAL CONSTRAINT, NOT "a console must open". reference/SCOPE-CHECKIN-SEALING-2026-09-10.md
           is explicit that this must be stated and not designed around: the issuer signs as the church, so
           only the console holding the church key can ever mint one. */}
@@ -5888,11 +5891,19 @@ function CheckinSessionKeys() {
           writing keys no relay will store. Name the church in <b>Settings</b> and this starts on its own.
         </DismissibleNote>
       ) : (
+        /* WHAT IS LEFT IS THE TRIGGER, AND THE TRIGGER IS THE HONESTY CLAIM (2026-09-10, the check-in copy
+            cut). What a session key is, who it is wrapped to, and what a month of nobody opening this page
+            costs are in the 'console-checkin' guide.
+
+            ⚠ "WHENEVER YOU OPEN THIS PAGE" STAYS ON THE SCREEN. This component mounts only on the Check-in
+            tab, so a steward who believes keys are minted on a schedule — or whenever the console is opened
+            at all — will find a month of Sundays with no helper keys on them. That is the one wrong
+            conclusion this panel can produce, so the sentence that prevents it is not instructional copy.
+            The {' '} is load-bearing: JSX drops whitespace containing a newline between a text node and an
+            element, and this exact junction shipped to the phone reading "whenever you openthis page". */
         <DismissibleNote id="checkin-keys-intro" icon="shield" tone="sage" style={{ marginBottom: 12 }}>
-          Each session gets its <b>own</b> key, wrapped to the people you have cleared and to your safeguarding
-          stewards. This console issues them for the next <b>{HORIZON_DAYS} days</b> whenever you open{' '}
-          <b>this page</b> and whenever a clearance changes — so if nobody opens it for a month, the Sundays in
-          that month have no helper keys and the desk falls back to you. Nothing here blocks a check-in.
+          Issued for the next <b>{HORIZON_DAYS} days</b> whenever you open{' '}
+          <b>this page</b>, and whenever a clearance changes. Nothing here blocks a check-in.
         </DismissibleNote>
       )}
       {!soon.length ? (
@@ -6168,8 +6179,24 @@ function DashCheckin() {
   const registerPanel = (
     <Panel title="Kids check-in" action={
       <button onClick={() => setPicking(true)} disabled={!minors.length || !sgKey} title={!sgKey ? 'The register’s key hasn’t reached this console yet — a check-in written now would not be saved.' : ''} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (minors.length && sgKey) ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
-    } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>This is a <b>door operation</b>, done by a leader on this device — parents do nothing in their own app, and nothing about check-in appears there. Say so when you announce it, or they will go looking. Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your safeguarding key</b> — the relay stores only ciphertext. They can be opened by you, by anyone you have given <b>Safeguarding</b> to, and by a helper you have <b>cleared</b> who holds that session’s key. Nobody else, the relay included.</DismissibleNote>
+    } style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* CUT FROM ~90 WORDS TO TWO SENTENCES, 2026-09-10. The owner's standing direction that session:
+          *"we need to cut down on the instructional copy in the ui itself. Use tool tips and help docs for
+          this kind of information imo."* On this page it was not only wordy — this note's own box measured
+          346px tall inside a 165px card on the phone, and it was the thing painting over the headings below.
+          The desk routine (check in, write the code on the slip, match it at collection) and the full
+          audience of a record are now in the 'console-checkin' guide, one tap away in Help.
+
+          ⚠ TWO CLAIMS DID NOT MOVE, and both are here because their absence would leave a steward with a
+          WRONG conclusion rather than merely less detail (CLAUDE.md rule 4 applied to copy):
+            · PARENTS SEE NOTHING OF CHECK-IN IN THEIR OWN APP. Verified 2026-09-10 rather than assumed:
+              `grep -c checkin src/fellowship.src.js src/mydata.src.js` is 1 and 1, and neither is a read of
+              the register — there is no member surface at all. A leader who does not say this at the
+              announcement sends the whole church hunting for a button that does not exist.
+            · WHO CAN OPEN A RECORD. Saying nothing would be safe; saying "you and your safeguarding
+              stewards" was the audit finding of 2026-09-09, because a cleared helper holding the session key
+              can open one too. The short form keeps all three and no more. */}
+      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>A door operation, done by a leader at this device — <b>parents see nothing of check-in in their own app</b>, so say so when you announce it. Records are sealed to your <b>safeguarding key</b>: you, anyone you have given <b>Safeguarding</b> to, and a <b>cleared</b> helper holding that session’s key can open them. <StewHelpLink id="console-checkin" label="How check-in works" /></DismissibleNote>
       {/* WHICH SESSION, SHOWN RATHER THAN ASSUMED — and never as a refusal. A record's ['session'] tag is
           the only thing that lets a cleared helper open it, so a leader is entitled to know whether the
           records they are writing carry one. This says so in a line, and offers the choice only where there
@@ -6240,15 +6267,40 @@ function DashCheckin() {
       {checkout ? <CheckoutModal rec={checkout} onConfirm={async () => { const r = checkout; setCheckout(null); await writeCheckin({ ...r, out: Math.floor(Date.now() / 1000) }, (r.childName || 'That child') + '’s collection'); }} onClose={() => setCheckout(null)} /> : null}
     </Panel>
   );
+  // ⚠ THE PAGE IS SIZED BY WHAT IS ON IT, AND THAT IS THE FIX FOR THE OVERLAP THE OWNER FOUND ON THE APK
+  // (2026-09-10: *"the check in layout is overlapping itself in various places"*).
+  //
+  // It used to say `height: '100%', minHeight: 0` here, `minHeight: 0` on both columns, and `height: '100%'`
+  // on the register and clearances cards. Every one of those is a licence to be SMALLER than the content
+  // rather than a floor, and together they are one bug. Measured with the copy as it then was:
+  //   · the grid had a definite height and two auto rows, so on a phone — where the columns stack — the two
+  //     rows split the viewport equally instead of taking the height of the cards in them (at 360px: 239px
+  //     per row, against 579px of register);
+  //   · in the right-hand column, TWO cards each asking for `height: 100%` plus an 18px gap overflow their
+  //     own column by its whole height again, so both are shrunk (at 900px: 245px and 233px boxes holding
+  //     282px and 267px of content);
+  //   · `minHeight: 0` then removed the content-based floor that would otherwise have stopped either.
+  // It takes a bounded container AND a card asking for 100% of it to shrink anything, which is why putting
+  // back any ONE of them does not reproduce the overlap — see the sabotage matrix in the test file.
+  // A panel shorter than its children does not clip them — `.sk-panel` has no `overflow` — so the copy paints
+  // out of the bottom of the card and straight over the next card's heading and buttons. 40 pairs of
+  // text-on-text at 360px, measured in scripts/the-check-in-page-fits-the-phone.test.mjs.
+  //
+  // So nothing here constrains a height any more: the cards are as tall as their contents and the console's
+  // own <main> scrolls, which is what every other page in this console already relies on. `align-items:
+  // start` keeps the two columns top-aligned rather than stretching the shorter one. The inner
+  // `flex: 1; min-height: 0; overflow-y: auto` wrappers inside the panels are now inert (a scroller whose
+  // parent is content-height never has anything to scroll) and are kept only because they cost nothing and
+  // come back into use if this page is ever given a fixed height again.
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : '1.35fr 1fr', gap: 18, height: '100%', minHeight: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{registerPanel}</div>
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : '1.35fr 1fr', gap: 18, alignItems: 'start' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>{registerPanel}</div>
       {/* THREE PANELS NOW, and the third is the answer to the question the second raises. Clearing somebody
           records that the church trusts them; a SESSION KEY is the thing that actually lets their phone open
           a record — and until this panel existed nothing in the product ever minted one, so every clearance
           was a decision with no mechanism behind it. It sits under the clearances because that is the order a
           steward meets them in. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}><CheckinClearances /><CheckinSessionKeys /></div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}><CheckinClearances /><CheckinSessionKeys /></div>
     </div>
   );
 }

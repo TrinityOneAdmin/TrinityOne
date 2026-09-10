@@ -81,6 +81,10 @@ async function desk({ services = [], guardians = {}, minors = [KID, KID2], recs 
     // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing: DashCheckin now renders the
     // session-key panel beside the clearances, so every test that SLICES DashCheckin has to supply it.
     CheckinSessionKeys: Stub('CheckinSessionKeys'),
+    // StewHelpLink arrived 2026-09-10 with the check-in copy cut: the intro note now ends in a link to the
+    // 'console-checkin' guide instead of carrying the desk routine itself, so every test that SLICES
+    // DashCheckin has to supply it (it lives in app/stew-help.jsx, loaded into the same global scope).
+    StewHelpLink: Stub('StewHelpLink'),
     useStewNarrow: () => false,
     todayISO: () => TODAY,
     window: {

@@ -20,7 +20,7 @@
 //   window.HelpBlock / window.useReadAloud / window.TextSizeStepper / window.articleToSpeech (screens-help.jsx).
 // Top-level names DECLARED here — kept unique across the console's single global scope on purpose (a
 // duplicate top-level name in classic scripts blanks the whole app): STEW_HELP_IDS, stewHelpArticles,
-// StewardHelp, StewHelpButton.
+// StewardHelp, StewHelpButton, StewHelpLink.
 
 // The console-relevant articles, in reading order, by id. An id that is not in HelpData is skipped rather
 // than rendered blank — and scripts/steward-help.test.mjs asserts every one of these resolves.
@@ -34,7 +34,7 @@
 // loses the church's has no church to go back to, and no way to move it onto a new key. 'restore' also named
 // a member Help button that does not exist in this console, and 'steward' ("Help from a steward") is written
 // to the person being helped — who, here, is the reader's member, not the reader.
-const STEW_HELP_IDS = ['console', 'console-giving-records', 'console-family-safety', 'console-steward', 'console-words', 'console-restore', 'console-scams', 'how-it-works'];
+const STEW_HELP_IDS = ['console', 'console-giving-records', 'console-family-safety', 'console-checkin', 'console-steward', 'console-words', 'console-restore', 'console-scams', 'how-it-works'];
 
 function stewHelpArticles() {
   const all = (window.HelpData && Array.isArray(window.HelpData.articles)) ? window.HelpData.articles : [];
@@ -44,9 +44,12 @@ function stewHelpArticles() {
 // The dialog. CkModal's shape (stew-dashboard.jsx): dimmed backdrop closes on click, the PANEL carries
 // role=dialog + the useStewDialog ref (Escape closes the topmost dialog, Tab is trapped, focus returns to
 // the trigger). Two views inside: the list of guides, and one guide open.
-function StewardHelp({ onClose }) {
+// `initialId` OPENS ONE GUIDE STRAIGHT AWAY (2026-09-10), which is what StewHelpLink below is for. It
+// defaults to null, so StewHelpButton's call is unchanged and still lands on the list of guides. The Back
+// control is unaffected: a deep-linked guide still has the whole list one tap behind it.
+function StewardHelp({ onClose, initialId }) {
   const dlgRef = useStewDialog(onClose);
-  const [openId, setOpenId] = React.useState(null);
+  const [openId, setOpenId] = React.useState(initialId || null);
   const [scale, setScale] = React.useState(1);
   const ra = window.useReadAloud ? window.useReadAloud() : { supported: false, speaking: false, speak() {}, stop() {} };
   const articles = stewHelpArticles();
@@ -126,5 +129,31 @@ function StewHelpButton() {
     </React.Fragment>
   );
 }
+// A DEEP LINK TO ONE GUIDE, FROM THE SCREEN THAT GUIDE IS ABOUT.
+//
+// This is what the console offers in place of a standing explainer, and it arrived with the check-in copy cut
+// of 2026-09-10 (owner: *"we need to cut down on the instructional copy in the ui itself. Use tool tips and
+// help docs for this kind of information imo."*). The pattern is: one short true sentence where the work
+// happens, and the whole story one tap away.
+//
+// ⚠ IT IS A REAL BUTTON WITH VISIBLE TEXT, and not a `title` tooltip. A tooltip is invisible on a touch
+// screen and to a screen reader, and this console has already paid for that once — the pickup code beside a
+// child's name was labelled by `title` alone, and a safeguarding lead reading that row said "I couldn't tell
+// which one is 'the' pickup code — I'd have read 9079 to a parent, but I was guessing." Anything a steward
+// actually needs is on the screen; the tooltip only names the destination.
+function StewHelpLink({ id, label }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <React.Fragment>
+      <button onClick={() => setOpen(true)} title={'Open the guide: ' + label}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+          color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 'inherit', textDecoration: 'underline', textAlign: 'left' }}>
+        <Icon name="book" size={13} color="currentColor" /> {label}
+      </button>
+      {open ? <StewardHelp initialId={id} onClose={() => setOpen(false)} /> : null}
+    </React.Fragment>
+  );
+}
 window.StewardHelp = StewardHelp;
 window.StewHelpButton = StewHelpButton;
+window.StewHelpLink = StewHelpLink;
