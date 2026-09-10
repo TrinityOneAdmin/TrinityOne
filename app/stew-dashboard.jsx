@@ -6012,7 +6012,7 @@ function ClearPersonModal({ members, rosters, groups, nameFor, already, onClose 
     setPicked(bad);
     try {
       window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in clearance',
-        message: bad.map(nameFor).join(', ') + (bad.length > 1 ? ' were' : ' was') + ' NOT cleared — nothing was saved for them. Only the console holding the church key can clear somebody, and it has to reach a relay.' } }));
+        message: bad.map(nameFor).join(', ') + (bad.length > 1 ? ' were' : ' was') + ' NOT cleared — nothing was saved for them. Clearing somebody needs the church key or the safeguarding tick, a relay it can reach, and this device’s clock to be roughly right — a clock more than a couple of minutes fast is refused.' } }));
     } catch (e) {}
   };
   return (

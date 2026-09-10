@@ -21102,6 +21102,48 @@ zoo`.split("\n");
     // the next event on it. That is the safe direction — the console under-reports, the relay still enforces
     // correctly — and it self-corrects on any later delivery or reconnect.
     //
+    // ── AND THE AUTHOR TEST IS ASKED OF A CLEARANCE ONLY — RED TEAM F3, 2026-09-10 ─────────────────────────
+    //
+    // `mayAuthor` used to gate EVERY version, so the moment a safeguarding lead was re-scoped their WITHDRAWAL
+    // was skipped by the reduce and the church's older clearance won. Measured against this exact function
+    // lifted out of vendor/steward.js: church clears Ada → 1 row; the lead withdraws → 0 rows; the lead is
+    // de-capped and the stream re-reduces on the very next event → **1 row again**. No restart, no reconnect,
+    // nothing to notice: the safeguarding screen simply said "cleared" about somebody a steward had withdrawn.
+    //
+    // THE SAME MODEL AS THE RELAY, and deliberately spelled the same way (gateway.mjs, checkinPermitted): a
+    // CLEARANCE widens access to a children's register, so it must keep answering for its author; a WITHDRAWAL
+    // narrows and can never admit anybody, so it counts for ever from the moment it was written. The relay's
+    // half of this fix asks checkinPermAuthorLive() of clearances only, for the same reason and in the same
+    // shape, and the cross-author comparison is a maximum with a withdrawal winning a tie.
+    //
+    // ⚠ AND A WITHDRAWAL IS NOT BELIEVED FROM *ANYBODY* — the wider test is `mayWithdraw`, not "no test".
+    //
+    // The first cut of this fix dropped the author test on tombstones altogether, reasoning that under-reporting
+    // is the safe direction. IT IS NOT, and there was already a test saying so:
+    // checkin-helper-mint-is-the-shipped-one.test.mjs, "A CO-TENANT'S TOMBSTONE DOES NOT REMOVE SOMEBODY FROM
+    // OUR CLEARED LIST" — *"another congregation took a name OFF our cleared list. Harmless-looking, and it is
+    // the same hole in the other direction: the screen stops showing a clearance the relay is still enforcing,
+    // so a steward clears somebody twice or believes their withdrawal worked when it did nothing."* This
+    // stream's second filter is `{'#church':[pub]}` — "anything tagged to us, whoever wrote it" — so a
+    // co-tenant congregation really can put that document where this console will read it. That decision stands
+    // and this fix is shaped around it rather than over it. It cost a full suite run to find, which is what a
+    // control run is for.
+    //
+    // SO THE TEST FOR A WITHDRAWAL IS THE CHURCH'S OWN SIGNED ROSTER, WITH THE CAPABILITY IGNORED. `_capsOf`
+    // returns an array for every steward the roster records capabilities for and null for everyone else, so
+    // `mayWithdraw` believes the church key and the people the church has scoped — whatever it scoped them TO.
+    // That is what F3 needs: the measured case is a safeguarding lead re-scoped to `['members']`, who is still
+    // on the roster and still has an entry, and whose withdrawal is now kept. A co-tenant church key has no
+    // entry and is still refused.
+    //
+    // ONE RESIDUE, AND IT IS NOT FIXED HERE: a lead REMOVED from the roster outright has no entry either, so
+    // this console puts her withdrawals back on the list. The console cannot tell her from a co-tenant — both
+    // are pubkeys the roster does not mention — and it is the relay that has the information to (note() keys a
+    // co-tenant's document to THEIR church, whoever it is tagged to). So THE RELAY CLOSES BOTH CASES and is
+    // asserted doing it, including the removal one, across a restart, in
+    // checkin-clearance-authorisation.test.mjs; this console can be wrong about the row while the relay refuses
+    // the person. The screen over-reporting here is a stale list, not an admission.
+    //
     // NOTHING IS CACHED IN localStorage, unlike _subAddr: this is a cleartext list of the adults a church has
     // cleared for children's work, and it is not worth leaving in a browser store to avoid an empty flash.
     subscribeCheckinPermissions(cb) {
@@ -21112,13 +21154,15 @@ zoo`.split("\n");
         const caps = _capsOf(by);
         return Array.isArray(caps) && caps.indexOf("safeguarding") >= 0;
       };
+      const mayWithdraw = (by) => by === cp || Array.isArray(_capsOf(by));
       const emit = () => {
         const out = [];
         for (const vers of byPerson.values()) {
           let win = null;
           for (const [by, rec] of vers) {
-            if (!mayAuthor(by)) continue;
-            if (!win || (rec.ts || 0) > (win.ts || 0)) win = rec;
+            if (!(rec._tomb ? mayWithdraw(by) : mayAuthor(by))) continue;
+            const ts = rec.ts || 0, wts = win ? win.ts || 0 : -1;
+            if (ts > wts || ts === wts && rec._tomb) win = rec;
           }
           if (win && !win._tomb) out.push(win);
         }

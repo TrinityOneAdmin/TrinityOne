@@ -1573,20 +1573,142 @@ const checkinHelperOf = (pub, cp, sessionId) => {
 // thing for a church to do and must be safe. `until === null` is the church choosing "until a steward ends
 // it"; legal here and refused for a session key, because this document carries no key material. Its safety is
 // revocation, which is immediate: the ingest drops the record the moment the tombstone lands.
+//
+// ── ONE MODEL, THREE FINDINGS — RED TEAM 2026-09-10, F3/F4/F5. Rewritten 2026-09-10. ─────────────────────
+//
+// THE QUESTION THIS FUNCTION NOW ASKS: *who* authorised this clearance, and *when* is that question asked?
+// Until today it was asked ONCE, at ingest, and the answer was thrown away — CHECKIN_PERMITS stored no author.
+// hydrateMaps() wipes and replays, so "asked at ingest" really meant "re-asked on every boot, against a
+// roster that has moved on". Three defects fell out of that, and they are the same defect:
+//
+//   F3 — a withdrawn clearance CAME BACK when the steward who withdrew it was de-capped. Measured across a
+//        restart on one database: cleared → withdrawn (0) → steward de-capped, still 0 → RESTART → cleared
+//        again (1), session key served, register served, writes accepted. A safeguarding lead being re-scoped
+//        quietly reinstated every clearance they had ever withdrawn.
+//   F4 — the mirror: a clearance GRANTED by a steward kept admitting after that steward was de-capped, with
+//        no restart, and then evaporated at the next one. The unsafe direction was live immediately and the
+//        availability failure landed later, as a volunteer refused at the desk while the console still listed
+//        them cleared. `grantorOk`'s own comment states the rule that broke.
+//   F5 — a +899s clearance made the church's own withdrawal accepted at the door and silently NOT enforced,
+//        while the steward's own withdrawal was refused by the store as `have-newer`. NEITHER AUTHOR COULD
+//        WITHDRAW, for up to fifteen minutes, with nothing retrying.
+//
+// THE MODEL, in one sentence: **a version is remembered WITH ITS AUTHOR; a CLEARANCE counts only while its
+// author still holds the authority to have written it, asked at USE time; a WITHDRAWAL counts for ever from
+// the moment a door admitted it, and is never re-litigated.**
+//
+// WHY THE ASYMMETRY IS THE WHOLE POINT, and not a convenience. Authorisation exists to decide who may WIDEN
+// access to a children's register. A clearance widens, so it must keep answering for itself: de-cap its
+// author and it stops granting, immediately, with no restart (F4). A withdrawal NARROWS — it can never admit
+// anybody — so keeping it in force needs no continuing authority at all. Requiring one is precisely how
+// removing a lead's capability turned into re-granting the clearances they had withdrawn (F3). The authority
+// test on a withdrawal happens at the door, once, when it is written — accept()'s CHECKINPERM_D branch — and
+// nothing asks it again afterwards.
+//
+// EVERY AUTHOR'S VERSION PARTICIPATES, which is the F5 half that lives here. Two authors means two
+// addressable slots, so the store cannot refuse a stale copy and cannot help: both live in the corpus for
+// ever and every device re-derives the answer. The old code kept ONE entry per person and compared
+// `held.ts` ACROSS authors, so one author's stamp silently overwrote the other's version and a withdrawal
+// could be lost with nothing left to fall back to. Now every author gets their own slot, newest-wins runs
+// WITHIN a slot (which is what keeps a withdrawal order-independent — see note()), and the answer across
+// slots is a fold over the whole set. A withdrawal WINS A TIE, because the fail-safe direction of a
+// children's register is "refused".
+//
+// AND THE STAMPS ARE MADE COMPARABLE AT THE DOOR rather than trusted here: checkinPermFutureOk() refuses a
+// CLEARANCE dated more than CHECKINPERM_MAX_FUTURE ahead of this relay's clock, and never refuses a
+// withdrawal. Without that, cross-author ordering is decided by whichever device has the fastest clock.
+//
+// ⚠ WHAT THIS DOES NOT DO, said plainly because the obvious reading of "total" would be wrong and a false
+// claim in the permanent record is worse than the bug it hides. Across authors the LATER STAMP STILL WINS —
+// a withdrawal does not beat a clearance stamped after it. It must not: the re-grant that lifts a withdrawal
+// is a clearance with a later stamp, and it is routinely written by the OTHER author (a lead re-clearing
+// somebody the church withdrew, or the reverse). checkin-permission-mint-widening.test.mjs asserts that by
+// name — "…AND A NEWER GRANT AFTER A WITHDRAWAL STILL CLEARS THEM — the withdrawal is not permanent" — and a
+// withdrawal that outranked every later clearance would make a person unclearable across authors for ever.
+//
+// SO A RESIDUE OF F5 SURVIVES, bounded by CHECKINPERM_MAX_FUTURE: within that window a clearance published
+// BEFORE a withdrawal, by a device that far fast, still carries the later stamp and still wins. The relay
+// cannot tell it from an honest re-grant, because the two produce the identical set of signed documents.
+// What changed is the size and the shape. 900s → 120s. It now needs two devices whose clocks disagree acting
+// inside that window. THE OTHER AUTHOR'S WITHDRAWAL ALWAYS LANDS AT THE DOOR — it is a different addressable
+// slot, so the store has no older copy of it to answer have-newer against, which is the half of "neither
+// author can withdraw" that is fully closed. The WITHDRAWING AUTHOR'S OWN is still refused by the store for
+// as long as their own future-stamped clearance outranks it, which is now at most 120s rather than 900s, and
+// that refusal is VISIBLE (the console gets OK:false and names the person). Any later act by either author
+// settles the whole thing. It is measured, not reasoned — see the fixture of "PER-AUTHOR
+// SLOTS — a de-capped steward's LATER clearance…" in checkin-clearance-authorisation.test.mjs, which is that
+// exact relay state, and the comment there says why closing it costs more than it buys.
+//
+// ORDER-INDEPENDENT BY CONSTRUCTION. The result is a fold over a set with no ordering — nothing about the
+// sequence in which the versions arrived, or the order hydrateMaps() replays them in, can change it.
 const checkinPermitted = (pub, cp) => {
   if (!pub || !cp) return false;
   const byP = CHECKIN_PERMITS.get(cp);
-  const pm = byP && byP.get(pub);
-  if (!pm) return false;
-  // A WITHDRAWAL IS NOW REMEMBERED RATHER THAN CONSUMED, so this map holds `{ revoked: true, ts }` entries
-  // as well as clearances. See the CHECKINPERM_D branch of note() for why: from 2026-09-10 this document has
-  // TWO possible authors, so the store holds one addressable copy per author and a delete no longer replaces
-  // the thing it deletes.
-  if (pm.revoked) return false;
+  const vers = byP && byP.get(pub);
+  if (!vers || !vers.size) return false;
+  let win = null;
+  for (const [by, pm] of vers) {
+    // A CLEARANCE ANSWERS FOR ITS AUTHOR, NOW (F4). A withdrawal does not, and must not (F3).
+    if (!pm.revoked && !checkinPermAuthorLive(by, cp)) continue;
+    const ts = pm.ts || 0, wts = win ? (win.ts || 0) : -1;
+    if (ts > wts || (ts === wts && pm.revoked)) win = pm;   // a withdrawal wins a tie — fail closed
+  }
+  if (!win || win.revoked) return false;
   const t = Math.floor(Date.now() / 1000);
-  if (t < pm.from) return false;
-  if (pm.until != null && t > pm.until) return false;
+  if (t < win.from) return false;
+  if (win.until != null && t > win.until) return false;
   return true;
+};
+// THE USE-TIME HALF OF checkinPermGrantor, and deliberately the SAME QUESTION spelled the same way: the
+// church itself, or a steward this church EXPLICITLY ticked for safeguarding. checkinPermGrantor asks it of an
+// EVENT at the doors; this asks it of a REMEMBERED AUTHOR every time a clearance is relied on, which is the
+// shape grantorOk() has had for delegated group-leader and care-team grants since M2 ("revoking a steward
+// immediately drops the grants they created — no re-derivation pass, the check just runs at use-time").
+//
+// CHURCH_PUBS IS ASKED AGAIN, not assumed. clearDerivedMaps() does not own CHURCH_PUBS — loadChurches() does —
+// so a de-provisioned church's clearances must stop granting here as well, on the same use-time axis.
+const checkinPermAuthorLive = (by, cp) =>
+  !!(by && cp && (by === cp ? CHURCH_PUBS.has(cp) : stewardCanExplicitly(by, cp, 'safeguarding')));
+// HOW FAR AHEAD OF THIS RELAY'S CLOCK A CLEARANCE MAY BE DATED — RED TEAM F5.
+//
+// scripts/event-store.mjs accepts a created_at up to +900s, which is right for a chat message and wrong for
+// the document that decides who may work a children's desk: created_at is this document's ORDERING KEY across
+// two authors, so +900s of it is fifteen minutes in which a fast device's clearance outranks every honest
+// withdrawal either author can sign. Measured: the church's withdrawal accepted and silently dropped, the
+// steward's own refused by the store as have-newer — neither author able to withdraw.
+//
+// 120s, not 0, and not 900 — AND IT IS THE WHOLE OF THIS PROTECTION, not half of it. Zero would refuse an
+// ordinary NTP-synced phone that happens to be two seconds fast; 900 is the hole. Two minutes covers real
+// drift between a handset and a Raspberry Pi. Do NOT read the per-author slots in checkinPermitted() as a
+// second protection that covers what this one lets through: across authors the later stamp still wins, so
+// this constant IS the bound on how long a stale clearance can outrank a withdrawal. The paragraph on
+// checkinPermitted() sets out why that cannot be closed without breaking the cross-author re-grant.
+//
+// IT REFUSES, RATHER THAN CLAMPING. A clamp would have to be computed at ingest and remembered, and the one
+// place that could remember it — the map — is wiped and replayed on every boot, so `min(created_at, now)`
+// re-evaluates to created_at after a restart and the poison comes back. A refusal is durable because the
+// document never reaches disk, and it is VISIBLE: the console gets OK:false, exactly as the CHECKINPERM_D
+// rule in accept() already prefers ("a clearance that silently did not save is a volunteer who turns up next
+// month and finds an empty room with nothing to look at").
+//
+// A WITHDRAWAL IS NEVER REFUSED FOR THIS. Refusing one is the unsafe direction, and a future-dated withdrawal
+// can only ever refuse somebody early. Same asymmetry as checkinPermitted().
+const CHECKINPERM_MAX_FUTURE = 120;
+// CALLERS — every one, per CLAUDE.md rule 2, and there are four, which is BOTH DOORS:
+//   • accept()                     — the websocket door, the CHECKINPERM_D branch
+//   • the /import loop             — beside carereqIdOk and checkinSessionOkOnIngest, which are there for
+//     exactly this reason. /import does store.put with NO accept() pass.
+//   • syncChurchFromPeer()         — the cursor pull, relay-to-relay
+//   • reconcileChurchWithPeer()    — the negentropy walk, relay-to-relay
+// It is deliberately NOT called from note(): note() runs AFTER store.put(), so a refusal there would leave
+// the poisoned stamp on disk to be replayed by the next hydrateMaps() with `now` moved past it. It also
+// consults NO MAP — only the clock — so it cannot refuse a restore for want of a hydrate, which is the trap
+// checkinSessionOkOnIngest's own comment records (an accept() pass on /import once deleted a church's whole
+// finance journal).
+const checkinPermFutureOk = (e, d) => {
+  if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKINPERM_D)) return true;
+  if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // a withdrawal is never refused
+  return (e.created_at || 0) <= Math.floor(Date.now() / 1000) + CHECKINPERM_MAX_FUTURE;
 };
 // ── WHICH SESSION DOES THE RECORD AT THIS ADDRESS ACTUALLY BELONG TO? ─────────────────────────────────────
 //
@@ -1746,9 +1868,17 @@ const stewardCanExplicitly = (pub, cp, cap) => {
   return !!(caps && caps.has(cap));
 };
 // WHO MAY CLEAR A PERSON FOR CHILDREN'S CHECK-IN — the church itself, or a steward it EXPLICITLY ticked for
-// safeguarding. Written once and used by both doors (accept() and note()), so the websocket and the ingest
-// cannot disagree about who authored a clearance; that pair disagreeing about a d-tag is the defect the
-// CHECKINPERM_D branch of note() already carries a correction for.
+// safeguarding.
+//
+// CALLERS — every one, per CLAUDE.md rule 2, and there is now exactly ONE: accept()'s CHECKINPERM_D branch.
+// It was TWO until 2026-09-10 (accept() and note()'s CHECKINPERM_D branch, "so the websocket and the ingest
+// cannot disagree about who authored a clearance"), and the second one was RED TEAM F3: note() runs on every
+// boot rehydrate, so asking it there meant re-asking it for ever, against a roster that has moved on, and a
+// withdrawing steward being re-scoped DROPPED HER TOMBSTONE and re-granted the clearance she had withdrawn.
+// The question is now asked where it has a true answer — at the door, when the document is written — and
+// re-asked of a CLEARANCE at use time by checkinPermAuthorLive(), which is the same question against the
+// remembered author. See the model note on checkinPermitted(), and the paragraph in note()'s CHECKINPERM_D
+// branch that states exactly what that does and does not close.
 //
 // NOTHING TRUSTS A ['church'] TAG ON ITS OWN. `namedChurch(e)` only returns a CONFIGURED church, and the
 // steward test then requires the author to be on THAT church's signed roster — so a co-tenant church's
@@ -2744,7 +2874,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (held && held.ts > ts) return;
     byS.set(sid, { from: g.from, until: g.until, lifetime: g.lifetime, pubs: new Set(g.pubs), ts });
   }
-  else if (d.startsWith(CHECKINPERM_D) && checkinPermGrantor(e)) {   // A PERSON IS CLEARED — the church, or a steward it ticked for safeguarding
+  else if (d.startsWith(CHECKINPERM_D)) {   // A PERSON IS CLEARED — the church, or a steward it ticked for safeguarding
     // THE SIBLING OF THE BRANCH ABOVE, and deliberately shaped the same way: keyed by the AUTHOR (never a
     // ['church'] tag), newest-wins by created_at alone, a tombstone that cannot be undone by an older replay,
     // and the SAME PARSER the write gate uses so a document cannot mean one thing at the door and another on
@@ -2765,18 +2895,100 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const who = checkinPermWho(d);
     if (!who) return;
     const ts = e.created_at || 0;
+    // ── WHOSE CLEARANCE IS THIS, AND WHO IS ALLOWED TO HAVE SAID SO — RED TEAM F3/F4, 2026-09-10 ──────────
+    //
+    // A CLEARANCE AND A WITHDRAWAL RESOLVE THIS DIFFERENTLY, and that asymmetry is the fix. The full model is
+    // written on checkinPermitted(); the half that lives here is: **a withdrawal already admitted by a door is
+    // a fact, and this ingest does not re-litigate the authority behind it.**
+    //
+    // WHAT THE OLD GUARD DID. The branch condition was `d.startsWith(CHECKINPERM_D) && checkinPermGrantor(e)`,
+    // so a steward's tombstone was DROPPED HERE the moment that steward stopped holding safeguarding — and
+    // hydrateMaps() wipes and replays, so the church's older clearance was the only version left and the
+    // withdrawn person was CLEARED AGAIN. Measured across a restart on one database: 0 → de-cap → 0 →
+    // restart → 1, session key served, register served, writes accepted. Taking a capability away RE-GRANTED
+    // every clearance that lead had ever withdrawn. That is the defect; this line is where it lived.
+    //
+    // WHAT IT WOULD COST TO KEEP ASKING is not symmetric with what it buys. Honouring a withdrawal whose
+    // author has since been re-scoped can only ever REFUSE somebody — an unstaffed desk, visible, fixed by
+    // re-clearing them. Dropping one puts a withdrawn volunteer back on the children's register, silently, on
+    // a schedule this relay sets for itself.
+    //
+    // ⚠ WHAT THIS DOES AND DOES NOT CLOSE, stated exactly rather than as "both doors agree", because the
+    // author test on a tombstone now lives at ONE door and it is worth being precise about which:
+    //
+    //   • THE WEBSOCKET IS CLOSED. accept()'s CHECKINPERM_D branch requires checkinPermGrantor(e), so an
+    //     ordinary member, a Finance-only steward, an unscoped steward and a co-tenant's steward are all
+    //     refused, and nothing they sign ever reaches this disk. That is the untrusted path and it is the
+    //     path that matters. Asserted by name in checkin-clearance-authorisation.test.mjs.
+    //   • /import AND PEER SYNC ARE NOT GATED ON THE AUTHOR, deliberately. A map-consulting gate at those
+    //     three sites would refuse a steward-authored document for want of a hydrate — STEWARDS_BY is EMPTY
+    //     while a fresh restore's loop runs, and it fills PART WAY THROUGH, so the same archive would keep or
+    //     lose a withdrawal depending on the order of lines in a file. For a clearance that is recoverable
+    //     (hydrateMaps() runs at the foot of /import and re-derives it); FOR A WITHDRAWAL IT IS NOT — the
+    //     document would never reach disk and the withdrawal would be gone. Losing a safeguarding withdrawal
+    //     on a restore is worse than anything the gate would buy, and it is the same trap
+    //     checkinSessionOkOnIngest's own comment records: an accept() pass was added to /import on 2026-08-20
+    //     and reverted the same day because it deleted a church's entire finance journal.
+    //   • SO THE REMAINING SURFACE IS: the operator's own archive, or a relay this church has authorised as a
+    //     peer, carrying a `checkinperm:` tombstone signed by somebody with no authority. Neither can be
+    //     reached by a member — a conformant relay's accept() refuses to store one in the first place, and
+    //     before 2026-09-10 accept() was narrower still (church key only), so no legacy corpus holds one.
+    //     What it could do is REFUSE a cleared volunteer. It cannot clear anybody. That is the direction this
+    //     whole model fails in on purpose.
+    //
+    // What IS gated at all four sites is checkinPermFutureOk (F5) — because that rule is about what may sit
+    // on disk rather than about who said it, it consults no map, and it never refuses a withdrawal.
+    //
     // KEYED BY THE CHURCH, NOT BY THE AUTHOR — changed 2026-09-10 with the mint widening, and it is the line
     // that makes the widening safe. It was `CHECKIN_PERMITS.get(e.pubkey)`, which was right while the church
     // key was the only possible author: a co-tenant's document then landed under THEIR key and could not
     // touch our map. Now a steward may author one, and a clearance filed under the steward's own pubkey
     // would be a clearance no lookup ever finds — checkinPermitted() asks CHECKIN_PERMITS.get(cp).
     //
-    // checkinPermGrantor resolves the church, and it is the SAME function accept() used to admit this event,
-    // so the two doors cannot disagree about whose clearance this is.
-    const owner = checkinPermGrantor(e);
+    // AND THE CHURCH IS RESOLVED STRUCTURALLY FOR BOTH KINDS — the author IS a configured church, or its
+    // ['church'] tag names one. That is a question no capability change can alter, which is the property F3
+    // needed; and note() no longer asks an authority question at all. It is a MAP-KEEPER: it records that
+    // this author said this at this timestamp, and checkinPermitted() decides whose word to take.
+    //
+    // WHY THE CLEARANCE MOVED TOO, and it was not for symmetry. Keeping checkinPermGrantor() here made the
+    // use-time test a ONE-WAY DOOR: de-cap a lead, restart, and the rehydrate DROPPED her clearances out of
+    // the map altogether, so re-ticking her for safeguarding brought none of them back — nothing replays a
+    // stored document except another hydrateMaps(). Measured: 0/0/false after a re-cap that should have
+    // restored everything. A church that re-scopes a steward by mistake would have had to restart its relay
+    // to undo it. Installing the version and judging its author at use time makes de-capping exactly as
+    // reversible as it looks on the console.
+    //
+    // IT WIDENS NOTHING, and here is the whole argument. Three authors could reach this line:
+    //   • THE CHURCH ITSELF — owner is its own pubkey, as before.
+    //   • A CO-TENANT CHURCH KEY tagging its document to us — CHURCH_PUBS.has(e.pubkey) resolves it to THEIR
+    //     pubkey, so it lands in their map and clears nobody here. That is the AUDIT-2026-07-24 CRITICAL-2
+    //     shape and it is asserted by name in checkin-permission-mint-widening.test.mjs.
+    //   • ANYBODY ELSE whose ['church'] tag names us — a member, a Finance-only steward, an unscoped steward,
+    //     a co-tenant's steward. They get a slot in our map and checkinPermAuthorLive() refuses to read a
+    //     CLEARANCE out of it, every time it is asked, so the enforcement is unchanged. And none of them can
+    //     reach this line at all over the websocket: accept()'s CHECKINPERM_D branch still requires
+    //     checkinPermGrantor(e), which is where an authority test belongs — at the moment a document is
+    //     written, when the question has a true answer.
+    // A withdrawal from such an author would count, because a withdrawal is never re-litigated; see the
+    // paragraph above on exactly what that does and does not close.
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e);
+    if (!owner) return;
     let byP = CHECKIN_PERMITS.get(owner);
     if (!byP) { byP = new Map(); CHECKIN_PERMITS.set(owner, byP); }
-    const held = byP.get(who);
+    // ONE SLOT PER AUTHOR, not one per person — RED TEAM F5, 2026-09-10.
+    //
+    // This map used to hold a single entry per person and compare `held.ts` ACROSS AUTHORS, which is a
+    // comparison the store cannot backstop: two authors are two addressable slots, so put() never sees the
+    // pair and never returns 'have-newer'. A withdrawal was therefore DROPPED whenever a differently-authored
+    // version carried a later stamp. Measured: a steward's +899s clearance accepted, the church's honest
+    // withdrawal accepted at the door and silently not enforced, the steward's own withdrawal refused by the
+    // store — NEITHER AUTHOR ABLE TO WITHDRAW, for up to fifteen minutes, with nothing retrying.
+    //
+    // Per-author slots make each comparison one the store agrees with, and checkinPermitted() folds the slots
+    // into an answer with no ordering in it at all.
+    let vers = byP.get(who);
+    if (!vers) { vers = new Map(); byP.set(who, vers); }
+    const held = vers.get(e.pubkey);
     // A WITHDRAWAL IS REMEMBERED, NOT CONSUMED — and this is the other half of the widening, for a reason
     // that is not obvious and is not cosmetic.
     //
@@ -2796,17 +3008,23 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // store, and as subscribeCheckinSessionKeys reporting a stand-down as a ROW rather than an absence —
     // both for this exact reason. checkinPermitted() reads `revoked` and refuses.
     //
-    // The cost is one small entry per person ever cleared and then withdrawn, per church, cleared on every
-    // hydrateMaps(). It is bounded by the size of a congregation.
-    if (removed) { if (!(held && held.ts > ts)) byP.set(who, { revoked: true, ts }); return; }
+    // ⚠ THE COMPARISON IS NOW WITHIN ONE AUTHOR'S OWN SLOT, and that is what PRESERVES this property rather
+    // than weakening it. `held` is this author's own held version, so a tombstone arriving before its grant
+    // still wins the slot exactly as it did before — the grant is the older copy of the same slot and is
+    // refused by the same `held.ts > ts`. What changed is only that a DIFFERENT author's stamp can no longer
+    // decide the slot, which is F5.
+    //
+    // The cost is one small entry per (person, author) ever cleared and then withdrawn, per church, cleared on
+    // every hydrateMaps(). It is bounded by the size of a congregation times its safeguarding leads.
+    if (removed) { if (!(held && held.ts > ts)) vers.set(e.pubkey, { revoked: true, ts }); return; }
     const pm = readCheckinPermission(e.content);
     // FAILS CLOSED, and refuses a d-tag that disagrees with the body: a permission filed under one member's
     // pubkey that names another inside would clear the wrong person, and the d-tag is what every lookup uses.
     // Recorded as a withdrawal rather than a deletion for the same order-independence reason: a newer
     // unreadable copy must not be undone by an older readable one arriving afterwards.
-    if (!pm || pm.person !== who) { if (!(held && held.ts > ts)) byP.set(who, { revoked: true, ts }); return; }
+    if (!pm || pm.person !== who) { if (!(held && held.ts > ts)) vers.set(e.pubkey, { revoked: true, ts }); return; }
     if (held && held.ts > ts) return;
-    byP.set(who, { from: pm.from, until: pm.until, lifetime: pm.lifetime, source: pm.source, ts });
+    vers.set(e.pubkey, { from: pm.from, until: pm.until, lifetime: pm.lifetime, source: pm.source, ts });
   }
   else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'any') ? cp : '');
@@ -3159,6 +3377,12 @@ function accept(e) {
       const who = checkinPermWho(d);
       if (!who) return false;
       if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // the church withdraws a clearance
+      // AND NOT DATED INTO THE FUTURE — RED TEAM F5, 2026-09-10. created_at is this document's ORDERING KEY
+      // across its two authors, and the store accepts +900s of it, so a fast device's clearance outranked
+      // every honest withdrawal either author could sign for up to fifteen minutes. Refused here, visibly,
+      // rather than clamped: a clamp cannot survive the rehydrate that recomputes it. See checkinPermFutureOk
+      // — it never refuses a WITHDRAWAL, because refusing one is the unsafe direction.
+      if (!checkinPermFutureOk(e, d)) return false;
       const pm = readCheckinPermission(e.content);
       // REFUSED AT THE DOOR, not merely ignored at ingest — a clearance that silently did not save is a
       // volunteer who turns up next month and finds an empty room with nothing to look at. readCheckinPermission
@@ -4828,6 +5052,9 @@ function serveStatic(req, res) {
           // hydrated map and never refuses the church's own copy — see checkinSessionOkOnIngest for why that
           // matters on a restore, and why an accept() pass here was reverted in 2026-08.
           if (!checkinSessionOkOnIngest(e, dtag(e))) { invalid++; continue; }
+          // …and never a clearance dated into the future (RED TEAM F5). Map-free, so it cannot refuse a
+          // restore for want of a hydrate, and it never refuses a WITHDRAWAL.
+          if (!checkinPermFutureOk(e, dtag(e))) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
             if (r === 'stored') imported++;
@@ -6029,6 +6256,7 @@ async function syncChurchFromPeer(cp, peerBase) {
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
       if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
       if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
+      if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
       const put = store.put(e, cp);
       if (put === 'stored') { imported++; note(e); }
       if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
@@ -6092,7 +6320,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }
