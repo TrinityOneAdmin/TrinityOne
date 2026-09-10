@@ -5851,7 +5851,17 @@ function CheckinSessionKeys() {
   const rowFor = (sv) => {
     const env = envOf(sv);
     if (env && env.standDown) return { tone: 'off', say: 'Stood down — no key, on purpose' };
-    if (env) return { tone: 'on', say: (env.pubs || []).length + ' helper' + ((env.pubs || []).length === 1 ? '' : 's') + ' hold this session’s key' };
+    // WRITTEN OUT PER CASE RATHER THAN ASSEMBLED FROM A PLURAL `s`. The version here until 2026-09-10
+    // pluralised the noun and left the verb alone — "1 helper hold this session's key", read off the Oppo —
+    // which is what happens when only one of the two words is made conditional. Three whole strings cannot
+    // disagree with themselves, and "nobody cleared yet" is the ordinary state of a Sunday rather than a
+    // fault, so it gets a sentence instead of "0 helpers hold".
+    if (env) {
+      const n = (env.pubs || []).length;
+      return { tone: 'on', say: n === 0 ? 'Key issued — nobody cleared for it yet'
+        : n === 1 ? '1 helper holds this session’s key'
+        : n + ' helpers hold this session’s key' };
+    }
     if (!settled) return { tone: 'off', say: 'Still reading this church’s keys…' };
     return { tone: 'off', say: 'No key yet' };
   };
@@ -5880,7 +5890,7 @@ function CheckinSessionKeys() {
       ) : (
         <DismissibleNote id="checkin-keys-intro" icon="shield" tone="sage" style={{ marginBottom: 12 }}>
           Each session gets its <b>own</b> key, wrapped to the people you have cleared and to your safeguarding
-          stewards. This console issues them for the next <b>{HORIZON_DAYS} days</b> whenever you open
+          stewards. This console issues them for the next <b>{HORIZON_DAYS} days</b> whenever you open{' '}
           <b>this page</b> and whenever a clearance changes — so if nobody opens it for a month, the Sundays in
           that month have no helper keys and the desk falls back to you. Nothing here blocks a check-in.
         </DismissibleNote>
@@ -5906,7 +5916,7 @@ function CheckinSessionKeys() {
       {last && last.settled === false ? (
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Waiting for this church’s existing keys to arrive before issuing — issuing now could replace a key a helper already has.</div>
       ) : last && Array.isArray(last.rotated) && last.rotated.length ? (
-        <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 10, lineHeight: 1.45 }}>{last.rotated.length} session(s) were given a <b>new</b> key because this console could not open the one already issued for them. The register itself is unaffected.</div>
+        <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 10, lineHeight: 1.45 }}>{last.rotated.length === 1 ? 'One session was given a new key' : last.rotated.length + ' sessions were given a new key'} because this console could not open the one already issued{last.rotated.length === 1 ? '' : ' for them'}. The register itself is unaffected.</div>
       ) : last && Array.isArray(last.issued) && last.issued.length ? (
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Issued keys for {last.issued.length} session(s) · {clearedNow.length} person(s) cleared right now.</div>
       ) : null}

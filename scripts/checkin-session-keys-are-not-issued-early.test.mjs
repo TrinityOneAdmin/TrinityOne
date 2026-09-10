@@ -537,7 +537,56 @@ function shown(n, pred, out = []) {
   return out;
 }
 const btn = (tree, label) => shown(tree, n => n.type === 'button' && texts(n).join(' ').includes(label));
+// `said()` JOINS WITH A SPACE, and that is right for "does this screen mention X anywhere" — the phrase may
+// legitimately span a <b> or a sibling node. It is WRONG for any claim about exact wording, and the device
+// run of 2026-09-10 is why this note exists: the panel shipped reading "whenever you openthis page" on the
+// phone, because JSX strips whitespace containing a newline between a text node and an element — and the
+// assertion pinning that sentence PASSED, because said() had put the missing space back in. A test that
+// certifies copy it cannot see is worse than no test (CLAUDE.md rule 4).
 const said = (tree) => texts(tree).join(' ').replace(/\s+/g, ' ');
+// ── SO: THE TEXT AS A BROWSER WOULD LAY IT OUT ────────────────────────────────────────────────────────────
+// Children only, in order. INLINE pieces are joined with NOTHING — which is what the DOM does with adjacent
+// inline nodes, the visible spacing coming from whitespace that is actually inside the text nodes — and a
+// BLOCK element is fenced with newlines, because a <div> starts a new line on screen whatever its neighbour
+// ends with. One rule, and it is what makes both instruments below faithful at once.
+//
+// Deliberately NOT `texts()`: that also collects string PROPS (title, aria-label), and gluing a tooltip onto
+// the copy beside it would invent adjacencies no reader ever sees.
+//
+// The inline list is the tags this panel actually uses for emphasis. A COMPONENT (a function type — Panel,
+// DismissibleNote, Icon) counts as a block: it is a box of its own, and treating it as inline is how the
+// first version of this reported four junctions that are perfectly fine on screen.
+const INLINE = new Set(['b', 'i', 'em', 'strong', 'span', 'code', 'a', 'small', 'Fragment']);
+const isInline = (n) => n == null || typeof n !== 'object' || Array.isArray(n)
+  || (typeof n.type === 'string' && INLINE.has(n.type)) || n.type === 'Fragment';
+function flow(n) {
+  if (n == null || n === false) return '';
+  if (typeof n === 'string' || typeof n === 'number') return String(n);
+  if (Array.isArray(n)) return n.map(flow).join('');
+  const inner = (n.kids || []).map(flow).join('');
+  return isInline(n) ? inner : '\n' + inner + '\n';
+}
+const reads = (tree) => flow(tree).replace(/\s+/g, ' ').trim();
+// ── AND THE GENERAL GUARD FOR THE WHOLE BUG CLASS ─────────────────────────────────────────────────────────
+// Fixing the one sentence the device caught would leave every other line in this panel one reflow away from
+// the same defect, and none of them carries an exact-wording assertion. So this checks the JUNCTIONS rather
+// than the sentences: every place one inline piece of copy ends on a word character and the next begins on
+// one, i.e. where the two run together with no separator a reader can see.
+//
+// It is quiet on correct markup for two reasons, both load-bearing: `{HORIZON_DAYS}` followed by ' days…' is
+// fine because the next node starts with a space, and a <div> beside a <button> is fine because flow() fences
+// blocks with a newline, so neither side ends or starts on a word character.
+function glued(n, out = []) {
+  if (!n || typeof n !== 'object') return out;
+  if (Array.isArray(n)) { n.forEach(c => glued(c, out)); return out; }
+  const kids = (n.kids || []).filter(k => k != null && k !== false && k !== '');
+  for (let i = 0; i < kids.length - 1; i++) {
+    const a = flow(kids[i]), b = flow(kids[i + 1]);
+    if (a && b && /\w$/.test(a) && /^\w/.test(b)) out.push('…' + a.slice(-28) + '][' + b.slice(0, 28) + '…');
+  }
+  kids.forEach(k => glued(k, out));
+  return out;
+}
 
 async function screen({ settled = true, held = true, name = 'St Mary\'s', keys = [], perms = CLEARED,
                         services = [svc('svc-a', SERVICE), svc('svc-b', SERVICE_2)], stewards = [SGLEAD],
@@ -589,6 +638,8 @@ async function screen({ settled = true, held = true, name = 'St Mary\'s', keys =
     calls, banners,
     tree: () => tree,
     said: () => said(tree),
+    reads: () => reads(tree),        // as a browser concatenates it — see flow()
+    glued: () => glued(tree),        // every place two pieces of copy run together
     redraw() { tree = draw(CheckinSessionKeys, {}); return tree; },
     press(label) {
       const bs = btn(tree, label);
@@ -620,8 +671,13 @@ test('POINT OF USE: opening the Check-in page ISSUES — this is the wiring the 
   // tab, so "whenever this console is opened" would be a false claim: a church whose owner opens the console
   // weekly and never opens Check-in gets no keys. CLAUDE.md rule 4, applied to copy — the same failure the
   // deleted keeper warning was.
-  assert.match(s.said(), /whenever you open this page/,
-    'the panel does not say WHEN it issues, or says something wider than it does: ' + s.said());
+  // ⚠ reads(), NOT said(). This exact assertion existed against said() and PASSED while the phone rendered
+  // "whenever you openthis page" — said() joins text nodes with a space and put the missing one back. Found
+  // on the Oppo, 2026-09-10, not by any test. reads() concatenates the way a browser does, so the claim and
+  // the thing a steward sees are now the same string.
+  assert.match(s.reads(), /whenever you open this page/,
+    'the panel does not say WHEN it issues, says something wider than it does, or says it in words that do ' +
+    'not render — the JSX newline trap. As rendered: ' + s.reads());
 });
 
 test('POINT OF USE: IT PASSES THE ENVELOPES IT HOLDS AS `existing` — the other half of the race', async () => {
@@ -693,6 +749,101 @@ test('POINT OF USE: THE IDENTITY-CHANGE PATH — the screen asks the ENGINE, not
     'every new church is refused its first session keys for ever and the desk is the only fallback');
   assert.deepEqual(firstEver.calls[0].existing, [],
     're-anchor: the first-issue call did not pass the empty list it actually holds');
+});
+
+// ── 2b. THE COPY AS A PHONE ACTUALLY RENDERS IT ───────────────────────────────────────────────────────────
+// Both defects below were found on the Oppo on 2026-09-10 and by nothing in this suite. They are the same
+// lesson twice: every assertion about this panel's wording ran through said(), which normalises exactly the
+// two things that were wrong.
+
+test('COPY: no two pieces of this panel run together — the JSX newline trap, closed for the whole panel', async () => {
+  // WHAT HAPPENED. `… for the next <b>{HORIZON_DAYS} days</b> whenever you open` / newline / `<b>this page</b>`
+  // renders as "whenever you openthis page": JSX strips whitespace that contains a newline between a text
+  // node and an element. Read off the device.
+  //
+  // WHY A SPOT FIX WOULD NOT HAVE BEEN ENOUGH. Every other line in this panel is one reflow away from the
+  // same defect and none of them carries an exact-wording assertion, so this checks the JUNCTIONS rather
+  // than the sentences: every place one inline piece of copy ends on a word character and the next begins on
+  // one. See glued() for why that is quiet on correct copy.
+  //
+  // Driven in all four states the panel has, because the notes are mutually exclusive branches and three of
+  // them are invisible to a test that only renders the happy path.
+  const states = [
+    ['owner, settled, sessions in range', {}],
+    ['delegated console', { held: false }],
+    ['church with no published name', { name: '' }],
+    ['no sessions in the horizon', { services: [] }],
+  ];
+  for (const [what, opts] of states) {
+    const s = await screen(opts);
+    await Promise.resolve();
+    assert.deepEqual(s.glued(), [],
+      'two pieces of copy run together with no space on the ' + what + ' state, so the phone shows them as ' +
+      'one word. JSX drops whitespace containing a newline between text and an element — put an explicit ' +
+      "{' '} at the end of the line, or keep the space inside the text node: " + JSON.stringify(s.glued()));
+  }
+  // AND THE CONTROL, so this cannot pass by glued() being blind. The junction it is built to find, built here
+  // by hand out of the same node shape the compiled JSX produces.
+  const bad = { type: 'div', props: {}, kids: ['whenever you open', { type: 'b', props: {}, kids: ['this page'] }] };
+  assert.equal(glued(bad).length, 1, 're-anchor: glued() cannot see the very junction it exists to find');
+  const good = { type: 'div', props: {}, kids: ['whenever you open ', { type: 'b', props: {}, kids: ['this page'] }] };
+  assert.deepEqual(glued(good), [], 're-anchor: glued() reports correct copy as broken, so it will be ignored');
+  // AND A BLOCK NEIGHBOUR IS NOT A JUNCTION. The first version of this check treated every element as inline
+  // and reported four of these — a <button> beside a note, a service's name div beside its status div — all
+  // of which are separate boxes on screen. A check that cries wolf costs exactly what a missing one does.
+  const blocks = { type: 'div', props: {}, kids: [{ type: 'div', props: {}, kids: ['Re-issue'] },
+                                                  { type: 'div', props: {}, kids: ['Each session gets'] }] };
+  assert.deepEqual(glued(blocks), [],
+    're-anchor: glued() counts two block elements as running together, so it will report correct layout as ' +
+    'broken and be switched off');
+});
+
+test('COPY: one helper HOLDS the key, two helpers HOLD it', async () => {
+  // Read off the device with exactly one cleared helper: "1 helper hold this session's key". The noun was
+  // pluralised and the verb was not. said() could not see it either — it is a whole word, not spacing — but
+  // nothing asserted this string at all, which is the more honest description of why it shipped.
+  const env = (n) => [{ session: 'svc-a', source: GRANT_SOURCE, lifetime: 'session', from: AT, until: AT + 7200,
+    pubs: Array.from({ length: n }, (_, i) => String(i).repeat(64).slice(0, 64)),
+    keys: { [CHURCH]: 'x' }, ts: AT - 3600 }];
+
+  const one = await screen({ keys: env(1) });
+  await Promise.resolve();
+  assert.match(one.reads(), /1 helper holds this session/,
+    'with ONE cleared helper the panel does not agree with itself. It read "1 helper hold this session\'s ' +
+    'key" on the phone: ' + one.reads());
+  assert.doesNotMatch(one.reads(), /1 helpers/, 'and it pluralised the noun at one: ' + one.reads());
+
+  const two = await screen({ keys: env(2) });
+  await Promise.resolve();
+  assert.match(two.reads(), /2 helpers hold this session/,
+    'with TWO cleared helpers the panel does not agree with itself either — fixing the singular must not ' +
+    'break the plural, which is how this class of defect usually gets half-fixed: ' + two.reads());
+
+  // AND NONE AT ALL is its own sentence rather than "0 helpers hold", which reads as a fault when it is the
+  // ordinary state of a session nobody has been cleared for yet.
+  const none = await screen({ keys: env(0) });
+  await Promise.resolve();
+  assert.doesNotMatch(none.reads(), /0 helpers? holds?/,
+    'a session with nobody cleared reports "0 helpers hold this key", which reads as something to fix. It ' +
+    'is the ordinary state of a Sunday nobody has been cleared for: ' + none.reads());
+});
+
+test('COPY: a single rotated session is not reported in the plural', async () => {
+  // Same class as the helper count, same component, caught by reading the strings beside the two the device
+  // found rather than by waiting for a second device run. It said "1 session(s) were given a new key".
+  const one = await screen({ result: { issued: [{ session: 'svc-a' }], skipped: [], failed: [],
+    rotated: ['svc-a'], settled: true } });
+  await Promise.resolve();
+  await Promise.resolve();
+  const words = (one.redraw(), one.reads());
+  assert.match(words, /One session was given a new key/i,
+    'a single replaced key is reported in the plural: ' + words);
+  const two = await screen({ result: { issued: [{ session: 'svc-a' }, { session: 'svc-b' }], skipped: [],
+    failed: [], rotated: ['svc-a', 'svc-b'], settled: true } });
+  await Promise.resolve();
+  await Promise.resolve();
+  const w2 = (two.redraw(), two.reads());
+  assert.match(w2, /2 sessions were given a new key/i, 'and the plural broke while the singular was fixed: ' + w2);
 });
 
 test('POINT OF USE: THE MANUAL RE-ISSUE CONTROL EXISTS AND WORKS', async () => {
