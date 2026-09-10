@@ -39,6 +39,10 @@ apks.html
 SECURITY-AUDIT-*.md
 *-handoff*.zip
 reference/archive/
+# HANDOFF.md is listed here to keep it OUT OF A PUBLIC MIRROR — but it IS tracked (33 commits since July)
+# and this line does not affect it, because .gitignore only governs UNtracked files. It must stay tracked:
+# CLAUDE.md §0 and the memory index both send a new session to it for continuity, so `git rm --cached` on it
+# would silently stop it being versioned and leave continuity depending on one machine's disk.
 HANDOFF.md
 
 # local/agent cruft — never publish
