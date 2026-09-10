@@ -1,3 +1,205 @@
+# Handoff — TrinityOne, 2026-09-10
+
+Read this before touching anything. It is written by the previous session and is deliberately weighted
+towards **what that session got wrong**, because the single most useful thing you can do is distrust its
+conclusions and re-verify them. Everything below §"EARLIER HANDOFFS" is history; current state is here.
+
+---
+
+## 0. THE OWNER'S STANDING INSTRUCTION FOR YOU: READ THE CODE. DO NOT ASSUME.
+
+He asked for this handoff with the words *"have the next session thoroughly read every line of code."* Take
+the spirit: **before you claim anything about this codebase, open the file and read it, and where you can,
+run it.** Every factual claim below names a file so you can check it. This session was corrected by the owner
+or by its own agents **eight times**, and in almost every case the cause was reasoning from the one code path
+in view. See §2.
+
+"Every line" is not literally achievable — the tree is large. What IS achievable, and what he means: never
+assert a mechanism you have not looked at, and never repeat a `file:line` from a doc without re-checking it
+(see [[cite-by-symbol-not-by-line]] — one commit adding 101 lines invalidated three citations, one of which
+now points inside a *different function*).
+
+---
+
+## 1. ⚠ THE DISK IS FULL, AND IT CORRUPTS MEASUREMENTS SILENTLY
+
+**`/` had 250 MB free at handoff.** Check `df -h /` **before believing any measurement you take.**
+
+Actual files total **79 GB**; `df` reports **148 GB used**. It is ext4, so there are no snapshots: that
+**~69 GB gap is deleted files still held open by running processes**, which nothing reclaims until the holder
+closes them. Diagnose and fix without a reboot:
+
+    sudo lsof +L1 | sort -k7 -nr | head -20
+    sudo truncate -s 0 /proc/<pid>/fd/<n>      # a log: frees the blocks, process keeps running
+
+A reboot reclaims all of it unconditionally. Note this session contributed: it started and killed relay
+processes repeatedly, each with a `nohup` log, then deleted some of those logs while a relay still held one
+open.
+
+**What a full disk has already done here, all three silently:**
+- killed a rebuild inside SQLite `VACUUM`, printing nothing — so the sabotage that followed tested the
+  **previous** artefact and reported 11 pass / 0 fail for a guard that had just been disabled;
+- given a sim `ERR_INSUFFICIENT_RESOURCES` and a blank app, which reads exactly like a product bug;
+- broken a harness's own temp directory mid-run.
+
+See [[a-silent-build-failure-makes-sabotage-pass]].
+
+---
+
+## 2. WHAT THIS SESSION GOT WRONG — distrust these areas first
+
+1. **I told the owner no member-app surface was planned for parents.** Wrong: `SCOPE-CHECKIN-SURFACES-2026-09-09.md`
+   slice 3 says *"a parent checking their own child in"* in terms. He caught it. Piece 2 (the guardian's
+   sealed copy) therefore belongs **with** slice 3, not deferred to the pilot.
+2. **I wrote "no piece adds a writer" into a scope doc, and a red-team pass falsified it.** The relay had
+   admitted in-window helpers as *writers* since 2026-09-09. Piece 1 added a **reader** for what that writer
+   produces — which turned a parked blob into a rendered row, and made a **pickup-code forgery** reachable.
+   Fixed in `cac7751`. The lesson: "no new writer" is not the same as "no new consequence".
+3. **I instructed a fix that would have broken every new church** — treating an empty existing-key list as
+   "not ready". A church's first issue legitimately has none. The builder refused it and was right.
+4. **I told an agent to prune `.claude/worktrees` to free the root disk.** They are on `/mnt/storage`
+   (1.9 TB, half empty). It would have freed space on the disk that was not full.
+5. **I quoted 5.75 MB as the hashed module size.** The cached bytes are the **1.99 MB** zip; 5.75 MB is the
+   unzipped database. The builder corrected me by measuring.
+6. **I left three scope docs untracked**; a `git add -A` used to clear a merge conflict swept them into a
+   throwaway branch, and the next checkout deleted them. `git status` was clean and 1,200 lines were gone.
+   Recovered and now tracked. See [[git-add-all-swallows-untracked-notes]].
+7. **My own overlap measurement contained an artefact of my own detector** — one of the 40 "collisions" I
+   briefed was a heading's rectangle behind a header that actually clips. The agent caught it.
+8. **I suggested the console prefer church-authored records** as defence in depth. It would have broken the
+   feature: a helper's *legitimate* update (writing "collected by") would be silently ignored.
+
+---
+
+## 3. WHERE THE CODE IS — measure these shas, do not quote them
+
+    main                            02a5d99     22 commits unpushed, NOTHING DEPLOYED
+    feat/bible-study-resources      c14f744     MERGED into main
+    feat/checkin-sealing            95afe22     pieces 3 + 1 (the double lock)
+    fix/relay-auth-gates            f7e2164     the pickup-code forgery + the /sync leak
+    fix/clearance-authorisation     2fe8a74     (on cac7751) F3/F4/F5
+    fix/checkin-page-layout         ee3456b     40 text collisions -> 0, copy 1276 -> 603 chars
+    fix/checkin-future-clearance    cab1d2b     "clear for next Sunday" + withdrawal
+    feat/worker-register-view       b8429b8     (on 2fe8a74) Serving -> Kids, read-only
+
+**The owner has NOT authorised a push.** He is reviewing personally.
+
+**Merge order and the one known conflict.** All five check-in branches merge cleanly onto `main` except one
+**test-file** conflict: `fix/checkin-page-layout` and `fix/checkin-future-clearance` each independently
+extracted `flow`/`reads`/`glued` into `scripts/render-jsx-screen.mjs`. Product files merge clean. Take the
+superset and keep both files' tests. Verified by dry run.
+
+**Device-verified on the Oppo (CPH2477)**, all on merged combinations, relay restarted to match each time:
+the double lock writing both copies; the church's copy decrypting; the layout at 0 collisions; the
+future-dated clearance labelling correctly and issuing a key; withdrawal taking effect in place **and
+surviving a relay restart** (the axis F3 lived on); and the Bible notes installing in 2,288 ms with a 2.36 ms
+chapter turn. **`feat/worker-register-view` has NOT been on a device** — that is the open gate.
+
+---
+
+## 4. THE OWNER — how he works
+
+- **Answer short and plain.** He asked twice for shorter answers, and *"in future continue answering in this
+  style"*. No tables or headings unless he asks. Lead with the answer.
+- **Tell him when you are wrong, immediately and without ceremony.** He responds well to it and badly to
+  hedging. He corrected this session's slice-3 error himself.
+- **He reviews on the device himself.** Give him something to look at and tell him where. He found the
+  Check-in overlap by opening the APK.
+- **Branch discipline is tightening.** *"let's be stricter on branches in the future, post pilot it will be
+  much more critical."* A "yes, merge" answers the question asked and does not repeal a standing branch rule.
+- **He will not push until audited and tested.** Do not push. Do not merge to `main` without him saying so
+  for that specific thing.
+- **UI copy: short label + tooltip + help doc.** *"we need to cut down on the instructional copy in the ui
+  itself."* But note: a `title` tooltip is invisible on touch and to a screen reader — use a visible help link.
+- **Ethos:** trust between people, not in the software; defaults lean open; persecuted-church and
+  developing-world first; safeguarding is mechanism, not policy — ship the gates, let churches set policy.
+- **He is fine with a feature being forfeited** where the environment cannot support it, rather than bending
+  the design.
+
+---
+
+## 5. STATUS BY AREA
+
+**Children's check-in.** The double lock exists and works: a record carries the church's copy in `content`
+plus a helper's copy in a `ck` tag, marker `enc: 2`. Five fix branches, all audited or red-teamed, all
+device-verified except the worker view. A red-team pass produced nine findings; F1 (the forgery) and F2 (the
+`/sync` leak) are fixed, F3/F4/F5 are fixed, **F6-F9 are open** and F7 contradicts its own probe (see §7).
+
+**Bible study resources.** Merged. English Aquifer Open Study Notes, 16,932 notes, 1.99 MB, install 2.3 s,
+chapter turn 2.4 ms, licence rendering. A module republished at the same URL now reaches a phone that has the
+old one — that was broken and is fixed.
+
+**Two sim rounds and a red-team pass** produced more real defects than three code audits did. Their findings
+are in the two scope docs, worst-first, with how each was established.
+
+---
+
+## 6. NEXT STEPS, in the owner's agreed order
+
+1. **Device-verify `feat/worker-register-view`.** Needs one phone plus a desktop console. Blocked only by the
+   disk.
+2. **Widen `approved:` so a safeguarding steward may clear, and let a delegate mint session keys.** Both
+   decided. `approved:` is **owner-only** on the relay today (`e.pubkey === cp`), so this widens a relay write
+   gate — its own scope and audit. It must come **after** the authorisation fix already in `2fe8a74`.
+3. **Merge the two clearances into one concept** — `SCOPE-ONE-CLEARANCE-2026-09-10.md`. No migration needed:
+   *"no live churches exists yet, no drama."* Depends on 2 for its authority model.
+4. **The parent check-in and the QR** — the rest of slice 3, now unblocked by the two design decisions in
+   §"DECIDED" of the surfaces doc. **Piece 2 (the guardian's sealed copy) belongs here.** Needs **two phones**
+   to verify; only one is attached.
+5. **The port collisions.** Five real, and one test currently *passes while testing nothing* (a "deliberately
+   never bound" port that another file binds). Until this is done every suite number is noisy.
+6. **The rest of the sim findings** — the wizard showing an empty church until reload; date validation saying
+   "too far ahead" about past dates; the toggles with no readable state; the "Others can see you are cleared"
+   card that adults cannot see.
+7. **Make commentaries and dictionaries uninstallable** — `removeModule` only works for Bibles.
+8. **Bible slice 2** — the other resources, all ten languages. ⚠ Fix the module-update path first if it is not
+   already merged, or every language is stranded on its first version.
+
+---
+
+## 7. OPEN, AND NOT DECIDED
+
+- **F5's 120-second residue.** Down from 900 s. Inside it a stale clearance can outrank a withdrawal. Cannot
+  be closed by making withdrawals always win — that blocks a cross-author re-grant another test requires.
+- **F7 contradicts its own evidence.** It claims the relay accepts a helper's hand-crafted tombstone; the red
+  team's own `zz-redteam-matrix` row measured it **refused**, before and after the fix. Resolve before
+  building on it.
+- **A residual import ordering hole.** If a forgery arrives *before* the genuine record in one `/import` pass,
+  the forgery lands. Not closed deliberately: rejecting the church's own copy is what destroyed a finance
+  journal on a legitimate restore in August.
+- **F6, F8, F9** — the `ck` copy is a lock `rotateCapKey` cannot reach; the row-identity fork is reachable
+  through the new reader; `/import`'s comment claims something `_exportAuth` makes false.
+- **A privacy inference written down nowhere:** a Finance-only steward and a care admin cannot open a record
+  but can derive, from cleartext tags alone, *"this family had a child at church on this date"* for the whole
+  history.
+- Console help articles appear in the **member** app's help index (`HelpIndex` has no filter).
+
+**The red team's eight probe files are at**
+`/tmp/claude-1000/-mnt-storage-projects-TrinityOne/2202c9f9-0fcc-4a98-b431-ae2ca4f08801/scratchpad/redteam-probes/`
+— they are the reproduction for F1-F9 and will die with that scratchpad. **Copy them somewhere durable.**
+
+---
+
+## 8. TRAPS THIS SESSION HIT — the short list
+
+- **A sabotage matrix needs an unsabotaged baseline row.** A broken `before()` fails every row and reads
+  exactly like every sabotage biting. Cost two discarded matrices in one day.
+- **A killed harness skips `finally`** and leaves the sabotage on disk, so every later run measures it.
+  Install a `SIGTERM`/`SIGINT` restore and checksum the tree either side.
+- **`said()` joins text nodes with spaces**, so it cannot see a JSX whitespace bug. A green test certified
+  copy that rendered as "openthis page". Use `reads()`/`glued()`.
+- **`pkill -f` matches your own shell** (exit 144) — and also matches when your own command line contains the
+  target string for another reason.
+- **No APK from a worktree** (`android/` is gitignored). Build in the main tree on a throwaway branch.
+- **The relay must be newer than `scripts/gateway.mjs`.** A stale relay enforces old gates against new
+  bundles and has produced false findings three times.
+- **`vendor/steward.js` is rebuilt ONLY by `bash scripts/build-steward.sh`.** `npm run build:vendor` exits 0
+  and rebuilds nothing of ours.
+
+---
+
+# EARLIER HANDOFFS
+
 # Handoff — TrinityOne, 2026-08-25
 
 Read this before touching anything. It is written by the previous session and is deliberately weighted
