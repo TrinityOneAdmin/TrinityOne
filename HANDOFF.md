@@ -25,28 +25,29 @@ now points inside a *different function*).
 
 **`/` had 250 MB free at handoff.** Check `df -h /` **before believing any measurement you take.**
 
-⚠ **CORRECTED, and the earlier diagnosis in this document was WRONG.** This session first concluded the gap
-was deleted files held open by running processes, and told the owner a reboot would reclaim it. **Both were
-wrong.** `sudo lsof +L1` showed deleted-open files totalling roughly **34 MB** on the root device — a 25 MB
-journal and an 8.6 MB Chromium temp file. Everything else in that listing was `memfd:` and `/dev/shm`, i.e.
-**RAM, not disk** (devices `0,1` and `0,29`, not `259,4`).
+⚠ **FOUND, after two wrong diagnoses of mine. Read this as a cautionary tale about measurement.**
 
-**The real cause is that `du` run as the ordinary user silently skips directories it cannot read**, so its
-79 GB was a floor and was treated as a total. `df` says **148 GB used**; the user-visible tree accounts for
-about 75 GB (`/home` 27 G, `/usr` 17 G, `/var` 15 G, `/opt` 15 G). **Roughly 70 GB is in paths that need root
-to see.**
+**The cause: `/tmp/snap-private-tmp/snap.chromium/tmp` held 61 GB — and it is OURS**, from the headless
+Chromium that browser tests and sim rounds launch. Firefox and Brave, the owner's real browsing, held 3.7 MB
+between them. `sudo du -x -h -d1 /tmp` shows it; **`du` as the ordinary user reports that same path as
+~370 MB**, because the directory is root-owned and unreadable, so its total is a **floor, not a total**.
 
-**The correct diagnosis, still to be run:**
+**A reboot fixes it** — Ubuntu wipes `/tmp` at boot and the snaps release their private dirs. It cannot be
+`rm`-ed while they hold it.
 
-    sudo du -x -h -d1 / | sort -rh | head -12
-    sudo du -x -h -d1 /var | sort -rh | head -8      # then drill into the biggest
+**My two wrong answers, kept deliberately because the pattern matters more than the outcome:**
+1. I reconciled non-root `du` against `df`, found a 69 GB gap, and blamed **deleted files held open by
+   running processes** — then told the owner a reboot was needed for that reason. `sudo lsof +L1` showed
+   deleted-open files totalling about **34 MB** on the root device; the rest of that listing was `memfd:` and
+   `/dev/shm`, i.e. **RAM, not disk**.
+2. Correcting that, I said a reboot **would not** help because the space was in real files. Also wrong — the
+   real files were in the one directory a reboot wipes.
 
-`/var/lib` is the usual suspect on this box — snap revisions, container images, or a database. **A reboot
-will NOT help if the space is in real files**, which is now the likely case.
+Both errors have the same shape, and it is the shape this document warns about in §2: **a number I was
+allowed to see, treated as the whole picture.** `du` without `sudo` is a floor. Say so, or run it as root.
 
-**The lesson, which is the reusable part:** `du` as a non-root user is a floor, not a total. Reconciling it
-against `df` and blaming the difference on deleted-open files was a guess dressed as a measurement — and it
-is exactly the "reasoning from the one path in view" failure this document warns about in §2.
+**Reap browsers after a sim round.** One session left 110 Chromium processes alive holding 11.5 GB of RAM
+before they were reaped, and their temp is what filled the disk.
 
 **What a full disk has already done here, all three silently:**
 - killed a rebuild inside SQLite `VACUUM`, printing nothing — so the sabotage that followed tested the
