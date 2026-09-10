@@ -423,14 +423,60 @@ let _checkinMigrated = '';   // which church we have already moved off the legac
 //   one. Nothing on any screen says so, and the register still paints, because the church's own ring copy is
 //   untouched: only the helper's copy dies.
 //
-// AUTHENTICATED, not merely EOSE, and that half is not belt-and-braces. nostr-tools counts a relay that fails
-// to CONNECT as an end-of-stored-events, and an UNAUTHENTICATED read of this church's documents is answered
-// with nothing at all (the relay's NIP-42 gate) — so a plain EOSE can mean "this church has no envelopes"
-// when it has a year of them. That answer is exactly the one that rotates every key.
+// AUTHENTICATED, not merely EOSE, and that half is not belt-and-braces — BUT THE REASON WRITTEN HERE UNTIL
+// 2026-09-10 WAS WRONG AND IS CORRECTED RATHER THAN SOFTENED (rule 4). It said an unauthenticated read of
+// this church's documents "is answered with nothing at all (the relay's NIP-42 gate)". Measured on a raw
+// socket against the real relay: `unauthed -> events: 0  eose: false  challenged: true  closed: null`. THE
+// RELAY SENDS NO EOSE AT ALL. It issues an AUTH challenge and waits.
+//
+// So where does the premature end-of-stored-events come from? From nostr-tools itself, two ways:
+//
+//   • `Subscription.fire()` arms `setTimeout(this.receivedEose, this.eoseTimeout)` — a CLIENT-SIDE timer, so
+//     a relay that says nothing at all still produces an EOSE on schedule. That is the case above.
+//   • `handleClose()` calls `handleEose()` first, so a relay that fails to CONNECT, or drops, also EOSEs.
+//
+// Either way the conclusion stands and is the reason for the guard: a plain EOSE can mean "this church has
+// no envelopes" while it holds a year of them, and that answer is exactly the one that rotates every key.
+// The cause is named correctly now because it is the record for whoever later asks whether this guard can be
+// simplified — it cannot be, and not for the reason first given.
+//
+// ⚠ AND ONE HONEST LIMIT OF `_isRelayAuthed()`, noted rather than chased (audit 2026-09-10): it answers true
+// if ANY relay in the pool is authenticated, and the pool's `oneose` fires once every grouped request has
+// EOSE'd OR CLOSED. So a church with two relays — one authenticated but holding an incomplete corpus, one
+// failing to connect — can stamp this flag over a partial view. Bounded, and it takes the relay-reset or
+// clone flows to produce that divergence, so it is not fixed here.
 //
 // STAMPED WITH THE CHURCH IT CAME FROM, not a bare boolean, because the reset is the mechanism that has
-// already failed here twice (see the note above _clearedTrail). `_resetChurchScopedState` clears it too.
+// already failed here twice (see the note above _clearedTrail).
 let _ckKeysSettled = '';
+// ⚠ AND STAMPED WITH THE SUBSCRIPTION GENERATION TOO — the audit's real defect, 2026-09-10.
+//
+// The church stamp alone was not enough, and the reason is that this module has TWO per-church reset blocks:
+// `_resetChurchScopedState()` (which cleared this flag) and `setActiveIdentity`'s own parallel list (which
+// did not, and whose own comment at the foot admits the duplication). So: switch identity away from your own
+// church and back. `setActiveIdentity` fires `steward-identity`, `idv` bumps, and makeSub's cache key
+// (`method|idv|church`, app/steward-root.jsx) has never been written — so the panel mounts holding `[]` while
+// this flag still names the church we are again on. `canIssue` is true, the effect fires before the new
+// stream has delivered one event, and EVERY Sunday in the horizon is re-minted with a fresh key. Measured
+// against the lifted shipped engine with a control beside it: `issued: 1, rotated: [], banners: []`, key
+// 5a5a5a → 5b5b5b. SILENT BY CONSTRUCTION, because `rotating = !!(have && !keyHex)` and `have` is undefined
+// on that path, so not even the rotation warning fires.
+//
+// A GENERATION, NOT A COUNTER OR AN EMPTINESS TEST, and the alternatives are worth naming:
+//   • clearing the flag in the second reset block is the belt and IS also done below — but it is exactly the
+//     kind of line that gets forgotten, which is how this defect existed at all;
+//   • "an empty `existing` means unsettled" was the other candidate and is WRONG: a church's FIRST EVER
+//     issue is legitimately handed no rows, so that rule refuses every new church its first keys and the
+//     desk is the only fallback. reference/DOMAIN.md and design §10 both forbid that shape.
+// The generation says the one true thing instead: THE NEWEST STREAM WE OPENED HAS FINISHED A TRUSTWORTHY READ
+// OF THE CHURCH WE ARE NOW ON. A re-mount, a reconnect, or an identity switch opens a new stream and bumps
+// the generation, so the answer goes back to "not yet" until that stream's own authenticated EOSE — and an
+// unauthenticated EOSE never matches, which is the safe direction and needs no close handling.
+let _ckKeysGen = 0;          // bumped on every subscribeCheckinSessionKeys open
+let _ckKeysSettledGen = -1;  // the generation whose authenticated EOSE set the stamp
+// ONE COPY OF "HAVE WE ACTUALLY READ THIS CHURCH'S ENVELOPES?", read by the issuer's refusal and by
+// Steward.checkinSessionKeysSettled(), so the screen's account of the wait cannot drift from the refusal.
+const _ckKeysRead = () => !!pub && _ckKeysSettled === pub && _ckKeysSettledGen === _ckKeysGen;
 const _capWaiters = {};   // kind -> Set of fn, called whenever that capability's ring changes
 for (const k of Object.keys(CAP_KEYS)) _capWaiters[k] = new Set();
 const _capRingChanged = (kind) => { for (const fn of (_capWaiters[kind] || [])) { try { fn(); } catch (e) {} } };
@@ -488,9 +534,24 @@ const _mayClearForCheckin = () => {
 // WHAT A KEEPER SLOT REALLY BUYS IS THE CHURCH'S OWN SLOT, and that is where the warning has gone. The church
 // is wrapped into every envelope so the issuer can unwrap the key a session ALREADY has and re-issue to a
 // changed set of people WITHOUT rotating it (see the unwrap in issueCheckinSessionKeys). When that recovery
-// fails — an envelope written by another device, a key restored from backup, a corrupt slot — the issuer
-// re-mints deliberately rather than leaving the session unstaffable for ever, and the cost is that the
-// session's key is replaced.
+// fails the issuer re-mints deliberately rather than leaving the session unstaffable for ever, and the cost
+// is that the session's key is replaced.
+//
+// ⚠ WHICH CAUSES ARE ACTUALLY REACHABLE — corrected 2026-09-10 after the audit, because the first wording of
+// this banner named two that are not, and sent a steward hunting for a second console that does not exist:
+//
+//   • "the envelope was issued from a different device" CANNOT do it. Only the owner console mints
+//     (`churchSkHeld() && !actingChurch`), always with the church key, and the unwrap is
+//     `nip44d(have.keys[cp], nip44ck(sk, cp))` — a self-to-self conversation key derived from the church key
+//     alone. Another device holding the same key unwraps it perfectly.
+//   • "the key was restored from a backup" CANNOT either, for the same arithmetic: a restored church key IS
+//     the same key, so it derives the same conversation key.
+//
+// What CAN reach it is a slot that is corrupt or truncated, or an envelope carrying NO church slot at all —
+// `subscribeCheckinSessionKeys` takes `c.keys` straight out of the JSON with no validation, so a malformed
+// or hand-written document arrives with `keys` missing the church and `have.keys[cp]` undefined. Both are
+// "the copy on the relay is damaged", which is what the wording now says, and neither is something a steward
+// can go and fix — so it says that too rather than prescribing an action.
 //
 // ⚠ WHAT THIS MAY CLAIM TODAY, AND WHAT IT MAY NOT. Nothing yet seals anything under a session key: piece 1
 // of that scope (the `ck` tag on a check-in record) is NOT BUILT. So a rotation today loses no readable data
@@ -511,10 +572,9 @@ const _warnCheckinKeyRotated = (sessions) => {
   const many = fresh.length > 1;
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in session key',
     message: (many ? (fresh.length + ' sessions were given a NEW register key') : 'One session was given a NEW register key')
-      + ' \u2014 this console could not open the key already issued for '
-      + (many ? 'them' : 'it') + ', which happens when the envelope was issued from a different device or this '
-      + 'church\u2019s key was restored from a backup. The register itself is unaffected: you and your '
-      + 'safeguarding stewards can still read every record.' } })); } catch (e) {}
+      + ' \u2014 the key already issued for ' + (many ? 'them' : 'it')
+      + ' was damaged, so this console could not reuse it. There is nothing to go and put right: the register '
+      + 'itself is unaffected, and you and your safeguarding stewards can still read every record.' } })); } catch (e) {}
 };
 const _warnUnsealed = (cap, failed) => {
   if (!failed || !failed.length) return;
@@ -6875,6 +6935,10 @@ window.Steward = {
   subscribeCheckinSessionKeys(cb) {
     const byId = new Map();
     const cp = pub;                                    // which church this stream is reading — see _ckKeysSettled
+    // AND WHICH STREAM THIS IS. Bumped on OPEN, never on close: everything downstream asks "is the newest
+    // stream the one that settled?", so a re-mount, a reconnect or an identity switch un-settles by simply
+    // existing, and there is no decrement to get wrong. See _ckKeysGen for the defect this closes.
+    const gen = ++_ckKeysGen;
     const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
@@ -6908,7 +6972,7 @@ window.Steward = {
       // `pub === cp` because a church switch mid-stream must not stamp the church we switched AWAY from as
       // read — the same guard subscribeCapKey applies to _capState, and for the same reason.
       oneose() {
-        if (cp && pub === cp && _isRelayAuthed()) _ckKeysSettled = cp;
+        if (cp && pub === cp && _isRelayAuthed()) { _ckKeysSettled = cp; _ckKeysSettledGen = gen; }
         emit();
       },
     });
@@ -7049,7 +7113,7 @@ window.Steward = {
   // subscription emits on every event as well as on EOSE — so one envelope arriving out of a year's worth
   // flips it, and the issuer run on that answer rotates every session it has not yet heard about. Measured
   // shape, not a hypothetical: the emit-per-event is three lines above the oneose that sets this flag.
-  checkinSessionKeysSettled() { return !!pub && _ckKeysSettled === pub; },
+  checkinSessionKeysSettled() { return _ckKeysRead(); },
   // AND "COULD THIS CONSOLE EVER ISSUE?" — the constraint the Check-in page has to state in plain words
   // rather than design around. False on a DELEGATED steward's console, and false on a console holding no
   // church key: a church where only delegated stewards ever open a console gets no session keys, EVER, and a
@@ -7101,7 +7165,10 @@ window.Steward = {
     // IT IS A REPORT, NOT A NULL. null already means "this console cannot issue at all", and a screen that
     // could not tell that from "still reading" would either say the wrong thing or say nothing. `settled:false`
     // is a state a screen can render honestly and retry out of.
-    if (_ckKeysSettled !== cp) return { issued: [], skipped: [], failed: [], rotated: [], settled: false };
+    // …AND IT ASKS THE GENERATION, NOT ONLY THE CHURCH. A stamp left behind by a reset block that forgot to
+    // clear it names the right church and is worth nothing: see _ckKeysGen for the measured identity-switch
+    // path where exactly that mints over every live key in the horizon and raises no banner.
+    if (!_ckKeysRead()) return { issued: [], skipped: [], failed: [], rotated: [], settled: false };
     const at = Number.isFinite(o.at) ? Math.floor(o.at) : now();
     const days = Number.isFinite(o.horizonDays) ? Math.max(0, Math.floor(o.horizonDays)) : 14;
     // CAPPED AT THE RELAY'S OWN LEAD, not merely defaulted to it. A caller asking for ninety days would mint
@@ -7704,6 +7771,14 @@ window.Steward = {
     // append-only and the relay has already consumed that sequence number.
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = '';
+    // ⚠ AND THE SESSION-KEY READ STAMP. Missing here was the audit's one real defect (2026-09-10): this
+    // block is the OTHER per-church reset, `_resetChurchScopedState` cleared the flag and this did not, so
+    // switching identity away and back left a console reporting "this church's envelopes have been read"
+    // over a subscription cache that had never been written — and the first issuer pass re-minted every
+    // Sunday in the horizon with a fresh key, silently. The generation check in _ckKeysGen closes the same
+    // hole from the other end; BOTH are kept, because either alone is one forgotten line from being back.
+    // Converging the two blocks is deliberately NOT done here — see the note below.
+    _ckKeysSettled = '';
     // NOTE: the block above is the same list as _resetChurchScopedState(), minus the care-key, media-key and
     // NIP-42 state. Deliberately NOT converged in this commit — a SWITCH keeps this device's key while a
     // RESTORE replaces it, so the wider reset is not obviously correct here and changing it is not what this

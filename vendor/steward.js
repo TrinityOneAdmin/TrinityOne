@@ -15338,6 +15338,9 @@ zoo`.split("\n");
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
   var _checkinMigrated = "";
   var _ckKeysSettled = "";
+  var _ckKeysGen = 0;
+  var _ckKeysSettledGen = -1;
+  var _ckKeysRead = () => !!pub && _ckKeysSettled === pub && _ckKeysSettledGen === _ckKeysGen;
   var _capWaiters = {};
   for (const k of Object.keys(CAP_KEYS)) _capWaiters[k] = /* @__PURE__ */ new Set();
   var _capRingChanged = (kind) => {
@@ -15368,7 +15371,7 @@ zoo`.split("\n");
     try {
       window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
         what: "check-in session key",
-        message: (many ? fresh.length + " sessions were given a NEW register key" : "One session was given a NEW register key") + " \u2014 this console could not open the key already issued for " + (many ? "them" : "it") + ", which happens when the envelope was issued from a different device or this church\u2019s key was restored from a backup. The register itself is unaffected: you and your safeguarding stewards can still read every record."
+        message: (many ? fresh.length + " sessions were given a NEW register key" : "One session was given a NEW register key") + " \u2014 the key already issued for " + (many ? "them" : "it") + " was damaged, so this console could not reuse it. There is nothing to go and put right: the register itself is unaffected, and you and your safeguarding stewards can still read every record."
       } }));
     } catch (e) {
     }
@@ -21140,6 +21143,7 @@ zoo`.split("\n");
     subscribeCheckinSessionKeys(cb) {
       const byId = /* @__PURE__ */ new Map();
       const cp = pub;
+      const gen = ++_ckKeysGen;
       const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
@@ -21182,7 +21186,10 @@ zoo`.split("\n");
         // `pub === cp` because a church switch mid-stream must not stamp the church we switched AWAY from as
         // read — the same guard subscribeCapKey applies to _capState, and for the same reason.
         oneose() {
-          if (cp && pub === cp && _isRelayAuthed()) _ckKeysSettled = cp;
+          if (cp && pub === cp && _isRelayAuthed()) {
+            _ckKeysSettled = cp;
+            _ckKeysSettledGen = gen;
+          }
           emit();
         }
       });
@@ -21328,7 +21335,7 @@ zoo`.split("\n");
     // flips it, and the issuer run on that answer rotates every session it has not yet heard about. Measured
     // shape, not a hypothetical: the emit-per-event is three lines above the oneose that sets this flag.
     checkinSessionKeysSettled() {
-      return !!pub && _ckKeysSettled === pub;
+      return _ckKeysRead();
     },
     // AND "COULD THIS CONSOLE EVER ISSUE?" — the constraint the Check-in page has to state in plain words
     // rather than design around. False on a DELEGATED steward's console, and false on a console holding no
@@ -21365,7 +21372,7 @@ zoo`.split("\n");
       if (!_ckIssuerHeld()) return null;
       const cp = pub;
       if (!cp) return null;
-      if (_ckKeysSettled !== cp) return { issued: [], skipped: [], failed: [], rotated: [], settled: false };
+      if (!_ckKeysRead()) return { issued: [], skipped: [], failed: [], rotated: [], settled: false };
       const at = Number.isFinite(o.at) ? Math.floor(o.at) : now();
       const days = Number.isFinite(o.horizonDays) ? Math.max(0, Math.floor(o.horizonDays)) : 14;
       const horizon = Math.min(days * 86400, KEY_LEAD_SECONDS);
@@ -22140,6 +22147,7 @@ zoo`.split("\n");
       _applyNoPhotoList([]);
       for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
       _checkinMigrated = "";
+      _ckKeysSettled = "";
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;

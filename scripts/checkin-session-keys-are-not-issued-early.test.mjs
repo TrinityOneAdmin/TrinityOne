@@ -114,6 +114,11 @@ function engine({ authed = true, publishOk = true, delegated = null } = {}) {
     // sets it by hand: it is set only by the lifted subscription's own oneose, which is the code the tests
     // are about. A harness that pre-set it would be the test answering its own question.
     _ckKeysSettled: '',
+    // …AND THE GENERATION PAIR, which starts UNMATCHED for the same reason the stamp starts empty: nothing in
+    // this file sets either by hand. The lifted subscription bumps `_ckKeysGen` on open and its own
+    // authenticated oneose copies it into `_ckKeysSettledGen` — that is the code under test.
+    _ckKeysGen: 0,
+    _ckKeysSettledGen: -1,
     _isRelayAuthed: () => { return authed; },
     // THE REAL DECISION-MAKERS, out of the module esbuild inlines into the bundle under test.
     buildHelperGrant, helperPolicy, lifetimeWindow, eligibleHelpers, GRANT_SOURCE, KEY_LEAD_SECONDS,
@@ -149,6 +154,7 @@ function engine({ authed = true, publishOk = true, delegated = null } = {}) {
   assert.equal(stubs.CAP_KEYS.checkin.cap, 'safeguarding', 'lifted CAP_KEYS is not the shipped one — re-anchor');
   const liftScoped = (sig, name) => new Function('scope', `with (scope) { return (${stmt(VENDOR, sig, name).replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '')}); }`)(scope);
   stubs._ckIssuerHeld = liftScoped('var _ckIssuerHeld = () =>', '_ckIssuerHeld');
+  stubs._ckKeysRead = liftScoped('var _ckKeysRead = () =>', '_ckKeysRead');
   stubs._warnCheckinKeyRotated = liftScoped('var _warnCheckinKeyRotated = (sessions) =>', '_warnCheckinKeyRotated');
   const lift = (sig, name) => {
     const body = fnBody(VENDOR, sig, name);
@@ -313,6 +319,91 @@ test('A STOOD-DOWN SUNDAY IS STILL NOT RE-STAFFED ONCE THE GATE IS IN — the tw
   assert.deepEqual(h.published, [], 'and it published an envelope for it');
 });
 
+// ── 1b. THE AUDIT'S DEFECT: THE STAMP GOES STALE ACROSS AN IDENTITY CHANGE ────────────────────────────────
+// Found by the independent audit, 2026-09-10, and it was mine. `_ckKeysSettled` was cleared in
+// `_resetChurchScopedState()` — which has exactly ONE call site — while `setActiveIdentity` keeps its own
+// PARALLEL per-church reset block that resets `_capState`, `_checkinMigrated`, `_localBlocked` and the
+// no-photo list, and did not clear this. Switch identity away from your own church and back:
+// `setActiveIdentity` fires `steward-identity`, `idv` bumps, makeSub's cache key (`method|idv|church`) has
+// never been written, and the panel mounts holding `[]` while the stamp still names the church we are again
+// on. The effect fires before one event has arrived and re-mints EVERY Sunday in the horizon with a fresh
+// key — `issued: 1, rotated: [], banners: []`, silent by construction, because `rotating = !!(have &&
+// !keyHex)` and `have` is undefined on that path.
+//
+// FIXED IN BOTH PLACES, so these are TWO tests rather than one. Belt-and-braces means neither half shows a
+// failure while the other stands, so a single test over the identity path would go green with either one
+// deleted — which is exactly the shape of test that let this through the first time.
+
+test('THE DEFECT, HALF ONE: a NEW stream un-settles the read even when the stamp survives a reset', async () => {
+  // THE GENERATION HALF, driven through the shipped subscription. The stamp is deliberately left standing —
+  // this test simulates the reset block having forgotten it, which is precisely what had happened — and the
+  // question is whether a console holding an EMPTY cache from a stream that has not finished can still mint.
+  const h = engine();
+  const ev = await envelopeEvent(h, 'svc-a', SERVICE, CLEARED);
+  const key0 = JSON.parse(ev.content).keys[CHURCH];
+
+  const first = h.openKeys();
+  first.deliver([ev]);
+  first.eose();
+  assert.equal(h.settled(), true, 'fixture: this console was supposed to be settled before the switch');
+  assert.equal(h.stubs._ckKeysSettled, CHURCH, 'fixture: the stamp was supposed to name this church');
+
+  // THE IDENTITY SWITCH, minus the clear — the state the shipped code was actually in. `pub` is the same
+  // church again, the stamp still names it, and makeSub has handed the freshly-mounted panel a new cache key
+  // with no rows under it. The only thing that has changed is that a NEW subscription is in flight.
+  first.stop();
+  const second = h.openKeys();
+  assert.equal(h.stubs._ckKeysSettled, CHURCH,
+    'fixture: this test is only about the generation, so the stamp must still be standing');
+  assert.equal(h.settled(), false,
+    'A CONSOLE WITH A STALE STAMP AND AN EMPTY CACHE REPORTED ITS ENVELOPES AS READ. This is the audit\'s ' +
+    'measured defect: the panel remounts after an identity change under a cache key never written, and the ' +
+    'first issuer pass re-mints every Sunday in the horizon with a fresh key and raises no banner');
+  const early = await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)],
+    permissions: CLEARED, stewards: [SGLEAD], existing: [] });
+  assert.equal(early.settled, false, 'the issuer minted against an empty cache on a stale stamp: ' + JSON.stringify(early));
+  assert.deepEqual(h.published, [],
+    'and it reached the wire. The measured cost was key 5a5a5a -> 5b5b5b with `rotated: []` and no banner: ' +
+    'a live session key replaced and reported as a clean issue');
+
+  // AND THE NEW STREAM'S OWN EOSE PUTS IT BACK — the positive control, so the assertions above cannot pass
+  // by the flag simply being broken shut.
+  second.deliver([ev]);
+  second.eose();
+  assert.equal(h.settled(), true, 'the new stream finished a trustworthy read and the console still refuses');
+  const ok = await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)],
+    permissions: [...CLEARED, perm(BEN)], stewards: [SGLEAD], existing: second.rows() });
+  assert.equal(ok.issued.length, 1, 'fixture: adding a cleared person was supposed to re-issue');
+  assert.equal(JSON.parse(h.published[0].content).keys[CHURCH], key0,
+    'and the re-issue rotated the key anyway, which is the loss this whole file is about');
+});
+
+test('THE DEFECT, HALF TWO: setActiveIdentity clears the stamp in its own reset block', () => {
+  // THE BELT. `setActiveIdentity` is not renderable in a slice — it needs the whole console's world — so this
+  // is asserted against vendor/steward.js, which is legitimate ONLY because that file is bundled: esbuild
+  // removes dead code, so a `false && ` in front of the line would take its text with it. (Against
+  // app/*.jsx the same assertion would prove nothing — CLAUDE.md rule 3.)
+  //
+  // SLICED TO THE ENCLOSING FUNCTION FIRST, because `_ckKeysSettled = ''` appears in
+  // `_resetChurchScopedState` too and a whole-file match would be satisfied by the copy that was already
+  // there — reporting the defect as fixed while the block that actually had it was untouched. That is the
+  // mis-aimed-sabotage failure this repo has a name for, in assertion form.
+  const block = fnBody(VENDOR, 'setActiveIdentity(targetPub) {', 'setActiveIdentity');
+  assert.match(block, /_ckKeysSettled = ""/,
+    'setActiveIdentity does not clear the session-key read stamp. It keeps its OWN per-church reset block, ' +
+    'separate from _resetChurchScopedState, and a stamp carried across an identity switch says "this ' +
+    'church\'s envelopes have been read" over a subscription cache that has never been written');
+  // …and it is in the same block as the capability-key reset it belongs beside, not stranded elsewhere in
+  // the function. `_capState` is reset there because carrying it across a switch corrupts the ring; this is
+  // the same class of state and the same reason.
+  assert.ok(block.indexOf('_ckKeysSettled = ""') > block.indexOf('_capState['),
+    're-anchor: the stamp clear is no longer beside the per-church reset block it belongs to');
+  // AND THE CONTROL: the assertion above can actually fail. If this slice ever stops containing the
+  // capability reset, it is reading the wrong function and every claim here is vacuous.
+  assert.match(block, /_checkinMigrated = ""/,
+    're-anchor: this slice is not setActiveIdentity\'s reset block at all');
+});
+
 test('THE FALSE KEEPER WARNING IS GONE FROM THE SHIPPED BUNDLE', () => {
   // Text-matching is legitimate here and only here: vendor/*.js is bundled, so esbuild removes dead code and
   // a `false && ` in front of a condition takes its text with it. (Against app/*.jsx it proves nothing —
@@ -329,6 +420,56 @@ test('THE FALSE KEEPER WARNING IS GONE FROM THE SHIPPED BUNDLE', () => {
     'the check that fed the false warning is back and has no caller — dead code under a banner nobody raises');
   // …and the re-aimed one IS there, so this test cannot pass by the whole feature having been deleted.
   assert.match(VENDOR, /_warnCheckinKeyRotated/, 're-anchor: the replacement warning is not in the bundle');
+});
+
+test('THE BANNER NAMES ONLY CAUSES THAT CAN ACTUALLY HAPPEN', () => {
+  // The audit's second truthfulness finding. The first wording said a rotation "happens when the envelope was
+  // issued from a different device or this church's key was restored from a backup". NEITHER CAN DO IT: only
+  // the owner console mints, always with the church key, and the unwrap is a self-to-self conversation key
+  // derived from that key alone — another device holding the same key unwraps it, and a restored key IS the
+  // same key. As written, a steward went hunting for a second console that does not exist.
+  //
+  // Asserted against the bundle, where a string literal that has been edited away is genuinely gone.
+  assert.doesNotMatch(VENDOR, /issued from a different device/,
+    'the rotation banner blames a second device again. That cannot cause it (the unwrap is nip44ck(sk, cp), ' +
+    'deterministic from the church key), so it sends a steward looking for a console that does not exist');
+  assert.doesNotMatch(VENDOR, /key was restored from a backup\. The register/,
+    'the rotation banner blames a restored backup again. A restored church key is the SAME key, so it ' +
+    'derives the same conversation key and unwraps the slot perfectly');
+  // …and it does name the one thing that IS reachable: the copy on the relay is damaged. `c.keys` is taken
+  // straight out of the JSON with no validation, so a truncated slot or an envelope with no church slot at
+  // all is exactly what reaches this.
+  assert.match(VENDOR, /was damaged, so this console could not reuse it/,
+    'the rotation banner no longer says WHY, or says something that cannot happen');
+});
+
+test('THE NIP-42 CLAIM IN THE STAMP\'S OWN NOTE IS GONE — the relay sends no EOSE at all', () => {
+  // The audit's first truthfulness finding. The note above `_ckKeysSettled` said an unauthenticated read of
+  // this church's documents "is answered with nothing at all (the relay's NIP-42 gate)". Measured on a raw
+  // socket against the real relay: `unauthed -> events: 0  eose: false  challenged: true  closed: null`. THE
+  // RELAY SENDS NO EOSE AT ALL — it issues an AUTH challenge and waits. The premature end-of-stored-events
+  // is nostr-tools' own: `Subscription.fire()` arms `setTimeout(this.receivedEose, this.eoseTimeout)`, and
+  // `handleClose()` calls `handleEose()` first. The conclusion was right; the named cause was not.
+  //
+  // ⚠ WHY THIS ONE MATCHES SOURCE TEXT, AND WHY THAT IS NOT CLAUDE.md RULE 3. Rule 3 forbids asserting
+  // BEHAVIOUR by matching text, because a `false && ` leaves every word in place. This asserts nothing about
+  // behaviour: it is a claim about a COMMENT — the record left for whoever later asks whether this guard can
+  // be simplified — and a comment has no other instrument. It cannot be read out of the bundle either:
+  // measured just now, esbuild drops the comments attached to top-level `let` declarations (the ones inside
+  // function bodies survive), so `grep 'NIP-42 gate' vendor/steward.js` returns 0 whether the sentence is
+  // there or not. Asserting it against the bundle would have been a test that could never fail.
+  const SRC = readFileSync(join(ROOT, 'src/steward.src.js'), 'utf8');
+  const note = SRC.slice(SRC.indexOf('HAS THE ENVELOPE CORPUS ACTUALLY BEEN READ?'), SRC.indexOf('const _ckKeysRead ='));
+  assert.ok(note.length > 500, 're-anchor: this slice is not the stamp\'s own note');
+  assert.doesNotMatch(note, /answered\s*\n?\s*\/\/ with nothing at all/,
+    'the note is back to claiming the relay answers an unauthenticated read with nothing at all. It sends no ' +
+    'EOSE — it challenges and waits — and a future reader deciding whether this guard is still needed would ' +
+    'be reasoning from a mechanism that does not exist');
+  assert.match(note, /RELAY SENDS NO EOSE AT ALL/,
+    'the note no longer says what the relay actually does with an unauthenticated read');
+  assert.match(note, /eoseTimeout/,
+    'the note does not name where the premature end-of-stored-events really comes from, which is the whole ' +
+    'reason the guard cannot be simplified away');
 });
 
 // ── 2. THE POINT OF USE — the screen a steward actually has ───────────────────────────────────────────────
@@ -462,6 +603,44 @@ test('POINT OF USE: IT DOES NOT ISSUE BEFORE THE ENVELOPES HAVE BEEN READ', asyn
   assert.equal(b[0].props.disabled, true,
     'the manual Re-issue button was live while the corpus was still arriving — one tap re-mints every ' +
     'session in the horizon with a fresh key');
+});
+
+test('POINT OF USE: THE IDENTITY-CHANGE PATH — the screen asks the ENGINE, not whether it has rows', async () => {
+  // THE SCREEN HALF OF THE AUDIT'S DEFECT. After an identity switch the panel remounts under a makeSub cache
+  // key (`method|idv|church`) that has never been written, so `keys` is `[]` from makeInit() — and the
+  // tempting gates are all wrong in the same direction:
+  //
+  //   · `keys.length` — false for a church that genuinely has no envelopes yet, so it would refuse a first
+  //     issue for ever AND, worse, be true the instant one stale row arrives;
+  //   · `stewardStreamLoaded('subscribeCheckinSessionKeys')` — flips on the FIRST delivery, and this
+  //     subscription emits per event as well as on EOSE, so one envelope out of a year's worth satisfies it.
+  //
+  // So the gate must be the engine's own answer and nothing else. Both halves are driven here: rows present
+  // while the engine says not-read (the stale-cache shape inverted), and no rows while it says read (a real
+  // first issue, which must go ahead).
+  const env = { session: 'svc-a', source: GRANT_SOURCE, lifetime: 'session', from: AT, until: AT + 7200,
+    pubs: [ADA], keys: { [CHURCH]: 'x', [ADA]: 'y' }, ts: AT - 3600 };
+
+  const holdingRows = await screen({ settled: false, keys: [env] });
+  await Promise.resolve();
+  assert.deepEqual(holdingRows.calls, [],
+    'THE SCREEN ISSUED BECAUSE IT HAD A ROW, while the engine said this church\'s envelopes had not been ' +
+    'read. That is the gate being `keys.length` or stewardStreamLoaded() rather than the engine\'s answer, ' +
+    'and it is one stale row away from re-minting every Sunday in the horizon');
+  assert.match(holdingRows.said(), /Still reading this church/,
+    'and it painted those rows as the finished picture, so a steward reading "1 helper holds this key" has ' +
+    'no way to know the list is a fragment: ' + holdingRows.said());
+
+  // …AND THE OTHER WAY ROUND: no rows at all, engine says read. This is a church's FIRST EVER issue and it
+  // must go ahead — "an empty list means not ready" was the other candidate fix for the audit's defect and
+  // this is the test that rules it out. Design §10 and reference/DOMAIN.md: nothing here may block.
+  const firstEver = await screen({ settled: true, keys: [] });
+  await Promise.resolve();
+  assert.equal(firstEver.calls.length, 1,
+    'A CHURCH WITH NO ENVELOPES YET WAS NEVER ISSUED ANY. If the gate has become "we must be holding rows", ' +
+    'every new church is refused its first session keys for ever and the desk is the only fallback');
+  assert.deepEqual(firstEver.calls[0].existing, [],
+    're-anchor: the first-issue call did not pass the empty list it actually holds');
 });
 
 test('POINT OF USE: THE MANUAL RE-ISSUE CONTROL EXISTS AND WORKS', async () => {

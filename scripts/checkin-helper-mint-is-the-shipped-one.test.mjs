@@ -152,6 +152,12 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     // scripts/checkin-session-keys-are-not-issued-early.test.mjs, which sets it through the shipped
     // subscription's own oneose instead of asserting it here.
     _ckKeysSettled: CHURCH,
+    // …AND THE SUBSCRIPTION GENERATION, added 2026-09-10 with the audit's identity-switch defect. The stamp
+    // alone was not enough: it names the right church and says nothing about whether the stream the caller's
+    // rows came from has finished. `_ckKeysRead()` — lifted below — asks both, so a settled console is
+    // "newest generation, and it is the one that settled". Equal values are what that means.
+    _ckKeysGen: 0,
+    _ckKeysSettledGen: 0,
     // AND AN AUTHENTICATED SOCKET, because the settle above happens only on an authenticated
     // end-of-stored-events — see the oneose in subscribeCheckinSessionKeys.
     _isRelayAuthed: () => true,
@@ -192,6 +198,10 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   // mint?" cannot drift from the refusal itself. Lifted, because `noKey`/`delegated` below mutate `sk` and
   // `actingChurch` AFTER the lift and this must read them live.
   stubs._ckIssuerHeld = liftScoped('var _ckIssuerHeld = () =>', '_ckIssuerHeld');
+  // AND THE "HAVE WE READ THIS CHURCH'S ENVELOPES?" TEST, out of the same bundle. It is the issuer's refusal
+  // and the screen's account of the wait in one arrow, so a test-local copy would let the two drift apart —
+  // which is the drift the audit found in the flag it replaced.
+  stubs._ckKeysRead = liftScoped('var _ckKeysRead = () =>', '_ckKeysRead');
   assert.equal(stubs.CAP_KEYS.checkin.cap, 'safeguarding', 'lifted CAP_KEYS is not the shipped one — re-anchor');
   assert.equal(stubs.CAP_KEYS.checkin.explicit, true,
     'the register key stopped being an EXPLICIT capability, so an unscoped steward now gets it by default');
@@ -429,6 +439,27 @@ test('THE ONE THING A KEEPER SLOT REALLY BUYS: a key this console cannot recover
   assert.doesNotMatch(h.banners[0].message, /lost|cannot be opened|unreadable|orphan/i,
     'the rotation warning claims records were lost. Nothing is sealed under a session key yet, so today that ' +
     'is a false claim in shipped UI copy — see _warnCheckinKeyRotated');
+  // ⚠ AND IT MUST NOT BLAME A CAUSE THAT CANNOT PRODUCE IT — the audit's second truthfulness finding,
+  // 2026-09-10. The first wording said this "happens when the envelope was issued from a different device or
+  // this church's key was restored from a backup". Neither can: only the owner console mints
+  // (`churchSkHeld() && !actingChurch`), always with the church key, and the recovery unwrap is
+  // `nip44d(have.keys[cp], nip44ck(sk, cp))` — a self-to-self conversation key derived from that key alone,
+  // so another device holding the same key unwraps it and a restored key IS the same key. A steward reading
+  // the old wording went looking for a second console that does not exist. The reachable causes are a corrupt
+  // or truncated slot, and an envelope carrying no church slot at all (`c.keys` comes straight out of the
+  // JSON with no validation) — both of which are "the copy on the relay is damaged".
+  assert.doesNotMatch(h.banners[0].message, /different device|restored from a backup/,
+    'the rotation warning blames a second device or a restored backup. Neither can cause it, and both send a ' +
+    'steward hunting for something that is not there: ' + h.banners[0].message);
+  assert.match(h.banners[0].message, /damaged/,
+    'the warning does not say WHY the key could not be reused, so there is nothing in it a steward can ' +
+    'understand: ' + h.banners[0].message);
+  // AND IT DOES NOT PRESCRIBE AN ACTION, because there is none. reference/DOMAIN.md: describe the
+  // consequence, do not prescribe a fix — and the deleted keeper warning's prescription ("re-issue the
+  // session keys") was actively harmful, since re-issuing is what rotates keys.
+  assert.doesNotMatch(h.banners[0].message, /Re-issue|Reopen|Check you are online/,
+    'the rotation warning tells a steward to go and do something about a damaged copy on the relay. There is ' +
+    'nothing to do, and the last warning that prescribed re-issuing was prescribing the rotation itself');
 
   // A SECOND PASS OVER THE SAME SUNDAYS SAYS NOTHING NEW. Keyed on the sessions, so this is not "once ever".
   await h.issueCheckinSessionKeys({ at: AT, permissions: CLEARED, stewards: [SGLEAD],
