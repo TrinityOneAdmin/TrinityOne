@@ -351,12 +351,27 @@ branch was not exercised. The negentropy import walk (`/sync-digest` → `/sync-
 
 ## OWNER DECISIONS — 2026-09-10 (third round)
 
-- **Piece 2 (the guardian's copy): DO NOT BUILD YET.** Owner: *"no surface yet, so let's not build anything
-  until pilot says we should."* Correct — there is no member-app check-in surface, so a parent-readable copy
-  would have nothing to read it with. The one caveat, recorded so the decision is informed: a record's
-  audiences are fixed **when it is sealed**, so records written before the parent copy exists would not be
-  parent-readable later. That is recoverable — `migrateCheckinKeys` already re-keys existing records for the
-  ring, so the same mechanism could add an audience retrospectively. **No reason to build ahead of the pilot.**
+- **Piece 2 (the guardian's copy): BUILD IT WITH SLICE 3, not before and not "when the pilot says".**
+  ⚠ **This corrects an answer I gave the owner and then had to withdraw.** I told him there was "no surface
+  yet", and he pushed back: *"we will have a member app surface for parents and safeguarding approved people
+  though right?"* He is right and I was wrong. `SCOPE-CHECKIN-SURFACES-2026-09-09.md` **Slice 3 — the room
+  and the register (member app)** says in terms: *"a QR on the room door, **a parent checking their own child
+  in**, and the worker's live list"*, and *"first use of a session key by a reader"*.
+
+  So piece 2 is not a lock for a door nobody is building — it is the lock for the **next** door, exactly as
+  piece 1 was the lock for slice 3's worker view. A parent who can check their own child in will need to see
+  the result, the pickup code at minimum, so a parent-readable record is implied by slice 3 rather than
+  speculative.
+
+  **Corrected sequencing:** do not build piece 2 standalone, and do not defer it to the pilot. It belongs in
+  slice 3, designed with the parent flow it serves, so the audience and the surface are decided together.
+  The caveat still stands and now matters more: a record's audiences are fixed **when it is sealed**, so
+  records written before the parent copy exists are not parent-readable afterwards — recoverable via the
+  `migrateCheckinKeys` re-key mechanism, but better not needed.
+
+  ⚠ **Slice 3 needs TWO phones for device verification** — its own scope says so: *"needs two phones — a
+  parent's and a worker's. A simulation of two people is not evidence for this one."* Only one device (the
+  Oppo) is attached to this box today. That is a real gate on slice 3, not a detail.
 - **Desktop per-card scrolling: live with it for now.** The register scrolls with the page rather than inside
   its own card.
 - **Bible slice 2 comes after the check-in queue.**
