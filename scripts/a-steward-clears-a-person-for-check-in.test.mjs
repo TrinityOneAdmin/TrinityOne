@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
-import { miniReact, texts } from './render-jsx-screen.mjs';
+import { miniReact, texts, reads, glued } from './render-jsx-screen.mjs';
 import { PERMISSION_LIFETIMES, DEFAULT_PERMISSION_LIFETIME, permissionPolicy, permissionWindow,
          permissionFault, eligibleHelpers, isPermissionSource, GRANT_SOURCE } from './checkin-role-source.mjs';
 
@@ -177,6 +177,90 @@ test('A LAPSED CLEARANCE IS SHOWN AS ENDED, not hidden', async () => {
   const t = said(s.tree());
   assert.match(t, /Dan Peart/, 'a lapsed clearance vanished from the screen entirely');
   assert.match(t, /Ended /, 'a lapsed clearance is not marked as ended: ' + t);
+});
+
+// ── A CLEARANCE THAT HAS NOT STARTED YET — THE THIRD STATE THIS ROW DID NOT HAVE ──────────────────────────
+//
+// S1 of the churchwarden sim round in reference/SCOPE-CHECKIN-SEALING-2026-09-10.md, and the most likely
+// thing a warden ever does with this panel: "clear Maureen for next Sunday." The row was BINARY —
+// `r.live ? runsTo(r) : 'Ended ' + fmtD(r.until)` — so a window entirely in the future is not live, falls to
+// the else branch, and tells the church the clearance is over. Reproduced four times on the real screen
+// (Sep 11, 13 and 20, with today being Sep 10); a clearance for TODAY rendered correctly, which is why the
+// shipped tests above did not see it — every one of them uses a live or a lapsed window.
+//
+// ⚠ reads(), NOT said(). said() joins text nodes with a space and cannot see a JSX whitespace bug; that is
+// how copy shipped to the Oppo reading "openthis page" under a green assertion. These labels are single
+// computed strings, so there is nothing to glue — and glued() is asserted empty below so that stays true.
+const IN_TWO_DAYS = Math.floor(Date.now() / 1000) + 2 * 86400;
+const END_OF_THAT_DAY = IN_TWO_DAYS + 86399;
+
+test('A CLEARANCE FOR NEXT SUNDAY IS NOT OVER — the row that said "Ended" for a date still to come', async () => {
+  // The exact shape the sim drove: "just that day", a Sunday two days out. This is what the warden picks.
+  const s = await screen({ perms: [row(DAN, { lifetime: 'day', from: IN_TWO_DAYS, until: END_OF_THAT_DAY })] });
+  const t = reads(s.tree());
+  assert.match(t, /Dan Peart/, 'a future-dated clearance is not on the screen at all');
+  assert.doesNotMatch(t, /Ended/,
+    'A CLEARANCE FOR A DAY STILL TO COME WAS LABELLED "ENDED". That is the S1 defect: the row has two ' +
+    'states and needs three, so the commonest act a churchwarden performs reads back as already over — and ' +
+    'a warden who believes it will clear somebody again, or stop trusting the panel. As rendered: ' + t);
+  assert.match(t, /not started yet/,
+    'and it does not say that it has not begun. "For Sep 13, 2026 only" alone cannot be told apart from a ' +
+    'clearance running today, which is the fact the row exists to carry. As rendered: ' + t);
+  assert.deepEqual(glued(s.tree()), [],
+    'two pieces of this row run together with no separator a reader can see — the JSX newline trap');
+});
+
+test('…and a future clearance with an END DATE says both ends, without inventing "Ended"', async () => {
+  const s = await screen({ perms: [row(DAN, { lifetime: 'dated', from: IN_TWO_DAYS, until: IN_TWO_DAYS + 200 * 86400 })] });
+  const t = reads(s.tree());
+  assert.doesNotMatch(t, /Ended/, 'a dated clearance that has not opened yet was labelled as over: ' + t);
+  assert.match(t, /From .* until /,
+    'a clearance starting later and ending later does not say when it starts — so the church cannot tell ' +
+    'it from one running now: ' + t);
+});
+
+test('…and an OPEN-ENDED clearance dated forward keeps the shape the church chose', async () => {
+  // runsTo()'s own rule, extended to the third state: say the shape the steward picked, never a date they
+  // did not type. An open-ended clearance starting in January must not acquire an expiry on screen.
+  const s = await screen({ perms: [row(DAN, { lifetime: 'open', from: IN_TWO_DAYS, until: null })] });
+  const t = reads(s.tree());
+  assert.doesNotMatch(t, /Ended/, 'an open-ended clearance starting later was labelled as over: ' + t);
+  assert.match(t, /From .*until someone here ends it/,
+    'it lost the church\'s own "until someone here ends it" shape, or does not say when it starts: ' + t);
+});
+
+test('A CLEARANCE FOR TODAY STILL READS EXACTLY AS IT DID — the regression half', async () => {
+  // The state that WAS correct, pinned, because the third state was added by rewriting the expression that
+  // produced this one. reference/SCOPE-CHECKIN-SEALING-2026-09-10.md: "Clearing for today renders correctly."
+  const t0 = Math.floor(Date.now() / 1000);
+  const day = await screen({ perms: [row(DAN, { lifetime: 'day', from: t0 - 3600, until: t0 + 3600 })] });
+  const dt = reads(day.tree());
+  assert.match(dt, /^.*For .* only/, 'a clearance running TODAY no longer reads as the day it covers: ' + dt);
+  assert.doesNotMatch(dt, /not started yet/, 'a clearance running today was described as not yet begun: ' + dt);
+  assert.doesNotMatch(dt, /Ended/, 'a clearance running today was described as over: ' + dt);
+  const open = await screen({ perms: [row(DAN, { lifetime: 'open' })] });
+  assert.match(reads(open.tree()), /Until someone here ends it/,
+    'a live open-ended clearance lost its own sentence: ' + reads(open.tree()));
+  assert.doesNotMatch(reads(open.tree()), /From /, 'a live clearance acquired a start date it did not need');
+});
+
+test('LIVE, THEN NOT-YET, THEN ENDED — the order a warden reads the list in', async () => {
+  // The sort was `Number(b.live) - Number(a.live)`, which files a clearance for next Sunday in with the
+  // lapsed ones at the bottom. A church renewing in January needs last year's list at the BOTTOM and the
+  // ones about to start near the top, or the row it most wants is the one it has to scroll for.
+  const t0 = Math.floor(Date.now() / 1000);
+  const s = await screen({ perms: [
+    row(ADA, { lifetime: 'dated', from: t0 - 200000, until: t0 - 100 }),          // ended
+    row(BEN, { lifetime: 'day', from: IN_TWO_DAYS, until: END_OF_THAT_DAY }),     // not started
+    row(CARA, { lifetime: 'open', from: t0 - 86400, until: null }),               // live
+  ] });
+  const t = reads(s.tree());
+  const at = (name) => { const i = t.indexOf(name); assert.ok(i >= 0, name + ' is not on the screen: ' + t); return i; };
+  assert.ok(at('Cara Lyle') < at('Ben Roe'),
+    'a live clearance sorted below one that has not started yet');
+  assert.ok(at('Ben Roe') < at('Ada Fenn'),
+    'A CLEARANCE FOR NEXT SUNDAY SORTED IN WITH THE LAPSED ONES. It is a decision the church has just ' +
+    'taken, not a record of one that expired: ' + t);
 });
 
 test('"NOBODY IS CLEARED YET" IS ONLY SAID ONCE THE RELAY HAS ANSWERED', async () => {
