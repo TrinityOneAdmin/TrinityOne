@@ -71,7 +71,11 @@ function proxyOf(stubs) {
 
 // One console's worth of world. The church key is held, this is the owner console (not a delegated steward
 // acting for the church), and every publish is captured rather than sent.
-function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['finance'] }, publishOk = true } = {}) {
+// `delegated` runs this console AS one of the stewards in `stewardCaps`, the way setActiveIdentity leaves it:
+// `actingChurch` and `pub` are the CHURCH, `churchPub` is this console's OWN key, and `churchSkHeld()` is
+// false. That naming is historical and it is the trap in every test of delegated mode — see myStewardCaps.
+function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['finance'] }, publishOk = true,
+                   delegated = null } = {}) {
   let keyNonce = 0;
   const published = [];
   const warnings = [];
@@ -84,8 +88,9 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   const stubs = {
     sk: new Uint8Array(32).fill(9),
     pub: CHURCH,
-    churchSkHeld: () => true,
-    actingChurch: null,
+    churchPub: delegated || CHURCH,
+    churchSkHeld: () => !delegated,
+    actingChurch: delegated ? CHURCH : null,
     _stewardCaps: stewardCaps,
     _stewardNames: {},
     now: () => 1788500000,
@@ -157,6 +162,12 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   // test-local reimplementation of it would be the test answering its own question. It closes over
   // _capAllows, CAP_KEYS and _stewardCaps, so unlike the two above it needs the harness scope.
   const liftScoped = (sig, name) => new Function('scope', `with (scope) { return (${stmt(VENDOR, sig, name).replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '')}); }`)(scope);
+  // AND THE CONSOLE'S OWN GATE ON CLEARING SOMEBODY, out of the same bundle. It is what decides whether a
+  // delegated safeguarding steward's console will even attempt the write the relay now admits, so a
+  // test-local copy of it would prove nothing about the shipped console.
+  const capsOfSrc = fnBody(VENDOR, 'function _capsOf(by) {', '_capsOf');
+  stubs._capsOf = new Function('scope', `with (scope) { ${capsOfSrc} return _capsOf; }`)(scope);
+  stubs._mayClearForCheckin = liftScoped('var _mayClearForCheckin = () =>', '_mayClearForCheckin');
   stubs._checkinKeepersMissing = liftScoped('var _checkinKeepersMissing = (caps, stewards) =>', '_checkinKeepersMissing');
   stubs._warnCheckinKeeperLeftOut = liftScoped('var _warnCheckinKeeperLeftOut = (missing) =>', '_warnCheckinKeeperLeftOut');
   assert.equal(stubs.CAP_KEYS.checkin.cap, 'safeguarding', 'lifted CAP_KEYS is not the shipped one — re-anchor');
@@ -179,6 +190,10 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   // and all three are lifted, so nothing between the stand-down and the issuer's answer is a test's own copy.
   const standDown = lift('revokeCheckinHelpers(session) {', 'revokeCheckinHelpers');
   const readKeys = lift('subscribeCheckinSessionKeys(cb) {', 'subscribeCheckinSessionKeys');
+  // AND THE CLEARANCE READ-BACK, which stopped being _subAddr on 2026-09-10 and became a bespoke
+  // subscription with the relay's own authorship rule in it. That rule is the only thing between a co-tenant
+  // church and this console's list of cleared adults, so it is lifted and driven rather than described.
+  const readPerms = lift('subscribeCheckinPermissions(cb) {', 'subscribeCheckinPermissions');
   // `this` for the issuer is the object it lives on in the console, and the one method it reaches for is the
   // mint — the REAL one, lifted above. Nothing is stubbed between the issuer's decision and the document.
   const self = { publishCheckinHelpers: (o) => mint.call({}, o) };
@@ -197,7 +212,19 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     assert.ok(Array.isArray(last), 'the shipped subscription emitted nothing at all, not even an empty list');
     return last;
   };
-  return { stubs, published, warnings, banners, subs, sessionKeysFrom,
+  // Feed events to the SHIPPED clearance subscription in order, then EOSE, exactly as a relay would.
+  const permsFrom = (events) => {
+    let last = null;
+    const stop = readPerms.call({}, (rows) => { last = rows; });
+    const sub = subs[subs.length - 1];
+    assert.ok(sub, 'the lifted clearance subscription never opened one — the pool stub was not reached');
+    for (const e of events) sub.handlers.onevent(e);
+    sub.handlers.oneose();
+    stop();
+    assert.ok(Array.isArray(last), 'the shipped subscription emitted nothing at all, not even an empty list');
+    return last;
+  };
+  return { stubs, published, warnings, banners, subs, sessionKeysFrom, permsFrom,
     publishCheckinHelpers: (o) => mint.call({}, o),
     grantCheckinPermission: (o) => grantPerm.call({}, o),
     revokeCheckinPermission: (who) => revokePerm.call({}, who),
@@ -523,22 +550,30 @@ test('A STEWARD CLEARS A PERSON, and the document that says so CARRIES NO KEY', 
     'the published clearance carries a second 64-hex value beside the person it names');
 });
 
-test('ONLY THE OWNER CLEARS ANYBODY — and a delegated steward console does not even try', async () => {
-  // THE SHARPER OF THE TWO MINTS. A safeguarding steward can already READ the register; what they must not gain
-  // is the power to say who ELSE may, and since 2026-09-09 this document is the only thing that says it. The
-  // relay refuses it too (gateway.mjs, the CHECKINPERM_D branch of accept()); this is the console half, so a
-  // delegated steward is not shown a success over a write the box threw away.
+// REWRITTEN 2026-09-10, AND THE OLD VERSION IS NAMED RATHER THAN QUIETLY REPLACED (CLAUDE.md rules 4 and 8).
+//
+// It was called "ONLY THE OWNER CLEARS ANYBODY — and a delegated steward console does not even try", and its
+// third case asserted that a delegated steward's console publishes nothing, with the message: *"Widening this
+// is a separate, already-scoped decision; it must not arrive as a side effect."*
+//
+// THAT DECISION HAS NOW BEEN TAKEN, on purpose, by the owner, in its own commit and wanting its own audit —
+// so the assertion is inverted deliberately and the delegated case moves to the block above, where it is
+// driven for a safeguarding steward, a finance-only steward and an unscoped one separately. It did NOT
+// "arrive as a side effect", which is what that sentence was guarding against, and this note is the record.
+//
+// WHAT SURVIVES UNCHANGED are the two refusals that have nothing to do with capabilities: a console holding
+// no key at all, and one that neither holds the church key nor is acting for a church (its own empty shell,
+// or a network key). Those are the cases where there is nothing to sign as.
+test('A CONSOLE WITH NO AUTHORITY TO ACT FOR A CHURCH CLEARS NOBODY', async () => {
   const noKey = harness(); noKey.stubs.sk = null;
   assert.equal(await noKey.grantCheckinPermission({ person: ADA, lifetime: 'open', from: AT }), null,
     'a console with no key cleared somebody for the children\'s register');
-  const notHeld = harness(); notHeld.stubs.churchSkHeld = () => false;
-  assert.equal(await notHeld.grantCheckinPermission({ person: ADA, lifetime: 'open', from: AT }), null,
-    'a console not holding the church key cleared somebody');
-  const delegated = harness(); delegated.stubs.actingChurch = CHURCH;
-  assert.equal(await delegated.grantCheckinPermission({ person: ADA, lifetime: 'open', from: AT }), null,
-    'a DELEGATED steward console cleared somebody for the children\'s register. Widening this is a separate, ' +
-    'already-scoped decision; it must not arrive as a side effect.');
-  for (const h of [noKey, notHeld, delegated]) {
+  // Not the church, and not acting for one: this is the empty church "Help run a church" makes, or a network
+  // key stepped sideways into. There is no church here to clear anybody FOR.
+  const orphan = harness(); orphan.stubs.churchSkHeld = () => false; orphan.stubs.actingChurch = null;
+  assert.equal(await orphan.grantCheckinPermission({ person: ADA, lifetime: 'open', from: AT }), null,
+    'a console that is neither the church nor acting for one cleared somebody');
+  for (const h of [noKey, orphan]) {
     assert.deepEqual(h.published, [], 'and it reached the wire');
     assert.equal(await h.revokeCheckinPermission(ADA), null, 'and it could revoke one');
   }
@@ -870,6 +905,163 @@ test('AND THE ISSUER LEAVES IT ALONE — it does not re-staff it, and it does no
     'the session was skipped for some other reason, so this test would keep passing if the stand-down check ' +
     'were deleted: ' + JSON.stringify(again));
   assert.equal(firstKey, JSON.parse(envelope.content).keys[CHURCH], 're-anchor: the key read back is not the minted one');
+});
+
+// ── AND WHOSE CLEARANCES THIS CONSOLE WILL BELIEVE ────────────────────────────────────────────────────────
+// subscribeCheckinPermissions stopped using _subAddr on 2026-09-10, when the mint widened and this document
+// gained a second possible author. Its own comment says why; these tests are the refusals that matter, and
+// they are the SAME CLASS as the co-tenant stand-down below — a document another congregation on the same
+// box can store, tagged to us, which this console asks the relay for by `{'#church':[pub]}`.
+//
+// A clearance believed from the wrong author is not cosmetic: the screen tells a steward that somebody is
+// cleared for children's work, and a church renewing its list in January renews from that screen.
+const permDoc = (by, person, at = 1789000000) => ({
+  pubkey: by, created_at: at,
+  tags: [['d', D.CHECKINPERM + person], ['t', 'trinityone'], ['church', CHURCH], ['person', person]],
+  content: JSON.stringify(buildCheckinPermission({ person, source: 'steward', lifetime: 'open', from: 1000, until: null })),
+});
+const permTomb = (by, person, at = 1789100000) => ({
+  pubkey: by, created_at: at, content: '',
+  tags: [['d', D.CHECKINPERM + person], ['t', 'trinityone'], ['church', CHURCH], ['deleted', '1']],
+});
+
+test('THE CHURCH\'S OWN CLEARANCE IS BELIEVED, and read through the relay\'s own parser', async () => {
+  const h = harness();
+  const rows = h.permsFrom([permDoc(CHURCH, ADA)]);
+  assert.equal(rows.length, 1, 'the console shows none of the church\'s own clearances: ' + JSON.stringify(rows));
+  assert.equal(rows[0].person, ADA);
+  assert.equal(rows[0].lifetime, 'open', 'the row does not carry what the relay would enforce');
+  assert.equal(rows[0].id, ADA, 're-anchor: the row id is not the person, so a screen keying on it breaks');
+});
+
+test('A SAFEGUARDING STEWARD\'S CLEARANCE IS BELIEVED — or the widening shows on nobody\'s screen', async () => {
+  const h = harness();
+  const rows = h.permsFrom([permDoc(SGLEAD, ADA)]);
+  assert.equal(rows.length, 1,
+    'a clearance the safeguarding steward published — which the relay now stores and enforces — is invisible ' +
+    'on the console. The lead clears somebody and the screen says nobody is cleared.');
+});
+
+test('A CO-TENANT CHURCH\'S CLEARANCE, TAGGED TO US, IS NOT BELIEVED', async () => {
+  const h = harness();
+  const rows = h.permsFrom([permDoc(COTENANT, ADA)]);
+  assert.deepEqual(rows, [],
+    'ANOTHER CONGREGATION ON THIS BOX PUT A NAME ON OUR CLEARED LIST. The relay files their document under ' +
+    'THEIR church, so it clears nobody here — but this console asks for everything tagged to us, and would ' +
+    'have shown a steward a cleared adult the relay refuses.');
+});
+
+test('…AND NEITHER IS AN ORDINARY MEMBER\'S, NOR A FINANCE-ONLY STEWARD\'S', async () => {
+  const h = harness();
+  assert.deepEqual(h.permsFrom([permDoc(MEMBER, ADA)]), [], 'a member\'s own clearance was displayed');
+  assert.deepEqual(h.permsFrom([permDoc(TREASURER, ADA)]), [],
+    'a steward ticked for FINANCE ONLY was believed about who may open the children\'s register');
+});
+
+test('A WITHDRAWAL IS BELIEVED FROM EITHER AUTHOR, and does not depend on arrival order', async () => {
+  // The console half of the order-independence the relay needed in the same change. With two authors the
+  // grant and the tombstone are two documents that coexist for ever, and a reader that dropped the row on a
+  // tombstone would put it back the moment the older grant was re-delivered — which every reconnect does.
+  const h = harness();
+  const grantThenTomb = h.permsFrom([permDoc(CHURCH, ADA, 1789000000), permTomb(SGLEAD, ADA, 1789100000)]);
+  assert.deepEqual(grantThenTomb, [],
+    'the steward\'s withdrawal left the person on the console\'s cleared list');
+  const tombThenGrant = h.permsFrom([permTomb(SGLEAD, ADA, 1789100000), permDoc(CHURCH, ADA, 1789000000)]);
+  assert.deepEqual(tombThenGrant, [],
+    'A WITHDRAWN CLEARANCE CAME BACK because the older grant arrived after the tombstone. Every reconnect ' +
+    're-delivers the corpus in whatever order the relay sends it.');
+  // AND A LATER GRANT STILL CLEARS THEM — the positive control, so a reader that simply never re-admits
+  // anybody could not pass the two above.
+  const regranted = h.permsFrom([permTomb(SGLEAD, ADA, 1789100000), permDoc(CHURCH, ADA, 1789200000)]);
+  assert.equal(regranted.length, 1, 'somebody once withdrawn can never be shown as cleared again');
+});
+
+test('A CO-TENANT\'S TOMBSTONE DOES NOT REMOVE SOMEBODY FROM OUR CLEARED LIST', async () => {
+  const h = harness();
+  const rows = h.permsFrom([permDoc(CHURCH, ADA), permTomb(COTENANT, ADA)]);
+  assert.equal(rows.length, 1,
+    'another congregation took a name OFF our cleared list. Harmless-looking, and it is the same hole in the ' +
+    'other direction: the screen stops showing a clearance the relay is still enforcing, so a steward ' +
+    'clears somebody twice or believes their withdrawal worked when it did nothing.');
+});
+
+test('a clearance the relay\'s parser refuses arrives marked, not as a clearance', async () => {
+  const h = harness();
+  const bad = { pubkey: CHURCH, created_at: 1789000000,
+    tags: [['d', D.CHECKINPERM + ADA], ['t', 'trinityone'], ['church', CHURCH]],
+    content: JSON.stringify({ person: ADA, source: 'rota', lifetime: 'dated', from: 1000, until: null }) };
+  const rows = h.permsFrom([bad]);
+  assert.equal(rows.length, 1, 're-anchor: an unparseable clearance is now dropped entirely rather than marked');
+  assert.equal(rows[0]._invalid, true,
+    'a document readCheckinPermission REFUSES was handed to the screen as an ordinary clearance. A `dated` ' +
+    'permission with no end is exactly the shape that must never read as unbounded.');
+});
+
+// ── WHO THIS CONSOLE WILL LET CLEAR SOMEBODY ──────────────────────────────────────────────────────────────
+// The console half of the mint widening (2026-09-10). The RELAY is the protection — every refusal is
+// asserted against a live gateway in scripts/checkin-permission-mint-widening.test.mjs — and this is the
+// console agreeing with it, which matters in the CLOSED direction: a guard that is stricter than the relay
+// leaves a safeguarding lead silently unable to do the job the change was made for.
+//
+// These drive the SHIPPED grantCheckinPermission and revokeCheckinPermission out of vendor/steward.js, with
+// _mayClearForCheckin and _capsOf lifted from the same bundle, so nothing between the decision and the
+// document is a copy.
+
+test('THE OWNER CONSOLE STILL CLEARS PEOPLE', async () => {
+  const h = harness();
+  const out = await h.grantCheckinPermission({ person: ADA, source: 'steward', lifetime: 'open', from: 1000 });
+  assert.ok(out, 'the church key can no longer clear anybody');
+  assert.equal(out.person, ADA);
+});
+
+test('A DELEGATED SAFEGUARDING STEWARD\'S CONSOLE CLEARS PEOPLE — the point of the widening', async () => {
+  const h = harness({ delegated: SGLEAD });
+  const out = await h.grantCheckinPermission({ person: ADA, source: 'steward', lifetime: 'open', from: 1000 });
+  assert.ok(out,
+    'THE SAFEGUARDING LEAD\'S CONSOLE REFUSED TO EVEN TRY. The relay admits this write now, so a console ' +
+    'that still refuses it is the whole change delivering nothing — and it fails silently, because ' +
+    'grantCheckinPermission returns null for every kind of refusal.');
+  const ev = h.published[h.published.length - 1];
+  assert.deepEqual((ev.tags.find(t => t[0] === 'church') || []), ['church', CHURCH],
+    'the steward\'s clearance does not name the church, so the relay cannot resolve the grantor and refuses it');
+  assert.equal((ev.tags.find(t => t[0] === 'd') || [])[1], D.CHECKINPERM + ADA, 're-anchor: the d-tag moved');
+});
+
+test('…AND MAY WITHDRAW ONE', async () => {
+  const h = harness({ delegated: SGLEAD });
+  const out = await h.revokeCheckinPermission(ADA);
+  assert.ok(out !== null, 'the steward who may clear somebody cannot un-clear them');
+  const ev = h.published[h.published.length - 1];
+  assert.ok(ev.tags.some(t => t[0] === 'deleted'), 're-anchor: the withdrawal is not a tombstone');
+});
+
+test('A FINANCE-ONLY STEWARD\'S CONSOLE WILL NOT TRY', async () => {
+  const h = harness({ delegated: TREASURER });
+  assert.equal(await h.grantCheckinPermission({ person: ADA, source: 'steward', lifetime: 'open', from: 1000 }), null,
+    'a treasurer\'s console attempted to clear somebody for the children\'s register');
+  assert.equal(await h.revokeCheckinPermission(ADA), null, 'and to withdraw a clearance');
+  assert.deepEqual(h.published, [], 'and it published something');
+});
+
+test('AN UNSCOPED STEWARD\'S CONSOLE WILL NOT EITHER — this capability is not part of "everything"', async () => {
+  // The relay refuses this too (stewardCanExplicitly), and the Check-in tab is already closed to an unscoped
+  // steward by stewCapState. Asserted here so the three layers cannot drift apart.
+  const h = harness({ stewardCaps: {}, delegated: 'a1'.repeat(32) });
+  assert.equal(await h.grantCheckinPermission({ person: ADA, source: 'steward', lifetime: 'open', from: 1000 }), null,
+    'a steward with NO capability list cleared somebody. Every church that appointed stewards before ' +
+    'capabilities existed has one, and none of them was asked about the children\'s register.');
+  assert.deepEqual(h.published, []);
+});
+
+test('AND THE SESSION KEYS ARE STILL OWNER-ONLY ON THIS CONSOLE', async () => {
+  // The widening stopped at the permission. A steward's console cannot mint an envelope, because the session
+  // key is wrapped with the CHURCH key — so an envelope it produced would be one the readers cannot open.
+  const h = harness({ delegated: SGLEAD });
+  assert.equal(await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: CLEARED, stewards: [SGLEAD] }), null,
+    'a delegated steward\'s console minted a session key envelope');
+  assert.equal(await h.issueCheckinSessionKeys({ at: AT, services: [svc('s1', SERVICE)], permissions: CLEARED }), null,
+    'a delegated steward\'s console ran the issuer');
+  assert.deepEqual(h.published, []);
 });
 
 // ── THE GUARD NOTHING PROVED: A CO-TENANT CHURCH CANNOT UNSTAFF OUR CRECHE ────────────────────────────────

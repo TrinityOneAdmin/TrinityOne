@@ -1578,6 +1578,11 @@ const checkinPermitted = (pub, cp) => {
   const byP = CHECKIN_PERMITS.get(cp);
   const pm = byP && byP.get(pub);
   if (!pm) return false;
+  // A WITHDRAWAL IS NOW REMEMBERED RATHER THAN CONSUMED, so this map holds `{ revoked: true, ts }` entries
+  // as well as clearances. See the CHECKINPERM_D branch of note() for why: from 2026-09-10 this document has
+  // TWO possible authors, so the store holds one addressable copy per author and a delete no longer replaces
+  // the thing it deletes.
+  if (pm.revoked) return false;
   const t = Math.floor(Date.now() / 1000);
   if (t < pm.from) return false;
   if (pm.until != null && t > pm.until) return false;
@@ -1633,6 +1638,39 @@ const stewardCan = (pub, cp, cap) => {
   const caps = byPub && byPub.get(pub);
   if (!caps) return true;                       // no capabilities recorded for them → full steward (compat)
   return cap === 'any' ? caps.size > 0 : caps.has(cap);
+};
+// THE SAME QUESTION, WITH THE COMPATIBILITY BRANCH REFUSED — and it is refused on purpose.
+//
+// stewardCan() answers `!caps` as "full steward (compat)": a steward appointed before capabilities existed
+// keeps everything, so that upgrading this relay cannot strip a working delegate. That is right for the
+// fourteen rules that share it and WRONG for a capability that has to be given deliberately.
+//
+// The console has said exactly this since 2026-08-20, in capNeedsExplicitGrant and the padlock beside it:
+// "the children's register has to be given on purpose — it isn't included in everything", because before
+// that date NO delegate could open a check-in record at all, so inheriting it on upgrade would hand every
+// steward a church has ever appointed the name, room and pickup code of every child, with nobody asked.
+//
+// This is the relay agreeing with that, for the one write it now admits from a steward: clearing a person
+// for children's check-in. An UNSCOPED steward is refused here and is not refused by stewardCan().
+const stewardCanExplicitly = (pub, cp, cap) => {
+  const s = STEWARDS_BY.get(cp);
+  if (!(cp && s && s.has(pub))) return false;
+  const byPub = STEWARD_CAPS.get(cp);
+  const caps = byPub && byPub.get(pub);
+  return !!(caps && caps.has(cap));
+};
+// WHO MAY CLEAR A PERSON FOR CHILDREN'S CHECK-IN — the church itself, or a steward it EXPLICITLY ticked for
+// safeguarding. Written once and used by both doors (accept() and note()), so the websocket and the ingest
+// cannot disagree about who authored a clearance; that pair disagreeing about a d-tag is the defect the
+// CHECKINPERM_D branch of note() already carries a correction for.
+//
+// NOTHING TRUSTS A ['church'] TAG ON ITS OWN. `namedChurch(e)` only returns a CONFIGURED church, and the
+// steward test then requires the author to be on THAT church's signed roster — so a co-tenant church's
+// steward, who is on their own roster and not ours, resolves to '' here.
+const checkinPermGrantor = (e) => {
+  if (CHURCH_PUBS.has(e.pubkey)) return e.pubkey;
+  const cp = namedChurch(e);
+  return stewardCanExplicitly(e.pubkey, cp, 'safeguarding') ? cp : '';
 };
 // M2: a delegated leader/care-admin grant is only honoured while the steward who authored it is STILL a
 // steward (or the church/network key). So revoking a steward immediately drops the group-leader and
@@ -2620,7 +2658,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (held && held.ts > ts) return;
     byS.set(sid, { from: g.from, until: g.until, lifetime: g.lifetime, pubs: new Set(g.pubs), ts });
   }
-  else if (d.startsWith(CHECKINPERM_D) && CHURCH_PUBS.has(e.pubkey)) {   // A PERSON IS CLEARED — OWNER-ONLY, author IS the church
+  else if (d.startsWith(CHECKINPERM_D) && checkinPermGrantor(e)) {   // A PERSON IS CLEARED — the church, or a steward it ticked for safeguarding
     // THE SIBLING OF THE BRANCH ABOVE, and deliberately shaped the same way: keyed by the AUTHOR (never a
     // ['church'] tag), newest-wins by created_at alone, a tombstone that cannot be undone by an older replay,
     // and the SAME PARSER the write gate uses so a document cannot mean one thing at the door and another on
@@ -2641,16 +2679,46 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const who = checkinPermWho(d);
     if (!who) return;
     const ts = e.created_at || 0;
-    let byP = CHECKIN_PERMITS.get(e.pubkey);
-    if (!byP) { byP = new Map(); CHECKIN_PERMITS.set(e.pubkey, byP); }
+    // KEYED BY THE CHURCH, NOT BY THE AUTHOR — changed 2026-09-10 with the mint widening, and it is the line
+    // that makes the widening safe. It was `CHECKIN_PERMITS.get(e.pubkey)`, which was right while the church
+    // key was the only possible author: a co-tenant's document then landed under THEIR key and could not
+    // touch our map. Now a steward may author one, and a clearance filed under the steward's own pubkey
+    // would be a clearance no lookup ever finds — checkinPermitted() asks CHECKIN_PERMITS.get(cp).
+    //
+    // checkinPermGrantor resolves the church, and it is the SAME function accept() used to admit this event,
+    // so the two doors cannot disagree about whose clearance this is.
+    const owner = checkinPermGrantor(e);
+    let byP = CHECKIN_PERMITS.get(owner);
+    if (!byP) { byP = new Map(); CHECKIN_PERMITS.set(owner, byP); }
     const held = byP.get(who);
-    // A REVOCATION — the church withdrew somebody's clearance. It ends EVERY session at once, which is the
-    // whole point of moving "who is cleared" out of the per-service document: a steward acts once.
-    if (removed) { if (!(held && held.ts > ts)) byP.delete(who); return; }
+    // A WITHDRAWAL IS REMEMBERED, NOT CONSUMED — and this is the other half of the widening, for a reason
+    // that is not obvious and is not cosmetic.
+    //
+    // While the church key was the only author, `byP.delete(who)` was safe: a document and its tombstone
+    // share one addressable slot (kind, pubkey, d-tag), so the store REPLACES the grant with the tombstone
+    // and put() only ever hands note() the newer of the two. There was nothing left to resurrect.
+    //
+    // TWO AUTHORS BREAKS THAT INVARIANT. The church's grant and a steward's tombstone are two different
+    // addresses, so both live in the corpus for ever, and every device has to re-derive the answer from
+    // whatever order they arrive in. Delete-on-tombstone is order-dependent: tombstone first (t2), then the
+    // church's older grant (t1) replayed by a peer sync or a boot rehydrate, and `held` is undefined, so the
+    // WITHDRAWN CLEARANCE IS REINSTALLED. syncChurchFromPeer runs every 5-7 minutes, and this relay restarts
+    // itself, so that is a scheduled reversal of a safeguarding decision rather than a corner.
+    //
+    // So the withdrawal is kept AS a version, at its own timestamp, and the comparison below refuses to
+    // re-admit anything at or older than it. Same shape as _forgetById's `tombs` in the client's document
+    // store, and as subscribeCheckinSessionKeys reporting a stand-down as a ROW rather than an absence —
+    // both for this exact reason. checkinPermitted() reads `revoked` and refuses.
+    //
+    // The cost is one small entry per person ever cleared and then withdrawn, per church, cleared on every
+    // hydrateMaps(). It is bounded by the size of a congregation.
+    if (removed) { if (!(held && held.ts > ts)) byP.set(who, { revoked: true, ts }); return; }
     const pm = readCheckinPermission(e.content);
     // FAILS CLOSED, and refuses a d-tag that disagrees with the body: a permission filed under one member's
     // pubkey that names another inside would clear the wrong person, and the d-tag is what every lookup uses.
-    if (!pm || pm.person !== who) { if (!(held && held.ts > ts)) byP.delete(who); return; }
+    // Recorded as a withdrawal rather than a deletion for the same order-independence reason: a newer
+    // unreadable copy must not be undone by an older readable one arriving afterwards.
+    if (!pm || pm.person !== who) { if (!(held && held.ts > ts)) byP.set(who, { revoked: true, ts }); return; }
     if (held && held.ts > ts) return;
     byP.set(who, { from: pm.from, until: pm.until, lifetime: pm.lifetime, source: pm.source, ts });
   }
@@ -2954,19 +3022,38 @@ function accept(e) {
       // states out loud what it depends on.
       return !!g && g.session === sid && isDeclaredSource(g.source);
     }
-    // A PERSON IS CLEARED — OWNER-ONLY, for the same reason and by the same argument as the grant above.
+    // A PERSON IS CLEARED — THE CHURCH, OR A STEWARD IT TICKED FOR SAFEGUARDING. Widened 2026-09-10.
     //
-    // IT IS THE SHARPER CASE OF THE TWO, and worth saying rather than inheriting. A safeguarding steward can
-    // already read the whole children's register; what they must not gain is the power to say who ELSE may.
-    // This document is now the ONLY thing that says that — the grant merely carries the key to whoever it
-    // already names — so if the mint were widened here, widening it on the grant would be a formality. Both
-    // stay church-key-only in this slice. Widening to safeguarding stewards is a separate, already-scoped
-    // change and is deliberately NOT done here.
+    // ⚠ THIS IS AN ESCALATION AND IT WAS TAKEN DELIBERATELY. What stood here until today said it plainly and
+    // is kept, because the reasoning is still true and only the decision changed:
     //
-    // Nothing trusts a ['church'] tag: the author must be a configured church, and note() keys the record by
-    // that author, so a co-tenant cannot clear anybody for another congregation.
+    //     "IT IS THE SHARPER CASE OF THE TWO. A safeguarding steward can already read the whole children's
+    //      register; what they must not gain is the power to say who ELSE may. This document is now the ONLY
+    //      thing that says that."
+    //
+    // An audit named exactly this as "the escalation that matters, since they can already read the register
+    // but must not be able to hand it to a third party". THE OWNER HAS WEIGHED THAT AND CHOSEN CONVENIENCE:
+    // in a real church the safeguarding lead is the person who knows who has a DBS certificate, and routing
+    // every clearance through whoever holds the church key makes the lead's own job need somebody else's
+    // console. This change WANTS ITS OWN AUDIT.
+    //
+    // FOUR THINGS IT DOES NOT WIDEN, each asserted by name in checkin-permission-mint-widening.test.mjs:
+    //   • an ordinary member;
+    //   • a steward ticked for Finance only — the August leak, in person;
+    //   • an UNSCOPED steward, via stewardCanExplicitly rather than stewardCan: this capability is not part
+    //     of "everything", and the console has said so since 2026-08-20;
+    //   • a co-tenant church's steward, who is on their roster and not ours.
+    //
+    // AND THE ENVELOPE STAYS CHURCH-KEY-ONLY. CHECKINHELPER_D above is untouched, and not merely for
+    // caution: the session key is NIP-44-wrapped to each recipient WITH THE CHURCH KEY, so a steward's
+    // console physically cannot mint one the recipients could unwrap the way the readers expect. The comment
+    // above once said widening the envelope would then be "a formality"; it is not, it is impossible without
+    // the church key, which is why issuance stays where reference/FINDING-...-PER-PERSON says it is: the
+    // console, acting as the church.
+    //
+    // Nothing trusts a ['church'] tag on its own — see checkinPermGrantor.
     if (d.startsWith(CHECKINPERM_D)) {
-      if (!CHURCH_PUBS.has(e.pubkey)) return false;
+      if (!checkinPermGrantor(e)) return false;
       // ONE SPELLING OF THE D-TAG, AND ONLY ONE. `toHexPub` would have done here — it is what the sibling
       // key-envelope rules use — but it also ACCEPTS AN NPUB and converts it, and this d-tag is what every
       // lookup of a clearance keys on. Two spellings of the same suffix would be two addressable documents

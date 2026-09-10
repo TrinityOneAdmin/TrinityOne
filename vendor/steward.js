@@ -15352,6 +15352,12 @@ zoo`.split("\n");
     if (!Array.isArray(c)) return !spec.explicit;
     return c.indexOf(spec.cap) >= 0;
   };
+  var _mayClearForCheckin = () => {
+    if (churchSkHeld()) return true;
+    if (!actingChurch) return false;
+    const mine = _capsOf(churchPub);
+    return Array.isArray(mine) && mine.indexOf("safeguarding") >= 0;
+  };
   var _checkinKeepersMissing = (caps, stewards) => {
     const src = caps && typeof caps === "object" ? caps : _stewardCaps;
     const allowed = _capAllows(CAP_KEYS.checkin, src);
@@ -20956,12 +20962,22 @@ zoo`.split("\n");
       return { ok: !fault, from: win.from, until: win.until, why: fault ? "That clearance would be refused: " + fault + "." : "" };
     },
     // -- 1. A PERSON IS CLEARED ------------------------------------------------------------------------------
-    // d=checkinperm:<personPub>. OWNER-ONLY, and this is the sharper of the two mints rather than the milder one.
-    // A safeguarding steward can already READ the whole register; what they must not gain is the power to say who
-    // ELSE may. This document is now the only thing that says it — the envelope merely carries a key to whoever it
-    // already names — so if this were widened, widening the envelope would be a formality. Both stay
-    // church-key-only in this slice; the relay refuses anything else (gateway.mjs, the CHECKINPERM_D branch of
-    // accept()), so an older or modified console gains nothing by trying.
+    // d=checkinperm:<personPub>. THE CHURCH KEY, OR A STEWARD THE CHURCH TICKED FOR SAFEGUARDING — widened
+    // 2026-09-10 at the owner's decision, and this is the sharper of the two mints rather than the milder one.
+    //
+    // WHAT THAT COSTS, kept from the comment that stood here when it was owner-only, because the reasoning did
+    // not stop being true: a safeguarding steward can already READ the whole register; what they now also gain
+    // is the power to say who ELSE may. An audit named that as "the escalation that matters". The owner weighed
+    // it against a real church's shape — the safeguarding lead is the person who knows who holds a DBS
+    // certificate — and chose convenience. It wants its own audit.
+    //
+    // THE ENVELOPE DID NOT MOVE. `checkinhelper:` stays church-key-only, and the comment that once said
+    // widening it would then be "a formality" was wrong: the session key is wrapped with the CHURCH key, so a
+    // steward's console cannot mint one whose slots the readers can open. Issuance stays where the finding
+    // puts it — the console, acting as the church.
+    //
+    // THE RELAY IS THE PROTECTION, not this guard (gateway.mjs, the CHECKINPERM_D branches of accept() and
+    // note()), so an older or modified console gains nothing by trying.
     //
     // IT CARRIES NO KEY. There is nothing to wrap and no `keys` object, which is why it may be open-ended and a
     // session key may not. Adding key material here is the collapse back to the design the owner refused.
@@ -20970,7 +20986,7 @@ zoo`.split("\n");
     // write, and publish()'s Promise.any would call it saved when it landed on one public relay.
     async grantCheckinPermission(opts) {
       const o = opts || {};
-      if (!sk || !churchSkHeld() || actingChurch) return null;
+      if (!sk || !_mayClearForCheckin()) return null;
       const cp = pub;
       const person = String(o.person || "").trim().toLowerCase();
       if (!cp || !/^[0-9a-f]{64}$/.test(person)) return null;
@@ -21001,8 +21017,12 @@ zoo`.split("\n");
     // take a key off a phone that already unwrapped one, so records they already fetched stay readable to them.
     // Same honest limit as rotateCapKey ("rotation protects the FUTURE, not the past"), and it is why a session
     // key is short-lived in the first place.
+    //
+    // AND WHOEVER MAY CLEAR MAY WITHDRAW. A one-way power over a safeguarding record is worse than no power:
+    // a lead who added somebody by mistake could not undo it, and would have to find the church key holder to
+    // fix their own error. Same predicate, deliberately.
     revokeCheckinPermission(person) {
-      if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
+      if (!sk || !_mayClearForCheckin()) return Promise.resolve(null);
       const who = String(person || "").trim().toLowerCase();
       if (!/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(null);
       return _publishToRelays(finalizeEvent2({
@@ -21016,8 +21036,85 @@ zoo`.split("\n");
     // reading of the same JSON, so the console and the box cannot disagree about what a permission means. A
     // document this parser cannot vouch for arrives as { _invalid: true } and is dropped by the issuer, never
     // silently treated as an unbounded one.
+    //
+    // NOT _subAddr ANY MORE, AND FOR THE SAME REASON subscribeCheckinSessionKeys is not — changed 2026-09-10
+    // with the mint widening. Two things broke at once the moment this document could have a second author:
+    //
+    //   • _subAddr's multi-author reduce decides who may be DISPLAYED with `_consoleDisplay` and who may
+    //     withdraw THE CHURCH'S copy with `_consoleChurchVoice`, which requires the `content` capability and a
+    //     ['for'] tag. A safeguarding steward has neither, so their own withdrawal would vanish from the relay
+    //     and stay on their screen — the worst shape this product has: silent, and only visible to somebody
+    //     else. (It is the right rule for a rota or a group; it is not this document's rule.)
+    //   • it would have believed a CO-TENANT. The second filter is `{'#church':[pub]}` — "anything tagged to
+    //     us, whoever wrote it" — and another congregation on the same box can store `checkinperm:<person>`
+    //     tagged to us. accept() keys that to THEIR church, so it clears nobody here; this console would have
+    //     listed the person as cleared. Exactly the shape of the stand-down tombstone hole that
+    //     `e.pubkey !== pub` closes on the sibling subscription.
+    //
+    // SO THE RULE HERE IS THE RELAY'S RULE, spelled the same way: the church itself, or a steward this church
+    // explicitly ticked for safeguarding. And a withdrawal is REMEMBERED at its own timestamp rather than
+    // dropping the row, so the answer does not depend on arrival order — the same reason note() stopped
+    // deleting from CHECKIN_PERMITS in the same change.
+    //
+    // ONE HONEST LIMIT: the author test is applied at EMIT time, against whatever `_stewardCaps` holds then.
+    // If the steward roster arrives after this stream's EOSE, a steward-authored clearance is omitted until
+    // the next event on it. That is the safe direction — the console under-reports, the relay still enforces
+    // correctly — and it self-corrects on any later delivery or reconnect.
+    //
+    // NOTHING IS CACHED IN localStorage, unlike _subAddr: this is a cleartext list of the adults a church has
+    // cleared for children's work, and it is not worth leaving in a browser store to avoid an empty flash.
     subscribeCheckinPermissions(cb) {
-      return this._subAddr(CHECKINPERM_D, (c) => readCheckinPermission(JSON.stringify(c)) || { _invalid: true }, cb);
+      const cp = pub;
+      const byPerson = /* @__PURE__ */ new Map();
+      const mayAuthor = (by) => {
+        if (by === cp) return true;
+        const caps = _capsOf(by);
+        return Array.isArray(caps) && caps.indexOf("safeguarding") >= 0;
+      };
+      const emit = () => {
+        const out = [];
+        for (const vers of byPerson.values()) {
+          let win = null;
+          for (const [by, rec] of vers) {
+            if (!mayAuthor(by)) continue;
+            if (!win || (rec.ts || 0) > (win.ts || 0)) win = rec;
+          }
+          if (win && !win._tomb) out.push(win);
+        }
+        cb(out.sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(CHECKINPERM_D)) return;
+          const person = d.slice(CHECKINPERM_D.length);
+          if (!person) return;
+          let vers = byPerson.get(person);
+          if (!vers) {
+            vers = /* @__PURE__ */ new Map();
+            byPerson.set(person, vers);
+          }
+          const held = vers.get(e.pubkey);
+          if (held && (held.ts || 0) > (e.created_at || 0)) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            vers.set(e.pubkey, { _tomb: true, person, ts: e.created_at, _by: e.pubkey });
+            emit();
+            return;
+          }
+          const pm = readCheckinPermission(e.content) || { _invalid: true };
+          vers.set(e.pubkey, { id: person, person, ...pm, ts: e.created_at, _by: e.pubkey });
+          emit();
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch (err2) {
+        }
+      };
     },
     // AND THE ENVELOPES, which the issuer needs for two reasons: to recover the session key it already minted for
     // a service rather than replacing it, and to know which services the church has STOOD DOWN.

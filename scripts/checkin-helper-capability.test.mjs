@@ -877,15 +877,34 @@ test('THE CLEARANCE IS NOT SERVED TO THE CONGREGATION — it names the church\'s
     'a helper who is not a member of the congregation cannot read his own clearance');
 });
 
-test('NOBODY BUT THE CHURCH KEY MAY CLEAR ANYBODY — not a member, not even the safeguarding lead', async () => {
-  // THE SHARPER OF THE TWO MINTS, and the one that most needed deciding. A safeguarding steward can already
-  // READ the whole register; what they must not gain is the power to say who ELSE may. Since 2026-09-09 this
-  // document is the ONLY thing that says it, so widening it here would make widening the envelope a formality.
-  // Owner-only is also the only direction that can be relaxed later.
-  for (const who of [cara, ada, sgLead, treasurer]) {
+// RENAMED AND NARROWED 2026-09-10, and the old title is kept here rather than deleted (CLAUDE.md rules 4
+// and 8). It was 'NOBODY BUT THE CHURCH KEY MAY CLEAR ANYBODY — not a member, not even the safeguarding
+// lead', and it included `sgLead` in the loop below on this reasoning:
+//
+//     "THE SHARPER OF THE TWO MINTS, and the one that most needed deciding. A safeguarding steward can
+//      already READ the whole register; what they must not gain is the power to say who ELSE may. Since
+//      2026-09-09 this document is the ONLY thing that says it, so widening it here would make widening the
+//      envelope a formality. Owner-only is also the only direction that can be relaxed later."
+//
+// THE OWNER RELAXED IT, in its own commit, and every refusal that now bounds it is asserted in
+// scripts/checkin-permission-mint-widening.test.mjs — including, at greater length than here, a co-tenant
+// church's steward and an UNSCOPED steward, neither of whom this file has an actor for.
+//
+// The last sentence of that comment was the good one and it held: relaxing was a one-line change with a
+// test. The "formality" sentence was wrong and is corrected where the rule lives — the session key is
+// wrapped with the CHURCH key, so widening the envelope is not a formality, it is impossible without it.
+//
+// WHAT IS ASSERTED HERE NOW is the part that did not change: a clearance is not something an ordinary
+// member, a helper, or a steward ticked for something else can write.
+test('A MEMBER, A HELPER AND A FINANCE STEWARD STILL MAY NOT CLEAR ANYBODY', async () => {
+  for (const who of [cara, ada, treasurer]) {
     assert.equal((await publishAs(who, permission(cara, { by: who })))[0], false,
-      'somebody other than the church key cleared a person for the children\'s register');
+      'somebody with no safeguarding tick cleared a person for the children\'s register');
   }
+  // AND THE ONE THAT DID CHANGE, asserted so this file cannot be read as still claiming otherwise: the
+  // church's own safeguarding steward MAY, and the relay enforces it.
+  assert.equal((await publishAs(sgLead, permission(ella, { by: sgLead })))[0], true,
+    'the safeguarding steward cannot clear anybody — the 2026-09-10 widening is not in effect here');
   await sleep(150);
   assert.equal((await publishAs(cara, checkin(cara, 'r-now-cara2', S_NOW, gina.pub, KEY_NOW)))[0], false,
     'a refused clearance admitted somebody anyway');
