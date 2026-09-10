@@ -25,29 +25,35 @@ now points inside a *different function*).
 
 **`/` had 250 MB free at handoff.** Check `df -h /` **before believing any measurement you take.**
 
-⚠ **FOUND, after two wrong diagnoses of mine. Read this as a cautionary tale about measurement.**
+⚠ **UNRESOLVED AT HANDOFF, and read this as a cautionary tale about measurement rather than a diagnosis.**
 
-**The cause: `/tmp/snap-private-tmp/snap.chromium/tmp` held 61 GB — and it is OURS**, from the headless
-Chromium that browser tests and sim rounds launch. Firefox and Brave, the owner's real browsing, held 3.7 MB
-between them. `sudo du -x -h -d1 /tmp` shows it; **`du` as the ordinary user reports that same path as
-~370 MB**, because the directory is root-owned and unreadable, so its total is a **floor, not a total**.
+**What is established.** `sudo du` found **61 GB in `/tmp/snap-private-tmp/snap.chromium/tmp`** — snap's
+private `/tmp` for Chromium, i.e. the browsers **our own** sim rounds and browser tests launch. Firefox and
+Brave, the owner's real browsing, held 3.7 MB between them. Deleting the contents with
+`sudo rm -rf /tmp/snap-private-tmp/snap.chromium/tmp/*` **succeeded and freed nothing**: the files are
+unlinked but still held open, and `pkill -9 chromium` did not release them (only two `chrome_crashpad`
+processes remained). The holders are not visible to the ordinary user, so **this needs root or a reboot.**
+`sudo reboot` reclaims it unconditionally; Ubuntu also wipes `/tmp` at boot.
 
-**A reboot fixes it** — Ubuntu wipes `/tmp` at boot and the snaps release their private dirs. It cannot be
-`rm`-ed while they hold it.
+**Three wrong answers of mine, kept because the pattern is the lesson:**
+1. Reconciled non-root `du` against `df`, found a 69 GB gap, and blamed **deleted files held open** — then
+   said a reboot was needed for that reason. `sudo lsof +L1` showed such files totalling about **34 MB** on
+   the root device; the rest of that listing was `memfd:`/`/dev/shm`, i.e. **RAM, not disk**.
+2. Correcting that, said a reboot **would not** help because the space was in real files. Wrong too — they
+   were in the one directory a reboot wipes.
+3. Said "nothing here is ours". Wrong — it is Chromium, which only our tests run headlessly.
 
-**My two wrong answers, kept deliberately because the pattern matters more than the outcome:**
-1. I reconciled non-root `du` against `df`, found a 69 GB gap, and blamed **deleted files held open by
-   running processes** — then told the owner a reboot was needed for that reason. `sudo lsof +L1` showed
-   deleted-open files totalling about **34 MB** on the root device; the rest of that listing was `memfd:` and
-   `/dev/shm`, i.e. **RAM, not disk**.
-2. Correcting that, I said a reboot **would not** help because the space was in real files. Also wrong — the
-   real files were in the one directory a reboot wipes.
+All three share one shape, and it is the shape §2 warns about: **a number I was allowed to see, treated as
+the whole picture.** `du` without `sudo` is a floor. And **look inside a directory before handing someone a
+command to delete it** — the evidence for how 61 GB accumulated was destroyed before it was examined, so the
+mechanism is still unknown. If it recurs: `sudo ls -la` and `sudo du -h -d2` on that path FIRST.
 
-Both errors have the same shape, and it is the shape this document warns about in §2: **a number I was
-allowed to see, treated as the whole picture.** `du` without `sudo` is a floor. Say so, or run it as root.
-
-**Reap browsers after a sim round.** One session left 110 Chromium processes alive holding 11.5 GB of RAM
-before they were reaped, and their temp is what filled the disk.
+**What is known about the cause, and it is not much.** `/dev/shm` is 62 GB with 61 GB free, so Chromium had
+no reason to spill shared memory into `/tmp` — that theory is out. There are **21 browser launchers in
+`scripts/`, 11 of them tests**, so one full suite run starts about eleven browsers, and each Chromium
+instance is ~9 processes. This session killed browsers with `kill -9` throughout, which skips Chromium's own
+cleanup. **Reap sim browsers by resolved PID after every round** — one session left 110 alive holding 11.5 GB
+of RAM.
 
 **What a full disk has already done here, all three silently:**
 - killed a rebuild inside SQLite `VACUUM`, printing nothing — so the sabotage that followed tested the
