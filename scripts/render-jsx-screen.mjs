@@ -135,6 +135,57 @@ export function miniReact() {
 }
 
 // ── reading the tree ──────────────────────────────────────────────────────────────────────────────────────
+// THE TEXT AS A BROWSER WOULD LAY IT OUT — and the reason this is not `texts().join(' ')`.
+//
+// Moved here from scripts/checkin-session-keys-are-not-issued-early.test.mjs on 2026-09-10, unchanged, so
+// that the second and third screens to need it cannot get a copy that drifts. It was written because a
+// device run found copy that shipped reading "whenever you openthis page" on the phone — JSX strips
+// whitespace containing a newline between a text node and an element — while the assertion pinning that
+// sentence PASSED, because joining text nodes with a space had put the missing space back in. A test that
+// certifies copy it cannot see is worse than no test.
+//
+// Children only, in order. INLINE pieces are joined with NOTHING — which is what the DOM does with adjacent
+// inline nodes, the visible spacing coming from whitespace that is actually inside the text nodes — and a
+// BLOCK element is fenced with newlines, because a <div> starts a new line on screen whatever its neighbour
+// ends with. One rule, and it is what makes both instruments below faithful at once.
+//
+// Deliberately NOT `texts()`: that also collects string PROPS (title, aria-label), and gluing a tooltip onto
+// the copy beside it would invent adjacencies no reader ever sees.
+//
+// A COMPONENT (a function type — Panel, DismissibleNote, Icon) counts as a block: it is a box of its own, and
+// treating it as inline is how the first version of this reported four junctions that are perfectly fine.
+const INLINE = new Set(['b', 'i', 'em', 'strong', 'span', 'code', 'a', 'small', 'Fragment']);
+const isInline = (n) => n == null || typeof n !== 'object' || Array.isArray(n)
+  || (typeof n.type === 'string' && INLINE.has(n.type)) || n.type === 'Fragment';
+export function flow(n) {
+  if (n == null || n === false) return '';
+  if (typeof n === 'string' || typeof n === 'number') return String(n);
+  if (Array.isArray(n)) return n.map(flow).join('');
+  const inner = (n.kids || []).map(flow).join('');
+  return isInline(n) ? inner : '\n' + inner + '\n';
+}
+export const reads = (tree) => flow(tree).replace(/\s+/g, ' ').trim();
+// ── AND THE GENERAL GUARD FOR THE WHOLE BUG CLASS ─────────────────────────────────────────────────────────
+// Fixing one sentence a device caught leaves every other line in a panel one reflow away from the same
+// defect, and most carry no exact-wording assertion. So this checks the JUNCTIONS rather than the sentences:
+// every place one inline piece of copy ends on a word character and the next begins on one, i.e. where the
+// two run together with no separator a reader can see.
+//
+// It is quiet on correct markup for two reasons, both load-bearing: `{HORIZON_DAYS}` followed by ' days…' is
+// fine because the next node starts with a space, and a <div> beside a <button> is fine because flow() fences
+// blocks with a newline, so neither side ends or starts on a word character.
+export function glued(n, out = []) {
+  if (!n || typeof n !== 'object') return out;
+  if (Array.isArray(n)) { n.forEach(c => glued(c, out)); return out; }
+  const kids = (n.kids || []).filter(k => k != null && k !== false && k !== '');
+  for (let i = 0; i < kids.length - 1; i++) {
+    const a = flow(kids[i]), b = flow(kids[i + 1]);
+    if (a && b && /\w$/.test(a) && /^\w/.test(b)) out.push('…' + a.slice(-28) + '][' + b.slice(0, 28) + '…');
+  }
+  kids.forEach(k => glued(k, out));
+  return out;
+}
+
 // Every string in a node and its children, including string props (titles, aria-labels, placeholders).
 export function texts(n, out = []) {
   if (n == null || n === false) return out;

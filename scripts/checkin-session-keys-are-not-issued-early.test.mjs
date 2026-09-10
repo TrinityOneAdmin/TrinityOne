@@ -44,7 +44,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody, stmt } from './test-slice.mjs';
-import { miniReact, texts } from './render-jsx-screen.mjs';
+import { miniReact, texts, reads, glued } from './render-jsx-screen.mjs';
 import { buildHelperGrant, helperPolicy, lifetimeWindow, eligibleHelpers, GRANT_SOURCE, KEY_LEAD_SECONDS,
          permittedHelpers, permissionPolicy, permissionWindow, buildCheckinPermission, readCheckinPermission,
          readHelperGrant, PERMISSION_LIFETIMES } from './checkin-role-source.mjs';
@@ -110,6 +110,12 @@ function engine({ authed = true, publishOk = true, delegated = null } = {}) {
     now: () => AT,
     NET: 'trinityone',
     CHECKINHELPER_D: D.CHECKINHELPER,
+    // …AND THE PERMISSION'S OWN ADDRESS, because the withdrawal test below asks WHICH DOCUMENT a withdrawal
+    // rewrites. `_mayClearForCheckin` is stubbed true and nothing here is about it: who may withdraw is
+    // proved in scripts/checkin-permission-mint-widening.test.mjs, and a stub of the ADDRESS would be the
+    // test answering its own question, which this is not.
+    CHECKINPERM_D: D.CHECKINPERM,
+    _mayClearForCheckin: () => true,
     // ⚠ THE FLAG UNDER TEST, and it starts EMPTY — a console that has not read anything. Nothing in this file
     // sets it by hand: it is set only by the lifted subscription's own oneose, which is the code the tests
     // are about. A harness that pre-set it would be the test answering its own question.
@@ -169,6 +175,7 @@ function engine({ authed = true, publishOk = true, delegated = null } = {}) {
   };
   const mint = lift('async publishCheckinHelpers(opts) {', 'publishCheckinHelpers');
   const issue = lift('async issueCheckinSessionKeys(opts) {', 'issueCheckinSessionKeys');
+  const revoke = lift('revokeCheckinPermission(person) {', 'revokeCheckinPermission');
   const readKeys = lift('subscribeCheckinSessionKeys(cb) {', 'subscribeCheckinSessionKeys');
   const settledFn = lift('checkinSessionKeysSettled() {', 'checkinSessionKeysSettled');
   const self = { publishCheckinHelpers: (o) => mint.call({}, o) };
@@ -191,6 +198,7 @@ function engine({ authed = true, publishOk = true, delegated = null } = {}) {
   return { stubs, published, banners, subs, probe, openKeys,
     settled: () => settledFn.call({}),
     publishCheckinHelpers: (o) => mint.call({}, o),
+    revokeCheckinPermission: (who) => revoke.call({}, who),
     issueCheckinSessionKeys: (o) => issue.call(self, o) };
 }
 
@@ -549,51 +557,14 @@ const btn = (tree, label) => shown(tree, n => n.type === 'button' && texts(n).jo
 // assertion pinning that sentence PASSED, because said() had put the missing space back in. A test that
 // certifies copy it cannot see is worse than no test (CLAUDE.md rule 4).
 const said = (tree) => texts(tree).join(' ').replace(/\s+/g, ' ');
-// ── SO: THE TEXT AS A BROWSER WOULD LAY IT OUT ────────────────────────────────────────────────────────────
-// Children only, in order. INLINE pieces are joined with NOTHING — which is what the DOM does with adjacent
-// inline nodes, the visible spacing coming from whitespace that is actually inside the text nodes — and a
-// BLOCK element is fenced with newlines, because a <div> starts a new line on screen whatever its neighbour
-// ends with. One rule, and it is what makes both instruments below faithful at once.
-//
-// Deliberately NOT `texts()`: that also collects string PROPS (title, aria-label), and gluing a tooltip onto
-// the copy beside it would invent adjacencies no reader ever sees.
-//
-// The inline list is the tags this panel actually uses for emphasis. A COMPONENT (a function type — Panel,
-// DismissibleNote, Icon) counts as a block: it is a box of its own, and treating it as inline is how the
-// first version of this reported four junctions that are perfectly fine on screen.
-const INLINE = new Set(['b', 'i', 'em', 'strong', 'span', 'code', 'a', 'small', 'Fragment']);
-const isInline = (n) => n == null || typeof n !== 'object' || Array.isArray(n)
-  || (typeof n.type === 'string' && INLINE.has(n.type)) || n.type === 'Fragment';
-function flow(n) {
-  if (n == null || n === false) return '';
-  if (typeof n === 'string' || typeof n === 'number') return String(n);
-  if (Array.isArray(n)) return n.map(flow).join('');
-  const inner = (n.kids || []).map(flow).join('');
-  return isInline(n) ? inner : '\n' + inner + '\n';
-}
-const reads = (tree) => flow(tree).replace(/\s+/g, ' ').trim();
-// ── AND THE GENERAL GUARD FOR THE WHOLE BUG CLASS ─────────────────────────────────────────────────────────
-// Fixing the one sentence the device caught would leave every other line in this panel one reflow away from
-// the same defect, and none of them carries an exact-wording assertion. So this checks the JUNCTIONS rather
-// than the sentences: every place one inline piece of copy ends on a word character and the next begins on
-// one, i.e. where the two run together with no separator a reader can see.
-//
-// It is quiet on correct markup for two reasons, both load-bearing: `{HORIZON_DAYS}` followed by ' days…' is
-// fine because the next node starts with a space, and a <div> beside a <button> is fine because flow() fences
-// blocks with a newline, so neither side ends or starts on a word character.
-function glued(n, out = []) {
-  if (!n || typeof n !== 'object') return out;
-  if (Array.isArray(n)) { n.forEach(c => glued(c, out)); return out; }
-  const kids = (n.kids || []).filter(k => k != null && k !== false && k !== '');
-  for (let i = 0; i < kids.length - 1; i++) {
-    const a = flow(kids[i]), b = flow(kids[i + 1]);
-    if (a && b && /\w$/.test(a) && /^\w/.test(b)) out.push('…' + a.slice(-28) + '][' + b.slice(0, 28) + '…');
-  }
-  kids.forEach(k => glued(k, out));
-  return out;
-}
+// ── SO: THE TEXT AS A BROWSER WOULD LAY IT OUT, AND WHERE TWO PIECES OF COPY RUN TOGETHER ────────────────
+// `reads()` and `glued()` were written here on 2026-09-10 and MOVED to scripts/render-jsx-screen.mjs the
+// same day, unchanged, when the clearance panel next door needed them for its own copy (the future-dated
+// clearance defect, S1). The reasoning for both — why not texts().join(' '), why a component counts as a
+// block, why it is quiet on correct markup — travelled with the code and is written above them there.
 
 async function screen({ settled = true, held = true, name = 'St Mary\'s', keys = [], perms = CLEARED,
+                        today = SERVICE.date,
                         services = [svc('svc-a', SERVICE), svc('svc-b', SERVICE_2)], stewards = [SGLEAD],
                         result = { issued: [{ session: 'svc-a' }], skipped: [], failed: [], rotated: [], settled: true } } = {}) {
   const src = fnBody(APP, 'function CheckinSessionKeys() {', 'CheckinSessionKeys');
@@ -611,8 +582,12 @@ async function screen({ settled = true, held = true, name = 'St Mary\'s', keys =
     Panel: function Panel(p) { return React.createElement('div', { 'data-panel': p.title }, p.action, p.children); },
     DismissibleNote: function DismissibleNote(p) { return React.createElement('div', { 'data-note': p.id }, p.children); },
     Icon: Stub('Icon'),
-    todayISO: () => SERVICE.date,          // "today" is the first of the two services, so both are in horizon
+    todayISO: () => today,                 // default: the first of the two services, so both are in horizon
     window: {
+      // ⚠ READ THROUGH A GETTER, NOT CAPTURED. `keys` and `perms` arrive from subscriptions, so on a real
+      // console they change UNDER AN OPEN PAGE — which is the entire subject of the S1/S2 trigger tests
+      // below. A harness that closed over the initial value could only ever test a fresh mount, and a fresh
+      // mount is exactly the case the shipped defect did not break.
       useStewardCheckinSessionKeys: () => keys,
       useStewardCheckinPermissions: () => perms,
       useStewardServices: () => services,
@@ -645,6 +620,11 @@ async function screen({ settled = true, held = true, name = 'St Mary\'s', keys =
     said: () => said(tree),
     reads: () => reads(tree),        // as a browser concatenates it — see flow()
     glued: () => glued(tree),        // every place two pieces of copy run together
+    // A CLEARANCE GRANTED OR WITHDRAWN WHILE THIS PAGE IS OPEN, and an envelope arriving back from the
+    // relay. Both are subscription deliveries and both must be followed by a redraw, exactly as a real
+    // re-render is: `perms = …` alone changes nothing until React draws again.
+    setPerms(next) { perms = next; return this.redraw(); },
+    setKeys(next) { keys = next; return this.redraw(); },
     redraw() { tree = draw(CheckinSessionKeys, {}); return tree; },
     press(label) {
       const bs = btn(tree, label);
@@ -754,6 +734,174 @@ test('POINT OF USE: THE IDENTITY-CHANGE PATH — the screen asks the ENGINE, not
     'every new church is refused its first session keys for ever and the desk is the only fallback');
   assert.deepEqual(firstEver.calls[0].existing, [],
     're-anchor: the first-issue call did not pass the empty list it actually holds');
+});
+
+// ── 2a. THE TRIGGER — A CLEARANCE THE CONSOLE HAS NOT NOTICED IS A SUNDAY WITH NO KEY ─────────────────────
+//
+// S1 and S2 of the churchwarden sim round, reference/SCOPE-CHECKIN-SEALING-2026-09-10.md, both of them the
+// SAME defect in the effect's dependency array. It depended on `clearedNow.join(',')` — the people whose
+// clearance is live at THIS MOMENT — while the issuer judges every session at its OWN start
+// (`permittedHelpers(perms, win.from)`). So:
+//
+//   • GRANTING a clearance for next Sunday changed nobody's live status, no element of the dependency array
+//     moved, the effect never ran, and that Sunday got no key at all. This is the most likely thing a
+//     churchwarden ever does with this screen.
+//   • WITHDRAWING one failed identically in the other direction: the clearance list correctly went to
+//     "Nobody is cleared yet" while this panel went on reporting "1 helper holds this session's key" for
+//     30+ seconds and through re-polling. Both pieces of shipped copy that promise otherwise — "withdrawing
+//     one ends their access to every session at once" and "whenever a clearance changes" — were false.
+//
+// THE ISSUER WAS NEVER WRONG. Nothing below changes it, and the gate tests in section 1 still hold: these
+// drive the SCREEN, which is where the trigger lives, because an issuer nothing calls at the right moment is
+// CLAUDE.md rule 1's "well-tested engine nobody is required to consult".
+const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+const TODAY_ISO = iso(Date.now());
+const SUNDAY_ISO = iso(Date.now() + 3 * 86400000);     // three days out: future, and well inside the horizon
+const SOON_SVC = [svc('svc-a', { date: SUNDAY_ISO, time: '10:30' })];
+// A CLEARANCE FOR ONE NAMED DAY, through the SHIPPED window maths and the SHIPPED builder and parser, so the
+// five fields the trigger keys on are the five a relay would actually store. A hand-typed object here would
+// let the trigger pass over a shape no console can produce.
+const permDay = (who, dateISO) => {
+  const w = permissionWindow('day', { date: dateISO });
+  assert.ok(w, 'fixture: the shipped window maths would not place ' + dateISO);
+  return readCheckinPermission(JSON.stringify(buildCheckinPermission({ person: who, source: 'steward',
+    lifetime: 'day', from: w.from, until: w.until })));
+};
+// An envelope row as subscribeCheckinSessionKeys delivers one, for the session in `SOON_SVC`.
+const envFor = (pubs) => [{ session: 'svc-a', source: GRANT_SOURCE, lifetime: 'session', from: AT,
+  until: AT + 7200, pubs, keys: Object.fromEntries([[CHURCH, 'x'], ...pubs.map(p => [p, 'y'])]), ts: AT - 3600 }];
+
+test('S1: CLEARING SOMEBODY FOR NEXT SUNDAY RE-ISSUES — the trigger that ignored every future date', async () => {
+  const s = await screen({ perms: [], today: TODAY_ISO, services: SOON_SVC });
+  await Promise.resolve();
+  assert.equal(s.calls.length, 1, 'fixture: the mount pass did not run, so nothing below is about anything');
+
+  // THE WARDEN CLEARS MAUREEN FOR SUNDAY. The page stays open — this is a subscription delivery, not a visit.
+  s.setPerms([permDay(BEN, SUNDAY_ISO)]);
+  await Promise.resolve();
+  assert.equal(s.calls.length, 2,
+    'A CLEARANCE FOR A FUTURE SUNDAY CHANGED NOTHING THIS EFFECT WATCHES, so no envelope was re-issued and ' +
+    'that Sunday has no helper key at all. Only reopening the page or pressing Re-issue would recover it — ' +
+    'and a warden has no reason to do either, because the clearance list says the clearance is there. This ' +
+    'is S1 of the 2026-09-10 sim round, reproduced four times on the real screen');
+  assert.deepEqual(s.calls[1].permissions.map(p => p.person), [BEN],
+    'the re-issue ran but did not hand the issuer the new clearance');
+  // …AND THE ISSUER IS STILL ASKED THE WHOLE LIST, never a pre-filtered one: it applies permittedHelpers()
+  // at each session's own start, which is the half that was already right and must stay right.
+  assert.ok(s.calls[1].permissions.every(p => p && p.person && p.lifetime),
+    'the permissions were flattened or filtered on the way out, so the issuer can no longer judge them at ' +
+    'each session\'s own start');
+});
+
+test('S1, the regression half: clearing somebody for TODAY still re-issues', async () => {
+  // The one case that worked before this fix ("Clearing for today renders correctly", scope note) — pinned,
+  // because the dependency it depended on is the one being replaced.
+  const s = await screen({ perms: [], today: TODAY_ISO, services: SOON_SVC });
+  await Promise.resolve();
+  assert.equal(s.calls.length, 1, 'fixture: no mount pass');
+  s.setPerms([permDay(BEN, TODAY_ISO)]);
+  await Promise.resolve();
+  assert.equal(s.calls.length, 2,
+    'clearing somebody for TODAY no longer re-issues. The narrow trigger this fix replaced got this case ' +
+    'right; a replacement that gets it wrong has traded one broken case for another');
+});
+
+test('S2: WITHDRAWING A CLEARANCE RE-ISSUES, AND THE PANEL STOPS NAMING HER — without a page revisit', async () => {
+  const s = await screen({ perms: [permDay(ADA, SUNDAY_ISO)], keys: envFor([ADA]),
+    today: TODAY_ISO, services: SOON_SVC });
+  await Promise.resolve();
+  assert.equal(s.calls.length, 1, 'fixture: no mount pass');
+  assert.match(s.reads(), /1 helper holds this session’s key/,
+    'fixture: the panel does not report the helper this test is about withdrawing: ' + s.reads());
+
+  // THE WITHDRAWAL LANDS. subscribeCheckinPermissions drops the tombstoned clearance, which is exactly what
+  // makes the list next door read "Nobody is cleared yet" — the state the sim photographed beside a panel
+  // still claiming a helper held the key.
+  s.setPerms([]);
+  await Promise.resolve();
+  assert.equal(s.calls.length, 2,
+    'WITHDRAWING A FUTURE-DATED CLEARANCE RE-ISSUED NOTHING. The panel then contradicts both the clearance ' +
+    'list beside it and its own copy ("whenever a clearance changes"), indefinitely — measured at 30+ ' +
+    'seconds and through re-polling on the real screen. And it is not only a label: the envelope on the ' +
+    'relay still wraps her, because revokeCheckinPermission writes a tombstone at checkinperm:<person> and ' +
+    'nothing else rewrites checkinhelper:<session> — see the engine test at the end of this file');
+  assert.deepEqual(s.calls[1].permissions, [],
+    'the re-issue ran with the withdrawn clearance still in the list it handed the issuer');
+
+  // AND THE RE-ISSUED ENVELOPE COMING BACK IS WHAT CHANGES THE WORDS. The panel reports the envelope it
+  // holds and nothing else — that is why it could be stale — so the honest end of this story is the new
+  // envelope arriving with nobody wrapped in it.
+  s.setKeys(envFor([]));
+  assert.doesNotMatch(s.reads(), /1 helper holds/,
+    'the panel still names a helper after the envelope that named her was replaced: ' + s.reads());
+  assert.match(s.reads(), /Key issued — nobody cleared for it yet/,
+    'and it does not say what the session\'s state actually is now: ' + s.reads());
+});
+
+test('THIS EFFECT PUBLISHES, so an UNCHANGED clearance list must not fire it again', async () => {
+  // The other way to get this wrong, and the worse one: a dependency whose IDENTITY changes every draw makes
+  // this effect mint continuously. The corpus key is a sorted string for exactly this reason, so an equal
+  // list delivered as a brand-new array — which is what every subscription emit hands over — is equal.
+  const s = await screen({ perms: [permDay(ADA, SUNDAY_ISO)], today: TODAY_ISO, services: SOON_SVC });
+  await Promise.resolve();
+  assert.equal(s.calls.length, 1, 'fixture: no mount pass');
+  s.redraw(); s.redraw();
+  s.setPerms([permDay(ADA, SUNDAY_ISO)]);        // a NEW array, a NEW object, the same five fields
+  s.setPerms([permDay(ADA, SUNDAY_ISO)]);
+  await Promise.resolve();
+  assert.equal(s.calls.length, 1,
+    'THE EFFECT FIRED AGAIN WITH NOTHING CHANGED. This effect publishes: a dependency that is an identity ' +
+    'rather than a value mints an envelope on every draw, and the issuer\'s idempotence only bounds the ' +
+    'damage, it does not stop the traffic');
+});
+
+test('THE EOSE GATE IS UNTOUCHED BY THE WIDER TRIGGER — a clearance change still does not fire early', async () => {
+  // The gate two audits went into, re-proved against the NEW trigger rather than assumed to have survived
+  // it. A wider dependency array is exactly the change that could make an effect fire before the corpus has
+  // been read — and firing early re-mints every session in the horizon with a fresh key.
+  const s = await screen({ settled: false, perms: [], today: TODAY_ISO, services: SOON_SVC });
+  await Promise.resolve();
+  assert.deepEqual(s.calls, [], 'fixture: it issued on mount with an unfinished read');
+  s.setPerms([permDay(BEN, SUNDAY_ISO)]);
+  s.setPerms([]);
+  await Promise.resolve();
+  assert.deepEqual(s.calls, [],
+    'A CLEARANCE CHANGE FIRED THE ISSUER BEFORE THIS CHURCH\'S ENVELOPES HAD BEEN READ. That re-mints every ' +
+    'session in the horizon with a FRESH key and orphans the helper copy of every record already sealed ' +
+    'under the old one, with the register still painting normally');
+});
+
+test('S3: THE SUMMARY LINE CANNOT CONTRADICT THE ROWS ABOVE IT', async () => {
+  // The sim photographed "Issued keys for 1 session(s) · 0 person(s) cleared right now" directly beneath a
+  // row reading "1 helper holds this session's key". Both were true: "right now" meant today and the
+  // clearance was for Sunday. So the count is over the sessions in view, computed from the same envelopes
+  // the rows are — which makes agreement structural rather than careful.
+  const s = await screen({ perms: [permDay(ADA, SUNDAY_ISO)], keys: envFor([ADA]),
+    today: TODAY_ISO, services: SOON_SVC });
+  // TWO TURNS AND A REDRAW: `setLast` is written inside the effect's own async run, and this miniReact does
+  // not re-render on a setState — the same shape the rotated-copy test below uses.
+  await Promise.resolve();
+  await Promise.resolve();
+  const t = (s.redraw(), s.reads());
+  assert.match(t, /1 helper holds this session’s key/, 'fixture: the row this line must agree with is missing: ' + t);
+  assert.doesNotMatch(t, /0 person/,
+    'THE LINE UNDER THE LIST SAID NOBODY WAS CLEARED WHILE THE ROW ABOVE IT NAMED A HOLDER. Two true ' +
+    'sentences that read as a contradiction is a warden deciding the screen is broken: ' + t);
+  assert.match(t, /Issued a key for 1 session · 1 person holds one\./,
+    'the summary does not report what this pass did and who holds a key for the sessions listed, in words ' +
+    'that agree with the rows: ' + t);
+  assert.doesNotMatch(t, /right now/,
+    '"right now" is back. It is a different question from the one the rows answer, and asking it here is ' +
+    'the whole of S3: ' + t);
+  assert.deepEqual(s.glued(), [], 'two pieces of this panel run together with no separator a reader can see');
+
+  // …AND THE EMPTY CASE IS A SENTENCE, not "0 people hold one".
+  const none = await screen({ perms: [], keys: envFor([]), today: TODAY_ISO, services: SOON_SVC });
+  await Promise.resolve();
+  await Promise.resolve();
+  none.redraw();
+  assert.match(none.reads(), /Issued a key for 1 session · nobody holds one yet\./,
+    'a Sunday nobody is cleared for is reported as a count rather than as the ordinary state it is: ' + none.reads());
 });
 
 // ── 2b. THE COPY AS A PHONE ACTUALLY RENDERS IT ───────────────────────────────────────────────────────────
@@ -955,6 +1103,81 @@ test('POINT OF USE: A ROTATION IS REPORTED ON THE SCREEN, and does not overclaim
   assert.doesNotMatch(words, /register itself is unaffected/i,
     'the screen carries BOTH the truthful line and the old reassurance, so a steward reads a contradiction ' +
     'and believes the half that costs them nothing: ' + words);
+});
+
+// ── 2c. WHAT A WITHDRAWAL ACTUALLY DOES TO THE PUBLISHED ENVELOPE ─────────────────────────────────────────
+//
+// The sim could not see this from the console and said so: "Whether the published envelope still wraps the
+// withdrawn helper, or only the label is stale, is not visible from the console." It is the difference
+// between a cosmetic bug and a live one, so it is settled here by running the SHIPPED withdrawal and the
+// SHIPPED issuer and reading what each puts on the wire.
+//
+// THE ANSWER IS THAT THE ENVELOPE REALLY DOES STILL WRAP HER. A withdrawal writes ONE addressable tombstone,
+// at `checkinperm:<person>`; the envelope lives at `checkinhelper:<session>`, a different address, and
+// nothing but publishCheckinHelpers/revokeCheckinHelpers ever writes it. So without a re-issue her wrapped
+// slot — and the session key inside it — stays on the relay for as long as the envelope does.
+//
+// WHAT LIMITS IT, stated so nothing here is overclaimed in either direction. The relay's read gate is a
+// CONJUNCTION: canRead's CHECKINHELPER_D branch requires `checkinPermitted(authed, cp)` as well as envelope
+// membership, so a withdrawn helper is refused the envelope and refused every record. What the stale wrap
+// costs is therefore a key ALREADY ON A PHONE — nothing rotates a session key, deliberately, because
+// rotating it orphans every record already sealed under it — which is the same honest limit the clearance
+// panel's own copy states. This fix does not change that and must not claim to.
+//
+// SO THE TRIGGER FIX IS NOT A RELABEL: firing the issuer on a withdrawal is what actually removes her from
+// the published document, and the second half below proves it does so WITHOUT rotating the key.
+
+test('A WITHDRAWAL REWRITES THE CLEARANCE, NOT THE ENVELOPE — measured, both addresses', async () => {
+  const h = engine();
+  const ev = await envelopeEvent(h, 'svc-a', SERVICE, CLEARED);
+  const doc0 = JSON.parse(ev.content);
+  assert.deepEqual(doc0.pubs, [ADA], 'fixture: the envelope this test withdraws from does not name her');
+  assert.ok(doc0.keys[ADA], 'fixture: she has no wrapped slot, so "the wrap survives" would be vacuous');
+  assert.deepEqual(h.published, [], 'fixture: the mint\'s own publish was supposed to be taken off the wire');
+
+  // THE WHOLE OF WHAT PRESSING "WITHDRAW" DOES.
+  const ok = await h.revokeCheckinPermission(ADA);
+  assert.equal(ok, true, 'fixture: the shipped withdrawal did not reach the wire at all');
+  assert.equal(h.published.length, 1, 'a withdrawal published ' + h.published.length + ' events, not one');
+  const dOf = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+  assert.ok(dOf(h.published[0]).startsWith(D.CHECKINPERM),
+    're-anchor: a withdrawal no longer writes the clearance document at all: ' + dOf(h.published[0]));
+  assert.deepEqual(h.published.filter(e => dOf(e).startsWith(D.CHECKINHELPER)), [],
+    'THE WITHDRAWAL REWROTE THE SESSION ENVELOPE. If it ever does, the note above this test is wrong and ' +
+    'the whole account of S2 needs redoing');
+  assert.deepEqual(JSON.parse(ev.content).pubs, [ADA],
+    'the envelope already published still names her — which is the finding: the console\'s panel was telling ' +
+    'the truth about the document and lying about the effect');
+});
+
+test('…AND THE RE-ISSUE IS WHAT TAKES HER OFF IT, without rotating the session key', async () => {
+  const h = engine();
+  const ev = await envelopeEvent(h, 'svc-a', SERVICE, CLEARED);
+  const key0 = JSON.parse(ev.content).keys[CHURCH];
+  const stream = h.openKeys();
+  stream.deliver([ev]);
+  stream.eose();
+  assert.equal(h.settled(), true, 'fixture: the corpus did not settle, so the issuer would refuse for the wrong reason');
+  h.published.length = 0;
+
+  // HER CLEARANCE IS GONE — the list the screen now hands the issuer, which is exactly what the trigger fix
+  // makes happen at the moment the tombstone arrives instead of on the next page visit.
+  const out = await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)],
+    permissions: [], stewards: [SGLEAD], existing: stream.rows() });
+  assert.equal(out.issued.length, 1,
+    'the issuer did not re-publish the envelope after the only cleared helper was withdrawn, so her wrap ' +
+    'stays on the relay: ' + JSON.stringify(out));
+  const doc1 = JSON.parse(h.published[0].content);
+  assert.deepEqual(doc1.pubs, [],
+    'THE RE-ISSUED ENVELOPE STILL NAMES THE WITHDRAWN HELPER: ' + JSON.stringify(doc1.pubs));
+  assert.equal(doc1.keys[ADA], undefined,
+    'and her wrapped copy of the session key survived the re-issue, which is the only part of this that a ' +
+    'phone can keep using');
+  assert.equal(out.issued[0].reused, true,
+    'the re-issue MINTED A FRESH KEY. Removing one helper would then orphan the helper copy of every record ' +
+    'already written into that session — a withdrawal must not destroy the register');
+  assert.equal(doc1.keys[CHURCH], key0, 'the church\'s own slot changed, so the key was not in fact reused');
+  assert.deepEqual(out.rotated, [], 'a re-issue that recovered the key was reported as a rotation');
 });
 
 // ── 3. AND THE PAGE ACTUALLY RENDERS IT ───────────────────────────────────────────────────────────────────

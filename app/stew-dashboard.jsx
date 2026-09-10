@@ -5641,9 +5641,23 @@ function CheckinClearances() {
   // will not stand behind. Showing one as a clearance would put a person on this list whom the relay
   // refuses, which is the worst direction for this screen to be wrong in: the church would believe somebody
   // is cleared and their key would open nothing.
+  //
+  // AND THERE ARE THREE STATES, NOT TWO. Until 2026-09-10 this computed `live` alone and every row that was
+  // not live was labelled "Ended <date>" — so a clearance whose window is entirely in the FUTURE, which is
+  // the commonest thing a churchwarden does ("clear Maureen for next Sunday"), read as already over. Found by
+  // the sim round of 2026-09-10 (S1) driving the real screen: Sep 11, 13 and 20 all rendered "Ended", four
+  // times out of four, while a clearance for today rendered correctly. `state` is ordered so that the OVER
+  // test comes first — a window that has not opened cannot also have closed, and asking "has it started"
+  // first is exactly how the future case fell through to the past one.
+  const RANK = { live: 2, soon: 1, ended: 0 };
   const rows = perms.filter(p => p && !p._invalid && !p._locked && p.person)
-    .map(p => ({ ...p, live: p.from <= nowS && (p.until == null || p.until >= nowS) }))
-    .sort((a, b) => (Number(b.live) - Number(a.live)) || nameFor(a.person).localeCompare(nameFor(b.person)));
+    .map(p => ({ ...p, state: (p.until != null && p.until < nowS) ? 'ended' : (p.from > nowS ? 'soon' : 'live'),
+      // `live` is KEPT alongside `state` for one caller and one only: the `already` list handed to
+      // ClearPersonModal, which asks "who is cleared NOW and so need not be offered again". Folding it into
+      // `state` would silently change who that modal suggests, and whether a forthcoming clearance should be
+      // re-offered is the separate S9 question (you cannot edit or extend one) — not this fix's to decide.
+      live: p.from <= nowS && (p.until == null || p.until >= nowS) }))
+    .sort((a, b) => (RANK[b.state] - RANK[a.state]) || nameFor(a.person).localeCompare(nameFor(b.person)));
   const fmtD = (ts) => { try { return new Date(ts * 1000).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }); } catch (e) { return ''; } };
   // SAY THE SHAPE THE CHURCH CHOSE, not a computed date it never typed. A steward who picked "until a
   // steward ends it" should read that sentence back, because an expiry date invented for display is how a
@@ -5651,6 +5665,15 @@ function CheckinClearances() {
   const runsTo = (r) => r.lifetime === 'open' ? 'Until someone here ends it'
     : r.lifetime === 'day' ? ('For ' + fmtD(r.from) + ' only')
     : ('Until ' + fmtD(r.until));
+  // …AND THE SAME SHAPE FOR ONE THAT HAS NOT STARTED. It says the START, because that is the fact the row was
+  // getting wrong, and it keeps the church's own chosen shape for the rest of the sentence for the reason
+  // runsTo() gives. "not started yet" is spelled out only for a single day, where "For Sep 13, 2026 only"
+  // would otherwise read identically whether that Sunday is ahead or behind; the other two shapes lead with
+  // "From", which says it on its own. No instructional sentence here — the owner's copy instruction of
+  // 2026-09-10 puts explanation in tooltips and help, not on the row.
+  const startsOn = (r) => r.lifetime === 'day' ? ('For ' + fmtD(r.from) + ' — not started yet')
+    : r.lifetime === 'dated' ? ('From ' + fmtD(r.from) + ' until ' + fmtD(r.until))
+    : ('From ' + fmtD(r.from) + ', until someone here ends it');
   const blocked = (message) => {
     try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in clearance', message } })); } catch (e) {}
   };
@@ -5669,16 +5692,16 @@ function CheckinClearances() {
   const list = (
     <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
       {rows.map(r => (
-        <div key={r.person} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: r.live ? 'var(--surface)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <div style={{ width: 34, height: 34, borderRadius: 999, background: r.live ? 'var(--sage-soft, var(--surface-2))' : 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Icon name="shield" size={16} color={r.live ? 'var(--sage)' : 'var(--ink-3)'} />
+        <div key={r.person} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: r.state === 'ended' ? 'var(--surface-2)' : 'var(--surface)', border: '1px solid var(--line)' }}>
+          <div style={{ width: 34, height: 34, borderRadius: 999, background: r.state === 'live' ? 'var(--sage-soft, var(--surface-2))' : r.state === 'soon' ? 'var(--surface-2)' : 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Icon name="shield" size={16} color={r.state === 'live' ? 'var(--sage)' : r.state === 'soon' ? 'var(--ink-2)' : 'var(--ink-3)'} />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14.5, color: r.live ? 'var(--ink)' : 'var(--ink-2)' }}>{nameFor(r.person)}</div>
+            <div style={{ fontWeight: 700, fontSize: 14.5, color: r.state === 'ended' ? 'var(--ink-2)' : 'var(--ink)' }}>{nameFor(r.person)}</div>
             {/* A LAPSED CLEARANCE IS SHOWN, NOT HIDDEN. It is the answer to "why can Margaret not open the
                 register any more", and a church renewing in January needs to see last year's list to renew
                 from it. reference/DOMAIN.md: say a key has expired; do not pretend it was never there. */}
-            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{r.live ? runsTo(r) : 'Ended ' + fmtD(r.until)}</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{r.state === 'live' ? runsTo(r) : r.state === 'soon' ? startsOn(r) : 'Ended ' + fmtD(r.until)}</div>
           </div>
           {asking === r.person ? (
             <div style={{ display: 'flex', gap: 7, flexShrink: 0 }}>
@@ -5770,7 +5793,6 @@ function CheckinSessionKeys() {
   const held = !!(S && S.checkinIssuerHeld && S.checkinIssuerHeld());
   const named = !!church.name;
   const canIssue = held && named;
-  const nowS = Math.floor(Date.now() / 1000);
   const HORIZON_DAYS = 14;                   // the issuer's own default; it clamps anything wider itself
   const today = todayISO();
   const horizonISO = new Date(Date.now() + HORIZON_DAYS * 86400000).toISOString().slice(0, 10);
@@ -5779,12 +5801,49 @@ function CheckinSessionKeys() {
   const soon = services.filter(sv => sv && sv.date && sv.date >= today && sv.date <= horizonISO)
     .sort((a, b) => String(a.date + (a.time || '')).localeCompare(String(b.date + (b.time || ''))));
   const envOf = (sv) => keys.find(k => k && k.session === (sv.session || sv.id)) || null;
-  // WHO IS CLEARED RIGHT NOW — for the count this panel shows, and for the effect's dependency. The issuer
-  // is handed the WHOLE `perms` list and applies permittedHelpers() itself at each session's own start
-  // instant, which is not the same question as "cleared at this moment": a clearance starting tomorrow puts
-  // nobody on today's envelope and somebody on tomorrow's. This list is display and change-detection only.
-  const clearedNow = perms.filter(p => p && !p._invalid && !p._locked && p.person
-    && p.from <= nowS && (p.until == null || p.until >= nowS)).map(p => p.person);
+  // WHAT COUNTS AS "A CLEARANCE CHANGED" — the effect's dependency, and the defect it replaces.
+  //
+  // ⚠ THIS DEPENDED ON WHO IS CLEARED **RIGHT NOW** UNTIL 2026-09-10, and the sim round of that day drove
+  // straight through the hole (S1 and S2). `clearedNow` filtered the permissions to those live at THIS
+  // MOMENT, so granting — or withdrawing — a clearance for NEXT SUNDAY changed no element of the dependency
+  // array at all: the effect never fired, no envelope was re-issued, and the panel went on reporting the
+  // previous answer until the page was reopened or Re-issue was pressed by hand. Both directions were
+  // measured on the real screen: a future-dated grant got no key, and a withdrawal left "1 helper holds this
+  // session's key" standing for 30+ seconds beside a clearance list correctly reading "Nobody is cleared
+  // yet" — contradicting this panel's own copy ("whenever a clearance changes") and the clearance panel's
+  // ("withdrawing one ends their access to every session at once").
+  //
+  // THE ISSUER JUDGES EACH SESSION AT ITS OWN START — `permittedHelpers(perms, win.from)` — so the question
+  // this dependency has to answer is "could the answer at ANY instant have changed", not "has today's". So
+  // it is derived from the WHOLE clearance corpus, in exactly the five fields permissionAdmits() reads:
+  // person, source, lifetime, from, until. Nothing else. `ts` and `_by` are deliberately left out — a
+  // re-publish of an identical clearance changes neither who holds a key nor when, and would buy a pass for
+  // nothing.
+  //
+  // AND IT IS A VALUE, NOT AN IDENTITY. Sorted and joined into one string, so it compares EQUAL across
+  // renders whenever nothing has changed. That is not tidiness: this effect PUBLISHES, and a dependency
+  // whose identity changed every draw would mint continuously.
+  //
+  // IT ERRS TOWARDS FIRING, on purpose. A narrower key — only the sessions inside the horizon — would be
+  // exact, and would also be a SECOND COPY of the rule that decides who a session key is wrapped to, which
+  // is how the padlocks and the keys came to disagree once already (capNeedsExplicitGrant). The cost of the
+  // wider key is one comparison per Sunday: the issuer is idempotent and skips a session whose envelope
+  // already names exactly these people and whose key it can still recover.
+  const clearanceKey = perms.filter(p => p && !p._invalid && !p._locked && p.person)
+    .map(p => [p.person, p.source, p.lifetime, p.from, p.until == null ? '' : p.until].join('|'))
+    .sort().join(',');
+  // AND WHO ACTUALLY HOLDS A KEY FOR THE SESSIONS ON THIS PANEL — the count under the list, read off THE
+  // SAME envelopes the rows above are drawn from.
+  //
+  // The line here until 2026-09-10 read "Issued keys for 1 session(s) · 0 person(s) cleared right now", and
+  // the sim (S3) photographed it directly beneath a row reading "1 helper holds this session's key". Both
+  // were true and they read as a contradiction, because "right now" means today and the clearance was for
+  // Sunday. A warden looking at a list of Sundays is asking about THOSE Sundays, not about this minute — so
+  // the count is over the sessions in view, and because it is computed from `keys` exactly as `rowFor` is,
+  // the two lines cannot disagree by construction rather than by care. A stood-down session contributes
+  // nobody: its row says so in its own words.
+  const holders = new Set();
+  for (const sv of soon) { const e = envOf(sv); if (e && !e.standDown) for (const h of (e.pubs || [])) holders.add(h); }
   const [busy, setBusy] = React.useState(false);
   const [last, setLast] = React.useState(null);      // the last issuer result — reported, never assumed
   // `keys` IS DELIBERATELY NOT A DEPENDENCY OF THE EFFECT BELOW, and is read through a ref instead. Issuing
@@ -5835,16 +5894,18 @@ function CheckinSessionKeys() {
   // is unaffected; what is narrower is only the horizon rolling a new Sunday into range.
   //
   // The deps are the whole trigger list from the scope note: [idv, conn] like every other subscription in this
-  // console, `settled` so the first run is the moment the corpus is read and not before, the CLEARED SET so
-  // granting or withdrawing a clearance re-wraps the affected Sundays, the SERVICES so a newly-added Sunday
-  // inside the horizon gets one, and the STEWARD ROSTER + CAPS so a new safeguarding lead is wrapped in. The
-  // issuer is idempotent — a session whose envelope already names exactly these people, and whose key it can
-  // still recover, is skipped without a publish — so a re-run costs one comparison per Sunday.
+  // console, `settled` so the first run is the moment the corpus is read and not before, the CLEARANCE
+  // CORPUS — see clearanceKey above, and note that it is the whole corpus and not the people cleared today,
+  // which is the S1/S2 defect — so granting or withdrawing a clearance re-wraps the affected Sundays whatever
+  // dates it covers, the SERVICES so a newly-added Sunday inside the horizon gets one, and the STEWARD ROSTER
+  // + CAPS so a new safeguarding lead is wrapped in. The issuer is idempotent — a session whose envelope
+  // already names exactly these people, and whose key it can still recover, is skipped without a publish —
+  // so a re-run costs one comparison per Sunday.
   React.useEffect(() => {
     if (!canIssue || !settled) return undefined;
     Promise.resolve(run()).catch(() => {});
     return undefined;
-  }, [idv, conn, settled, canIssue, clearedNow.join(','),
+  }, [idv, conn, settled, canIssue, clearanceKey,
       soon.map(sv => (sv.session || sv.id) + '@' + sv.date + (sv.time || '')).join(','),
       stewards.join(','), JSON.stringify(caps)]);
   const fmtD = (iso) => { try { return new Date(iso + 'T12:00:00').toLocaleDateString([], { day: 'numeric', month: 'short' }); } catch (e) { return iso; } };
@@ -5927,7 +5988,7 @@ function CheckinSessionKeys() {
       ) : last && Array.isArray(last.rotated) && last.rotated.length ? (
         <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 10, lineHeight: 1.45 }}>{last.rotated.length === 1 ? 'One session was given a new key' : last.rotated.length + ' sessions were given a new key'} because this console could not open the one already issued{last.rotated.length === 1 ? '' : ' for them'}. Any check-in already written for {last.rotated.length === 1 ? 'it' : 'them'} is now unreadable to cleared helpers — you and the church can still read {last.rotated.length === 1 ? 'it' : 'them'} in the register.</div>
       ) : last && Array.isArray(last.issued) && last.issued.length ? (
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Issued keys for {last.issued.length} session(s) · {clearedNow.length} person(s) cleared right now.</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>{(last.issued.length === 1 ? 'Issued a key for 1 session' : 'Issued keys for ' + last.issued.length + ' sessions') + ' · ' + (holders.size === 0 ? 'nobody holds one yet' : holders.size === 1 ? '1 person holds one' : holders.size + ' people hold one') + '.'}</div>
       ) : null}
     </Panel>
   );
