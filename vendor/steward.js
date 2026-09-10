@@ -15337,6 +15337,7 @@ zoo`.split("\n");
   var _capState = {};
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
   var _checkinMigrated = "";
+  var _ckKeysSettled = "";
   var _capWaiters = {};
   for (const k of Object.keys(CAP_KEYS)) _capWaiters[k] = /* @__PURE__ */ new Set();
   var _capRingChanged = (kind) => {
@@ -15358,23 +15359,16 @@ zoo`.split("\n");
     const mine = _capsOf(churchPub);
     return Array.isArray(mine) && mine.indexOf("safeguarding") >= 0;
   };
-  var _checkinKeepersMissing = (caps, stewards) => {
-    const src = caps && typeof caps === "object" ? caps : _stewardCaps;
-    const allowed = _capAllows(CAP_KEYS.checkin, src);
-    const named = new Set((Array.isArray(stewards) ? stewards : []).filter(Boolean));
-    return Object.keys(src || {}).filter((p2) => allowed(p2) && !named.has(p2));
-  };
-  var _ckKeeperWarned = /* @__PURE__ */ new Set();
-  var _warnCheckinKeeperLeftOut = (missing) => {
-    if (!missing || !missing.length) return;
-    const sig = [...missing].sort().join(",");
-    if (_ckKeeperWarned.has(sig)) return;
-    _ckKeeperWarned.add(sig);
-    const who = missing.map((p2) => _stewardNames && _stewardNames[p2] || (p2 || "").slice(0, 10) + "\u2026").join(", ");
+  var _ckRotateWarned = /* @__PURE__ */ new Set();
+  var _warnCheckinKeyRotated = (sessions) => {
+    const fresh = [...new Set((Array.isArray(sessions) ? sessions : []).filter(Boolean))].filter((sid) => !_ckRotateWarned.has(sid));
+    if (!fresh.length) return;
+    for (const sid of fresh) _ckRotateWarned.add(sid);
+    const many = fresh.length > 1;
     try {
       window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
         what: "check-in session key",
-        message: "This session\u2019s register was NOT shared with " + who + " \u2014 they hold Safeguarding, so they should be able to read what a helper writes, and cannot. Re-issue the session keys from the Check-in page."
+        message: (many ? fresh.length + " sessions were given a NEW register key" : "One session was given a NEW register key") + " \u2014 this console could not open the key already issued for " + (many ? "them" : "it") + ", which happens when the envelope was issued from a different device or this church\u2019s key was restored from a backup. The register itself is unaffected: you and your safeguarding stewards can still read every record."
       } }));
     } catch (e) {
     }
@@ -15407,6 +15401,7 @@ zoo`.split("\n");
   }
   var FINKEY_D = CAP_KEYS.finance.d;
   var churchSkHeld = () => !actingChurch && !!churchSk && !!churchPub;
+  var _ckIssuerHeld = () => !!sk && churchSkHeld() && !actingChurch;
   var _legacyBookKeyHex = () => {
     try {
       return churchSkHeld() ? _hex(getConversationKey(churchSk, churchPub)) : "";
@@ -16228,6 +16223,7 @@ zoo`.split("\n");
     _mediaKeyChecked = false;
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
+    _ckKeysSettled = "";
     _authedRelays.clear();
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
@@ -21143,6 +21139,7 @@ zoo`.split("\n");
     // recipients, which is not something to leave lying in a browser store for the sake of a paint.
     subscribeCheckinSessionKeys(cb) {
       const byId = /* @__PURE__ */ new Map();
+      const cp = pub;
       const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
@@ -21174,7 +21171,18 @@ zoo`.split("\n");
           } catch (err2) {
           }
         },
+        // ── AND ONLY NOW IS THE CORPUS "READ" ────────────────────────────────────────────────────────────────
+        // The one thing that makes wiring the issuer safe. Set here and nowhere else, so there is exactly one
+        // place in the product that can answer "have we actually looked for this church's envelopes?" — and it
+        // answers yes only on an AUTHENTICATED end-of-stored-events. See _ckKeysSettled for what an
+        // unauthenticated one costs: nostr-tools calls a failed CONNECT an EOSE, the relay answers an
+        // unauthenticated read of this church with nothing, and the issuer reads either as "no envelope" and
+        // mints a fresh key over a live one.
+        //
+        // `pub === cp` because a church switch mid-stream must not stamp the church we switched AWAY from as
+        // read — the same guard subscribeCapKey applies to _capState, and for the same reason.
         oneose() {
+          if (cp && pub === cp && _isRelayAuthed()) _ckKeysSettled = cp;
           emit();
         }
       });
@@ -21229,7 +21237,6 @@ zoo`.split("\n");
       const helpers = permittedHelpers(Array.isArray(o.permissions) ? o.permissions : [], at);
       const allowed = _capAllows(CAP_KEYS.checkin, o.caps || _stewardCaps);
       const keepers = [cp, ...(Array.isArray(o.stewards) ? o.stewards : []).filter(allowed)];
-      const _short = _checkinKeepersMissing(o.caps || _stewardCaps, o.stewards);
       const reuse = String(o.sessionKeyHex || "");
       const sessionKeyHex = /^[0-9a-f]{64}$/.test(reuse) ? reuse : _hex(crypto.getRandomValues(new Uint8Array(32)));
       let built;
@@ -21249,7 +21256,6 @@ zoo`.split("\n");
         return null;
       }
       if (built.failed.length) _warnUnsealed("check-in helper", built.failed);
-      _warnCheckinKeeperLeftOut(_short);
       const ok = await _publishToRelays(finalizeEvent2({
         kind: 30078,
         created_at: now(),
@@ -21310,6 +21316,28 @@ zoo`.split("\n");
         content: ""
       }, sk));
     },
+    // ── THE TWO QUESTIONS THE CHECK-IN SCREEN HAS TO ASK BEFORE IT SAYS ANYTHING ────────────────────────────
+    //
+    // Both are one-line readers of module state that already exists, exposed rather than re-derived, because the
+    // console keeping its own copy of either is how the padlocks and the keys came to disagree once already
+    // (see capNeedsExplicitGrant).
+    //
+    // WHY NOT stewardStreamLoaded('subscribeCheckinSessionKeys')? Because it answers a DIFFERENT question and
+    // answers it too early. That helper is true as soon as the stream has DELIVERED anything, and this
+    // subscription emits on every event as well as on EOSE — so one envelope arriving out of a year's worth
+    // flips it, and the issuer run on that answer rotates every session it has not yet heard about. Measured
+    // shape, not a hypothetical: the emit-per-event is three lines above the oneose that sets this flag.
+    checkinSessionKeysSettled() {
+      return !!pub && _ckKeysSettled === pub;
+    },
+    // AND "COULD THIS CONSOLE EVER ISSUE?" — the constraint the Check-in page has to state in plain words
+    // rather than design around. False on a DELEGATED steward's console, and false on a console holding no
+    // church key: a church where only delegated stewards ever open a console gets no session keys, EVER, and a
+    // cleared helper there is served ciphertext they hold no key for. Whether delegates should be able to mint
+    // is the owner's decision and has not been taken (reference/SCOPE-CHECKIN-SEALING-2026-09-10.md).
+    checkinIssuerHeld() {
+      return _ckIssuerHeld();
+    },
     // -- THE ISSUER: the weekly act, with no steward in it ----------------------------------------------------
     // THIS IS THE NEW MACHINERY, AND IT IS WHERE THIS DESIGN CAN GO WRONG, so it says out loud what it is.
     //
@@ -21334,9 +21362,10 @@ zoo`.split("\n");
     // under the old one.
     async issueCheckinSessionKeys(opts) {
       const o = opts || {};
-      if (!sk || !churchSkHeld() || actingChurch) return null;
+      if (!_ckIssuerHeld()) return null;
       const cp = pub;
       if (!cp) return null;
+      if (_ckKeysSettled !== cp) return { issued: [], skipped: [], failed: [], rotated: [], settled: false };
       const at = Number.isFinite(o.at) ? Math.floor(o.at) : now();
       const days = Number.isFinite(o.horizonDays) ? Math.max(0, Math.floor(o.horizonDays)) : 14;
       const horizon = Math.min(days * 86400, KEY_LEAD_SECONDS);
@@ -21350,7 +21379,7 @@ zoo`.split("\n");
       };
       const allowed = _capAllows(CAP_KEYS.checkin, o.caps || _stewardCaps);
       const keepers = [cp, ...(Array.isArray(o.stewards) ? o.stewards : []).filter(allowed)];
-      const out = { issued: [], skipped: [], failed: [] };
+      const out = { issued: [], skipped: [], failed: [], rotated: [], settled: true };
       for (const svc of Array.isArray(o.services) ? o.services : []) {
         const session = String(svc && (svc.session || svc.id) || "");
         if (!session) {
@@ -21389,6 +21418,7 @@ zoo`.split("\n");
           out.skipped.push({ session, why: "unchanged" });
           continue;
         }
+        const rotating = !!(have && !keyHex);
         const res = await this.publishCheckinHelpers({
           session,
           service: svc,
@@ -21401,9 +21431,12 @@ zoo`.split("\n");
           after: o.after,
           sessionKeyHex: keyHex
         });
-        if (res) out.issued.push(res);
-        else out.failed.push({ session, why: "the relay or the builder refused it" });
+        if (res) {
+          out.issued.push(res);
+          if (rotating) out.rotated.push(session);
+        } else out.failed.push({ session, why: "the relay or the builder refused it" });
       }
+      _warnCheckinKeyRotated(out.rotated);
       return out;
     },
     // MIGRATION — move any check-in record still sealed with the legacy self-key onto the safeguarding key.

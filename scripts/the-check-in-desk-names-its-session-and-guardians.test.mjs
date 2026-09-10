@@ -78,6 +78,9 @@ async function desk({ services = [], guardians = {}, minors = [KID, KID2], recs 
     CheckoutModal: Stub('CheckoutModal'),
     // The clearances panel is the SIBLING under test in the other file; here it is furniture.
     CheckinClearances: Stub('CheckinClearances'),
+    // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing: DashCheckin now renders the
+    // session-key panel beside the clearances, so every test that SLICES DashCheckin has to supply it.
+    CheckinSessionKeys: Stub('CheckinSessionKeys'),
     useStewNarrow: () => false,
     todayISO: () => TODAY,
     window: {

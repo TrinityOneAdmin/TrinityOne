@@ -122,6 +122,8 @@ test('CHECK-IN SAYS WHICH EMPTY IT IS: no children marked, or the list has not a
       Icon: Stub('Icon'), Panel: function Panel(p) { return p.children; }, SkPill: Stub('SkPill'),
       DismissibleNote: Stub('DismissibleNote'), todayISO: () => '2026-09-03',
       useStewNarrow: () => false, CheckinClearances: Stub('CheckinClearances'),
+      // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
+      CheckinSessionKeys: Stub('CheckinSessionKeys'),
       setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
     });
     return texts(draw(Comp, {})).join(' ');
@@ -181,6 +183,8 @@ test('…and check-in says loading rather than claiming the church marked nobody
     Icon: Stub('Icon'), Panel: function Panel(p) { return p.children; }, SkPill: Stub('SkPill'),
     DismissibleNote: Stub('DismissibleNote'), todayISO: () => '2026-09-03',
     useStewNarrow: () => false, CheckinClearances: Stub('CheckinClearances'),
+    // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
+    CheckinSessionKeys: Stub('CheckinSessionKeys'),
     setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
   });
   const words = texts(draw(Comp, {})).join(' ');

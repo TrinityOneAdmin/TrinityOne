@@ -159,6 +159,8 @@ async function checkin({ minors, guardians, present }) {
     // The clearances panel is now DashCheckin's sibling on the same page. Stubbed rather than sliced in:
     // this file is about who is printed as a pickup contact, and that panel prints nobody.
     CheckinClearances: () => null,
+    // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
+    CheckinSessionKeys: () => null,
   };
   const mod = await loadSlices(
     [['function DashCheckin()', 'DashCheckin'], ['function CheckinPicker(', 'CheckinPicker'],

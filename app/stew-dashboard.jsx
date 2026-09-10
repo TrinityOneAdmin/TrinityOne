@@ -5721,6 +5721,200 @@ function CheckinClearances() {
 }
 window.CheckinClearances = CheckinClearances;
 
+// ── WHO HOLDS THIS SUNDAY'S REGISTER KEY, AND THE ONE THING THAT STOPS IT BEING ISSUED ───────────────────
+//
+// Piece 3 of reference/SCOPE-CHECKIN-SEALING-2026-09-10.md, and THE FIRST PRODUCT CALLER either half of the
+// issuer has ever had. Before this component, `grep -rl issueCheckinSessionKeys app/` and `grep -rl
+// subscribeCheckinSessionKeys app/` both returned nothing: a steward could clear somebody for children's work
+// and no key was ever minted for them, on any Sunday, for ever. CLAUDE.md rule 1.
+//
+// ⚠ THE ONE THING THIS SCREEN MUST NEVER DO IS ISSUE EARLY. `issueCheckinSessionKeys` recovers the key a
+// session ALREADY has out of the envelope list this component holds. Run before that list has been read to an
+// authenticated end-of-stored-events, every branch of the issuer reads "this Sunday has no envelope",
+// publishes one, and mints a FRESH key — rotating the session and orphaning everything already sealed under
+// the old one, with the register still painting normally because only the helper's copy dies.
+//
+// So the effect below is gated on window.Steward.checkinSessionKeysSettled(), and NOT on the rows arriving
+// and NOT on stewardStreamLoaded(). Both of those are true on the FIRST delivery, and this subscription
+// emits per event as well as on EOSE — one envelope out of a year's worth flips them. The engine refuses the
+// same call for the same reason, so a future caller cannot re-create the race either; this half is what makes
+// the screen tell the truth about it rather than merely being safe.
+//
+// WHAT IT SAYS RATHER THAN DESIGNS AROUND. `issueCheckinSessionKeys` needs `churchSkHeld() && !actingChurch`,
+// and this effect also needs a published church name — the same proxy for "this console's church actually
+// exists" that the capability-key effect uses, and for the same measured reason (round 7: a delegate's
+// console minting envelopes keyed to the delegate's OWN pubkey, refused 28 times, raising a banner that told
+// a treasurer her work was not saving and offered a remedy that destroys a church key). So A CHURCH WHERE
+// ONLY DELEGATED STEWARDS EVER OPEN A CONSOLE GETS NO SESSION KEYS, EVER, and its cleared helpers are served
+// ciphertext they hold no key for. That is stated in plain words on this panel. Whether a delegate should be
+// able to mint is the owner's decision and it has not been taken; nothing here works around it.
+function CheckinSessionKeys() {
+  const keys = window.useStewardCheckinSessionKeys ? window.useStewardCheckinSessionKeys() : [];
+  const perms = window.useStewardCheckinPermissions ? window.useStewardCheckinPermissions() : [];
+  const services = window.useStewardServices ? window.useStewardServices() : [];
+  // A FLAT LIST OF HEX PUBKEYS — subscribeStewards' own shape — passed straight through, exactly as
+  // ensureCapKeyFor(kind, stewardPubs, caps) takes it. WHICH of them is a keeper is decided inside the mint
+  // by _capAllows against CAP_KEYS.checkin, so filtering here would be a second copy of the rule that says
+  // who holds the register's key, and a second copy is how the padlocks and the keys came to disagree.
+  const stewards = window.useStewardStewards ? window.useStewardStewards() : [];
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
+  const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const conn = window.useStewardConn ? window.useStewardConn() : 0;
+  const S = window.Steward;
+  const caps = (S && S.stewardCaps && S.stewardCaps()) || {};
+  // READ LIVE, NOT LATCHED IN STATE. The flag is set inside the subscription's oneose, one line BEFORE it
+  // emits — so the delivery that flips it is also the delivery that re-renders this component, and reading it
+  // here is reading it at the first moment it can be true. A copy in useState would need its own effect and
+  // could only ever be a draw behind.
+  const settled = !!(S && S.checkinSessionKeysSettled && S.checkinSessionKeysSettled());
+  const held = !!(S && S.checkinIssuerHeld && S.checkinIssuerHeld());
+  const named = !!church.name;
+  const canIssue = held && named;
+  const nowS = Math.floor(Date.now() / 1000);
+  const HORIZON_DAYS = 14;                   // the issuer's own default; it clamps anything wider itself
+  const today = todayISO();
+  const horizonISO = new Date(Date.now() + HORIZON_DAYS * 86400000).toISOString().slice(0, 10);
+  // The services this pass would actually touch, in the issuer's own terms: dated, from today, inside the
+  // horizon. Sorted forward, because "which Sunday am I looking at" is the question a steward has.
+  const soon = services.filter(sv => sv && sv.date && sv.date >= today && sv.date <= horizonISO)
+    .sort((a, b) => String(a.date + (a.time || '')).localeCompare(String(b.date + (b.time || ''))));
+  const envOf = (sv) => keys.find(k => k && k.session === (sv.session || sv.id)) || null;
+  // WHO IS CLEARED RIGHT NOW — for the count this panel shows, and for the effect's dependency. The issuer
+  // is handed the WHOLE `perms` list and applies permittedHelpers() itself at each session's own start
+  // instant, which is not the same question as "cleared at this moment": a clearance starting tomorrow puts
+  // nobody on today's envelope and somebody on tomorrow's. This list is display and change-detection only.
+  const clearedNow = perms.filter(p => p && !p._invalid && !p._locked && p.person
+    && p.from <= nowS && (p.until == null || p.until >= nowS)).map(p => p.person);
+  const [busy, setBusy] = React.useState(false);
+  const [last, setLast] = React.useState(null);      // the last issuer result — reported, never assumed
+  // `keys` IS DELIBERATELY NOT A DEPENDENCY OF THE EFFECT BELOW, and is read through a ref instead. Issuing
+  // publishes envelopes, which arrive back on this very subscription and change `keys` — so listing it would
+  // make every issue schedule another one. The issuer is idempotent, so the loop would terminate rather than
+  // run away, but it would put two extra full passes on the wire after every mint. What the effect needs is
+  // the list AT THE MOMENT IT RUNS, which is exactly what a ref written on every draw holds.
+  const keysRef = React.useRef(keys);
+  keysRef.current = keys;
+  const alive = React.useRef(true);
+  React.useEffect(() => () => { alive.current = false; }, []);
+  const run = async () => {
+    // NO EARLY `return null` IN A COMPONENT BODY, and this is a structural rule rather than a style: a hook
+    // below one changes React's hook count the first time the branch flips, React throws #310, and the screen
+    // renders NOTHING with no error a steward can see (scripts/no-hook-after-an-early-return.test.mjs, which
+    // exists because that shipped once). The guard it replaces is not lost — both call sites already refuse
+    // when this console cannot issue (the effect's own gate, and the button's `disabled`), `canIssue` is false
+    // whenever window.Steward is absent because it is read off it, and a missing issuer lands in the catch.
+    setBusy(true);
+    let res = null;
+    try {
+      res = await S.issueCheckinSessionKeys({ services: soon, permissions: perms, existing: keysRef.current,
+        stewards, caps, horizonDays: HORIZON_DAYS });
+    } catch (e) { res = null; }
+    if (!alive.current) return res;
+    setBusy(false);
+    setLast(res);
+    // A REFUSAL IS SAID, NOT SWALLOWED. Every other write on this page is awaited and answered for the same
+    // reason (see writeCheckin): a screen that reports a key nobody has is worse than one that reports
+    // nothing. `settled: false` is NOT raised as a banner — the engine refused because the read had not
+    // finished, and the effect comes back when it has, so it is a wait rather than a fault.
+    if (res && Array.isArray(res.failed) && res.failed.length) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'check-in session keys',
+        message: res.failed.length + ' of the next ' + soon.length + ' session(s) could not be given a register key. A cleared helper will not be able to open those sessions — you and your safeguarding stewards still can. Check you are online and press Re-issue.' } })); } catch (e) {}
+    }
+    return res;
+  };
+  // ISSUE ON OPENING THIS PAGE — AFTER EOSE — AND ON ANY CHANGE TO WHO IS CLEARED.
+  //
+  // ⚠ "THIS PAGE", NOT "THE CONSOLE", AND THE NOTE ABOVE SAYS SO IN THOSE WORDS. This component mounts only
+  // on the Check-in tab, so a church whose owner opens the console every week and never opens Check-in still
+  // gets no keys. The scope note asks for "owner-console open"; a trigger that genuinely meant that would
+  // have to sit in StewDashboard beside the capability-key effect, which is mounted always — and it is NOT
+  // put there in this change, deliberately, because a publishing effect in an always-mounted component needs
+  // its own point-of-use test and StewDashboard is not renderable in a slice. Recorded rather than glossed:
+  // the copy claims what the code does, which is the narrower thing (CLAUDE.md rule 4). A steward clearing
+  // somebody is already on this page — CheckinClearances is the panel above — so the clearance-change trigger
+  // is unaffected; what is narrower is only the horizon rolling a new Sunday into range.
+  //
+  // The deps are the whole trigger list from the scope note: [idv, conn] like every other subscription in this
+  // console, `settled` so the first run is the moment the corpus is read and not before, the CLEARED SET so
+  // granting or withdrawing a clearance re-wraps the affected Sundays, the SERVICES so a newly-added Sunday
+  // inside the horizon gets one, and the STEWARD ROSTER + CAPS so a new safeguarding lead is wrapped in. The
+  // issuer is idempotent — a session whose envelope already names exactly these people, and whose key it can
+  // still recover, is skipped without a publish — so a re-run costs one comparison per Sunday.
+  React.useEffect(() => {
+    if (!canIssue || !settled) return undefined;
+    Promise.resolve(run()).catch(() => {});
+    return undefined;
+  }, [idv, conn, settled, canIssue, clearedNow.join(','),
+      soon.map(sv => (sv.session || sv.id) + '@' + sv.date + (sv.time || '')).join(','),
+      stewards.join(','), JSON.stringify(caps)]);
+  const fmtD = (iso) => { try { return new Date(iso + 'T12:00:00').toLocaleDateString([], { day: 'numeric', month: 'short' }); } catch (e) { return iso; } };
+  const rowFor = (sv) => {
+    const env = envOf(sv);
+    if (env && env.standDown) return { tone: 'off', say: 'Stood down — no key, on purpose' };
+    if (env) return { tone: 'on', say: (env.pubs || []).length + ' helper' + ((env.pubs || []).length === 1 ? '' : 's') + ' hold this session’s key' };
+    if (!settled) return { tone: 'off', say: 'Still reading this church’s keys…' };
+    return { tone: 'off', say: 'No key yet' };
+  };
+  return (
+    <Panel title="Session keys" action={
+      <button onClick={() => run()} disabled={!canIssue || busy || !settled}
+        title={!canIssue ? 'Only the console holding the church key can issue session keys.' : (!settled ? 'Still reading this church’s existing keys — issuing now could replace one.' : 'Issue a register key for each of the next two weeks’ sessions')}
+        className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, opacity: (canIssue && settled && !busy) ? 1 : 0.5 }}>{busy ? 'Issuing…' : 'Re-issue'}</button>
+    } style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* SAY THE REAL CONSTRAINT, NOT "a console must open". reference/SCOPE-CHECKIN-SEALING-2026-09-10.md
+          is explicit that this must be stated and not designed around: the issuer signs as the church, so
+          only the console holding the church key can ever mint one. */}
+      {!held ? (
+        <DismissibleNote id="checkin-keys-delegated" icon="shield" tone="clay" style={{ marginBottom: 12 }}>
+          <b>This console cannot issue session keys.</b> A register key is wrapped by the church’s own key, so
+          only the console that holds it can mint one — not a steward acting for the church. If nobody ever
+          opens <b>this church’s own</b> console, no session keys are issued at all: the people you have
+          cleared will be handed records their phone cannot open. You can still run the register from here.
+        </DismissibleNote>
+      ) : !named ? (
+        <DismissibleNote id="checkin-keys-unnamed" icon="shield" tone="clay" style={{ marginBottom: 12 }}>
+          <b>No session keys yet.</b> This church has not published its name, so this console cannot yet tell
+          its own church from one it is helping with — and issuing on that guess is how a console ends up
+          writing keys no relay will store. Name the church in <b>Settings</b> and this starts on its own.
+        </DismissibleNote>
+      ) : (
+        <DismissibleNote id="checkin-keys-intro" icon="shield" tone="sage" style={{ marginBottom: 12 }}>
+          Each session gets its <b>own</b> key, wrapped to the people you have cleared and to your safeguarding
+          stewards. This console issues them for the next <b>{HORIZON_DAYS} days</b> whenever you open
+          <b>this page</b> and whenever a clearance changes — so if nobody opens it for a month, the Sundays in
+          that month have no helper keys and the desk falls back to you. Nothing here blocks a check-in.
+        </DismissibleNote>
+      )}
+      {!soon.length ? (
+        <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>No sessions in the next {HORIZON_DAYS} days, so there is nothing to issue a key for. Add them to the <b>calendar</b> and a key follows.</div>
+      ) : (
+        <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 7, overflowY: 'auto', minHeight: 0 }}>
+          {soon.map(sv => { const r = rowFor(sv); return (
+            <div key={sv.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 12px', borderRadius: 12, background: r.tone === 'on' ? 'var(--surface)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <Icon name="shield" size={15} color={r.tone === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5 }}>{(sv.name || 'Gathering') + ' · ' + fmtD(sv.date) + (sv.time ? ' ' + sv.time : '')}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{r.say}</div>
+              </div>
+            </div>
+          ); })}
+        </div>
+      )}
+      {/* WHAT THE LAST PASS ACTUALLY DID, reported rather than implied. `settled: false` is its own state and
+          is said as one: the engine refused because this church's existing keys had not finished arriving,
+          which is a wait and not a fault. */}
+      {last && last.settled === false ? (
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Waiting for this church’s existing keys to arrive before issuing — issuing now could replace a key a helper already has.</div>
+      ) : last && Array.isArray(last.rotated) && last.rotated.length ? (
+        <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 10, lineHeight: 1.45 }}>{last.rotated.length} session(s) were given a <b>new</b> key because this console could not open the one already issued for them. The register itself is unaffected.</div>
+      ) : last && Array.isArray(last.issued) && last.issued.length ? (
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Issued keys for {last.issued.length} session(s) · {clearedNow.length} person(s) cleared right now.</div>
+      ) : null}
+    </Panel>
+  );
+}
+window.CheckinSessionKeys = CheckinSessionKeys;
+
 // PICK A PERSON, AND HOW LONG FOR. The two halves of the only decision this screen takes.
 //
 // WHERE THE NAMES COME FROM, and why it is a SUGGESTION and never an authority. checkinPermissionSuggestions
@@ -6030,7 +6224,12 @@ function DashCheckin() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : '1.35fr 1fr', gap: 18, height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{registerPanel}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}><CheckinClearances /></div>
+      {/* THREE PANELS NOW, and the third is the answer to the question the second raises. Clearing somebody
+          records that the church trusts them; a SESSION KEY is the thing that actually lets their phone open
+          a record — and until this panel existed nothing in the product ever minted one, so every clearance
+          was a decision with no mechanism behind it. It sits under the clearances because that is the order a
+          steward meets them in. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}><CheckinClearances /><CheckinSessionKeys /></div>
     </div>
   );
 }

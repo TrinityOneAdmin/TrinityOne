@@ -141,9 +141,20 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     pool: { subscribeMany: (_relays, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; } },
     _warnUnsealed: (cap, failed) => { warnings.push({ cap, failed: [...failed] }); },
     window: { dispatchEvent: (e) => { banners.push((e && e.detail) || {}); return true; } },
-    // A FRESH ONE PER HARNESS. `_ckKeeperWarned` is module state in the console — "say it once per console
+    // A FRESH ONE PER HARNESS. `_ckRotateWarned` is module state in the console — "say it once per console
     // session" — so sharing one across tests would let the first test's warning silence the second's.
-    _ckKeeperWarned: new Set(),
+    _ckRotateWarned: new Set(),
+    // ⚠ A SETTLED CONSOLE, STATED RATHER THAN INHERITED. `_ckKeysSettled` is the church whose
+    // `checkinhelper:` corpus has been read to an AUTHENTICATED EOSE, and issueCheckinSessionKeys refuses
+    // outright when it does not match — because issuing on an unfinished read mints a FRESH key over a live
+    // one. Every test in THIS file hands the issuer an explicit `existing` list, i.e. models a console that
+    // has finished reading, so that is what this stub says. The gate itself is driven from
+    // scripts/checkin-session-keys-are-not-issued-early.test.mjs, which sets it through the shipped
+    // subscription's own oneose instead of asserting it here.
+    _ckKeysSettled: CHURCH,
+    // AND AN AUTHENTICATED SOCKET, because the settle above happens only on an authenticated
+    // end-of-stored-events — see the oneose in subscribeCheckinSessionKeys.
+    _isRelayAuthed: () => true,
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
   };
   const scope = proxyOf(stubs);
@@ -157,10 +168,10 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   const lifted = new Function(`${capKeysSrc} ${capAllowsSrc} return { CAP_KEYS, _capAllows };`)();
   stubs.CAP_KEYS = lifted.CAP_KEYS;
   stubs._capAllows = lifted._capAllows;
-  // AND THE KEEPER CHECK, OUT OF THE SAME BUNDLE. This is the decision the audit's second item is about —
-  // "the code CAN tell the difference between a church with no lead and a lead who was left out" — so a
-  // test-local reimplementation of it would be the test answering its own question. It closes over
-  // _capAllows, CAP_KEYS and _stewardCaps, so unlike the two above it needs the harness scope.
+  // AND THE HELPERS THAT CLOSE OVER MODULE STATE, OUT OF THE SAME BUNDLE rather than reimplemented here:
+  // each is a decision one of these tests is NAMED after, so a test-local copy would be the test answering
+  // its own question. They close over _capAllows, CAP_KEYS, _stewardCaps, sk and actingChurch, so unlike
+  // CAP_KEYS and _capAllows above they need the harness scope.
   const liftScoped = (sig, name) => new Function('scope', `with (scope) { return (${stmt(VENDOR, sig, name).replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '')}); }`)(scope);
   // AND THE CONSOLE'S OWN GATE ON CLEARING SOMEBODY, out of the same bundle. It is what decides whether a
   // delegated safeguarding steward's console will even attempt the write the relay now admits, so a
@@ -168,8 +179,19 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
   const capsOfSrc = fnBody(VENDOR, 'function _capsOf(by) {', '_capsOf');
   stubs._capsOf = new Function('scope', `with (scope) { ${capsOfSrc} return _capsOf; }`)(scope);
   stubs._mayClearForCheckin = liftScoped('var _mayClearForCheckin = () =>', '_mayClearForCheckin');
-  stubs._checkinKeepersMissing = liftScoped('var _checkinKeepersMissing = (caps, stewards) =>', '_checkinKeepersMissing');
-  stubs._warnCheckinKeeperLeftOut = liftScoped('var _warnCheckinKeeperLeftOut = (missing) =>', '_warnCheckinKeeperLeftOut');
+  // _checkinKeepersMissing + _warnCheckinKeeperLeftOut WERE LIFTED HERE UNTIL 2026-09-10 and are GONE from
+  // the bundle: under the owner's double-locking decision their message ("they hold Safeguarding, so they
+  // should be able to read what a helper writes, and cannot") became a false claim, because a safeguarding
+  // holder reads every record through the ring copy in `content` and loses nothing by being off an envelope.
+  // The warning is re-aimed at the one thing a keeper slot really buys — the CHURCH'S own slot, which is what
+  // lets the issuer reuse a session's key instead of rotating it. Three tests over the old warning were
+  // removed with it and are named in the commit; the "said once" test below was re-aimed with it.
+  stubs._warnCheckinKeyRotated = liftScoped('var _warnCheckinKeyRotated = (sessions) =>', '_warnCheckinKeyRotated');
+  // AND THE OWNER TEST THE ISSUER NOW SHARES WITH THE SCREEN. One copy in the bundle, read by
+  // issueCheckinSessionKeys and by Steward.checkinIssuerHeld(), so the console's copy of "can this console
+  // mint?" cannot drift from the refusal itself. Lifted, because `noKey`/`delegated` below mutate `sk` and
+  // `actingChurch` AFTER the lift and this must read them live.
+  stubs._ckIssuerHeld = liftScoped('var _ckIssuerHeld = () =>', '_ckIssuerHeld');
   assert.equal(stubs.CAP_KEYS.checkin.cap, 'safeguarding', 'lifted CAP_KEYS is not the shipped one — re-anchor');
   assert.equal(stubs.CAP_KEYS.checkin.explicit, true,
     'the register key stopped being an EXPLICIT capability, so an unscoped steward now gets it by default');
@@ -345,64 +367,101 @@ test('A CALLER THAT FORGETS THE ROSTER MINTS A GRANT ONLY THE CHURCH CAN OPEN �
     're-anchor: the lead got a key with no roster passed, so this test no longer describes the shipped path');
 });
 
-// ── AND IT NOW SAYS SO: THE AUDIT'S SECOND ITEM ────────────────────────────────────────────────────────────
-// reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md: "the mint derives keepers as [cp, ...stewards], so a
-// caller omitting the lead silently leaves her unable to read that session's register… An audit MEASURED
-// that the code can tell the difference. A previous builder declined this on the false premise that the two
-// were indistinguishable. Warn."
+// ── THE WARNING THIS SECTION HELD IS GONE, AND ONE OF ITS FOUR TESTS IS RE-AIMED WITH IT ──────────────────
 //
-// The check itself is LIFTED OUT OF THE BUNDLE (see harness) rather than restated, so these four tests are
-// driving the shipped rule and not a copy of it.
+// UNTIL 2026-09-10 four tests here pinned `_warnCheckinKeeperLeftOut`: "the safeguarding lead was left off
+// the envelope, and it says so". reference/SCOPE-CHECKIN-SEALING-2026-09-10.md establishes that its message
+// was FALSE, and false in the worst direction — the owner's decision double-locks every record, one copy
+// under the safeguarding ring in `content` and one under the session key, so a safeguarding holder reads
+// every record through the ring copy whatever any envelope says. Omitted from an envelope she loses a
+// DUPLICATE of a body she can already read. The banner told her she had lost access she still had, and told
+// her to fix it by re-issuing, which rotates keys.
+//
+// THREE OF THE FOUR WERE DELETED with the code they pinned, and they are named here rather than vanishing
+// (CLAUDE.md rule 8):
+//
+//   1. 'A LEAD LEFT OFF THE ENVELOPE IS NAMED IN A WARNING — not left to find out on Sunday'
+//      — pinned the false claim itself. What it also asserted (the lead is absent from an envelope minted
+//        with no `stewards` argument) is still asserted, by the test immediately above this block.
+//   2. '…AND A CHURCH WITH NO SAFEGUARDING STEWARD IS NOT WARNED AT ALL'
+//   3. '…AND THE FINANCE-ONLY STEWARD BEING ABSENT IS NOT A WARNING'
+//      — both asserted the ABSENCE of a banner that can no longer be raised by anything, so both passed
+//        vacuously the moment the code went. A test that cannot fail is worse than no test.
+//
+// THE FOURTH IS RE-AIMED, not deleted, because its subject — "say it once for the whole horizon pass, not
+// once per Sunday" — is a property of the replacement warning too, and the replacement is raised from the
+// ISSUER's loop, which is exactly where a per-Sunday repeat comes from.
 
-test('A LEAD LEFT OFF THE ENVELOPE IS NAMED IN A WARNING — not left to find out on Sunday', async () => {
-  const h = harness();   // the church HAS a safeguarding steward: SGLEAD
-  await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: [perm(ADA)] });   // no `stewards`
-  const { raw } = grantOf(h);
-  assert.equal(raw.keys[SGLEAD], undefined, 'fixture: the lead was supposed to be missing from this envelope');
-  assert.equal(h.banners.length, 1,
-    'THE SAFEGUARDING LEAD WAS GIVEN NO SESSION KEY AND NOTHING WAS SAID. She can read the register today ' +
-    'and cannot read what a helper writes into it, and the only way she finds out is a parent asking her ' +
-    'about a check-in she has no record of. banners: ' + JSON.stringify(h.banners));
-  assert.equal(h.banners[0].what, 'check-in session key', 're-anchor: the warning went down a different channel');
-  assert.match(h.banners[0].message, new RegExp(SGLEAD.slice(0, 10)),
-    'the warning does not name WHO was left out, so a steward cannot act on it: ' + h.banners[0].message);
-});
-
-test('…AND A CHURCH WITH NO SAFEGUARDING STEWARD IS NOT WARNED AT ALL — keepers [church] is correct for her', async () => {
-  // The small church where the owner does safeguarding herself. This is the case that made a previous builder
-  // decline to warn, and it is the one that must stay silent: nagging her about a steward she has not got is
-  // exactly what reference/DOMAIN.md forbids ("a church that runs its children's work differently from our
-  // assumptions is not making a mistake").
-  const h = harness({ stewardCaps: {} });
-  await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: [perm(ADA)] });
-  const { raw } = grantOf(h);
-  assert.deepEqual(Object.keys(raw.keys).sort(), [ADA, CHURCH].sort(), 'fixture: keepers should be [church] here');
-  assert.deepEqual(h.banners, [],
-    'a church with no safeguarding steward was warned that somebody was left out. Nobody was left out; ' +
-    'this is the nag reference/DOMAIN.md rules out, raised on the commonest small-church setup');
-});
-
-test('…AND THE FINANCE-ONLY STEWARD BEING ABSENT IS NOT A WARNING — she was never eligible', async () => {
-  // `checkin` is an EXPLICIT capability, so the treasurer is not a keeper whether she is passed or not. A
-  // warning here would train a steward to ignore the banner, which is worse than no banner.
-  const h = harness({ stewardCaps: { [TREASURER]: ['finance'] } });
-  await h.publishCheckinHelpers({ session: 'svc-sun', service: SERVICE, permissions: [perm(ADA)] });
-  grantOf(h);
-  assert.deepEqual(h.banners, [],
-    'omitting a FINANCE-only steward raised the safeguarding-lead warning — the check is reading the roster ' +
-    'rather than the capability tick');
-});
-
-test('…AND IT IS SAID ONCE, not once per Sunday in the issuer\'s horizon', async () => {
-  // The issuer mints every service inside a fortnight in ONE pass with ONE `stewards` argument, so a warning
-  // raised from the mint fires per service for a single omission. reference/DOMAIN.md: "say the thing once".
+test('THE ONE THING A KEEPER SLOT REALLY BUYS: a key this console cannot recover is REPLACED, and said once', async () => {
+  // WHAT THE RE-AIMED WARNING IS ABOUT. The church wraps a slot to ITSELF on every envelope so the issuer can
+  // unwrap the key a session already has and re-issue to a changed set of people WITHOUT rotating it. When
+  // that recovery fails — an envelope written by another device, a key restored from a backup, a corrupt slot
+  // — the issuer re-mints on purpose rather than leaving the session unstaffable for ever, and the cost is a
+  // NEW key for that session. That is the consequential, reachable event a steward can neither see nor undo.
+  //
+  // TWO SESSIONS, ONE PASS, ONE BANNER. The issuer mints every service inside a fortnight in one loop, so a
+  // church whose whole corpus is unrecoverable is the case that would otherwise say this three times.
   const h = harness();
-  const out = await h.issueCheckinSessionKeys({ at: AT, permissions: CLEARED, horizonDays: 14,
-    services: [svc('s1', SERVICE), svc('s2', SERVICE_2)] });   // no `stewards`
-  assert.equal(out.issued.length, 2, 'fixture: the issuer was supposed to mint two envelopes here');
+  // AN ENVELOPE THIS CONSOLE CANNOT OPEN. The harness's nip44d throws unless the ciphertext carries the
+  // recipient's own prefix, so a church slot sealed to somebody else is exactly the unrecoverable case —
+  // built the same way the shipped wrapper builds a real one, so it is not a shape only a test can produce.
+  const unopenable = (session) => ({ session, source: GRANT_SOURCE, lifetime: 'session', from: AT - 60,
+    until: AT + 7200, pubs: [ADA], keys: { [CHURCH]: 'sealed[ck:' + ADA + ']' + 'a'.repeat(64), [ADA]: 'sealed[ck:' + ADA + ']' + 'a'.repeat(64) } });
+  const out = await h.issueCheckinSessionKeys({ at: AT, permissions: CLEARED, stewards: [SGLEAD],
+    services: [svc('svc-a', SERVICE), svc('svc-b', SERVICE_2)],
+    existing: [unopenable('svc-a'), unopenable('svc-b')] });
+  assert.equal(out.issued.length, 2, 'fixture: the issuer was supposed to re-mint both unrecoverable envelopes');
+  assert.deepEqual(out.rotated.sort(), ['svc-a', 'svc-b'],
+    'THE ISSUER REPLACED TWO LIVE SESSION KEYS AND DID NOT REPORT IT. `rotated` is the only thing the screen ' +
+    'has to go on, and a rotation is the one consequential act in this function that a steward cannot see: ' +
+    'out was ' + JSON.stringify(out));
   assert.equal(h.banners.length, 1,
-    'the same omission was reported ' + h.banners.length + ' times. A banner that repeats per Sunday is one ' +
-    'a steward learns to dismiss without reading, which is how the next real one gets missed');
+    'the replacement was reported ' + h.banners.length + ' times for one pass. A banner that repeats per ' +
+    'Sunday is one a steward learns to dismiss without reading, which is how the next real one gets missed: ' +
+    JSON.stringify(h.banners));
+  assert.equal(h.banners[0].what, 'check-in session key', 're-anchor: the warning went down a different channel');
+  assert.match(h.banners[0].message, /NEW register key/,
+    'the warning does not say a key was REPLACED, which is the whole of what happened: ' + h.banners[0].message);
+  // ⚠ AND IT MUST NOT OVERCLAIM. Nothing seals anything under a session key yet — piece 1 of the scope note
+  // (the `ck` tag) is not built — so a rotation today loses no readable data, and copy saying otherwise is
+  // rule 4's territory. When piece 1 lands this assertion must be INVERTED and the message must gain that
+  // sentence; it is here so that lands as a deliberate edit rather than a silent one.
+  assert.doesNotMatch(h.banners[0].message, /lost|cannot be opened|unreadable|orphan/i,
+    'the rotation warning claims records were lost. Nothing is sealed under a session key yet, so today that ' +
+    'is a false claim in shipped UI copy — see _warnCheckinKeyRotated');
+
+  // A SECOND PASS OVER THE SAME SUNDAYS SAYS NOTHING NEW. Keyed on the sessions, so this is not "once ever".
+  await h.issueCheckinSessionKeys({ at: AT, permissions: CLEARED, stewards: [SGLEAD],
+    services: [svc('svc-a', SERVICE)], existing: [unopenable('svc-a')] });
+  assert.equal(h.banners.length, 1, 'the same session\'s replacement was reported twice');
+  // …BUT A DIFFERENT SUNDAY STILL GETS SAID.
+  const third = await h.issueCheckinSessionKeys({ at: AT, permissions: CLEARED, stewards: [SGLEAD],
+    services: [svc('svc-c', SERVICE_2)], existing: [unopenable('svc-c')] });
+  assert.deepEqual(third.rotated, ['svc-c'], 'fixture: the third pass was supposed to rotate svc-c');
+  assert.equal(h.banners.length, 2,
+    'a DIFFERENT session\'s key was replaced and nothing was said — the dedupe is per console rather than ' +
+    'per session, so only the first loss in a console\'s life is ever reported');
+});
+
+test('AND A FIRST ISSUE IS NOT A ROTATION — or the warning above fires on every new church', async () => {
+  // The negative that stops the assertion above passing on any mint at all. A church with no envelopes yet
+  // has nothing to recover and nothing to lose, and a banner here would greet every new church with a
+  // warning about data it has never had.
+  const h = harness();
+  const out = await h.issueCheckinSessionKeys({ at: AT, permissions: CLEARED, stewards: [SGLEAD],
+    services: [svc('svc-a', SERVICE)] });
+  assert.equal(out.issued.length, 1, 'fixture: the first issue was supposed to mint one envelope');
+  assert.deepEqual(out.rotated, [], 'a FIRST issue was reported as a rotation');
+  assert.deepEqual(h.banners, [],
+    'a church issuing its first ever session key was warned that a key had been replaced');
+  // …and neither is a re-issue whose key IS recoverable, which is the ordinary weekly path.
+  const held = { session: 'svc-a', ...JSON.parse(h.published[0].content) };
+  const again = await h.issueCheckinSessionKeys({ at: AT, permissions: [...CLEARED, perm(BEN)],
+    stewards: [SGLEAD], services: [svc('svc-a', SERVICE)], existing: [held] });
+  assert.equal(again.issued.length, 1, 'fixture: adding a cleared person was supposed to re-issue');
+  assert.equal(again.issued[0].reused, true, 'fixture: that re-issue was supposed to reuse the key');
+  assert.deepEqual(again.rotated, [], 'a re-issue that REUSED the session key was reported as a rotation');
+  assert.deepEqual(h.banners, [], 'the ordinary weekly re-issue raised the key-replaced warning');
 });
 
 // ── WHAT THE MINT PUTS ON THE WIRE, AND WHAT THE RELAY WILL MAKE OF IT ────────────────────────────────────
