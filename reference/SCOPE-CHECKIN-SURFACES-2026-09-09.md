@@ -38,8 +38,33 @@ The session itself: a QR on the room door, a parent checking their own child in,
 list.
 
 - First member-app work, first use of a session key by a reader, first QR.
-- Needs the room code decided: printed sheet vs rotating screen code, and what "this session" means when
-  a church runs three rooms at once.
+- **DECIDED 2026-09-10 — the room code is a PRINTED IDENTIFIER that carries NO authority.**
+  The QR names the session ("Toddlers, 13 Sept") and is not a credential. The authority already exists and
+  is relay-enforced: a parent is proven a guardian by the `p` tags and `guardianOfIn`, and a worker is
+  proven cleared by the conjunction of envelope membership and a live clearance. So **photographing the code
+  gains nothing.**
+  Why printed rather than rotating: it works with no device at the door, no power and no screen — which
+  matters for a church hall and matters far more for the places this product is aimed at. Rotation stays
+  available later **without changing the model**, because a rotating code is the same identifier with a
+  shorter life.
+  The risk knowingly accepted: somebody holding the code could check in a child who is not there. That is a
+  data-quality nuisance, not a safeguarding breach — the **pickup code**, which is what actually releases a
+  child, is separate and per-record.
+  ⚠ **THE RULE THIS DECISION RESTS ON:** the room code must never carry key material or authority. If anyone
+  later puts either into it, the printed-sheet decision is void and it must rotate.
+
+- **DECIDED 2026-09-10 — one session per service; the ROOM is a field and a filter, never a key boundary.**
+  Three rooms on one Sunday morning are one session. The model already says so: a check-in record carries
+  **both** `session` and `room`, and the envelope is keyed to the service (`checkinhelper:<serviceId>`).
+  Why not a key per room: it would need three rota services on one morning, which fights how the rota
+  thinks, and would mean re-keying the envelope away from the service. The blast-radius argument buys little
+  here — one key covers one morning across all rooms, but a volunteer physically in the building could walk
+  into the next room anyway, so splitting the key protects against a **lost phone**, not against a person who
+  is already there. And **volunteers move rooms mid-morning**: covering a gap in Juniors with a Toddlers-only
+  key would block them, and "must not block" is this slice's own rule.
+  What this forecloses: a church that genuinely wants its Toddlers workers unable to read the Youth register.
+  If that is ever wanted it is a **view** rule, or a later per-room key — not a bend in this model.
+
 - **Device verification is mandatory here** and needs two phones — a parent's and a worker's. A simulation
   of two people is not evidence for this one.
 - Must not block (see the design's framing section). A ratio outside policy, a lapsed clearance, a gap in
