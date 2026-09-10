@@ -20,6 +20,15 @@ displays it under each commentary's heading (owner decision 5, 2026-09-10).
 
 Re-run:  python3 scripts/build-aquifer-studynotes.py
          python3 scripts/build-aquifer-studynotes.py --cache /some/dir   (reuse a download)
+
+REPRODUCIBLE ON ONE TOOLCHAIN, NOT ON ALL OF THEM. Zip timestamps are fixed, so the same
+notes in give the same bytes out -- verified twice on the box this was built on (Python
+3.12.3, SQLite 3.45.1, zlib 1.3). Two of those three decide the bytes and neither is
+recorded in the file: SQLite's VACUUM page layout and zlib's deflate output can both
+change between versions. So a rebuild on a different machine may legitimately produce a
+different SHA-256 from the one catalog.json pins. That is not a corruption. The recovery
+is to paste the two fields this script prints at the end into catalog.json; the test in
+scripts/aquifer-study-notes-reach-the-study-panel.test.mjs then goes green again.
 """
 import json, os, re, sqlite3, sys, tempfile, urllib.request, zipfile
 from html.parser import HTMLParser
@@ -37,8 +46,10 @@ ABBR = "OSN"
 # are here, taken verbatim from the source repository's own README rather than paraphrased.
 LICENSE_LINE = ("Aquifer Open Study Notes © Mission Mutual · CC BY-SA 4.0 · an adaptation of "
                 "Tyndale Open Study Notes © 2023 Tyndale House Publishers, also CC BY-SA 4.0")
-# The fuller notice, shipped as a file inside the zip so it travels with the module even when the
-# module is handed phone-to-phone rather than downloaded (engine.js exportModule / Quick Share).
+# The fuller notice, shipped as a file inside the zip. CC BY-SA 4.0 obliges a redistributor to pass the
+# licence on with the work, and anyone who ends up holding this file — a church mirroring modules/, an
+# operator serving them off their own box, a member who loaded it from a file rather than the catalogue —
+# has the whole notice in front of them without needing our catalogue or our app to read it.
 LICENSE_FILE = """Aquifer Open Study Notes
 ========================
 
@@ -194,11 +205,15 @@ def rows_for(passage):
     which this data does not carry: a guessed `v1-3` label on a note about 1:1-2:3 would be a claim
     the source cannot support. Existing MySword commentaries behave the same way.
 
-    THE PASSAGE DECIDES THE BOOK, NOT THE FILE NAME. Five of the English articles carry a passage
-    that points into a different book from the file they sit in -- the note titled "Numbers 6:1-21"
-    is associated with Acts 18:18 (Paul's vow), "Acts 14:4" with Luke 10:1 and 10:17. Those are the
-    source's own claims about where the note is worth reading, so they are honoured. Filtering them
-    out on "the file says Numbers" would be this converter overruling the data it is converting.
+    THE PASSAGE DECIDES THE BOOK, NOT THE FILE NAME. FIVE ASSOCIATIONS ACROSS FOUR ARTICLES point
+    into a different book from the file they sit in -- the note titled "Numbers 6:1-21" is
+    associated with Acts 18:18 (Paul's vow), "Acts 14:4" with BOTH Luke 10:1 and Luke 10:17, which
+    is why the counts differ. All four also carry their home-book association, so nothing is
+    displaced: these are additive cross-references, and they are the source's own claims about
+    where a note is worth reading. Honoured, not filtered -- owner decision 11. Filtering them out
+    on "the file says Numbers" would be this converter overruling the data it is converting.
+    Because a note from another book is otherwise a puzzle, build() prepends the article's own
+    title to those five rows; see the lead-in below.
     """
     sb, sc, sv = decode_ref(passage["start_ref"])
     eb, ec, ev = decode_ref(passage["end_ref"])
@@ -227,7 +242,7 @@ def build(cache):
     """)
     con.execute("INSERT INTO Details VALUES (?,?,?,?)", (NAME, ABBR, NAME, LICENSE_LINE))
 
-    articles = rows = skipped = 0
+    articles = rows = skipped = cross = 0
     for n in BOOKS:
         for a in load_book(n, cache):
             if (a.get("media_type") or "Text") != "Text":
@@ -242,7 +257,19 @@ def build(cache):
                 r = rows_for(pa)
                 if not r:
                     continue
-                con.execute("INSERT INTO Commentary VALUES (?,?,?,?,?)", r + (html,))
+                # SAY WHERE A CROSS-BOOK NOTE CAME FROM. A row whose book is not the book this article
+                # is filed under is a cross-reference (5 of them; see rows_for). Without its title, a
+                # reader in Acts 18 gets a note about Nazirite vows labelled "v18" and no clue why, so
+                # the article's own title -- "Numbers 6:1-21" -- goes above it and turns a puzzle into a
+                # cross-reference. <p>, <small> and <strong> are all tags the reader renders, and the
+                # title is escaped like any other text.
+                body = html
+                if r[0] != n:
+                    title = esc((a.get("title") or "").strip())
+                    if title:
+                        cross += 1
+                        body = "<p><small>From the note on <strong>%s</strong></small></p>%s" % (title, html)
+                con.execute("INSERT INTO Commentary VALUES (?,?,?,?,?)", r + (body,))
                 rows += 1
                 emitted += 1
             if not emitted:
@@ -268,8 +295,8 @@ def build(cache):
             z.writestr(zi, data, compresslevel=9)
     raw = os.path.getsize(dbpath)
     zipped = os.path.getsize(dest)
-    print("wrote %s — %d articles, %d rows, sqlite %.2f MB, zipped %.2f MB%s"
-          % (OUT_ZIP, articles, rows, raw / 1e6, zipped / 1e6,
+    print("wrote %s — %d articles, %d rows (%d cross-book, titled), sqlite %.2f MB, zipped %.2f MB%s"
+          % (OUT_ZIP, articles, rows, cross, raw / 1e6, zipped / 1e6,
              (" (%d articles had no usable passage reference)" % skipped) if skipped else ""))
     # catalog.json pins this download's hash (engine.js verifyIntegrity honours item.sha256), so a rebuild
     # has to update the entry. Print the two fields that move; a test asserts the catalog matches the file

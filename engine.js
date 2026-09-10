@@ -227,10 +227,14 @@ window.safeImgUrl = function (v) {
   }
   // A module's own Details row. `license` is the ATTRIBUTION NOTICE THE MODULE CARRIES ITSELF, not a
   // catalogue label: an openly-licensed resource (CC BY-SA and friends) obliges us to credit the author and
-  // name the licence wherever its words are shown, and a notice that lives only in catalog.json is gone the
-  // moment the module is handed phone-to-phone by Quick Share (exportModule below). So it travels in the
-  // file, and getCommentary() passes it to the Study panel, which prints it under the heading.
-  // Public-domain modules have no such column and get no line — nothing to attribute.
+  // name the licence wherever its words are shown, and a notice that lives only in catalog.json covers only
+  // the modules WE list. A module loaded from a file — pickFile(), a hand-copied .cmt.mybible, one built by
+  // somebody else's script — has no catalogue entry at all, and the file-input path calls loadModuleBytes
+  // with no meta whatsoever, so applyMeta() has nothing to apply. Reading the notice out of the file is what
+  // makes the credit travel with the words. That path is the one the tests drive: they call
+  // buildCommentaryFromDb + addCommentary directly, with no meta, and the notice still reaches the screen.
+  // getCommentary() passes it to the Study panel, which prints it under the heading. Public-domain modules
+  // have no such column and get no line — nothing to attribute.
   function detailsOf(db, fb){
     let abbr = fb || "Bible", name = fb || "Module", license = "";
     try{ const d = db.q("SELECT * FROM Details LIMIT 1"); if(d.length){ if(d[0].Abbreviation) abbr = d[0].Abbreviation; name = d[0].Description || d[0].Title || name; license = d[0].License || d[0].Licence || d[0].Copyright || ""; } }catch(e){}
@@ -567,7 +571,20 @@ window.safeImgUrl = function (v) {
         }   // M3: verify before cache/parse
         loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
       }else{
-        loaded = await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item) });
+        // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
+        // standing between a compromised gateway or mirror and a module whose HTML goes into the reader
+        // through dangerouslySetInnerHTML — and until 2026-09-10 this line did not pass `item.sha256` at
+        // all. The JSON branch above always has; this branch, which is every Bible, every USFM zip and
+        // every commentary, silently dropped it, so `expected` fell back to KNOWN_HASHES and only the two
+        // bundled defaults were ever checked. Proved in headless Chromium: the study-notes entry with its
+        // pin replaced by zeros installed anyway. It went unnoticed because no catalogue entry carried a
+        // `sha256` until that day — the field was honoured on a path nothing used.
+        //
+        // An entry WITHOUT a pin must still install: verifyIntegrity treats a falsy declaredHash as "no
+        // pin here" and returns, so `undefined` behaves exactly as before. Every entry in catalog.json
+        // and all 1,290 in ebible-catalog.json are un-pinned, so that is not a corner case, it is the
+        // common one. applyMeta() reads only abbr/name/category, so the extra key is inert downstream.
+        loaded = await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item), sha256: item.sha256 });
       }
       recordInstalled(item);
       return loaded || true;   // {kind:'bible',abbr} for a translation (the real registered abbr) — lets callers switch to it

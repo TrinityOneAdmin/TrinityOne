@@ -145,10 +145,10 @@
      "format": "MySword",
      "kind": "comment",
      "size": "2.0 MB",
-     "sha256": "e11bcf88c9d26d917fd795232bddc04bd398fe08fca7205f64ce55b6d423fde7",
+     "sha256": "198b2853dc8ec18c3265fb035a76ae30b1283af7f1f037837184d6aaa8503ff7",
      "license": "CC BY-SA 4.0 · Mission Mutual, from Tyndale Open Study Notes",
      "featured": true,
-     "desc": "Plain-language study notes on every chapter of the Bible — modern, clear, and freely licensed. Built by scripts/build-aquifer-studynotes.py."
+     "desc": "Plain-language study notes across all 66 books — modern, clear, and freely licensed. 16,923 notes covering 1,188 of the Bible's 1,189 chapters."
     },
     {
      "id": "matthew-henry",

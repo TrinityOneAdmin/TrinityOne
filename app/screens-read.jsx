@@ -683,12 +683,13 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
           ) : comm.length ? comm.map((srcBlk, si) => (
             <div key={si} style={{ marginBottom: 22 }}>
               {/* THE SOURCE'S OWN CREDIT SITS WITH ITS WORDS. Openly-licensed study notes (Aquifer's are
-                  CC BY-SA 4.0) oblige us to name the author and the licence wherever the notes are shown,
-                  and the notice travels inside the module itself (engine.js detailsOf → Details.License →
-                  getCommentary), so it cannot be lost by handing the file to another phone. It goes directly
-                  under the heading rather than in a footer or an About screen: it is the only placement that
-                  is on screen every time the words are, and a reader scrolling a long chapter never has to
-                  know to go looking for it. Public-domain modules carry no notice and show no line. */}
+                  CC BY-SA 4.0) oblige us to name the author and the licence wherever the notes are shown.
+                  The notice is read out of the module file itself (engine.js detailsOf → Details.License →
+                  getCommentary), not out of catalog.json, so a commentary a member loaded from a FILE —
+                  which has no catalogue entry — still credits its source. It goes directly under the
+                  heading rather than in a footer or an About screen: it is the only placement that is on
+                  screen every time the words are, and a reader scrolling a long chapter never has to know
+                  to go looking for it. Public-domain modules carry no notice and show no line. */}
               <div style={{ marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--line)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                   <Icon name={srcBlk.kind === 'footnotes' ? 'note' : 'comment'} size={14} color="var(--clay)" />

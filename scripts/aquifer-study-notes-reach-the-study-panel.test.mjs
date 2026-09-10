@@ -19,39 +19,53 @@
 //     the build uses and drawn through the miniature React in scripts/render-jsx-screen.mjs.
 //
 // So the chain asserted is: file on disk → shipped loader → shipped getCommentary → shipped panel → text a
-// member can read. Delete the licence line from the panel, or the `license` field from getCommentary, and
-// the two point-of-use tests go red.
+// member can read. There are THREE point-of-use tests over that chain — the notes on the screen, the licence
+// on the screen, and a cross-book note naming where it came from. Delete the licence line from the panel, or
+// the `license` field from getCommentary, and the licence one goes red on its own.
 //
 // THE OFF-BY-ONE THAT WOULD HAVE PUT EVERY NOTE ONE BOOK OUT. Aquifer keys passages as BBBCCCVVV with 1-based
 // book numbers, and so does this app (`bookName = n => BOOK_NAMES[n - 1]`, engine.js:66). That is asserted
-// here rather than assumed, and not against a hand-typed table of chapter counts: the module's own
-// highest-chapter-with-notes for all 66 books is compared against the chapter counts of the Bible THIS APP
-// SHIPS (modules/engbsb.zip), computed by engine.js's own buildFromUSFM. A shift of one book in either
-// direction breaks dozens of those at once.
+// here rather than assumed, and not against a hand-typed table: the module's own lowest and highest chapter
+// with notes, for all 66 books, is compared against the chapter counts of the Bible THIS APP SHIPS
+// (modules/engbsb.zip), computed by engine.js's own buildFromUSFM. All 66 match exactly, and a shift of one
+// book in either direction breaks dozens of them at once.
 //
-// MEASURED RED/GREEN, 2026-09-10. Each sabotage is SCOPED — the enclosing function is sliced out, the
-// anchor asserted to appear exactly once inside that slice, and only then replaced (CLAUDE.md), because
-// near-identical siblings are the house style and a plain string-replace hits somebody else's function:
-//   · as committed                                                        8 pass / 0 fail
-//   · `license: s.license || ""` dropped from engine.js getCommentary      6 pass / 2 fail
+// THAT IS A CLAIM ABOUT CHAPTER COUNTS, NOT ABOUT VERSIFICATION, and the two are not the same. Four rows of
+// 16,932 (0.024%) carry a verse number the shipped BSB's chapter does not reach — 3 John 1 assumes 15 verses
+// where the BSB has 14, and Revelation 12 has two rows on v18 where the BSB's chapter ends at 17 because that
+// material is 13:1 there. The content of all four is right; the label is one verse-boundary out. The test
+// below pins that set at exactly those four, so it is a measured fact with a tripwire rather than a sentence
+// in a comment that quietly stops being true.
+//
+// MEASURED RED/GREEN, 2026-09-10, re-measured after the audit follow-up added tests 6 and 9. Each sabotage
+// is SCOPED — the enclosing function is sliced out, the anchor asserted to appear exactly once inside that
+// slice, and only then replaced (CLAUDE.md), because near-identical siblings are the house style and a plain
+// string-replace hits somebody else's function:
+//   · as committed                                                       10 pass / 0 fail
+//   · `license: s.license || ""` dropped from engine.js getCommentary      8 pass / 2 fail
 //   · the licence line disabled in CommentaryPanel with `false && `,
-//     leaving every word of it in app/screens-read.jsx                     7 pass / 1 fail  -- the licence
+//     leaving every word of it in app/screens-read.jsx                     9 pass / 1 fail  -- the licence
 //                                                                         point-of-use test, ALONE. This is
 //                                                                         the rule-1 check: the feature was
 //                                                                         removed from the SCREEN only.
-//   · `license: det.license` dropped from buildCommentaryFromDb            5 pass / 3 fail
-//   · decode_ref shifted +1 in the converter and the module rebuilt        4 pass / 4 fail  -- the
-//                                                                         catalogue hash, the chapter rows,
-//                                                                         the book-number check and the
-//                                                                         2 John panel test. The two licence
-//                                                                         tests correctly stay green.
+//   · `license: det.license` dropped from buildCommentaryFromDb            7 pass / 3 fail
+//   · the cross-book title lead-in disabled in the converter and the
+//     module rebuilt                                                       8 pass / 2 fail  -- test 9 and
+//                                                                         the catalogue hash. The rebuild's
+//                                                                         hash reverted exactly to the
+//                                                                         pre-title build's, which is its
+//                                                                         own proof that the lead-in is the
+//                                                                         only difference between them.
+//   · decode_ref shifted +1 in the converter and the module rebuilt        4 pass / 6 fail
 //
 // And the harness cannot be silently empty: `entered` counts calls into engine.js's own notify() from its
 // own addCommentary, and loadedNotes() refuses to continue at zero (see the note above engineChain).
 //
-// WHAT THIS FILE DOES NOT PROVE. It never downloads the module (nothing here touches the network — see
-// CLAUDE.md on ASSET_BASE and app.trinityone.church), it does not run installModule's cache/verify path, and
-// NOTHING HERE HAS BEEN ON A DEVICE. Rule 6 still applies before this merges.
+// WHAT THIS FILE DOES NOT PROVE. It never downloads the module — nothing here touches the network (see
+// CLAUDE.md on ASSET_BASE and app.trinityone.church) — so installModule, fetchAndCacheModule, the IndexedDB
+// cache and verifyIntegrity are all outside it. Those are proved in a real browser against a real gateway by
+// scripts/a-tampered-module-is-refused.test.mjs. And NOTHING HERE HAS BEEN ON A DEVICE: rule 6 still applies
+// before this merges.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -95,9 +109,13 @@ function engineChain() {
     fnBody(ENGINE, 'function addCommentary(src){'),
     fnBody(ENGINE, 'function getCommentary(b, c, version){'),
     fnBody(ENGINE, 'function buildFromUSFM(files, fallbackName){'),
+    // The BSB's per-chapter VERSE counts need buildFromUSFM's lazy half too, so these three come along.
+    fnBody(ENGINE, 'function inlineUSFM(s){'),
+    fnBody(ENGINE, 'function parseUSFM(text){'),
+    fnBody(ENGINE, 'function stripTags(s){'),
   ];
   const commentaries = {};
-  const factory = new Function('initSqlJs', 'SQLJS_BASE', 'commentaries', 'notify', 'src', 'parseUSFM', 'stripTags',
+  const factory = new Function('initSqlJs', 'SQLJS_BASE', 'commentaries', 'notify', 'src',
     parts.join('\n') +
     '\nreturn { BOOK_NAMES, openDb, detailsOf, buildCommentaryFromDb, addCommentary, getCommentary, buildFromUSFM };');
   const api = factory(
@@ -106,8 +124,6 @@ function engineChain() {
     commentaries,
     () => { entered++; },                                   // engine.js's notify(), counted
     () => null,                                             // src(version): no active Bible, so no footnotes block
-    () => { throw new Error('parseUSFM must stay lazy — buildFromUSFM should not parse verses to list books'); },
-    () => { throw new Error('stripTags must stay lazy here'); },
   );
   return { ...api, commentaries };
 }
@@ -144,9 +160,14 @@ test('the study notes are offered as a download, and the catalogue describes the
   assert.equal(it.kind, 'comment', 'the wrong kind puts it in the wrong section of the store');
   assert.equal(it.format, 'MySword', 'the format decides which branch of installModule runs');
   const bytes = readFileSync(ROOT + MODULE_URL);
-  // engine.js verifyIntegrity() refuses a download whose sha256 does not match the catalogue entry, so a
-  // rebuilt module with a stale entry would be a module that cannot be installed at all. The build is
-  // reproducible (fixed zip timestamps) precisely so this can be pinned.
+  // WHAT THIS PIN IS WORTH, STATED HONESTLY. As first committed on this branch it was worth NOTHING:
+  // installModule did not forward `item.sha256` on the MySword/USFM branch, so verifyIntegrity received
+  // `undefined` and fell back to the two hashes in KNOWN_HASHES. Found by audit, fixed in the follow-up
+  // commit, and proved end to end in a real browser by scripts/a-tampered-module-is-refused.test.mjs — that
+  // file, not this line, is what says the pin is enforced. Since the fix, a rebuilt module with a stale
+  // catalogue entry really is uninstallable, which is why this assertion exists: it goes red on this box
+  // before anyone's phone ever sees the mismatch. The build is reproducible (fixed zip timestamps) so the
+  // pin is stable between rebuilds on the same toolchain — see the caveat in the converter's header.
   assert.equal(createHash('sha256').update(bytes).digest('hex'), it.sha256,
     'catalog.json pins a different sha256 than the module on disk — rerun scripts/build-aquifer-studynotes.py and paste the two fields it prints');
   assert.equal(it.size, (bytes.length / 1e6).toFixed(1) + ' MB', 'the size shown in the store is not the size of the file');
@@ -220,13 +241,45 @@ test('THE BOOK NUMBERS ARE THE ENGINE\'S OWN — checked against the Bible this 
   assert.ok(cmt.getComment(66, 22).length, 'Revelation 22 has no notes');
 });
 
+test('the verse keys sit inside the shipped Bible\'s verses — with FOUR named exceptions and no others', async () => {
+  // Test 5 proves the BOOK and CHAPTER keys line up exactly. VERSIFICATION is a separate question and the
+  // answer is not "exactly": Aquifer's notes were written against a versification that differs from the
+  // BSB's in two places, and pretending otherwise is the kind of claim CLAUDE.md rule 4 exists to stop.
+  //
+  // What is asserted is the SIZE and the SHAPE of the divergence: exactly four rows of 16,932 (0.024%) fall
+  // outside the shipped BSB's verse range, and they are these four. Content is right in all four; only the
+  // label is one verse-boundary out. A fifth would mean something new — a converter bug, or an upstream
+  // change — and this goes red rather than the fact quietly rotting in a comment.
+  //   · 3 John 1 v13–15 and v15 — the notes assume 15 verses, the BSB's 3 John has 14
+  //   · Revelation 12 v18, twice — the BSB's Rev 12 ends at 17 and that material is 13:1, so the
+  //     introduction to Revelation 13 is filed under Revelation 12
+  const { eng, db } = await loadedNotes();
+  const bsb = eng.buildFromUSFM(unzipSync(readFileSync(ROOT + 'modules/engbsb.zip')), 'engbsb.zip');
+  const lastVerse = (b, c) => { const vs = bsb.getVerses(b, c); return vs.length ? Math.max(...vs.map(v => v.v)) : 0; };
+  const outside = [];
+  for (const r of db.q('SELECT Book AS b, Chapter AS c, FromVerse AS fv, ToVerse AS tv FROM Commentary ORDER BY Book, Chapter, FromVerse')) {
+    const lim = lastVerse(r.b, r.c);
+    assert.ok(lim > 0, `the shipped BSB has no ${eng.BOOK_NAMES[r.b - 1]} ${r.c}, but the notes do`);
+    if (r.fv > lim || r.tv > lim) outside.push(`${eng.BOOK_NAMES[r.b - 1]} ${r.c}:${r.fv}-${r.tv} (BSB ends at v${lim})`);
+  }
+  // sorted, because two rows on the same verse tie under ORDER BY and SQLite's tie-break is not a
+  // guarantee — an assertion that depended on it would flap without anything changing.
+  outside.sort();
+  assert.deepEqual(outside, [
+    '3 John 1:13-15 (BSB ends at v14)',
+    '3 John 1:15-15 (BSB ends at v14)',
+    'Revelation 12:18-0 (BSB ends at v17)',
+    'Revelation 12:18-18 (BSB ends at v17)',
+  ], 'the set of rows whose verse numbers fall outside the shipped Bible has changed');
+});
+
 // ── THE POINT OF USE: the Study panel ─────────────────────────────────────────────────────────────────────
 // Both tests below drive the REAL CommentaryPanel with the REAL getCommentary over the REAL module. Delete
 // the feature from the screen and they fail; that is the whole reason they exist (CLAUDE.md rule 1).
 
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-async function studyPanel(loc) {
+async function studyPanel(loc, label = '2 John 1') {
   const { eng } = await loadedNotes();
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
@@ -256,7 +309,7 @@ async function studyPanel(loc) {
   // the first paint is the empty state and the notes arrive on the next one. A single draw here would assert
   // about a screen no member ever sees settled on -- and it is what makes "the empty state is gone" below a
   // real claim rather than a timing accident.
-  const props = { loc, label: '2 John 1', open: true, onClose() {}, ctx, docked: true };
+  const props = { loc, label, open: true, onClose() {}, ctx, docked: true };
   draw(CommentaryPanel, props);
   const tree = draw(CommentaryPanel, props);
   return { tree, words: texts(tree).join(' | '), Bible: win.Bible };
@@ -287,9 +340,33 @@ test('POINT OF USE: THE LICENCE NOTICE IS ON THE SCREEN, beside the words it lic
   assert.ok(notice > heading, 'the licence notice is not under the source heading');
 });
 
-test('a module that carries no licence notice shows no licence line', async () => {
-  // The three public-domain commentaries already installed have no License column, and they must not
-  // sprout an empty or `undefined` line under their heading. Built here with the same sql.js the app uses.
+test('POINT OF USE: a note carried over from another book SAYS WHICH NOTE IT IS', async () => {
+  // Five associations across four articles point into a book other than the one they are filed under —
+  // Aquifer's own cross-references, honoured rather than filtered (owner decision 11). All four also carry
+  // their home-book association, so nothing is displaced. But a reader in Acts 18 would otherwise get a
+  // note about Nazirite vows labelled "v18" and no clue why, so the converter puts the article's own title
+  // above it. This asserts a member actually SEES that on the screen, not merely that the row holds it.
+  const { tree, words } = await studyPanel({ book: 44, chap: 18 }, 'Acts 18');
+  const bodies = find(tree, n => n.props && n.props.dangerouslySetInnerHTML).map(n => n.props.dangerouslySetInnerHTML.__html);
+  const carried = bodies.filter(h => /From the note on/.test(h));
+  assert.equal(carried.length, 1, `Acts 18 showed ${carried.length} carried-over notes; exactly one is filed there`);
+  assert.match(carried[0], /From the note on <strong>Numbers 6:1\u201321<\/strong>/,
+    'the carried-over note does not name the note it came from');
+  assert.match(carried[0], /Nazirite/, 'the carried-over note is not the Nazirite-vow note');
+  assert.ok(bodies.length > 1, 'Acts 18 shows only the carried-over note — its own notes are missing');
+  assert.doesNotMatch(words, /Nothing here for/, 'the panel still shows its empty state while holding notes');
+  // and a chapter with no carried-over note has no such lead-in
+  const plain = await studyPanel({ book: 63, chap: 1 });
+  const plainBodies = find(plain.tree, n => n.props && n.props.dangerouslySetInnerHTML).map(n => n.props.dangerouslySetInnerHTML.__html);
+  assert.equal(plainBodies.filter(h => /From the note on/.test(h)).length, 0,
+    '2 John 1 has no cross-book note, yet something there claims to be carried over');
+});
+
+test('a Details row with no licence column yields an EMPTY licence string, never undefined', async () => {
+  // NOT a screen test — it never draws anything, and it passed unchanged under the `false &&` panel
+  // sabotage. What it guards is the value the panel is handed: the three public-domain commentaries
+  // already installed have no License column, and `{srcBlk.license ? ... : null}` must see '' and not
+  // `undefined` so they never sprout an empty line. Built here with the same sql.js the app uses.
   const eng = engineChain();
   const SQL = await require(ROOT + 'vendor/sqljs/sql-wasm.js')({ locateFile: f => ROOT + 'vendor/sqljs/' + f });
   const raw = new SQL.Database();
