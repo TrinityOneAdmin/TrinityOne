@@ -30,7 +30,7 @@ different SHA-256 from the one catalog.json pins. That is not a corruption. The 
 is to paste the two fields this script prints at the end into catalog.json; the test in
 scripts/aquifer-study-notes-reach-the-study-panel.test.mjs then goes green again.
 """
-import json, os, re, sqlite3, sys, tempfile, urllib.request, zipfile
+import json, os, re, shutil, sqlite3, sys, tempfile, urllib.request, zipfile
 from html.parser import HTMLParser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -190,6 +190,22 @@ def clean_html(html):
 
 
 # ── verse keys ────────────────────────────────────────────────────────────────────────────────────
+DOT_BETWEEN_DIGITS = re.compile(r"(?<=\d)\.(?=\d)")
+
+
+def ref_title(title):
+    """An article title, tidied just enough to put on a member's screen.
+
+    Aquifer writes the END of a chapter-crossing range with a period where a colon belongs:
+    "John 13:31-17.26", "Genesis 1:1-2.3". 318 of the 16,923 English titles do it and every one is that
+    same shape -- a range end, never a decimal, never an abbreviation. Only the five cross-book rows carry
+    a title into the app (see build below), and one of them is "John 13:31-17.26", so left verbatim it is a
+    visible typo at Luke 22:12. A period BETWEEN TWO DIGITS is the whole rule; the en dash, the book name
+    and every other character are untouched, so this cannot turn a correct reference into a wrong one.
+    """
+    return DOT_BETWEEN_DIGITS.sub(":", (title or "").strip())
+
+
 def decode_ref(s):
     """BBBCCCVVV -> (book, chapter, verse). '63001001' -> (63, 1, 1)."""
     n = int(s)
@@ -232,8 +248,21 @@ def load_book(n, cache):
 
 
 def build(cache):
+    # THE SQLITE IS SCRATCH, AND IT MUST NOT SURVIVE THE RUN. It is 5.75 MB, and the first version of this
+    # function made a fresh mkdtemp every time and never removed it: eighteen runs while developing left
+    # 127 MB in /tmp and filled the disk on this box, which then failed a rebuild inside `VACUUM` with
+    # "database or disk is full" -- and because the build had already printed nothing and exited non-zero,
+    # a sabotage measurement silently ran against the PREVIOUS module and reported the wrong answer. A
+    # leaking build script is not a tidiness matter; it corrupted a result.
     os.makedirs(cache, exist_ok=True)
-    tmpdir = tempfile.mkdtemp(prefix="aquifer-osn-")
+    tmpdir = tempfile.mkdtemp(prefix="aquifer-osn-build-")
+    try:
+        return _build(cache, tmpdir)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _build(cache, tmpdir):
     dbpath = os.path.join(tmpdir, DB_NAME)
     con = sqlite3.connect(dbpath)
     con.executescript("""
@@ -265,7 +294,7 @@ def build(cache):
                 # title is escaped like any other text.
                 body = html
                 if r[0] != n:
-                    title = esc((a.get("title") or "").strip())
+                    title = esc(ref_title(a.get("title")))
                     if title:
                         cross += 1
                         body = "<p><small>From the note on <strong>%s</strong></small></p>%s" % (title, html)

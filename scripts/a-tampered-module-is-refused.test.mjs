@@ -79,10 +79,8 @@ async function waitReady(ms = 20000) {
 }
 
 before(async () => {
-  // Two singular calls rather than requireFreePorts([PORT, CDP]): test-ports.test.mjs's "every test that
-  // binds a fixed port checks it first" guard matches the literal `requireFreePort(PORT` and
-  // `requireFreePort(CDP`, so the plural convenience helper reads to it as no check at all. Same
-  // shape as every other browser test here.
+  // One call per port, by name — the shape test-ports.test.mjs's structural guards can read, and the shape
+  // that makes the refusal message name WHICH port is held.
   await requireFreePort(PORT, 'a-tampered-module-is-refused.test.mjs');
   await requireFreePort(CDP, 'a-tampered-module-is-refused.test.mjs (Chrome debug port)');
   if (!CHROME) return;

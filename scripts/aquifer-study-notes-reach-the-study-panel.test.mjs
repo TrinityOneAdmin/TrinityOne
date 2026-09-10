@@ -37,26 +37,32 @@
 // below pins that set at exactly those four, so it is a measured fact with a tripwire rather than a sentence
 // in a comment that quietly stops being true.
 //
-// MEASURED RED/GREEN, 2026-09-10, re-measured after the audit follow-up added tests 6 and 9. Each sabotage
-// is SCOPED — the enclosing function is sliced out, the anchor asserted to appear exactly once inside that
+// MEASURED RED/GREEN, 2026-09-10, re-measured against all 11 tests after two audit rounds. Each sabotage is
+// SCOPED — the enclosing function is sliced out, the anchor asserted to appear exactly once inside that
 // slice, and only then replaced (CLAUDE.md), because near-identical siblings are the house style and a plain
 // string-replace hits somebody else's function:
-//   · as committed                                                       10 pass / 0 fail
-//   · `license: s.license || ""` dropped from engine.js getCommentary      8 pass / 2 fail
+//
+//   · as committed                                                        11 pass /  0 fail
+//   · `license: s.license || ""` out of engine.js getCommentary             9 pass /  2 fail
 //   · the licence line disabled in CommentaryPanel with `false && `,
-//     leaving every word of it in app/screens-read.jsx                     9 pass / 1 fail  -- the licence
-//                                                                         point-of-use test, ALONE. This is
-//                                                                         the rule-1 check: the feature was
-//                                                                         removed from the SCREEN only.
-//   · `license: det.license` dropped from buildCommentaryFromDb            7 pass / 3 fail
-//   · the cross-book title lead-in disabled in the converter and the
-//     module rebuilt                                                       8 pass / 2 fail  -- test 9 and
-//                                                                         the catalogue hash. The rebuild's
-//                                                                         hash reverted exactly to the
-//                                                                         pre-title build's, which is its
-//                                                                         own proof that the lead-in is the
-//                                                                         only difference between them.
-//   · decode_ref shifted +1 in the converter and the module rebuilt        4 pass / 6 fail
+//     leaving every word of it in app/screens-read.jsx                     10 pass /  1 fail  — test 9 ALONE.
+//     This is the rule-1 check: the feature was removed from the SCREEN only, and nothing here reads source
+//     text, so `false && ` cannot hide from it.
+//   · `license: det.license` out of buildCommentaryFromDb                   8 pass /  3 fail
+//   · the cross-book title lead-in disabled and the module rebuilt          9 pass /  2 fail
+//   · ref_title's period→colon fix disabled and the module rebuilt          9 pass /  2 fail
+//   · decode_ref shifted +1 and the module rebuilt                          5 pass /  6 fail
+//   · buildFromUSFM made EAGER (parse every book while listing them,
+//     i.e. the pre-LAZY-BIBLE behaviour)                                   10 pass /  1 fail  — test 7 alone
+//   · buildFromUSFM's per-book parse memo removed                          10 pass /  1 fail  — test 7 alone
+//   · the harness's own parseUSFM probe neutered                           10 pass /  1 fail  — test 7 alone,
+//     on "this probe is not attached to anything". The laziness guard cannot pass by measuring nothing.
+//
+// TWO OF THOSE REBUILDS ARE THE STRONGEST EVIDENCE IN THIS FILE, and they are hashes rather than diffs.
+// Disabling only the cross-book lead-in rebuilds to e11bcf88…, byte-for-byte the module commit 3066ce6
+// shipped; disabling only ref_title rebuilds to 198b2853…, byte-for-byte 9c292b2's. Each says three things
+// at once: the build is reproducible, that one edit is the ONLY difference in the output, and every other
+// converter change between those commits is inert on the bytes.
 //
 // And the harness cannot be silently empty: `entered` counts calls into engine.js's own notify() from its
 // own addCommentary, and loadedNotes() refuses to continue at zero (see the note above engineChain).
@@ -98,7 +104,7 @@ const entry = () => {
 // silently runs nothing while every negative test passes vacuously. `entered` below is the counter that
 // proves this harness really got inside the engine's code.
 let entered = 0;
-function engineChain() {
+function engineChain(probe = () => {}) {
   const parts = [
     stmt(ENGINE, 'const BOOK_NAMES = [', 'BOOK_NAMES'),
     stmt(ENGINE, 'const USFM_BOOK = {', 'USFM_BOOK'),
@@ -113,9 +119,16 @@ function engineChain() {
     fnBody(ENGINE, 'function inlineUSFM(s){'),
     fnBody(ENGINE, 'function parseUSFM(text){'),
     fnBody(ENGINE, 'function stripTags(s){'),
+    // COUNT THE EXPENSIVE HALF. `function f(){}` declares a MUTABLE binding, so reassigning it here means
+    // buildFromUSFM's closure calls the wrapper — which is the only way to observe from outside whether
+    // listing the books parsed any verses. Wrapping the returned object instead would prove nothing: the
+    // internal call site does not go through it. Default probe is a no-op, so every other test is unchanged.
+    `const _pU = parseUSFM, _sT = stripTags;
+     parseUSFM = function(){ probe('parseUSFM'); return _pU.apply(null, arguments); };
+     stripTags = function(){ probe('stripTags'); return _sT.apply(null, arguments); };`,
   ];
   const commentaries = {};
-  const factory = new Function('initSqlJs', 'SQLJS_BASE', 'commentaries', 'notify', 'src',
+  const factory = new Function('initSqlJs', 'SQLJS_BASE', 'commentaries', 'notify', 'src', 'probe',
     parts.join('\n') +
     '\nreturn { BOOK_NAMES, openDb, detailsOf, buildCommentaryFromDb, addCommentary, getCommentary, buildFromUSFM };');
   const api = factory(
@@ -124,6 +137,7 @@ function engineChain() {
     commentaries,
     () => { entered++; },                                   // engine.js's notify(), counted
     () => null,                                             // src(version): no active Bible, so no footnotes block
+    probe,
   );
   return { ...api, commentaries };
 }
@@ -273,6 +287,46 @@ test('the verse keys sit inside the shipped Bible\'s verses — with FOUR named 
   ], 'the set of rows whose verse numbers fall outside the shipped Bible has changed');
 });
 
+test('THE BIBLE STAYS LAZY — listing 66 books parses not one verse', () => {
+  // A GUARD THIS FILE ONCE HAD AND LOST. The first version of engineChain passed throwing stubs for
+  // parseUSFM and stripTags, on the reasoning that buildFromUSFM must not need them to list books. Adding
+  // the verse-key test above meant lifting the real ones, and the stubs went with them — leaving `parseUSFM`
+  // with exactly one mention anywhere in scripts/*.test.mjs (this file's fnBody anchor) and NOTHING
+  // asserting the property. Restored on the audit's finding, 2026-09-10.
+  //
+  // What it is worth, in engine.js's own words (the LAZY BIBLE note above buildFromUSFM): parsing all 66
+  // books up front cost "~0.6s on desktop / 2-5s on a modest phone on EVERY boot". That is a regression that
+  // ships in silence — every test stays green, the app just gets slower to open on the cheapest hardware,
+  // which is the hardware this project is aimed at.
+  //
+  // A COUNTER, NOT A THROWER, and deliberately: a thrower proves only that the expensive path was not taken,
+  // and a lift that broke the wiring would satisfy it by never calling anything. This counts both directions
+  // in one harness — 0 while listing, then ABOVE zero the moment a chapter is actually opened, which is what
+  // says the counter is really attached to the function the app calls.
+  const calls = [];
+  const eng = engineChain(name => calls.push(name));
+  const bsb = eng.buildFromUSFM(unzipSync(readFileSync(ROOT + 'modules/engbsb.zip')), 'engbsb.zip');
+
+  assert.equal(bsb.books.length, 66, 'the shipped BSB did not list 66 books');
+  assert.equal(bsb.maxChap[19], 150, 'Psalms did not come back with 150 chapters');
+  assert.deepEqual(calls, [],
+    `listing the books and their chapter counts called ${JSON.stringify(calls.slice(0, 4))} — the bible is no `
+    + 'longer lazy, and every launch now pays 0.6s on desktop / 2-5s on a modest phone to parse 66 books '
+    + 'nobody has opened');
+
+  // …and the counter is genuinely wired: opening one chapter DOES reach the expensive path.
+  const verses = bsb.getVerses(43, 1);
+  assert.ok(verses.length > 10, `John 1 came back with ${verses.length} verses`);
+  assert.ok(calls.includes('parseUSFM'), 'opening John 1 never reached parseUSFM — this probe is not attached to anything');
+  assert.ok(calls.includes('stripTags'), 'opening John 1 never reached stripTags — this probe is not attached to anything');
+
+  // one book, not sixty-six: the parse is per-book and memoised
+  const before = calls.filter(n => n === 'parseUSFM').length;
+  bsb.getVerses(43, 2);
+  assert.equal(calls.filter(n => n === 'parseUSFM').length, before,
+    'a second chapter of the SAME book parsed the book again — the per-book memo is gone');
+});
+
 // ── THE POINT OF USE: the Study panel ─────────────────────────────────────────────────────────────────────
 // Both tests below drive the REAL CommentaryPanel with the REAL getCommentary over the REAL module. Delete
 // the feature from the screen and they fail; that is the whole reason they exist (CLAUDE.md rule 1).
@@ -355,6 +409,20 @@ test('POINT OF USE: a note carried over from another book SAYS WHICH NOTE IT IS'
   assert.match(carried[0], /Nazirite/, 'the carried-over note is not the Nazirite-vow note');
   assert.ok(bodies.length > 1, 'Acts 18 shows only the carried-over note — its own notes are missing');
   assert.doesNotMatch(words, /Nothing here for/, 'the panel still shows its empty state while holding notes');
+  // AND THE REFERENCE IN IT IS NOT A TYPO. Aquifer writes the end of a chapter-crossing range with a
+  // period where a colon belongs — "John 13:31-17.26" — in 318 of its 16,923 titles, and one of those is a
+  // title that now reaches a member's screen at Luke 22:12. Passing the source through verbatim was
+  // defensible until it became visible; the converter's ref_title() fixes a period between two digits and
+  // nothing else. Asserted on the SCREEN, not on the row.
+  const luke = await studyPanel({ book: 42, chap: 22 }, 'Luke 22');
+  const lukeCarried = find(luke.tree, n => n.props && n.props.dangerouslySetInnerHTML)
+    .map(n => n.props.dangerouslySetInnerHTML.__html).filter(h => /From the note on/.test(h));
+  assert.equal(lukeCarried.length, 1, `Luke 22 showed ${lukeCarried.length} carried-over notes; exactly one is filed there`);
+  assert.match(lukeCarried[0], /From the note on <strong>John 13:31\u201317:26<\/strong>/,
+    'the reference a member reads at Luke 22:12 is not "John 13:31\u201317:26"');
+  assert.doesNotMatch(lukeCarried[0], /<strong>[^<]*\d\.\d/,
+    'a chapter-verse reference on the screen still has a period where a colon belongs');
+
   // and a chapter with no carried-over note has no such lead-in
   const plain = await studyPanel({ book: 63, chap: 1 });
   const plainBodies = find(plain.tree, n => n.props && n.props.dangerouslySetInnerHTML).map(n => n.props.dangerouslySetInnerHTML.__html);
