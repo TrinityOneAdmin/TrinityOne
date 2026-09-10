@@ -24,7 +24,25 @@ deliberately not the safeguarding boundary):
 since the 2026-09-10 widening it accepts **two authors**: the church key *or* a safeguarding steward. It
 gates membership of the session-key envelope, i.e. reading and writing that session's register.
 
-## ⚠ THE DECISION THIS NEEDS BEFORE ANY CODE — what happens to churches that already cleared people
+## OWNER DECISIONS — 2026-09-10, both answered. THE MIGRATION QUESTION IS MOOT.
+
+**1. "Set both going forward" — and there is nothing to migrate.** Owner: *"set both going forward. but no
+live churches exists yet, no drama."* So the four-option table below is **historical**: there is no existing
+clearance state to preserve, widen or reset. Build the merged concept cleanly, with no transitional
+half-cleared state and no migration path. Keep the table only as the record of why it was not needed.
+
+**2. Both the owner AND a safeguarding steward may clear.** Owner: *"clearing should be for both owner and
+safeguarding stewards."* `checkinperm:` already accepts both. **`approved:` does not — it is owner-only on
+the relay** (`scripts/gateway.mjs` requires `e.pubkey === cp` on that d-tag), so this decision requires
+widening a relay write gate. That is the same change as the delegate-minting decision recorded in
+`SCOPE-CHECKIN-SEALING-2026-09-10.md`, and the two go in one pass.
+
+⚠ **ORDER MATTERS.** The red team's F3/F4/F5 found that clearance *authorisation* is judged at ingest and
+re-judged on restart, so a withdrawal by a steward who later loses the tick comes back. **Fix that model
+BEFORE widening who may author a clearance** — widening a broken authorisation model multiplies the bug
+across a second document.
+
+## Historical — the migration options, moot per decision 1
 
 Merging the concept means one act grants both. For every church already running, that is a **widening in
 both directions**, and the two directions are not equally safe:

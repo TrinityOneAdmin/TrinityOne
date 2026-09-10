@@ -349,6 +349,20 @@ branch was not exercised. The negentropy import walk (`/sync-digest` → `/sync-
 `note()` with `/import` so the same answers are expected, but it was **not** executed — "could not", not
 "impossible".
 
+## OWNER DECISIONS — 2026-09-10 (third round)
+
+- **Piece 2 (the guardian's copy): DO NOT BUILD YET.** Owner: *"no surface yet, so let's not build anything
+  until pilot says we should."* Correct — there is no member-app check-in surface, so a parent-readable copy
+  would have nothing to read it with. The one caveat, recorded so the decision is informed: a record's
+  audiences are fixed **when it is sealed**, so records written before the parent copy exists would not be
+  parent-readable later. That is recoverable — `migrateCheckinKeys` already re-keys existing records for the
+  ring, so the same mechanism could add an audience retrospectively. **No reason to build ahead of the pilot.**
+- **Desktop per-card scrolling: live with it for now.** The register scrolls with the page rather than inside
+  its own card.
+- **Bible slice 2 comes after the check-in queue.**
+- **Making commentaries and dictionaries uninstallable: after the check-in work wraps up.**
+- **Pushing, and the console help articles appearing in the member app's help index: both can wait.**
+
 ## OWNER DECISIONS — 2026-09-10 (second round)
 
 **A. Piece 2 (the guardian's copy): APPROVED, but NOT ESSENTIAL.** Owner: *"yes that can, but it's not
