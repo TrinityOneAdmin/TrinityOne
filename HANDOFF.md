@@ -25,16 +25,28 @@ now points inside a *different function*).
 
 **`/` had 250 MB free at handoff.** Check `df -h /` **before believing any measurement you take.**
 
-Actual files total **79 GB**; `df` reports **148 GB used**. It is ext4, so there are no snapshots: that
-**~69 GB gap is deleted files still held open by running processes**, which nothing reclaims until the holder
-closes them. Diagnose and fix without a reboot:
+⚠ **CORRECTED, and the earlier diagnosis in this document was WRONG.** This session first concluded the gap
+was deleted files held open by running processes, and told the owner a reboot would reclaim it. **Both were
+wrong.** `sudo lsof +L1` showed deleted-open files totalling roughly **34 MB** on the root device — a 25 MB
+journal and an 8.6 MB Chromium temp file. Everything else in that listing was `memfd:` and `/dev/shm`, i.e.
+**RAM, not disk** (devices `0,1` and `0,29`, not `259,4`).
 
-    sudo lsof +L1 | sort -k7 -nr | head -20
-    sudo truncate -s 0 /proc/<pid>/fd/<n>      # a log: frees the blocks, process keeps running
+**The real cause is that `du` run as the ordinary user silently skips directories it cannot read**, so its
+79 GB was a floor and was treated as a total. `df` says **148 GB used**; the user-visible tree accounts for
+about 75 GB (`/home` 27 G, `/usr` 17 G, `/var` 15 G, `/opt` 15 G). **Roughly 70 GB is in paths that need root
+to see.**
 
-A reboot reclaims all of it unconditionally. Note this session contributed: it started and killed relay
-processes repeatedly, each with a `nohup` log, then deleted some of those logs while a relay still held one
-open.
+**The correct diagnosis, still to be run:**
+
+    sudo du -x -h -d1 / | sort -rh | head -12
+    sudo du -x -h -d1 /var | sort -rh | head -8      # then drill into the biggest
+
+`/var/lib` is the usual suspect on this box — snap revisions, container images, or a database. **A reboot
+will NOT help if the space is in real files**, which is now the likely case.
+
+**The lesson, which is the reusable part:** `du` as a non-root user is a floor, not a total. Reconciling it
+against `df` and blaming the difference on deleted-open files was a guess dressed as a measurement — and it
+is exactly the "reasoning from the one path in view" failure this document warns about in §2.
 
 **What a full disk has already done here, all three silently:**
 - killed a rebuild inside SQLite `VACUUM`, printing nothing — so the sabotage that followed tested the
