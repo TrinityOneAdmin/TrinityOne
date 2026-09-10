@@ -84,6 +84,14 @@ See [[a-silent-build-failure-makes-sabotage-pass]].
 
 **The owner has NOT authorised a push.** He is reviewing personally.
 
+**What is installed on the Oppo right now:** a steward APK built from a throwaway merge of
+`fix/relay-auth-gates` + `fix/checkin-page-layout` + `fix/checkin-future-clearance` onto
+`fix/clearance-authorisation` — i.e. all four check-in fixes together. That temp branch has been deleted;
+recreate it with those four merges if you need the same build. `feat/worker-register-view` is **not** on the
+phone. The relay serving the Funnel (`scripts/gateway.mjs 8000`, from the main tree) was last restarted on
+that same merge, so if you check out something else the relay and the served bundles will disagree — restart
+it, or you will chase a stale-relay ghost.
+
 **Merge order and the one known conflict.** All five check-in branches merge cleanly onto `main` except one
 **test-file** conflict: `fix/checkin-page-layout` and `fix/checkin-future-clearance` each independently
 extracted `flow`/`reads`/`glued` into `scripts/render-jsx-screen.mjs`. Product files merge clean. Take the
