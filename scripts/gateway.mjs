@@ -1588,6 +1588,92 @@ const checkinPermitted = (pub, cp) => {
   if (pm.until != null && t > pm.until) return false;
   return true;
 };
+// ── WHICH SESSION DOES THE RECORD AT THIS ADDRESS ACTUALLY BELONG TO? ─────────────────────────────────────
+//
+// RED TEAM 2026-09-10, F1 — a child-safety defect, and the reason this function exists. accept()'s check-in
+// branch bound a helper's write to the ['session'] tag ON THE INCOMING EVENT, which is a tag THE WRITER
+// CHOOSES, and never asked which session the record at that d-tag belongs to. So a helper cleared and
+// in-window for session S1 was correctly refused every READ of a session-S2 record and was nonetheless
+// ACCEPTED PUBLISHING AT THAT S2 RECORD'S OWN ADDRESS, by putting ['session', S1] on her event. Measured on a
+// live relay: `ada OVERWRITES r2 — session S2, tagged S1` → accepted.
+//
+// WHAT IT COST, and it is not a read leak. Addressable events are per AUTHOR (replKey is pubkey:kind:d-tag —
+// see event-store.mjs), so the forgery does not replace the church's row in the store; it sits BESIDE it, and
+// both are served. The console's register keys `byId` on the d-tag SUFFIX and take() is newest-wins, so the
+// newer forgery is the row that renders. Before the `ck` tag a helper held no ring key, so a forged `content`
+// was garbage that parked in the holding pen for ever — inert. The helper's copy makes it bite: the forger
+// seals her own body under the session key she legitimately holds, tags the event S1, and
+// _encOpenSealedCopy looks the key up BY THE TAG SHE WROTE. `rec.code` is the pickup code and CheckoutModal
+// releases a child on `code.trim() === String(rec.code)`, so a volunteer cleared for one Sunday morning could
+// set ANY child's pickup code to a value of her choosing, on any record from any date, and write or clear
+// `out` ("collected by…"). The register renders one row per address with no author, so there is nothing on
+// screen to notice.
+//
+// THE RULE: a helper may CREATE a record in a session they hold, and may only UPDATE an address whose records
+// AS THIS RELAY ALREADY HOLDS THEM name that same session. Create is the whole feature — a rota volunteer
+// checking a child in at the desk — so an address this box holds nothing at is admitted, and that is not a
+// hole: a new address is a new record, and the session it names is one the author was entitled to.
+//
+// ANY DISAGREEMENT REFUSES, rather than "the newest record's session wins" or "the church's copy wins". A
+// record is one child at one session; its session is part of its identity and no honest writer ever changes
+// it. publishCheckin() mints a fresh id per record and migrateCheckinKeys() RE-PUBLISHES an existing body, so
+// both of `trinityone/checkin:`'s two writers re-derive the tag from the same unchanged body
+// (src/steward.src.js, _encCleartextTags — "ONE SESSION, and the service's own id"). So two sessions at one
+// address is never a state an honest corpus reaches, and treating it as a refusal means a forgery ALREADY on
+// disk locks its own address down rather than becoming the thing that answers for it.
+//
+// A RECORD WITH NO SESSION TAG MAKES NO CLAIM and is skipped, in both directions. Publishing one is legal and
+// deliberate — "a church with no service document for today is an ordinary Sunday, not an error", and nothing
+// in this feature may stand between a child and the desk — and such a record cannot be opened by a helper at
+// all, because _encOpenSealedCopy needs the tag to find a key. So it is not something to refuse a write over,
+// and it is not something a conflict can be measured against. (A helper cannot exploit the skip: the helper
+// clause requires a non-empty `sid` before this is ever reached, and has since 2026-09-09.)
+//
+// SCOPED TO THE CHURCH, resolved the same way accept() resolves it, because a d-tag suffix is a relay-GLOBAL
+// namespace: on a shared box two congregations can hold `checkin:r1`. A co-tenant's record must not be able to
+// refuse this church's write (a denial of service on a children's desk), and must not be able to answer for
+// which session this church's address belongs to.
+//
+// CALLERS — every one, per CLAUDE.md rule 2, and there are four, which is BOTH DOORS:
+//   • accept()                     — the websocket door, the CHECKIN_D branch's helper clause
+//   • the /import loop             — beside carereqIdOk, which is there for exactly this reason ("A CARE
+//     REQUEST'S ID NAMES ITS ASKER, AND THAT HOLDS AT EVERY DOOR"). /import does store.put with NO accept()
+//     pass, deliberately and for measured reasons, so a rule that must hold on disk has to be stated here too.
+//   • syncChurchFromPeer()         — the cursor pull, relay-to-relay
+//   • reconcileChurchWithPeer()    — the negentropy walk, relay-to-relay
+// It is NOT called from note(). note() has no CHECKIN_D branch and populates no map from a check-in record —
+// it is a map-keeper, and by the time it runs store.put() has already happened. The three ingest sites above
+// are where an event is refused BEFORE the store, which is exactly where carereqIdOk sits at the same three.
+//
+// ⚠ THE INGEST DOOR EXEMPTS THE CHURCH KEY, and that is not laziness. An accept() pass was added to /import on
+// 2026-08-20 and reverted the same day because it deleted a church's entire finance journal on a legitimate
+// restore: a write-time admission gate cannot answer a question about an archive. This check consults NO MAP
+// for the author — only CHURCH_PUBS, which /import populates before its loop — so it cannot refuse a restore
+// for want of a hydrate. Never refusing the church's own copy is the second half of that: on a restore the
+// church's genuine record must land whatever else the archive happens to carry.
+const checkinSessionConflict = (d, cp, sid) => {
+  if (!d || !cp || !sid) return false;
+  for (const x of store.query({ kinds: [30078], '#d': [d], limit: 200 })) {
+    const xcp = namedChurch(x) || (CHURCH_PUBS.has(x.pubkey) ? x.pubkey : '');
+    if (xcp !== cp) continue;
+    const s = ((x.tags || []).find(t => t[0] === 'session') || [])[1] || '';
+    if (s && s !== sid) return true;
+  }
+  return false;
+};
+// The ingest half of the rule above, in the shape carereqIdOk has: given an event about to be put in the
+// store, may it sit at the address it names? True for everything that is not a check-in record, for a record
+// naming no session, and for the church's own copy. False only for a NON-church author whose record would join
+// an address this box already holds a DIFFERENT session at.
+const checkinSessionOkOnIngest = (e, d) => {
+  if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKIN_D)) return true;
+  if (CHURCH_PUBS.has(e.pubkey)) return true;
+  const cp = namedChurch(e) || '';
+  if (!cp) return true;                       // ownership unproven — owningChurch()/canRead() deny it anyway
+  const sid = ((e.tags || []).find(t => t[0] === 'session') || [])[1] || '';
+  if (!sid) return true;
+  return !checkinSessionConflict(d, cp, sid);
+};
 const onAnyRoster = (pub, cp) => {
   if (!pub || !cp) return false;
   for (const [id, src] of ROSTER_BY) {
@@ -3271,7 +3357,8 @@ function accept(e) {
     //      of the helper capability is that the people who actually do this job — rota volunteers — are not
     //      stewards, and must not have to be made safeguarding stewards to check a child in.
     //
-    //      THREE THINGS THIS BRANCH REFUSES, each asserted by name in checkin-helper-capability.test.mjs:
+    //      FOUR THINGS THIS BRANCH REFUSES, each asserted by name (the first three in
+    //      checkin-helper-capability.test.mjs, the fourth in checkin-helper-write-scope.test.mjs):
     //      a record with NO ['session'] tag (a helper cannot write into the register at large, only into the
     //      session they were granted); a session OTHER than the one they hold; and the same helper outside
     //      their window. The window is compared against the SERVER's clock inside checkinHelperOf, never
@@ -3281,7 +3368,16 @@ function accept(e) {
       if (!cp) return false;
       if (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')) return true;
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
-      return !!sid && checkinHelperOf(e.pubkey, cp, sid);
+      if (!sid || !checkinHelperOf(e.pubkey, cp, sid)) return false;
+      //      d. AND THE RECORD AT THAT ADDRESS MUST BE THEIR SESSION'S. Everything above this line asks about
+      //      the tag on the incoming event, which the writer chose; nothing asked which session the record the
+      //      d-tag ADDRESSES belongs to. RED TEAM 2026-09-10 F1: a helper in-window for S1 only, correctly
+      //      refused every read of a session-S2 record, was accepted publishing AT that record's own address
+      //      by tagging her event S1 — and with the helper's `ck` copy she can seal a body the console will
+      //      render over the church's, including `rec.code`, the pickup code CheckoutModal releases a child
+      //      on. See checkinSessionConflict for the full measurement and for why any disagreement refuses.
+      //      CREATE is untouched: an address this box holds nothing at is the volunteer at the desk.
+      return !checkinSessionConflict(d, cp, sid);
     }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
@@ -4724,6 +4820,14 @@ function serveStatic(req, res) {
           // straight to the store, so without this a forged request arrives by import or by relay-to-relay sync, sits
           // beside the genuine one (addressable events are per author), and every reader picks newest-wins.
           if (!carereqIdOk(e, dtag(e))) { invalid++; continue; }
+          // …AND A CHECK-IN RECORD BELONGS TO ONE SESSION, WHICH ALSO HOLDS AT EVERY DOOR. Same argument as
+          // the line above, on the register instead of on care: this route writes straight to the store with
+          // no accept() pass, so without this a helper's forgery at another session's address arrives by
+          // import or by relay-to-relay sync, sits beside the genuine record (addressable events are per
+          // author), and the console's newest-wins register renders it. RED TEAM 2026-09-10 F1. It consults no
+          // hydrated map and never refuses the church's own copy — see checkinSessionOkOnIngest for why that
+          // matters on a restore, and why an accept() pass here was reverted in 2026-08.
+          if (!checkinSessionOkOnIngest(e, dtag(e))) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
             if (r === 'stored') imported++;
@@ -5924,6 +6028,7 @@ async function syncChurchFromPeer(cp, peerBase) {
       let e; try { e = JSON.parse(s); } catch { return; }
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
       if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
+      if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
       const put = store.put(e, cp);
       if (put === 'stored') { imported++; note(e); }
       if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
@@ -5987,7 +6092,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }
