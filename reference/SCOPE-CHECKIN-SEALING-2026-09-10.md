@@ -349,6 +349,33 @@ branch was not exercised. The negentropy import walk (`/sync-digest` → `/sync-
 `note()` with `/import` so the same answers are expected, but it was **not** executed — "could not", not
 "impossible".
 
+## OPEN AFTER THE AUTHORISATION FIX (`2fe8a74`) — two items for the owner's judgement
+
+The F3/F4/F5 fix landed with one model: **a version is remembered with its author; a clearance answers for
+its author's authority at USE time; a withdrawal counts for ever from the moment a door admitted it and is
+never re-litigated.** The asymmetry is deliberate — a clearance widens access to a children's register, a
+withdrawal can only refuse. Requiring continuing authority for a withdrawal is exactly how de-capping a
+safeguarding lead re-granted every clearance she had withdrawn.
+
+**Device-verified 2026-09-10 on the Oppo**, on the four-fix merge: withdrawal takes effect in place, and
+**survives a relay restart on the same database** — the relay holds one empty version and the console still
+reads "Nobody is cleared yet" after the rehydrate. That is the axis F3 lived on.
+
+Two things it could not close, both stated in the code and the commit:
+
+1. **A 120-second clock-skew residue.** Down from 900 s. Inside that window a stale clearance from a fast
+   device can still outrank a withdrawal. It cannot be closed by making a withdrawal beat any later-stamped
+   clearance, because that also blocks the cross-author **re-grant** that
+   `checkin-permission-mint-widening.test.mjs` requires to work. It needs two disagreeing clocks acting
+   within the same two minutes; the other author's withdrawal always lands at the door now; and any later act
+   settles it. **Accept, or reopen with a different mechanism.**
+2. **The console cannot distinguish a removed safeguarding lead from a co-tenant** — from the console's
+   position both are simply a pubkey with no capability. The **relay closes both cases** and is asserted
+   doing so, so the enforcement is right; it is the console's *display* that cannot tell the two apart.
+   Relevant because a row vanishing while the relay still enforces would make a steward believe a withdrawal
+   worked when it did nothing — which is why the console deliberately believes the church key and anyone the
+   roster records a capability for, capability ignored.
+
 ## OWNER DECISIONS — 2026-09-10 (third round)
 
 - **Piece 2 (the guardian's copy): BUILD IT WITH SLICE 3, not before and not "when the pilot says".**
