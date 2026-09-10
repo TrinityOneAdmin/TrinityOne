@@ -225,10 +225,16 @@ window.safeImgUrl = function (v) {
     const tables = q("SELECT name FROM sqlite_master WHERE type='table'").map(r => r.name);
     return { q, tables, has: t => tables.some(x => x.toLowerCase() === t.toLowerCase()) };
   }
+  // A module's own Details row. `license` is the ATTRIBUTION NOTICE THE MODULE CARRIES ITSELF, not a
+  // catalogue label: an openly-licensed resource (CC BY-SA and friends) obliges us to credit the author and
+  // name the licence wherever its words are shown, and a notice that lives only in catalog.json is gone the
+  // moment the module is handed phone-to-phone by Quick Share (exportModule below). So it travels in the
+  // file, and getCommentary() passes it to the Study panel, which prints it under the heading.
+  // Public-domain modules have no such column and get no line — nothing to attribute.
   function detailsOf(db, fb){
-    let abbr = fb || "Bible", name = fb || "Module";
-    try{ const d = db.q("SELECT * FROM Details LIMIT 1"); if(d.length){ if(d[0].Abbreviation) abbr = d[0].Abbreviation; name = d[0].Description || d[0].Title || name; } }catch(e){}
-    return { abbr, name };
+    let abbr = fb || "Bible", name = fb || "Module", license = "";
+    try{ const d = db.q("SELECT * FROM Details LIMIT 1"); if(d.length){ if(d[0].Abbreviation) abbr = d[0].Abbreviation; name = d[0].Description || d[0].Title || name; license = d[0].License || d[0].Licence || d[0].Copyright || ""; } }catch(e){}
+    return { abbr, name, license: String(license || "") };
   }
   function buildBibleFromDb(db, fb){
     const det = detailsOf(db, fb);
@@ -276,7 +282,7 @@ window.safeImgUrl = function (v) {
     const det = detailsOf(db, fb);
     const sel = "SELECT " + [bookCol + " AS b", chapCol + " AS c", (fromV ? fromV : "0") + " AS fv", (toV ? toV : (fromV || "0")) + " AS tv", dataCol + " AS d"].join(", ") + " FROM " + t + " WHERE " + bookCol + "=? AND " + chapCol + "=? ORDER BY fv";
     return {
-      abbr: det.abbr, name: det.name, kind: "comment",
+      abbr: det.abbr, name: det.name, kind: "comment", license: det.license,
       getComment: (b, c) => { try { return db.q(sel, [b, c]).map(r => ({ v: r.fv, vTo: r.tv, html: parseVerse(String(r.d || "")) })).filter(x => x.html.trim()); } catch(e){ return []; } }
     };
   }
@@ -642,7 +648,10 @@ window.safeImgUrl = function (v) {
   // commentary for a passage: installed commentary modules + footnotes baked into the active Bible
   function getCommentary(b, c, version){
     const out = [];
-    for(const abbr in commentaries){ const s = commentaries[abbr]; let rows = []; try { rows = s.getComment(b, c); } catch(e){} if(rows && rows.length) out.push({ abbr, name: s.name, kind: "module", rows }); }
+    // `license` rides along with the block, not fetched separately by the panel: the notice has to appear
+    // WHEREVER these words appear, and one object per source is the only shape in which the panel cannot
+    // draw a module's words without its credit beside them.
+    for(const abbr in commentaries){ const s = commentaries[abbr]; let rows = []; try { rows = s.getComment(b, c); } catch(e){} if(rows && rows.length) out.push({ abbr, name: s.name, kind: "module", license: s.license || "", rows }); }
     const s = src(version);
     if(s && s.footnotes){ let fn = []; try { fn = s.footnotes(b, c); } catch(e){} if(fn.length) out.push({ abbr: s.abbr, name: s.name + " — footnotes", kind: "footnotes", rows: fn.map(f => ({ v: f.v, vTo: f.v, html: f.notes.map(t => "<p>" + t + "</p>").join("") })) }); }
     return out;

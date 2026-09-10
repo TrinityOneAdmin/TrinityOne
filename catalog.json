@@ -137,6 +137,20 @@
    "icon": "comment",
    "items": [
     {
+     "id": "aquifer-osn-eng",
+     "name": "Aquifer Open Study Notes",
+     "abbr": "OSN",
+     "lang": "English",
+     "url": "modules/aquifer-osn-eng.cmt.mybible.zip",
+     "format": "MySword",
+     "kind": "comment",
+     "size": "2.0 MB",
+     "sha256": "e11bcf88c9d26d917fd795232bddc04bd398fe08fca7205f64ce55b6d423fde7",
+     "license": "CC BY-SA 4.0 · Mission Mutual, from Tyndale Open Study Notes",
+     "featured": true,
+     "desc": "Plain-language study notes on every chapter of the Bible — modern, clear, and freely licensed. Built by scripts/build-aquifer-studynotes.py."
+    },
+    {
      "id": "matthew-henry",
      "name": "Matthew Henry’s Commentary",
      "abbr": "MHC",
