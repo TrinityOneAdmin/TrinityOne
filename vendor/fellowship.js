@@ -6220,6 +6220,300 @@
     return { kind: "symbol", color: av.color, symbol: av.symbol || (symbolFor ? symbolFor(pubkey) : void 0) };
   }
 
+  // scripts/checkin-role-source.mjs
+  var HELPER_LIFETIMES = Object.freeze({
+    // THE DEFAULT, and the tightest. A church that never opens the setting gets the safest behaviour rather than
+    // the most convenient one. Twelve hours covers a Sunday morning with hours of slack either side and refuses
+    // a grant that would still be open next weekend.
+    session: {
+      id: "session",
+      max: 12 * 3600,
+      label: "The rostered session only",
+      describe: "Access ends when the session does.",
+      window(start, o) {
+        const before = Number.isFinite(o.before) ? Math.max(0, Math.floor(o.before)) : 45 * 60;
+        const after = Number.isFinite(o.after) ? Math.max(0, Math.floor(o.after)) : 3 * 3600;
+        return { from: start - before, until: start + after };
+      }
+    },
+    // For a church whose children's work runs across a morning and an afternoon, or an all-day event, and which
+    // does not want a steward re-issuing a grant at lunchtime. Ends at local midnight of the service's own date,
+    // so "that whole day" means the day the church means, not twenty-four hours from an arbitrary instant.
+    day: {
+      id: "day",
+      max: 26 * 3600,
+      label: "The whole of that day",
+      describe: "Access ends at the end of the day the session is on.",
+      window(start, o, endOfDay) {
+        const before = Number.isFinite(o.before) ? Math.max(0, Math.floor(o.before)) : 45 * 60;
+        return { from: start - before, until: endOfDay };
+      }
+    }
+    // THERE IS NO `open` HERE ANY MORE, AND ITS ABSENCE IS THE POINT OF THE 2026-09-09 RESTRUCTURE.
+    //
+    // It used to live here — "until a steward ends it" — because a session grant was ALSO the thing that said a
+    // person was cleared, so the small church that re-staffs nothing had to be able to say "leave it open". Now
+    // that "is this person cleared" is its own document with its own lifetimes (PERMISSION_LIFETIMES below), an
+    // open-ended SESSION KEY would be a standing key to the children's register and nothing else. Worse under
+    // the new model than under the old one: session keys are now issued WITHOUT A STEWARD ACTING, so an
+    // open-ended one could be minted by machinery nobody watched.
+    //
+    // So every lifetime in this table has a `max`, windowFault refuses a missing `until` under all of them, and
+    // NO SESSION KEY THIS PRODUCT CAN MINT OUTLIVES 26 HOURS. The church's "until a steward ends it" is not
+    // lost — it moved to the permission, where it means what a church means by it: this person is cleared until
+    // we say otherwise.
+  });
+  var isDeclaredLifetime = (id) => typeof id === "string" && Object.prototype.hasOwnProperty.call(HELPER_LIFETIMES, id);
+  var MAX_SESSION_SECONDS = 26 * 3600;
+  var PERMISSION_LIFETIMES = Object.freeze({
+    // THE DEFAULT, and the tightest.
+    day: {
+      id: "day",
+      max: 26 * 3600,
+      label: "Just that day",
+      describe: "Cleared for that one day. Ends at the end of it."
+    },
+    // The annual clearance. 400 days is a year plus slack for a church that renews late — long enough that
+    // "annually" is expressible, short enough that a clearance nobody ever revisits still lapses.
+    dated: {
+      id: "dated",
+      max: 400 * 24 * 3600,
+      label: "Until a date the church sets",
+      describe: "Cleared until the date you choose. Nothing renews it on its own."
+    },
+    // No end. Ended by a steward, and by nothing else.
+    open: {
+      id: "open",
+      max: null,
+      label: "Until a steward ends it",
+      describe: "Cleared until somebody removes it. Nothing expires on its own."
+    }
+  });
+  var isDeclaredPermissionLifetime = (id) => typeof id === "string" && Object.prototype.hasOwnProperty.call(PERMISSION_LIFETIMES, id);
+  var MAX_PERMISSION_SECONDS = 400 * 24 * 3600;
+  var KEY_LEAD_SECONDS = 14 * 24 * 3600;
+  function permissionFault(from, until, lifetimeId) {
+    if (!isDeclaredPermissionLifetime(lifetimeId)) return "unknown permission lifetime " + JSON.stringify(lifetimeId);
+    const life = PERMISSION_LIFETIMES[lifetimeId];
+    if (!Number.isInteger(from) || from <= 0) return "from must be a positive whole unix second";
+    if (until === null || until === void 0) {
+      return life.max == null ? "" : "a " + lifetimeId + " permission must carry an end";
+    }
+    if (life.max == null) return "an open-ended permission must not carry an end \u2014 revoke it to end it";
+    if (!Number.isInteger(until) || until <= 0) return "until must be a positive whole unix second";
+    if (until <= from) return "the clearance closes before it opens";
+    if (until - from > life.max) return "a " + lifetimeId + " permission may not exceed " + life.max + " seconds";
+    if (until - from > MAX_PERMISSION_SECONDS) return "no expiring permission may exceed " + MAX_PERMISSION_SECONDS + " seconds";
+    return "";
+  }
+  function readCheckinPermission(content) {
+    let c;
+    try {
+      c = JSON.parse(content || "");
+    } catch {
+      return null;
+    }
+    if (!c || typeof c !== "object") return null;
+    const person = String(c.person || "").trim().toLowerCase();
+    const until = c.until === void 0 ? null : c.until;
+    if (!HEX64.test(person)) return null;
+    if (!isPermissionSource(c.source)) return null;
+    if (permissionFault(c.from, until, c.lifetime)) return null;
+    return { person, source: c.source, lifetime: c.lifetime, from: c.from, until };
+  }
+  function permissionAdmits(perm, at) {
+    if (!perm || !Number.isFinite(at)) return false;
+    if (!HEX64.test(String(perm.person || ""))) return false;
+    if (!isPermissionSource(perm.source)) return false;
+    if (permissionFault(perm.from, perm.until == null ? null : perm.until, perm.lifetime)) return false;
+    if (at < perm.from) return false;
+    if (perm.until != null && at > perm.until) return false;
+    return true;
+  }
+  var HEX64 = /^[0-9a-f]{64}$/;
+  var clean3 = (pubs) => {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const p of pubs || []) {
+      const h = typeof p === "string" ? p.trim().toLowerCase() : "";
+      if (!HEX64.test(h) || seen.has(h)) continue;
+      seen.add(h);
+      out.push(h);
+    }
+    return out;
+  };
+  var HELPER_SOURCES = Object.freeze({
+    // TODAY. Whoever is on the rota for this service, in a slot belonging to a team the church has named as
+    // children's work.
+    //
+    // THREE THINGS THIS HAS TO GET RIGHT, and each of them is a real trap in the shipped rota model:
+    //
+    //   1. `published` is a DRAFT FLAG and it is checked client-side only. A rota nobody has published is a
+    //      steward pencilling names in. Deriving a key grant from a draft would hand the register to whoever
+    //      was in the box at the moment somebody scrolled past. scripts/rota-view.test.mjs already sabotage-
+    //      tests this for the serving screen; the same rule has to hold here, with more at stake.
+    //   2. `assign` values carry `pub: ''` for a person with no app identity at all (stew-schedule.jsx lets a
+    //      steward name someone who has never installed anything). Those are not helpers — there is no key to
+    //      wrap anything to. They are dropped silently, which is correct: the rota is still right, the person
+    //      still serves, they simply cannot hold a key they have no key for.
+    //   3. Assign keys are the literal string `<teamId>::<roleId>`. A roleId may itself contain no `::`, but a
+    //      teamId is console-minted and must be compared as the FIRST segment only — splitting on every `::`
+    //      and taking [0] is the same thing app/app.jsx does.
+    //
+    // AND THE THING THE MODEL DOES NOT HAVE: there is no ministry taxonomy. A children's team is a
+    // `trinityone/group:<id>` whose `kind` is 'team' and whose NAME a steward typed. Nothing marks a team as
+    // children's work, so the church must SAY which teams they are — `childrenTeams`. That is a deliberate
+    // input, not a guess: matching on the word "kids" in a team name would be a safeguarding gate built on
+    // spelling, and a church running "Sunday Club" or "Junior Church" would silently get nobody.
+    rota: {
+      id: "rota",
+      label: "Whoever is on the rota for this session",
+      resolve(ctx) {
+        const rota = ctx && ctx.rota || null;
+        const teams = new Set((ctx && ctx.childrenTeams || []).filter((t) => typeof t === "string" && t));
+        if (!rota || !rota.published || !rota.assign || !teams.size) return [];
+        const out = [];
+        for (const key of Object.keys(rota.assign)) {
+          const teamId = String(key).split("::")[0];
+          if (!teams.has(teamId)) continue;
+          const who = rota.assign[key];
+          if (who && who.pub) out.push(who.pub);
+        }
+        return clean3(out);
+      }
+    },
+    // TOMORROW, if the owner decides it. A named safeguarding team, taken from its roster.
+    //
+    // Written NOW rather than left as a comment, and this is the point of the file: if the swap were a
+    // to-do it would be a rewrite, and the day it is wanted is the day somebody discovers that "the rota"
+    // was welded into six places. It is also the honest test of the abstraction — a second implementation
+    // that fits the same signature is the only proof the first one was not shaped around its caller.
+    //
+    // `roster:<teamId>` carries its pubkeys in the CLEAR (a top-level `pubs` array, sealed names beside it) —
+    // exactly what six existing relay grants hang off — so this source needs no key to answer. Note the legacy
+    // fallback: rosters written before 2026-09-05 have `people: [{pub}]` and no `pubs`, and a church that has
+    // not re-saved a team since then would otherwise resolve to nobody.
+    team: {
+      id: "team",
+      label: "A named safeguarding team",
+      resolve(ctx) {
+        const teamId = ctx && ctx.teamId;
+        if (!teamId) return [];
+        const roster = (ctx && ctx.rosters || []).find((r) => r && (r.team === teamId || r.id === teamId));
+        if (!roster) return [];
+        const pubs = Array.isArray(roster.pubs) ? roster.pubs : (roster.people || []).map((p) => p && p.pub);
+        return clean3(pubs);
+      }
+    },
+    // A STEWARD NAMED THEM, BY HAND. Added 2026-09-09 with the permission layer, and it is the ordinary case
+    // rather than an escape hatch: an annual clearance is a HUMAN decision — a DBS certificate, a lead's
+    // sign-off, a training course — and none of those facts are in this product. A steward types the names.
+    //
+    // It also stops `helpers`/`people` being a way AROUND the source system. Before this, publishCheckinHelpers
+    // took an explicit `helpers` array and recorded whatever `source` it was told, so a hand-picked list could be
+    // filed under 'rota' provenance and nothing would notice. Now naming somebody by hand IS a declared source
+    // and says so in the enforced record.
+    steward: {
+      id: "steward",
+      label: "A steward named them",
+      resolve(ctx) {
+        return clean3(ctx && ctx.people || []);
+      }
+    },
+    // THE ONLY SOURCE A SESSION ENVELOPE MAY DECLARE, and the one that makes the weekly steward act disappear.
+    //
+    // It is not interchangeable with the three above: they answer "who should the church CLEAR", which is a
+    // question about people, and this answers "who HAS the church cleared, right now", which is a question about
+    // documents the church has already signed. isPermissionSource() is what keeps them apart — a permission may
+    // not cite this as its provenance (that would be circular) and an envelope may cite nothing else (that would
+    // be the pre-restructure model, where a rota decided who held a key).
+    //
+    // `ctx.permissions` is an array of parsed permissions (readCheckinPermission's output) and `ctx.at` the
+    // instant to judge them at. It reads a clock from nowhere.
+    permission: {
+      id: "permission",
+      label: "Whoever the church has cleared",
+      resolve(ctx) {
+        const at = Number.isFinite(ctx && ctx.at) ? ctx.at : Math.floor(Date.now() / 1e3);
+        return clean3((ctx && ctx.permissions || []).filter((pm) => permissionAdmits(pm, at)).map((pm) => pm && pm.person));
+      }
+    }
+  });
+  var isPermissionSource = (id) => isDeclaredSource(id) && id !== GRANT_SOURCE;
+  var GRANT_SOURCE = "permission";
+  var isDeclaredSource = (id) => typeof id === "string" && Object.prototype.hasOwnProperty.call(HELPER_SOURCES, id);
+  function windowFault(from, until, lifetimeId) {
+    if (!isDeclaredLifetime(lifetimeId)) return "unknown lifetime " + JSON.stringify(lifetimeId);
+    const life = HELPER_LIFETIMES[lifetimeId];
+    if (!Number.isInteger(from) || from <= 0) return "from must be a positive whole unix second";
+    if (until === null || until === void 0) {
+      return "a " + lifetimeId + " key must carry an end \u2014 only a PERMISSION may be open-ended";
+    }
+    if (!Number.isInteger(until) || until <= 0) return "until must be a positive whole unix second";
+    if (until <= from) return "the window closes before it opens";
+    if (until - from > life.max) return "a " + lifetimeId + " grant may not exceed " + life.max + " seconds";
+    if (until - from > MAX_SESSION_SECONDS) return "no expiring grant may exceed " + MAX_SESSION_SECONDS + " seconds";
+    return "";
+  }
+  function readHelperGrant(content) {
+    let c;
+    try {
+      c = JSON.parse(content || "");
+    } catch {
+      return null;
+    }
+    if (!c || typeof c !== "object") return null;
+    const session = String(c.session || "");
+    const source = c.source;
+    const lifetime = c.lifetime;
+    const from = c.from;
+    const until = c.until === void 0 ? null : c.until;
+    if (!session || source !== GRANT_SOURCE || windowFault(from, until, lifetime)) return null;
+    return {
+      session,
+      source,
+      lifetime,
+      from,
+      until,
+      pubs: clean3(c.pubs),
+      keys: c.keys && typeof c.keys === "object" ? c.keys : {}
+    };
+  }
+  function grantAdmits(grant, pub2, at) {
+    if (!grant || !pub2 || !Number.isFinite(at)) return false;
+    if (at < grant.from) return false;
+    if (grant.until != null && at > grant.until) return false;
+    return grant.pubs.indexOf(String(pub2).toLowerCase()) >= 0;
+  }
+  function helperKeyFor(grant, pub2, at, unwrap) {
+    if (!grantAdmits(grant, pub2, at)) return "";
+    const ct = grant.keys[String(pub2).toLowerCase()];
+    if (!ct) return "";
+    try {
+      const k = unwrap(ct);
+      return /^[0-9a-f]{64}$/.test(String(k || "")) ? String(k) : "";
+    } catch {
+      return "";
+    }
+  }
+  function readCheckinHelperCopy(tags, keyHex, unseal) {
+    if (!Array.isArray(tags)) return null;
+    if (!/^[0-9a-f]{64}$/.test(String(keyHex || ""))) return null;
+    if (typeof unseal !== "function") return null;
+    const ct = (tags.find((t) => Array.isArray(t) && t[0] === "ck") || [])[1] || "";
+    if (!ct) return null;
+    try {
+      const obj = JSON.parse(unseal(String(ct), String(keyHex)));
+      return obj && typeof obj === "object" && !Array.isArray(obj) ? obj : null;
+    } catch {
+      return null;
+    }
+  }
+  function checkinSessionOf(tags) {
+    if (!Array.isArray(tags)) return "";
+    return String((tags.find((t) => Array.isArray(t) && t[0] === "session") || [])[1] || "").trim();
+  }
+
   // src/fellowship.src.js
   var _dmEncrypt = (sk2, peerPub, text) => encrypt(text, getConversationKey(sk2, peerPub));
   var _dmDecrypt = async (sk2, peerPub, ct) => {
@@ -6257,6 +6551,9 @@
   var MEALS_SETTINGS_D = "trinityone/meals-settings";
   var ROTA_SETTINGS_D = "trinityone/rota-settings";
   var MSGTAGS_D = "trinityone/msgtags";
+  var CHECKINPERM_D = "trinityone/checkinperm:";
+  var CHECKINHELPER_D = "trinityone/checkinhelper:";
+  var CHECKIN_D = "trinityone/checkin:";
   var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
   var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
   var MSGTAG_RESERVED = ["verse", "devotional", "note", "poll"];
@@ -6542,8 +6839,8 @@
     const readers = [cp];
     if (Array.isArray(group)) readers.push(...group);
     if (by) readers.push(by);
-    const clean3 = [...new Set(readers.map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))];
-    return { readers: clean3, narrowed: !Array.isArray(group) };
+    const clean4 = [...new Set(readers.map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))];
+    return { readers: clean4, narrowed: !Array.isArray(group) };
   }
   async function _fetchStewardsWithCap(cp, cap) {
     try {
@@ -11029,6 +11326,233 @@
         // no doc → signal "use the default", never leave the caller hanging
       });
     },
+    // ── THE CHILDREN'S REGISTER, FOR SOMEBODY THE CHURCH HAS CLEARED TO WORK THE DOOR ──────────────────────
+    // Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, read half only. THE FIRST PRODUCT CALLER of
+    // helperKeyFor and readCheckinHelperCopy: the whole chain existed and nothing in src/ or app/ consulted it.
+    //
+    // WHAT THIS IS NOT. It is not a gate. The relay serves a check-in record to a worker only when BOTH hold —
+    // they are named in that session's envelope AND their clearance is live (gateway.mjs, canRead's CHECKIN_D
+    // and CHECKINHELPER_D rules, and checkinPermitted() between them) — and both are enforced on the box. This
+    // subscription cannot widen that and must not pretend to narrow it: everything below decides what a screen
+    // can HONESTLY SAY about what arrived, and nothing below decides who may read anything.
+    //
+    // AND IT MUST NOT BLOCK. reference/DOMAIN.md, "Check-in supports a safeguarded church; it does not enforce
+    // safeguarding": a lapsed clearance, a rota gap, a ratio outside policy — none may stop a child being
+    // checked in. This is a read view, so the discipline is narrower and still real: it never refuses to show
+    // what it can open, it never hides a register because a clearance has since lapsed, and it never reports an
+    // absence as a fault.
+    //
+    // ── ROUTE BY THE RECORD'S OWN SESSION TAG, NEVER BY "ANY KEY I HOLD" ───────────────────────────────────
+    // The red-team pass of 2026-09-10 found that exact fallback leaks a MORNING register to an EVENING helper:
+    // trying each held key in turn opens whatever it happens to fit. So `checkinSessionOf(e.tags)` decides which
+    // key is reached for — the cleartext tag, because the answer is needed before anything can be opened, and it
+    // is the same tag the relay keys its own read rule on, so the box and the phone agree by construction — and
+    // when we hold no key for THAT session nothing is tried at all.
+    //
+    // ── FOUR THINGS A WORKER'S PHONE CAN HONESTLY BE IN, AND THEY LOOK NOTHING ALIKE ───────────────────────
+    // "Refused" and "served but unreadable" are different failures (both scope docs say so, in those words), so
+    // the emitted shape distinguishes them rather than collapsing them into an empty list:
+    //
+    //   cleared:false, keys 0        — the church has not cleared this person. Nothing is served and nothing is
+    //                                  shown; the screen does not exist. This is the state a parent persona
+    //                                  hunted for on 2026-09-10 and correctly found nothing of.
+    //   cleared:true,  keys 0        — cleared, and NO SESSION KEY HAS BEEN ISSUED. Nothing is wrong. Today this
+    //                                  is the commonest state of all: `issueCheckinSessionKeys` runs only while
+    //                                  an OWNER console is open, so a church whose console never opens has
+    //                                  cleared helpers with no keys, for any Sunday, ever.
+    //   foreign > 0                  — records arrived whose session tag names a session this phone holds NO key
+    //                                  for. Counted, never opened, never listed. It is the honest form of "a key
+    //                                  held, but this session is not one of them".
+    //   unreadable > 0               — a record in a session we DO hold the key for whose ['ck'] copy is absent
+    //                                  or will not open. Served ciphertext that will not open: the register is
+    //                                  not empty and this phone cannot show it. Every record written before the
+    //                                  double-lock landed, and every record written by a console that held no
+    //                                  session key, is in this state — publishCheckin OMITS the copy rather than
+    //                                  refusing to write, because nothing may block a check-in.
+    //
+    // ── WHY THE RAW EVENTS ARE KEPT AND RE-TRIED ───────────────────────────────────────────────────────────
+    // The records and the envelopes RACE, and on a cold start the records usually win: the hub replays its
+    // persisted corpus oldest-first before any envelope can be unwrapped. A reader that decided once, at arrival,
+    // would report a whole register as unreadable for ever. So each record is remembered with its tags and
+    // re-tried the moment a key for ITS session lands — which is the console's holding pen, whose one measured
+    // defect (it stored only { content, ts } and lost the tags, so a retry could never find the ck copy) this
+    // deliberately does not repeat. Re-tried per session, so a key arriving is O(that session), not O(corpus).
+    //
+    // ── WHAT THIS DOES NOT DO, on purpose ──────────────────────────────────────────────────────────────────
+    //   • IT DOES NOT FILTER BY AUTHOR, and that is a known unfixed relay defect rather than a choice made here.
+    //     Red-team F1 (2026-09-10): accept()'s CHECKIN_D helper clause binds a helper's write to the ['session']
+    //     tag the WRITER chooses and never to the record the d-tag addresses, so a helper cleared for one Sunday
+    //     can rewrite any record on any date — including its pickup code. Filtering to `_churchVoice` here would
+    //     NOT fix it (it would hide legitimate helper-written records the relay permits) and would give the
+    //     screen a boundary it must not claim to be. `_by` is carried on every row so the fix, when it comes,
+    //     has somewhere to land. Newest-wins per address, as the console's own register does.
+    //   • IT MAKES NO CLAIM FROM THE ABSENCE OF A TOMBSTONE. `removeCheckin` publishes a tombstone with no tags
+    //     at all, so canRead's CHECKIN_D branch finds no ['session'] and no ['p'] and refuses it: a worker is
+    //     never served the deletion of a record they can read. A tombstone from an author whose ordinary records
+    //     we already trust is honoured if one ever arrives; "no tombstone" is not evidence a child is present.
+    //   • THE LIVENESS BOOLEANS ARE COMPUTED AT EMIT TIME and do not re-fire on the clock alone, exactly as the
+    //     console's do. The raw window travels with them so a screen can be honest about what it is reading.
+    subscribeCheckinRegister(churchNpub, cb) {
+      const pubk = toPub(churchNpub);
+      const EMPTY = { cleared: false, lapsed: false, notYet: false, from: null, until: null, lifetime: "", sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
+      if (!pubk) {
+        cb({ ...EMPTY });
+        return () => {
+        };
+      }
+      const me = String(pub || "").toLowerCase();
+      if (!me || !sk) {
+        cb({ ...EMPTY });
+        return () => {
+        };
+      }
+      let perm = null;
+      let permTs = 0;
+      const grants = /* @__PURE__ */ new Map();
+      const keys = /* @__PURE__ */ new Map();
+      const recs = /* @__PURE__ */ new Map();
+      const rows = /* @__PURE__ */ new Map();
+      let eosed = false;
+      const openRec = (id, r) => {
+        if (!r.sid) return "unreadable";
+        const keyHex = keys.get(r.sid) || "";
+        if (!keyHex) return "foreign";
+        const obj = readCheckinHelperCopy(r.tags, keyHex, (ct, k) => decrypt(ct, _unhex(k)));
+        if (!obj) return "unreadable";
+        rows.set(id, { ...obj, id, session: r.sid, ts: r.ts, _by: r.by });
+        return "ok";
+      };
+      const emit = _coalesce(() => {
+        const at = Math.floor(Date.now() / 1e3);
+        const live = permissionAdmits(perm, at);
+        let unreadable = 0, foreign = 0;
+        const bySession = /* @__PURE__ */ new Map();
+        for (const [id, r] of recs) {
+          const state = rows.has(id) ? "ok" : openRec(id, r);
+          if (state === "foreign") {
+            foreign++;
+            continue;
+          }
+          if (state === "unreadable") {
+            unreadable++;
+            continue;
+          }
+          if (!bySession.has(r.sid)) bySession.set(r.sid, []);
+          bySession.get(r.sid).push(rows.get(id));
+        }
+        const sessions = [...keys.keys()].map((sid) => {
+          const g = grants.get(sid);
+          return {
+            session: sid,
+            from: g ? g.grant.from : null,
+            until: g ? g.grant.until : null,
+            helpers: g ? g.grant.pubs.length : 0,
+            rows: (bySession.get(sid) || []).slice().sort((a, b) => String(a.childName || "").localeCompare(String(b.childName || "")) || (a.ts || 0) - (b.ts || 0))
+          };
+        }).sort((a, b) => (a.from || 0) - (b.from || 0));
+        cb({
+          cleared: live,
+          // A CLEARANCE THAT EXISTS AND IS NOT LIVE, told apart from one that was never granted — AND ENDED TOLD
+          // APART FROM NOT STARTED YET. DOMAIN.md: say a key has expired, do not lock somebody out of a room
+          // mid-session, so a phone still holding a key goes on showing the register and says plainly that the
+          // clearance has ended.
+          //
+          // ⚠ THE THIRD STATE IS NOT DECORATION. The console shipped this as a BINARY on 2026-09-10 —
+          // `{r.live ? runsTo(r) : 'Ended ' + fmtD(r.until)}` — and a churchwarden sim clearing a helper for
+          // NEXT SUNDAY, which is the likeliest thing a warden ever does, was told four times over that the
+          // clearance had already ENDED. A window entirely in the future is not live and has not ended.
+          lapsed: !!perm && !live && perm.until != null && at > perm.until,
+          notYet: !!perm && !live && Number.isFinite(perm.from) && at < perm.from,
+          from: perm ? perm.from : null,
+          until: perm ? perm.until == null ? null : perm.until : null,
+          lifetime: perm ? String(perm.lifetime || "") : "",
+          sessions,
+          keysHeld: keys.size,
+          unreadable,
+          foreign,
+          settled: eosed
+        });
+      });
+      return _onChurchDocs(pubk, {
+        emit,
+        // so the hub can cancel a queued emit when this handler tears down
+        want: [CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D],
+        // replay only these three slices (see _hubBufSet)
+        onevent(e, d) {
+          if (d.startsWith(CHECKINPERM_D)) {
+            if (String(d.slice(CHECKINPERM_D.length) || "").toLowerCase() !== me) return;
+            if (e.pubkey !== pubk) return;
+            if ((e.created_at || 0) < permTs) return;
+            permTs = e.created_at || 0;
+            if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+              perm = null;
+              emit();
+              return;
+            }
+            perm = readCheckinPermission(e.content);
+            emit();
+            return;
+          }
+          if (d.startsWith(CHECKINHELPER_D)) {
+            const sid = d.slice(CHECKINHELPER_D.length);
+            if (!sid || e.pubkey !== pubk) return;
+            const held = grants.get(sid);
+            if (held && (held.ts || 0) > (e.created_at || 0)) return;
+            if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+              grants.delete(sid);
+              keys.delete(sid);
+              emit();
+              return;
+            }
+            const grant = readHelperGrant(e.content);
+            if (!grant || grant.session !== sid) return;
+            grants.set(sid, { grant, ts: e.created_at || 0 });
+            const at = Math.floor(Date.now() / 1e3);
+            let k = "";
+            try {
+              k = helperKeyFor(grant, me, at, (ct) => decrypt(ct, getConversationKey(sk, e.pubkey)));
+            } catch (err) {
+              k = "";
+            }
+            if (k) keys.set(sid, k);
+            else keys.delete(sid);
+            emit();
+            return;
+          }
+          if (d.startsWith(CHECKIN_D)) {
+            const id = d.slice(CHECKIN_D.length);
+            if (!id) return;
+            const held = recs.get(id);
+            if (held && (held.ts || 0) > (e.created_at || 0)) return;
+            if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+              if (_churchVoice(pubk, { _by: e.pubkey })) {
+                recs.delete(id);
+                rows.delete(id);
+                emit();
+              }
+              return;
+            }
+            rows.delete(id);
+            recs.set(id, { sid: checkinSessionOf(e.tags), tags: e.tags, ts: e.created_at || 0, by: e.pubkey });
+            openRec(id, recs.get(id));
+            emit();
+            return;
+          }
+        },
+        onroster() {
+          emit();
+        },
+        // a roster arriving changes which tombstones are honoured
+        // NOT STICKY, and this one is deliberately unlike its siblings. Elsewhere an EOSE with nothing to show
+        // is swallowed so a reconnect cannot blank a card. Here the empty answer IS the answer a worker needs —
+        // "you are cleared and no key has reached this phone" is the state to report, and holding it back would
+        // leave the screen on a loading state that never resolves.
+        oneose() {
+          eosed = true;
+          emit();
+        }
+      });
+    },
     // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a
     // need present on the church's relay was written by an authorised pubkey. cb([{ id, displayLabel, type,
     // startDate, endDate, recipient, notes, ts }]).
@@ -11828,8 +12352,8 @@
         }
       }
       if (!sk || !cp) return null;
-      const clean3 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean3, note: String(note || "").trim().slice(0, 240) }) }, sk);
+      const clean4 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }) }, sk);
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {

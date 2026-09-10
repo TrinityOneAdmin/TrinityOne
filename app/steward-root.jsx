@@ -200,6 +200,25 @@ window.useStewardRosters = makeSub(S, 'subscribeRosters', () => []);
 window.useStewardServices = makeSub(S, 'subscribeServices', () => []);
 window.useStewardRunsheets = makeSub(S, 'subscribeRunsheets', () => []);
 window.useStewardCheckins = makeSub(S, 'subscribeCheckins', () => []);
+// WHO THE CHURCH HAS CLEARED FOR CHILDREN'S CHECK-IN. The first reader the check-in permission boundary has
+// ever had: until this line, `grep` over app/ for grantCheckinPermission / revokeCheckinPermission /
+// subscribeCheckinPermissions returned NOTHING, and a well-tested engine nobody is required to consult is
+// not a feature (CLAUDE.md rule 1).
+window.useStewardCheckinPermissions = makeSub(S, 'subscribeCheckinPermissions', () => []);
+// AND THE SESSION-KEY ENVELOPES — the issuer's ONLY source for the key a Sunday already has.
+//
+// THE FIRST PRODUCT CALLER subscribeCheckinSessionKeys has ever had. Until this line `grep -rl
+// subscribeCheckinSessionKeys app/` returned nothing, so `issueCheckinSessionKeys` had no settled source for
+// its `existing` argument and could not be wired at all without creating the re-mint race
+// (reference/SCOPE-CHECKIN-SEALING-2026-09-10.md, piece 3).
+//
+// ⚠ WHAT THIS HOOK IS NOT. Its rows arriving is NOT the signal that says it is safe to issue. makeSub writes
+// its cache — and so flips stewardStreamLoaded() — on the FIRST delivery, and this subscription emits on
+// every event as well as on EOSE. One envelope out of a year's worth would therefore report "loaded" while
+// the rest are still in flight, and the issuer run on that list rotates the key of every session it has not
+// heard about yet. The gate is window.Steward.checkinSessionKeysSettled(), which is set only on an
+// AUTHENTICATED end-of-stored-events, and the engine refuses to issue without it regardless of any caller.
+window.useStewardCheckinSessionKeys = makeSub(S, 'subscribeCheckinSessionKeys', () => []);
 window.useStewardEvents = makeSub(S, 'subscribeEvents', () => []);
 window.useStewardRooms = makeSub(S, 'subscribeRooms', () => []);
 window.useStewardBookings = makeSub(S, 'subscribeBookings', () => []);

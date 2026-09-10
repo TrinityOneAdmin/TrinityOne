@@ -254,6 +254,39 @@ window.HelpData = {
       ],
     },
     {
+      // THE ARTICLE THE KIDS TAB'S HELP BUTTON OPENS. The owner's instruction of 2026-09-10 — "cut down on the
+      // instructional copy in the ui itself. Use tool tips and help docs for this kind of information" — means
+      // the screen carries one short true sentence per state and everything else lives here.
+      //
+      // ⚠ THE ID IS LOAD-BEARING. app/screens-serving.jsx calls ctx.openHelp('checkin-register'), and
+      // HelpArticleView does `if (!a) return null` on an id it cannot find — so a typo here gives a worker a
+      // header, a back button and a blank page. That is live today for ctx.openHelp('wallet') in
+      // screens-giving.jsx, which names an article that does not exist.
+      id: 'checkin-register',
+      illo: 'shield',
+      title: 'The children’s register',
+      summary: 'If your church has cleared you for children’s check-in, this is what you can see — and what it means when you can’t.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'Some churches check children in and out of their groups on a Sunday. If your church has cleared you to help with that, a Kids tab appears under Serving, showing who is in the room and each child’s pickup code. Nobody else in the church sees this tab at all.' },
+        { type: 'list', items: [
+          { lead: 'Your church clears you once, not every week.', text: 'A steward marks you as cleared for children’s check-in — usually for a year, the way a church already does it. That is a separate decision from being cleared to message young people, and doing one does not do the other.' },
+          { lead: 'A key arrives for each session.', text: 'Being cleared is not the same as holding a key. Your church’s console hands out a key for each session, and only for the session it is for — so last Sunday’s key opens last Sunday and nothing else.' },
+          { lead: 'Tap to see a pickup code.', text: 'Codes stay covered until you ask for one, and only one shows at a time. A register with every code painted down the screen is a phone anyone can read over your shoulder.' },
+        ] },
+        { type: 'p', text: 'The screen tells you exactly which of four things is true, because they look the same if nobody says:' },
+        { type: 'list', items: [
+          { lead: '“No session keys have reached this phone.”', text: 'Nothing is wrong and nothing is broken. Your church has cleared you and has not yet handed out a key — which it does from its console, so a church whose console has not been opened has no keys to hand out yet. Ask whoever runs the console.' },
+          { lead: '“Nobody has been checked in yet.”', text: 'You hold the key, the register is open, and no child has arrived. This is the ordinary start of a morning.' },
+          { lead: '“This phone cannot open N records.”', text: 'Children are checked in and this phone has no copy it can read — usually because the console had no key for that session when it wrote them. The register is not empty; ask at the desk.' },
+          { lead: '“N records belong to another session.”', text: 'Records reached this phone from a session you hold no key for. They are counted and never opened. Your key opens your session, and deliberately nothing else.' },
+        ] },
+        { type: 'rule', text: 'Nothing here ever stops a child being checked in. If your clearance has run out mid-morning the register stays on your screen and the desk keeps working — the app tells you, it does not lock you out.' },
+        { type: 'note', text: 'You are shown a child’s name and pickup code because that is what the door needs. You are not shown medical, allergy or contact details — those are not in this part of the app.' },
+        { type: 'tech', text: 'Each check-in record is locked twice over. One copy is sealed to your church’s safeguarding key, so the safeguarding lead can always read the register; a second copy rides on the same record, sealed under that one session’s key, which is what your phone opens. The session key lives only inside a church-signed envelope, wrapped separately to each person cleared for that session, so your phone can unwrap its own share and nobody else’s. Your church’s relay serves you a record only while both hold — you are named in that session’s envelope AND your clearance is live — so the screen is reading what the relay decided, never deciding it.' },
+      ],
+    },
+    {
       id: 'directory',
       illo: 'people',
       title: 'The church directory',

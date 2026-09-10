@@ -24,7 +24,13 @@ import { D } from './trinity-doc-types.mjs';   // durable event storage (node:sq
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
 // provenance nobody implemented). readHelperGrant applies the WINDOW CAP itself, which is why the cap is not
 // re-checked here: one parser, one rule, both paths.
-import { readHelperGrant, isDeclaredSource } from './checkin-role-source.mjs';
+//
+// SINCE 2026-09-09 IT IMPORTS THE PERMISSION PARSER TOO, and the same rule applies to it: this box parses, it
+// does not decide. `isPermissionSource` is the declared-provenance test for a permission (a permission may not
+// cite 'permission' as its own source); `KEY_LEAD_SECONDS` is how far ahead a named helper may fetch a session
+// key, and it lives beside the lifetimes rather than as a number typed into this file.
+import { readHelperGrant, readCheckinPermission, isDeclaredSource, isPermissionSource,
+         KEY_LEAD_SECONDS } from './checkin-role-source.mjs';
 import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
@@ -708,7 +714,8 @@ const NAME_D = D.NAME;           // a MEMBER's own display name for one church, 
 const CAREKEY_D = D.CAREKEY;     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
 const FINANCEKEY_D = D.FINANCEKEY;   // the church books' key, wrapped to the church + every finance-capable steward
 const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — d=checkin:<id>, sealed under the safeguarding key
-const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S check-in helpers + that session's key wrapped to each — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
+const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S key, wrapped to whoever the church's PERMISSIONS admit — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
+const CHECKINPERM_D = D.CHECKINPERM;   // A PERSON IS CLEARED for children's check-in — d=checkinperm:<personPub>. Owner-only, cleartext, and CARRIES NO KEY. The half of the old grant that says WHO, split out 2026-09-09 so a church can clear its volunteers once a year as it actually does, rather than once a service.
 const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to the church + every safeguarding-capable steward. Separate from FINANCEKEY_D on purpose: they shared one derived key until 2026-08-20, so a treasurer could read every child's name, room and pickup code.
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
@@ -1469,6 +1476,56 @@ const ROTA_VIS = new Map();
 // here on purpose: this document is owner-only, so the author IS the church, and accepting a ['church'] tag
 // would reintroduce exactly the shape AUDIT-2026-07-24 CRITICAL-2 closed.
 const CHECKIN_HELPERS = new Map();
+// cp -> Map(personPub -> { from, until, ts }) — WHO THIS CHURCH HAS CLEARED for children's check-in.
+//
+// Keyed by church first for the same reason CHECKIN_HELPERS is, and with the same absence of a namedChurch()
+// fallback: this document is owner-only, so the AUTHOR is the church, and honouring a ['church'] tag would
+// reintroduce the shape AUDIT-2026-07-24 CRITICAL-2 closed. A co-tenant on a shared box cannot clear anybody
+// for this congregation.
+//
+// It holds NO KEY MATERIAL and never will. A permission is an authorisation; the key lives in the session
+// envelope. That separation is the owner's decision of 2026-09-09 and the reason a lost helper phone exposes
+// the Sundays it held rather than the year.
+const CHECKIN_PERMITS = new Map();
+// ── THE D-TAG SUFFIX, PARSED IN ONE PLACE FOR BOTH DOORS ──────────────────────────────────────────────────
+//
+// accept() and note() are two doors into the maps above, and until 2026-09-10 THEY DISAGREED ABOUT WHAT A
+// SUFFIX MAY LOOK LIKE. accept() pinned a clearance's suffix to lowercase 64-hex and bounded a session id at
+// 128 characters of [A-Za-z0-9._:-]; note() LOWERCASED the clearance suffix and bounded the session id not at
+// all. So `checkinperm:<UPPERCASE-HEX>`, a session id containing `..`, and a 300-character session id were
+// each refused on the websocket AND INSTALLED through /import and peer replication — measured one document at
+// a time on a fresh relay, and they survived a restart.
+//
+// WHY IT MATTERED, since both doors require CHURCH_PUBS.has(e.pubkey) and this was never a member or operator
+// escalation. Two spellings of one suffix are two addressable documents writing one map entry, which is what
+// accept()'s own rule says it exists to prevent. Measured symptoms of the uppercase clearance: the church saw
+// it in its list; THE PERSON IT NAMED COULD NOT READ THEIR OWN CLEARANCE, because canRead() pins the same
+// lowercase form, so their "your clearance ends on the 4th" screen was blank while this relay treated them as
+// cleared; and the document outlived the revoke, because the tombstone a console writes is lowercase.
+//
+// It also falsified the claim written on the ingest itself — "the SAME PARSER the write gate uses so a
+// document cannot mean one thing at the door and another on disk". The WINDOW half of that was true (both
+// doors call readHelperGrant / readCheckinPermission and both were verified). The D-TAG half was not.
+//
+// CALLERS — every one, per CLAUDE.md rule 2, and there are four:
+//   • accept()  CHECKINPERM_D and CHECKINHELPER_D — the websocket door
+//   • note()    CHECKINPERM_D and CHECKINHELPER_D — the ingest, reached by the boot rehydrate, by /import, and
+//     by BOTH relay-to-relay sync paths (the cursor pull and negentropy), which call note(e) directly
+// canRead() keeps its own inline 64-hex pin on the clearance suffix rather than calling this: a read gate must
+// be able to refuse without a map having been populated first, and that pin is measured against the same rule.
+//
+// RETURNS '' FOR ANYTHING ELSE, and every caller treats '' as "not a document of this kind" — installs
+// nothing, serves nothing, removes nothing.
+const checkinPermWho = (d) => {
+  const who = String(d.slice(CHECKINPERM_D.length) || '');
+  return /^[0-9a-f]{64}$/.test(who) ? who : '';
+};
+// A session id is a console-minted opaque token joined to service:<id>. Bounded and charset-checked so it
+// cannot smuggle a path, a huge key, or something that reads as another d-tag.
+const checkinHelperSid = (d) => {
+  const sid = String(d.slice(CHECKINHELPER_D.length) || '');
+  return (sid.length > 0 && sid.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(sid)) ? sid : '';
+};
 // Is `pub` a check-in helper for this church's session, RIGHT NOW?
 //
 // THE CLOCK IS THE SERVER'S, ALWAYS, and never the event's created_at. That is the whole enforcement: a helper
@@ -1486,13 +1543,258 @@ const checkinHelperOf = (pub, cp, sessionId) => {
   if (!g) return false;
   const t = Math.floor(Date.now() / 1000);
   if (t < g.from) return false;
-  // `until === null` is the church choosing "until a steward ends it" (HELPER_LIFETIMES.open). It is legal
-  // ONLY because readHelperGrant refused to store an absent end under any other lifetime — so a grant that
-  // reaches here with no end is one whose church said so in the enforced record, not one that lost its end on
-  // the way. Its safety is revocation, which is immediate and beats any lifetime; the ingest above drops the
-  // grant the moment the tombstone lands.
-  if (g.until != null && t > g.until) return false;
-  return g.pubs.has(pub);
+  // NO SESSION KEY IS OPEN-ENDED ANY MORE. This read `if (g.until != null && …)` because HELPER_LIFETIMES once
+  // carried an `open` shape; the open-ended choice moved to the PERMISSION on 2026-09-09, and readHelperGrant
+  // now refuses a grant with no end under every lifetime. The null test is KEPT rather than deleted so that a
+  // document written by an older console, replayed through a rehydrate, cannot reach this line as an unbounded
+  // one — belt over the braces, and it costs a comparison.
+  if (g.until == null || t > g.until) return false;
+  if (!g.pubs.has(pub)) return false;
+  // AND THE PERMISSION. THE CONJUNCTION IS THE RESTRUCTURE, and it is what makes "cleared until the church
+  // ends it" a single act rather than a hunt through one document per Sunday.
+  //
+  // Session keys are now ISSUED WITHOUT A STEWARD ACTING, ahead of time, for every service the console can
+  // see. If the envelope alone admitted, revoking a person's clearance on Tuesday would leave every envelope
+  // already minted for the next month still admitting them, and a steward would have to find and revoke each
+  // one — which is precisely the per-service chore the owner asked to be rid of.
+  //
+  // IT CAN ONLY EVER NARROW. A permission admits nobody the envelope does not already name; it is a second
+  // refusal, never a second route in. So this line cannot widen what a helper key opens, which is the one
+  // property no change to this feature may touch.
+  return checkinPermitted(pub, cp);
+};
+// IS `pub` CLEARED BY THIS CHURCH FOR CHILDREN'S CHECK-IN, RIGHT NOW?
+//
+// THE CLOCK IS THE SERVER'S, as it is for the grant window and for the same reason: created_at is the writer's
+// to choose. This takes no time argument so no caller can hand it a friendlier one. The boundary itself is
+// unit-tested against permissionAdmits() in checkin-role-source.mjs, where the time IS a parameter.
+//
+// A PERMISSION THAT HAS NOT OPENED YET CLEARS NOBODY — granting a January clearance in December is an ordinary
+// thing for a church to do and must be safe. `until === null` is the church choosing "until a steward ends
+// it"; legal here and refused for a session key, because this document carries no key material. Its safety is
+// revocation, which is immediate: the ingest drops the record the moment the tombstone lands.
+//
+// ── ONE MODEL, THREE FINDINGS — RED TEAM 2026-09-10, F3/F4/F5. Rewritten 2026-09-10. ─────────────────────
+//
+// THE QUESTION THIS FUNCTION NOW ASKS: *who* authorised this clearance, and *when* is that question asked?
+// Until today it was asked ONCE, at ingest, and the answer was thrown away — CHECKIN_PERMITS stored no author.
+// hydrateMaps() wipes and replays, so "asked at ingest" really meant "re-asked on every boot, against a
+// roster that has moved on". Three defects fell out of that, and they are the same defect:
+//
+//   F3 — a withdrawn clearance CAME BACK when the steward who withdrew it was de-capped. Measured across a
+//        restart on one database: cleared → withdrawn (0) → steward de-capped, still 0 → RESTART → cleared
+//        again (1), session key served, register served, writes accepted. A safeguarding lead being re-scoped
+//        quietly reinstated every clearance they had ever withdrawn.
+//   F4 — the mirror: a clearance GRANTED by a steward kept admitting after that steward was de-capped, with
+//        no restart, and then evaporated at the next one. The unsafe direction was live immediately and the
+//        availability failure landed later, as a volunteer refused at the desk while the console still listed
+//        them cleared. `grantorOk`'s own comment states the rule that broke.
+//   F5 — a +899s clearance made the church's own withdrawal accepted at the door and silently NOT enforced,
+//        while the steward's own withdrawal was refused by the store as `have-newer`. NEITHER AUTHOR COULD
+//        WITHDRAW, for up to fifteen minutes, with nothing retrying.
+//
+// THE MODEL, in one sentence: **a version is remembered WITH ITS AUTHOR; a CLEARANCE counts only while its
+// author still holds the authority to have written it, asked at USE time; a WITHDRAWAL counts for ever from
+// the moment a door admitted it, and is never re-litigated.**
+//
+// WHY THE ASYMMETRY IS THE WHOLE POINT, and not a convenience. Authorisation exists to decide who may WIDEN
+// access to a children's register. A clearance widens, so it must keep answering for itself: de-cap its
+// author and it stops granting, immediately, with no restart (F4). A withdrawal NARROWS — it can never admit
+// anybody — so keeping it in force needs no continuing authority at all. Requiring one is precisely how
+// removing a lead's capability turned into re-granting the clearances they had withdrawn (F3). The authority
+// test on a withdrawal happens at the door, once, when it is written — accept()'s CHECKINPERM_D branch — and
+// nothing asks it again afterwards.
+//
+// EVERY AUTHOR'S VERSION PARTICIPATES, which is the F5 half that lives here. Two authors means two
+// addressable slots, so the store cannot refuse a stale copy and cannot help: both live in the corpus for
+// ever and every device re-derives the answer. The old code kept ONE entry per person and compared
+// `held.ts` ACROSS authors, so one author's stamp silently overwrote the other's version and a withdrawal
+// could be lost with nothing left to fall back to. Now every author gets their own slot, newest-wins runs
+// WITHIN a slot (which is what keeps a withdrawal order-independent — see note()), and the answer across
+// slots is a fold over the whole set. A withdrawal WINS A TIE, because the fail-safe direction of a
+// children's register is "refused".
+//
+// AND THE STAMPS ARE MADE COMPARABLE AT THE DOOR rather than trusted here: checkinPermFutureOk() refuses a
+// CLEARANCE dated more than CHECKINPERM_MAX_FUTURE ahead of this relay's clock, and never refuses a
+// withdrawal. Without that, cross-author ordering is decided by whichever device has the fastest clock.
+//
+// ⚠ WHAT THIS DOES NOT DO, said plainly because the obvious reading of "total" would be wrong and a false
+// claim in the permanent record is worse than the bug it hides. Across authors the LATER STAMP STILL WINS —
+// a withdrawal does not beat a clearance stamped after it. It must not: the re-grant that lifts a withdrawal
+// is a clearance with a later stamp, and it is routinely written by the OTHER author (a lead re-clearing
+// somebody the church withdrew, or the reverse). checkin-permission-mint-widening.test.mjs asserts that by
+// name — "…AND A NEWER GRANT AFTER A WITHDRAWAL STILL CLEARS THEM — the withdrawal is not permanent" — and a
+// withdrawal that outranked every later clearance would make a person unclearable across authors for ever.
+//
+// SO A RESIDUE OF F5 SURVIVES, bounded by CHECKINPERM_MAX_FUTURE: within that window a clearance published
+// BEFORE a withdrawal, by a device that far fast, still carries the later stamp and still wins. The relay
+// cannot tell it from an honest re-grant, because the two produce the identical set of signed documents.
+// What changed is the size and the shape. 900s → 120s. It now needs two devices whose clocks disagree acting
+// inside that window. THE OTHER AUTHOR'S WITHDRAWAL ALWAYS LANDS AT THE DOOR — it is a different addressable
+// slot, so the store has no older copy of it to answer have-newer against, which is the half of "neither
+// author can withdraw" that is fully closed. The WITHDRAWING AUTHOR'S OWN is still refused by the store for
+// as long as their own future-stamped clearance outranks it, which is now at most 120s rather than 900s, and
+// that refusal is VISIBLE (the console gets OK:false and names the person). Any later act by either author
+// settles the whole thing. It is measured, not reasoned — see the fixture of "PER-AUTHOR
+// SLOTS — a de-capped steward's LATER clearance…" in checkin-clearance-authorisation.test.mjs, which is that
+// exact relay state, and the comment there says why closing it costs more than it buys.
+//
+// ORDER-INDEPENDENT BY CONSTRUCTION. The result is a fold over a set with no ordering — nothing about the
+// sequence in which the versions arrived, or the order hydrateMaps() replays them in, can change it.
+const checkinPermitted = (pub, cp) => {
+  if (!pub || !cp) return false;
+  const byP = CHECKIN_PERMITS.get(cp);
+  const vers = byP && byP.get(pub);
+  if (!vers || !vers.size) return false;
+  let win = null;
+  for (const [by, pm] of vers) {
+    // A CLEARANCE ANSWERS FOR ITS AUTHOR, NOW (F4). A withdrawal does not, and must not (F3).
+    if (!pm.revoked && !checkinPermAuthorLive(by, cp)) continue;
+    const ts = pm.ts || 0, wts = win ? (win.ts || 0) : -1;
+    if (ts > wts || (ts === wts && pm.revoked)) win = pm;   // a withdrawal wins a tie — fail closed
+  }
+  if (!win || win.revoked) return false;
+  const t = Math.floor(Date.now() / 1000);
+  if (t < win.from) return false;
+  if (win.until != null && t > win.until) return false;
+  return true;
+};
+// THE USE-TIME HALF OF checkinPermGrantor, and deliberately the SAME QUESTION spelled the same way: the
+// church itself, or a steward this church EXPLICITLY ticked for safeguarding. checkinPermGrantor asks it of an
+// EVENT at the doors; this asks it of a REMEMBERED AUTHOR every time a clearance is relied on, which is the
+// shape grantorOk() has had for delegated group-leader and care-team grants since M2 ("revoking a steward
+// immediately drops the grants they created — no re-derivation pass, the check just runs at use-time").
+//
+// CHURCH_PUBS IS ASKED AGAIN, not assumed. clearDerivedMaps() does not own CHURCH_PUBS — loadChurches() does —
+// so a de-provisioned church's clearances must stop granting here as well, on the same use-time axis.
+const checkinPermAuthorLive = (by, cp) =>
+  !!(by && cp && (by === cp ? CHURCH_PUBS.has(cp) : stewardCanExplicitly(by, cp, 'safeguarding')));
+// HOW FAR AHEAD OF THIS RELAY'S CLOCK A CLEARANCE MAY BE DATED — RED TEAM F5.
+//
+// scripts/event-store.mjs accepts a created_at up to +900s, which is right for a chat message and wrong for
+// the document that decides who may work a children's desk: created_at is this document's ORDERING KEY across
+// two authors, so +900s of it is fifteen minutes in which a fast device's clearance outranks every honest
+// withdrawal either author can sign. Measured: the church's withdrawal accepted and silently dropped, the
+// steward's own refused by the store as have-newer — neither author able to withdraw.
+//
+// 120s, not 0, and not 900 — AND IT IS THE WHOLE OF THIS PROTECTION, not half of it. Zero would refuse an
+// ordinary NTP-synced phone that happens to be two seconds fast; 900 is the hole. Two minutes covers real
+// drift between a handset and a Raspberry Pi. Do NOT read the per-author slots in checkinPermitted() as a
+// second protection that covers what this one lets through: across authors the later stamp still wins, so
+// this constant IS the bound on how long a stale clearance can outrank a withdrawal. The paragraph on
+// checkinPermitted() sets out why that cannot be closed without breaking the cross-author re-grant.
+//
+// IT REFUSES, RATHER THAN CLAMPING. A clamp would have to be computed at ingest and remembered, and the one
+// place that could remember it — the map — is wiped and replayed on every boot, so `min(created_at, now)`
+// re-evaluates to created_at after a restart and the poison comes back. A refusal is durable because the
+// document never reaches disk, and it is VISIBLE: the console gets OK:false, exactly as the CHECKINPERM_D
+// rule in accept() already prefers ("a clearance that silently did not save is a volunteer who turns up next
+// month and finds an empty room with nothing to look at").
+//
+// A WITHDRAWAL IS NEVER REFUSED FOR THIS. Refusing one is the unsafe direction, and a future-dated withdrawal
+// can only ever refuse somebody early. Same asymmetry as checkinPermitted().
+const CHECKINPERM_MAX_FUTURE = 120;
+// CALLERS — every one, per CLAUDE.md rule 2, and there are four, which is BOTH DOORS:
+//   • accept()                     — the websocket door, the CHECKINPERM_D branch
+//   • the /import loop             — beside carereqIdOk and checkinSessionOkOnIngest, which are there for
+//     exactly this reason. /import does store.put with NO accept() pass.
+//   • syncChurchFromPeer()         — the cursor pull, relay-to-relay
+//   • reconcileChurchWithPeer()    — the negentropy walk, relay-to-relay
+// It is deliberately NOT called from note(): note() runs AFTER store.put(), so a refusal there would leave
+// the poisoned stamp on disk to be replayed by the next hydrateMaps() with `now` moved past it. It also
+// consults NO MAP — only the clock — so it cannot refuse a restore for want of a hydrate, which is the trap
+// checkinSessionOkOnIngest's own comment records (an accept() pass on /import once deleted a church's whole
+// finance journal).
+const checkinPermFutureOk = (e, d) => {
+  if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKINPERM_D)) return true;
+  if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // a withdrawal is never refused
+  return (e.created_at || 0) <= Math.floor(Date.now() / 1000) + CHECKINPERM_MAX_FUTURE;
+};
+// ── WHICH SESSION DOES THE RECORD AT THIS ADDRESS ACTUALLY BELONG TO? ─────────────────────────────────────
+//
+// RED TEAM 2026-09-10, F1 — a child-safety defect, and the reason this function exists. accept()'s check-in
+// branch bound a helper's write to the ['session'] tag ON THE INCOMING EVENT, which is a tag THE WRITER
+// CHOOSES, and never asked which session the record at that d-tag belongs to. So a helper cleared and
+// in-window for session S1 was correctly refused every READ of a session-S2 record and was nonetheless
+// ACCEPTED PUBLISHING AT THAT S2 RECORD'S OWN ADDRESS, by putting ['session', S1] on her event. Measured on a
+// live relay: `ada OVERWRITES r2 — session S2, tagged S1` → accepted.
+//
+// WHAT IT COST, and it is not a read leak. Addressable events are per AUTHOR (replKey is pubkey:kind:d-tag —
+// see event-store.mjs), so the forgery does not replace the church's row in the store; it sits BESIDE it, and
+// both are served. The console's register keys `byId` on the d-tag SUFFIX and take() is newest-wins, so the
+// newer forgery is the row that renders. Before the `ck` tag a helper held no ring key, so a forged `content`
+// was garbage that parked in the holding pen for ever — inert. The helper's copy makes it bite: the forger
+// seals her own body under the session key she legitimately holds, tags the event S1, and
+// _encOpenSealedCopy looks the key up BY THE TAG SHE WROTE. `rec.code` is the pickup code and CheckoutModal
+// releases a child on `code.trim() === String(rec.code)`, so a volunteer cleared for one Sunday morning could
+// set ANY child's pickup code to a value of her choosing, on any record from any date, and write or clear
+// `out` ("collected by…"). The register renders one row per address with no author, so there is nothing on
+// screen to notice.
+//
+// THE RULE: a helper may CREATE a record in a session they hold, and may only UPDATE an address whose records
+// AS THIS RELAY ALREADY HOLDS THEM name that same session. Create is the whole feature — a rota volunteer
+// checking a child in at the desk — so an address this box holds nothing at is admitted, and that is not a
+// hole: a new address is a new record, and the session it names is one the author was entitled to.
+//
+// ANY DISAGREEMENT REFUSES, rather than "the newest record's session wins" or "the church's copy wins". A
+// record is one child at one session; its session is part of its identity and no honest writer ever changes
+// it. publishCheckin() mints a fresh id per record and migrateCheckinKeys() RE-PUBLISHES an existing body, so
+// both of `trinityone/checkin:`'s two writers re-derive the tag from the same unchanged body
+// (src/steward.src.js, _encCleartextTags — "ONE SESSION, and the service's own id"). So two sessions at one
+// address is never a state an honest corpus reaches, and treating it as a refusal means a forgery ALREADY on
+// disk locks its own address down rather than becoming the thing that answers for it.
+//
+// A RECORD WITH NO SESSION TAG MAKES NO CLAIM and is skipped, in both directions. Publishing one is legal and
+// deliberate — "a church with no service document for today is an ordinary Sunday, not an error", and nothing
+// in this feature may stand between a child and the desk — and such a record cannot be opened by a helper at
+// all, because _encOpenSealedCopy needs the tag to find a key. So it is not something to refuse a write over,
+// and it is not something a conflict can be measured against. (A helper cannot exploit the skip: the helper
+// clause requires a non-empty `sid` before this is ever reached, and has since 2026-09-09.)
+//
+// SCOPED TO THE CHURCH, resolved the same way accept() resolves it, because a d-tag suffix is a relay-GLOBAL
+// namespace: on a shared box two congregations can hold `checkin:r1`. A co-tenant's record must not be able to
+// refuse this church's write (a denial of service on a children's desk), and must not be able to answer for
+// which session this church's address belongs to.
+//
+// CALLERS — every one, per CLAUDE.md rule 2, and there are four, which is BOTH DOORS:
+//   • accept()                     — the websocket door, the CHECKIN_D branch's helper clause
+//   • the /import loop             — beside carereqIdOk, which is there for exactly this reason ("A CARE
+//     REQUEST'S ID NAMES ITS ASKER, AND THAT HOLDS AT EVERY DOOR"). /import does store.put with NO accept()
+//     pass, deliberately and for measured reasons, so a rule that must hold on disk has to be stated here too.
+//   • syncChurchFromPeer()         — the cursor pull, relay-to-relay
+//   • reconcileChurchWithPeer()    — the negentropy walk, relay-to-relay
+// It is NOT called from note(). note() has no CHECKIN_D branch and populates no map from a check-in record —
+// it is a map-keeper, and by the time it runs store.put() has already happened. The three ingest sites above
+// are where an event is refused BEFORE the store, which is exactly where carereqIdOk sits at the same three.
+//
+// ⚠ THE INGEST DOOR EXEMPTS THE CHURCH KEY, and that is not laziness. An accept() pass was added to /import on
+// 2026-08-20 and reverted the same day because it deleted a church's entire finance journal on a legitimate
+// restore: a write-time admission gate cannot answer a question about an archive. This check consults NO MAP
+// for the author — only CHURCH_PUBS, which /import populates before its loop — so it cannot refuse a restore
+// for want of a hydrate. Never refusing the church's own copy is the second half of that: on a restore the
+// church's genuine record must land whatever else the archive happens to carry.
+const checkinSessionConflict = (d, cp, sid) => {
+  if (!d || !cp || !sid) return false;
+  for (const x of store.query({ kinds: [30078], '#d': [d], limit: 200 })) {
+    const xcp = namedChurch(x) || (CHURCH_PUBS.has(x.pubkey) ? x.pubkey : '');
+    if (xcp !== cp) continue;
+    const s = ((x.tags || []).find(t => t[0] === 'session') || [])[1] || '';
+    if (s && s !== sid) return true;
+  }
+  return false;
+};
+// The ingest half of the rule above, in the shape carereqIdOk has: given an event about to be put in the
+// store, may it sit at the address it names? True for everything that is not a check-in record, for a record
+// naming no session, and for the church's own copy. False only for a NON-church author whose record would join
+// an address this box already holds a DIFFERENT session at.
+const checkinSessionOkOnIngest = (e, d) => {
+  if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKIN_D)) return true;
+  if (CHURCH_PUBS.has(e.pubkey)) return true;
+  const cp = namedChurch(e) || '';
+  if (!cp) return true;                       // ownership unproven — owningChurch()/canRead() deny it anyway
+  const sid = ((e.tags || []).find(t => t[0] === 'session') || [])[1] || '';
+  if (!sid) return true;
+  return !checkinSessionConflict(d, cp, sid);
 };
 const onAnyRoster = (pub, cp) => {
   if (!pub || !cp) return false;
@@ -1544,6 +1846,47 @@ const stewardCan = (pub, cp, cap) => {
   const caps = byPub && byPub.get(pub);
   if (!caps) return true;                       // no capabilities recorded for them → full steward (compat)
   return cap === 'any' ? caps.size > 0 : caps.has(cap);
+};
+// THE SAME QUESTION, WITH THE COMPATIBILITY BRANCH REFUSED — and it is refused on purpose.
+//
+// stewardCan() answers `!caps` as "full steward (compat)": a steward appointed before capabilities existed
+// keeps everything, so that upgrading this relay cannot strip a working delegate. That is right for the
+// fourteen rules that share it and WRONG for a capability that has to be given deliberately.
+//
+// The console has said exactly this since 2026-08-20, in capNeedsExplicitGrant and the padlock beside it:
+// "the children's register has to be given on purpose — it isn't included in everything", because before
+// that date NO delegate could open a check-in record at all, so inheriting it on upgrade would hand every
+// steward a church has ever appointed the name, room and pickup code of every child, with nobody asked.
+//
+// This is the relay agreeing with that, for the one write it now admits from a steward: clearing a person
+// for children's check-in. An UNSCOPED steward is refused here and is not refused by stewardCan().
+const stewardCanExplicitly = (pub, cp, cap) => {
+  const s = STEWARDS_BY.get(cp);
+  if (!(cp && s && s.has(pub))) return false;
+  const byPub = STEWARD_CAPS.get(cp);
+  const caps = byPub && byPub.get(pub);
+  return !!(caps && caps.has(cap));
+};
+// WHO MAY CLEAR A PERSON FOR CHILDREN'S CHECK-IN — the church itself, or a steward it EXPLICITLY ticked for
+// safeguarding.
+//
+// CALLERS — every one, per CLAUDE.md rule 2, and there is now exactly ONE: accept()'s CHECKINPERM_D branch.
+// It was TWO until 2026-09-10 (accept() and note()'s CHECKINPERM_D branch, "so the websocket and the ingest
+// cannot disagree about who authored a clearance"), and the second one was RED TEAM F3: note() runs on every
+// boot rehydrate, so asking it there meant re-asking it for ever, against a roster that has moved on, and a
+// withdrawing steward being re-scoped DROPPED HER TOMBSTONE and re-granted the clearance she had withdrawn.
+// The question is now asked where it has a true answer — at the door, when the document is written — and
+// re-asked of a CLEARANCE at use time by checkinPermAuthorLive(), which is the same question against the
+// remembered author. See the model note on checkinPermitted(), and the paragraph in note()'s CHECKINPERM_D
+// branch that states exactly what that does and does not close.
+//
+// NOTHING TRUSTS A ['church'] TAG ON ITS OWN. `namedChurch(e)` only returns a CONFIGURED church, and the
+// steward test then requires the author to be on THAT church's signed roster — so a co-tenant church's
+// steward, who is on their own roster and not ours, resolves to '' here.
+const checkinPermGrantor = (e) => {
+  if (CHURCH_PUBS.has(e.pubkey)) return e.pubkey;
+  const cp = namedChurch(e);
+  return stewardCanExplicitly(e.pubkey, cp, 'safeguarding') ? cp : '';
 };
 // M2: a delegated leader/care-admin grant is only honoured while the steward who authored it is STILL a
 // steward (or the church/network key). So revoking a steward immediately drops the group-leader and
@@ -2168,7 +2511,18 @@ function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
+                   CHECKIN_PERMITS,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE]) { try { m.clear(); } catch {} }
+  // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
+  // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
+  // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
+  //
+  // MEASURED, not reasoned: the church kind-5-deletes a clearance, so it leaves the corpus; a MID-LIFE
+  // hydrateMaps() then runs (an /import, or a /config save — the call at the foot of the config route);
+  // CHECKIN_HELPERS correctly forgets the envelope and CHECKIN_PERMITS STILL ADMITTED. The relay went on
+  // handing out the session key and accepting register writes on a clearance it no longer held, until the
+  // process next restarted — and this relay restarts itself, so it was self-healing at an interval nobody
+  // chose, which is worse than either a permanent bug or none.
   // GROUP_CHILDSAFE was missing here. The eachKind rebuild does re-derive it (a non-child-safe group
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
@@ -2445,7 +2799,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
   }
   else if (d.startsWith(CHECKINHELPER_D) && CHURCH_PUBS.has(e.pubkey)) {   // ONE SESSION'S check-in helpers — OWNER-ONLY, author IS the church
-    const sid = d.slice(CHECKINHELPER_D.length);
+    // THE SAME SUFFIX RULE AS THE DOOR, not a looser one. This was a bare `d.slice(...)` with no bound and no
+    // charset test until 2026-09-10, while accept() refused anything over 128 characters or outside
+    // [A-Za-z0-9._:-] — so a session id containing `..`, and a 300-character one, were refused on the websocket
+    // and installed through /import and peer replication. See checkinHelperSid, which is now the one parser.
+    const sid = checkinHelperSid(d);
+    if (!sid) return;
     const ts = e.created_at || 0;
     let byS = CHECKIN_HELPERS.get(e.pubkey);
     if (!byS) { byS = new Map(); CHECKIN_HELPERS.set(e.pubkey, byS); }
@@ -2481,12 +2840,31 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     //     HELPER BACK ON THE CHILDREN'S REGISTER. This relay restarts itself, so that was a scheduled
     //     reversal of a safeguarding decision, not a corner case.
     //
-    // AND created_at IS THE RIGHT RULE, not merely the surviving one. This document is OWNER-ONLY: the only
-    // key that can produce a grant bearing a later timestamp is the church's own, so a later timestamp IS the
-    // church speaking more recently. A stale copy replayed by a rehydrate or arriving from a peer sync carries
-    // its original created_at inside the signature and cannot be handed a fresher one — which is the case the
-    // guard was really for, and the case put() already refuses on its own. `rev` was this relay second-guessing
-    // the church's signed timestamp and then forgetting it had.
+    // AND created_at IS THE SURVIVING RULE. IT IS NOT THE RIGHT ONE — corrected 2026-09-09, because what stood
+    // here until then was measured false and a false claim in the permanent record is worse than the bug it
+    // hides.
+    //
+    // WHAT IT SAID: "this document is OWNER-ONLY: the only key that can produce a grant bearing a later
+    // timestamp is the church's own, so a later timestamp IS the church speaking more recently."
+    //
+    // WHY THAT IS FALSE: scripts/event-store.mjs:149 accepts a created_at up to +900 SECONDS ahead of this
+    // relay's own clock. A church device running fast pins the record with a timestamp up to fifteen minutes
+    // in the future, and every honest correction the SAME CHURCH signs inside that window carries a lower
+    // timestamp and is refused as stale. Both events are the church's; it is the clocks that disagree. So an
+    // honest revocation can be refused for up to fifteen minutes by the church's own fast device.
+    //
+    // WHY IT STANDS ANYWAY: the owner judged mid-session revocation unlikely in practice and chose not to
+    // spend on it (2026-09-09). The window is bounded at 900s, it needs the church's own device to be fast,
+    // and the 2026-09-09 restructure narrows what a stale grant can do at all — an envelope admits nobody
+    // without a live PERMISSION, and a permission is a DIFFERENT document, so revoking a person's clearance is
+    // not exposed to this race even when a re-issued envelope is. That is a mitigation. It is not a fix, and
+    // nobody should read this paragraph as one.
+    //
+    // WHAT created_at DOES HANDLE, correctly: a stale copy replayed by a rehydrate or arriving from a peer
+    // sync carries its original created_at inside the signature and cannot be handed a fresher one. That is
+    // the case the guard was really for, and put() already refuses it on its own. `rev` was this relay
+    // second-guessing the church's signed timestamp and then forgetting it had — a different and worse failure
+    // than the bounded one described above.
     //
     // KEPT, THOUGH put() MAKES IT UNREACHABLE TODAY, and said plainly rather than implied: put() only ever
     // hands note() the newer of two versions, so this comparison should never be the thing that decides. It
@@ -2495,6 +2873,158 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // is never written down.
     if (held && held.ts > ts) return;
     byS.set(sid, { from: g.from, until: g.until, lifetime: g.lifetime, pubs: new Set(g.pubs), ts });
+  }
+  else if (d.startsWith(CHECKINPERM_D)) {   // A PERSON IS CLEARED — the church, or a steward it ticked for safeguarding
+    // THE SIBLING OF THE BRANCH ABOVE, and deliberately shaped the same way: keyed by the AUTHOR (never a
+    // ['church'] tag), newest-wins by created_at alone, a tombstone that cannot be undone by an older replay,
+    // and the SAME PARSER the write gate uses so a document cannot mean one thing at the door and another on
+    // disk. Enforced here as well as in accept() for the reason NEED_D and CHECKINHELPER_D both state: a
+    // document already on disk replays through note() on every boot with accept() nowhere in the path, and
+    // this relay restarts itself.
+    //
+    // THAT SENTENCE WAS HALF TRUE UNTIL 2026-09-10, and is corrected rather than left standing (rule 4). The
+    // WINDOW half held on both doors — both really do call readCheckinPermission, and every lifetime and cap
+    // was verified against both. The D-TAG half did not: this line read
+    //     String(d.slice(CHECKINPERM_D.length) || '').toLowerCase()
+    // while accept() pinned the RAW suffix to lowercase 64-hex. `checkinperm:<UPPERCASE-HEX>` was therefore
+    // refused on the websocket and INSTALLED here — the lowercase() folded it onto the very map entry the door
+    // had refused to write. Measured on a fresh relay: served the session key, accepted register writes, and
+    // survived a restart, while the person it named could not read their own clearance (canRead pins the
+    // lowercase form) and the console's lowercase tombstone could never remove it. checkinPermWho is now the
+    // one parser for the suffix, exactly as readCheckinPermission is for the body.
+    const who = checkinPermWho(d);
+    if (!who) return;
+    const ts = e.created_at || 0;
+    // ── WHOSE CLEARANCE IS THIS, AND WHO IS ALLOWED TO HAVE SAID SO — RED TEAM F3/F4, 2026-09-10 ──────────
+    //
+    // A CLEARANCE AND A WITHDRAWAL RESOLVE THIS DIFFERENTLY, and that asymmetry is the fix. The full model is
+    // written on checkinPermitted(); the half that lives here is: **a withdrawal already admitted by a door is
+    // a fact, and this ingest does not re-litigate the authority behind it.**
+    //
+    // WHAT THE OLD GUARD DID. The branch condition was `d.startsWith(CHECKINPERM_D) && checkinPermGrantor(e)`,
+    // so a steward's tombstone was DROPPED HERE the moment that steward stopped holding safeguarding — and
+    // hydrateMaps() wipes and replays, so the church's older clearance was the only version left and the
+    // withdrawn person was CLEARED AGAIN. Measured across a restart on one database: 0 → de-cap → 0 →
+    // restart → 1, session key served, register served, writes accepted. Taking a capability away RE-GRANTED
+    // every clearance that lead had ever withdrawn. That is the defect; this line is where it lived.
+    //
+    // WHAT IT WOULD COST TO KEEP ASKING is not symmetric with what it buys. Honouring a withdrawal whose
+    // author has since been re-scoped can only ever REFUSE somebody — an unstaffed desk, visible, fixed by
+    // re-clearing them. Dropping one puts a withdrawn volunteer back on the children's register, silently, on
+    // a schedule this relay sets for itself.
+    //
+    // ⚠ WHAT THIS DOES AND DOES NOT CLOSE, stated exactly rather than as "both doors agree", because the
+    // author test on a tombstone now lives at ONE door and it is worth being precise about which:
+    //
+    //   • THE WEBSOCKET IS CLOSED. accept()'s CHECKINPERM_D branch requires checkinPermGrantor(e), so an
+    //     ordinary member, a Finance-only steward, an unscoped steward and a co-tenant's steward are all
+    //     refused, and nothing they sign ever reaches this disk. That is the untrusted path and it is the
+    //     path that matters. Asserted by name in checkin-clearance-authorisation.test.mjs.
+    //   • /import AND PEER SYNC ARE NOT GATED ON THE AUTHOR, deliberately. A map-consulting gate at those
+    //     three sites would refuse a steward-authored document for want of a hydrate — STEWARDS_BY is EMPTY
+    //     while a fresh restore's loop runs, and it fills PART WAY THROUGH, so the same archive would keep or
+    //     lose a withdrawal depending on the order of lines in a file. For a clearance that is recoverable
+    //     (hydrateMaps() runs at the foot of /import and re-derives it); FOR A WITHDRAWAL IT IS NOT — the
+    //     document would never reach disk and the withdrawal would be gone. Losing a safeguarding withdrawal
+    //     on a restore is worse than anything the gate would buy, and it is the same trap
+    //     checkinSessionOkOnIngest's own comment records: an accept() pass was added to /import on 2026-08-20
+    //     and reverted the same day because it deleted a church's entire finance journal.
+    //   • SO THE REMAINING SURFACE IS: the operator's own archive, or a relay this church has authorised as a
+    //     peer, carrying a `checkinperm:` tombstone signed by somebody with no authority. Neither can be
+    //     reached by a member — a conformant relay's accept() refuses to store one in the first place, and
+    //     before 2026-09-10 accept() was narrower still (church key only), so no legacy corpus holds one.
+    //     What it could do is REFUSE a cleared volunteer. It cannot clear anybody. That is the direction this
+    //     whole model fails in on purpose.
+    //
+    // What IS gated at all four sites is checkinPermFutureOk (F5) — because that rule is about what may sit
+    // on disk rather than about who said it, it consults no map, and it never refuses a withdrawal.
+    //
+    // KEYED BY THE CHURCH, NOT BY THE AUTHOR — changed 2026-09-10 with the mint widening, and it is the line
+    // that makes the widening safe. It was `CHECKIN_PERMITS.get(e.pubkey)`, which was right while the church
+    // key was the only possible author: a co-tenant's document then landed under THEIR key and could not
+    // touch our map. Now a steward may author one, and a clearance filed under the steward's own pubkey
+    // would be a clearance no lookup ever finds — checkinPermitted() asks CHECKIN_PERMITS.get(cp).
+    //
+    // AND THE CHURCH IS RESOLVED STRUCTURALLY FOR BOTH KINDS — the author IS a configured church, or its
+    // ['church'] tag names one. That is a question no capability change can alter, which is the property F3
+    // needed; and note() no longer asks an authority question at all. It is a MAP-KEEPER: it records that
+    // this author said this at this timestamp, and checkinPermitted() decides whose word to take.
+    //
+    // WHY THE CLEARANCE MOVED TOO, and it was not for symmetry. Keeping checkinPermGrantor() here made the
+    // use-time test a ONE-WAY DOOR: de-cap a lead, restart, and the rehydrate DROPPED her clearances out of
+    // the map altogether, so re-ticking her for safeguarding brought none of them back — nothing replays a
+    // stored document except another hydrateMaps(). Measured: 0/0/false after a re-cap that should have
+    // restored everything. A church that re-scopes a steward by mistake would have had to restart its relay
+    // to undo it. Installing the version and judging its author at use time makes de-capping exactly as
+    // reversible as it looks on the console.
+    //
+    // IT WIDENS NOTHING, and here is the whole argument. Three authors could reach this line:
+    //   • THE CHURCH ITSELF — owner is its own pubkey, as before.
+    //   • A CO-TENANT CHURCH KEY tagging its document to us — CHURCH_PUBS.has(e.pubkey) resolves it to THEIR
+    //     pubkey, so it lands in their map and clears nobody here. That is the AUDIT-2026-07-24 CRITICAL-2
+    //     shape and it is asserted by name in checkin-permission-mint-widening.test.mjs.
+    //   • ANYBODY ELSE whose ['church'] tag names us — a member, a Finance-only steward, an unscoped steward,
+    //     a co-tenant's steward. They get a slot in our map and checkinPermAuthorLive() refuses to read a
+    //     CLEARANCE out of it, every time it is asked, so the enforcement is unchanged. And none of them can
+    //     reach this line at all over the websocket: accept()'s CHECKINPERM_D branch still requires
+    //     checkinPermGrantor(e), which is where an authority test belongs — at the moment a document is
+    //     written, when the question has a true answer.
+    // A withdrawal from such an author would count, because a withdrawal is never re-litigated; see the
+    // paragraph above on exactly what that does and does not close.
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e);
+    if (!owner) return;
+    let byP = CHECKIN_PERMITS.get(owner);
+    if (!byP) { byP = new Map(); CHECKIN_PERMITS.set(owner, byP); }
+    // ONE SLOT PER AUTHOR, not one per person — RED TEAM F5, 2026-09-10.
+    //
+    // This map used to hold a single entry per person and compare `held.ts` ACROSS AUTHORS, which is a
+    // comparison the store cannot backstop: two authors are two addressable slots, so put() never sees the
+    // pair and never returns 'have-newer'. A withdrawal was therefore DROPPED whenever a differently-authored
+    // version carried a later stamp. Measured: a steward's +899s clearance accepted, the church's honest
+    // withdrawal accepted at the door and silently not enforced, the steward's own withdrawal refused by the
+    // store — NEITHER AUTHOR ABLE TO WITHDRAW, for up to fifteen minutes, with nothing retrying.
+    //
+    // Per-author slots make each comparison one the store agrees with, and checkinPermitted() folds the slots
+    // into an answer with no ordering in it at all.
+    let vers = byP.get(who);
+    if (!vers) { vers = new Map(); byP.set(who, vers); }
+    const held = vers.get(e.pubkey);
+    // A WITHDRAWAL IS REMEMBERED, NOT CONSUMED — and this is the other half of the widening, for a reason
+    // that is not obvious and is not cosmetic.
+    //
+    // While the church key was the only author, `byP.delete(who)` was safe: a document and its tombstone
+    // share one addressable slot (kind, pubkey, d-tag), so the store REPLACES the grant with the tombstone
+    // and put() only ever hands note() the newer of the two. There was nothing left to resurrect.
+    //
+    // TWO AUTHORS BREAKS THAT INVARIANT. The church's grant and a steward's tombstone are two different
+    // addresses, so both live in the corpus for ever, and every device has to re-derive the answer from
+    // whatever order they arrive in. Delete-on-tombstone is order-dependent: tombstone first (t2), then the
+    // church's older grant (t1) replayed by a peer sync or a boot rehydrate, and `held` is undefined, so the
+    // WITHDRAWN CLEARANCE IS REINSTALLED. syncChurchFromPeer runs every 5-7 minutes, and this relay restarts
+    // itself, so that is a scheduled reversal of a safeguarding decision rather than a corner.
+    //
+    // So the withdrawal is kept AS a version, at its own timestamp, and the comparison below refuses to
+    // re-admit anything at or older than it. Same shape as _forgetById's `tombs` in the client's document
+    // store, and as subscribeCheckinSessionKeys reporting a stand-down as a ROW rather than an absence —
+    // both for this exact reason. checkinPermitted() reads `revoked` and refuses.
+    //
+    // ⚠ THE COMPARISON IS NOW WITHIN ONE AUTHOR'S OWN SLOT, and that is what PRESERVES this property rather
+    // than weakening it. `held` is this author's own held version, so a tombstone arriving before its grant
+    // still wins the slot exactly as it did before — the grant is the older copy of the same slot and is
+    // refused by the same `held.ts > ts`. What changed is only that a DIFFERENT author's stamp can no longer
+    // decide the slot, which is F5.
+    //
+    // The cost is one small entry per (person, author) ever cleared and then withdrawn, per church, cleared on
+    // every hydrateMaps(). It is bounded by the size of a congregation times its safeguarding leads.
+    if (removed) { if (!(held && held.ts > ts)) vers.set(e.pubkey, { revoked: true, ts }); return; }
+    const pm = readCheckinPermission(e.content);
+    // FAILS CLOSED, and refuses a d-tag that disagrees with the body: a permission filed under one member's
+    // pubkey that names another inside would clear the wrong person, and the d-tag is what every lookup uses.
+    // Recorded as a withdrawal rather than a deletion for the same order-independence reason: a newer
+    // unreadable copy must not be undone by an older readable one arriving afterwards.
+    if (!pm || pm.person !== who) { if (!(held && held.ts > ts)) vers.set(e.pubkey, { revoked: true, ts }); return; }
+    if (held && held.ts > ts) return;
+    vers.set(e.pubkey, { from: pm.from, until: pm.until, lifetime: pm.lifetime, source: pm.source, ts });
   }
   else if (d === ROTA_SETTINGS_D) {   // who may FETCH the rota — only the church key (or one of its stewards) sets it
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'any') ? cp : '');
@@ -2782,10 +3312,11 @@ function accept(e) {
     // by that author — so a co-tenant cannot author a grant for another congregation's session id.
     if (d.startsWith(CHECKINHELPER_D)) {
       if (!CHURCH_PUBS.has(e.pubkey)) return false;
-      const sid = d.slice(CHECKINHELPER_D.length);
-      // A session id is a console-minted opaque token joined to service:<id>. Bounded and charset-checked so it
-      // cannot smuggle a path, a huge key, or something that reads as another d-tag.
-      if (!sid || sid.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(sid)) return false;
+      // THE SAME BOUND AND CHARSET AS THE INGEST, from the same function since 2026-09-10 — this rule is
+      // unchanged, and checkinHelperSid is where it now lives so note() cannot be looser than it. The two
+      // spellings a bare slice let through (a `..`, and 300 characters) were refused here and installed there.
+      const sid = checkinHelperSid(d);
+      if (!sid) return false;
       if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // the church stands the session down
       const g = readHelperGrant(e.content);
       // REFUSED AT THE DOOR, not merely ignored at ingest. A grant with an unbounded window, a window that
@@ -2794,6 +3325,70 @@ function accept(e) {
       // the window cap and the declared-source test; isDeclaredSource is named again here only so this rule
       // states out loud what it depends on.
       return !!g && g.session === sid && isDeclaredSource(g.source);
+    }
+    // A PERSON IS CLEARED — THE CHURCH, OR A STEWARD IT TICKED FOR SAFEGUARDING. Widened 2026-09-10.
+    //
+    // ⚠ THIS IS AN ESCALATION AND IT WAS TAKEN DELIBERATELY. What stood here until today said it plainly and
+    // is kept, because the reasoning is still true and only the decision changed:
+    //
+    //     "IT IS THE SHARPER CASE OF THE TWO. A safeguarding steward can already read the whole children's
+    //      register; what they must not gain is the power to say who ELSE may. This document is now the ONLY
+    //      thing that says that."
+    //
+    // An audit named exactly this as "the escalation that matters, since they can already read the register
+    // but must not be able to hand it to a third party". THE OWNER HAS WEIGHED THAT AND CHOSEN CONVENIENCE:
+    // in a real church the safeguarding lead is the person who knows who has a DBS certificate, and routing
+    // every clearance through whoever holds the church key makes the lead's own job need somebody else's
+    // console. This change WANTS ITS OWN AUDIT.
+    //
+    // FOUR THINGS IT DOES NOT WIDEN, each asserted by name in checkin-permission-mint-widening.test.mjs:
+    //   • an ordinary member;
+    //   • a steward ticked for Finance only — the August leak, in person;
+    //   • an UNSCOPED steward, via stewardCanExplicitly rather than stewardCan: this capability is not part
+    //     of "everything", and the console has said so since 2026-08-20;
+    //   • a co-tenant church's steward, who is on their roster and not ours.
+    //
+    // AND THE ENVELOPE STAYS CHURCH-KEY-ONLY. CHECKINHELPER_D above is untouched, and not merely for
+    // caution: the session key is NIP-44-wrapped to each recipient WITH THE CHURCH KEY, so a steward's
+    // console physically cannot mint one the recipients could unwrap the way the readers expect. The comment
+    // above once said widening the envelope would then be "a formality"; it is not, it is impossible without
+    // the church key, which is why issuance stays where reference/FINDING-...-PER-PERSON says it is: the
+    // console, acting as the church.
+    //
+    // Nothing trusts a ['church'] tag on its own — see checkinPermGrantor.
+    if (d.startsWith(CHECKINPERM_D)) {
+      if (!checkinPermGrantor(e)) return false;
+      // ONE SPELLING OF THE D-TAG, AND ONLY ONE. `toHexPub` would have done here — it is what the sibling
+      // key-envelope rules use — but it also ACCEPTS AN NPUB and converts it, and this d-tag is what every
+      // lookup of a clearance keys on. Two spellings of the same suffix would be two addressable documents
+      // writing one map entry: a name the relay gates under one form and a client publishes under another,
+      // which is the shape scripts/doc-registry.test.mjs exists to prevent.
+      //
+      // A SECOND REFUSAL, NOT THE ONLY ONE, and said plainly rather than overclaimed. Measured by sabotage on
+      // 2026-09-09: replacing this line with `toHexPub(who)` changed no test result, because readCheckinPermission
+      // already requires `person` to be 64-hex and the comparison below requires it to equal this suffix — so an
+      // npub-spelled d-tag is refused either way. This line is belt over those braces and is worth its two
+      // lines; it is NOT what is holding the property up.
+      //
+      // AND IT WAS THE ONLY THING HOLDING ONE SPELLING UP: `checkinperm:<UPPERCASE-HEX>`. The ingest lowercased
+      // the suffix before comparing it to `pm.person` (which readCheckinPermission lowercases too), so the pair
+      // agreed there and the door refused it here. Same rule, one function since 2026-09-10 — see
+      // checkinPermWho, which this now calls and note() calls too.
+      const who = checkinPermWho(d);
+      if (!who) return false;
+      if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // the church withdraws a clearance
+      // AND NOT DATED INTO THE FUTURE — RED TEAM F5, 2026-09-10. created_at is this document's ORDERING KEY
+      // across its two authors, and the store accepts +900s of it, so a fast device's clearance outranked
+      // every honest withdrawal either author could sign for up to fifteen minutes. Refused here, visibly,
+      // rather than clamped: a clamp cannot survive the rehydrate that recomputes it. See checkinPermFutureOk
+      // — it never refuses a WITHDRAWAL, because refusing one is the unsafe direction.
+      if (!checkinPermFutureOk(e, d)) return false;
+      const pm = readCheckinPermission(e.content);
+      // REFUSED AT THE DOOR, not merely ignored at ingest — a clearance that silently did not save is a
+      // volunteer who turns up next month and finds an empty room with nothing to look at. readCheckinPermission
+      // applies the lifetime cap and the declared-source test; isPermissionSource is named again here only so
+      // this rule states out loud what it depends on, exactly as the grant's rule names isDeclaredSource.
+      return !!pm && pm.person === who && isPermissionSource(pm.source);
     }
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
     // the per-church NAME key envelope — same authority as the care key.
@@ -2986,7 +3581,8 @@ function accept(e) {
     //      of the helper capability is that the people who actually do this job — rota volunteers — are not
     //      stewards, and must not have to be made safeguarding stewards to check a child in.
     //
-    //      THREE THINGS THIS BRANCH REFUSES, each asserted by name in checkin-helper-capability.test.mjs:
+    //      FOUR THINGS THIS BRANCH REFUSES, each asserted by name (the first three in
+    //      checkin-helper-capability.test.mjs, the fourth in checkin-helper-write-scope.test.mjs):
     //      a record with NO ['session'] tag (a helper cannot write into the register at large, only into the
     //      session they were granted); a session OTHER than the one they hold; and the same helper outside
     //      their window. The window is compared against the SERVER's clock inside checkinHelperOf, never
@@ -2996,7 +3592,16 @@ function accept(e) {
       if (!cp) return false;
       if (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')) return true;
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
-      return !!sid && checkinHelperOf(e.pubkey, cp, sid);
+      if (!sid || !checkinHelperOf(e.pubkey, cp, sid)) return false;
+      //      d. AND THE RECORD AT THAT ADDRESS MUST BE THEIR SESSION'S. Everything above this line asks about
+      //      the tag on the incoming event, which the writer chose; nothing asked which session the record the
+      //      d-tag ADDRESSES belongs to. RED TEAM 2026-09-10 F1: a helper in-window for S1 only, correctly
+      //      refused every read of a session-S2 record, was accepted publishing AT that record's own address
+      //      by tagging her event S1 — and with the helper's `ck` copy she can seal a body the console will
+      //      render over the church's, including `rec.code`, the pickup code CheckoutModal releases a child
+      //      on. See checkinSessionConflict for the full measurement and for why any disagreement refuses.
+      //      CREATE is untouched: an address this box holds nothing at is the volunteer at the desk.
+      return !checkinSessionConflict(d, cp, sid);
     }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
@@ -3412,10 +4017,41 @@ function canRead(e, authed) {
     // over from being REFUSED, loudly, at the moment it tries to use the register — which is what §8 of the
     // design asks for anyway ("fail LOUDLY at the moment of check-in") — and not from waiting for a document
     // it will never be sent.
+    //
+    // TWO CLAUSES ADDED 2026-09-09 WITH THE PERMISSION LAYER, and both are refusals:
+    //
+    //   • A LIVE PERMISSION IS REQUIRED. Being named in an envelope is no longer enough. Envelopes are issued
+    //     ahead of time by machinery, so without this a person whose clearance was withdrawn on Tuesday would
+    //     keep collecting keys for every Sunday a console had already run ahead and minted.
+    //   • AND THE FETCH IS TIME-BOUNDED: from the session's `until` back to `from - KEY_LEAD_SECONDS`. Early
+    //     fetch is still how a Sunday starts — ten minutes, or a fortnight — but a phone belonging to somebody
+    //     cleared for the YEAR can no longer hoover up every envelope in one REQ. That is the blast radius the
+    //     owner paid machinery for, enforced by this box rather than by a console's good judgement. A CLOSED
+    //     session's envelope is refused outright, and costs nothing: its records are window-gated anyway, so
+    //     there was never anything the key could open.
     if (d.startsWith(CHECKINHELPER_D)) {
       const byS = CHECKIN_HELPERS.get(cp);
       const g = byS && byS.get(d.slice(CHECKINHELPER_D.length));
-      return !!(g && authed && g.pubs.has(authed));
+      if (!g || !authed || !g.pubs.has(authed)) return false;
+      if (!checkinPermitted(authed, cp)) return false;
+      const t = Math.floor(Date.now() / 1000);
+      return t >= g.from - KEY_LEAD_SECONDS && g.until != null && t <= g.until;
+    }
+    // A PERMISSION IS NOT SERVED TO THE CONGREGATION. It names the church's cleared safeguarding team, which is
+    // exactly what a church narrowing its rota visibility said the congregation does not get to see — the same
+    // reasoning, at the same size, as the grant rule above, and NOT conditional on that setting for the same
+    // reason: a protection that waits for a church to find a settings page is a reward for reading the manual.
+    //
+    // WHO STILL READS IT: the church, its network, any steward and a care admin, all of whom returned true at
+    // the privileged short-circuit above — and THE PERSON IT NAMES, who already knows they were cleared and
+    // whose own screen has to be able to say "your clearance ends on the 4th". Note they may not be a member of
+    // the congregation at all, which is why the ordinary member rule is not what serves it. IT RETURNS: no
+    // fall-through, because that fall-through is the defect this same rule had on the grant until 2026-09-09.
+    if (d.startsWith(CHECKINPERM_D)) {
+      // The same one spelling as the write gate above, and for the same reason — a read rule that accepted an
+      // npub form would serve a document the write gate can never have stored.
+      const who = String(d.slice(CHECKINPERM_D.length) || '');
+      return /^[0-9a-f]{64}$/.test(who) && !!authed && authed === who;
     }
     if (d.startsWith(CHECKIN_D)) {
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
@@ -4408,6 +5044,17 @@ function serveStatic(req, res) {
           // straight to the store, so without this a forged request arrives by import or by relay-to-relay sync, sits
           // beside the genuine one (addressable events are per author), and every reader picks newest-wins.
           if (!carereqIdOk(e, dtag(e))) { invalid++; continue; }
+          // …AND A CHECK-IN RECORD BELONGS TO ONE SESSION, WHICH ALSO HOLDS AT EVERY DOOR. Same argument as
+          // the line above, on the register instead of on care: this route writes straight to the store with
+          // no accept() pass, so without this a helper's forgery at another session's address arrives by
+          // import or by relay-to-relay sync, sits beside the genuine record (addressable events are per
+          // author), and the console's newest-wins register renders it. RED TEAM 2026-09-10 F1. It consults no
+          // hydrated map and never refuses the church's own copy — see checkinSessionOkOnIngest for why that
+          // matters on a restore, and why an accept() pass here was reverted in 2026-08.
+          if (!checkinSessionOkOnIngest(e, dtag(e))) { invalid++; continue; }
+          // …and never a clearance dated into the future (RED TEAM F5). Map-free, so it cannot refuse a
+          // restore for want of a hydrate, and it never refuses a WITHDRAWAL.
+          if (!checkinPermFutureOk(e, dtag(e))) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
             if (r === 'stored') imported++;
@@ -4440,6 +5087,18 @@ function serveStatic(req, res) {
         // a read gate is bypassed by nothing, because every delivery goes through it, and it consults
         // TODAY's clearance rather than what was true when the message was sent. If you are tempted to add a
         // policy pass here again, check first whether the read gate already covers the harm.
+        //
+        // ⚠ AND "BYPASSED BY NOTHING" IS TRUE OF THE GATE THAT SENTENCE WAS WRITTEN ABOUT, NOT OF EVERY GATE.
+        // Narrowed 2026-09-10 after it was measured wrong on check-in, because it is the paragraph a future
+        // change will lean on. It holds where canRead() RE-DERIVES its answer from the event — the kind-4 DM
+        // case above, which recomputes safeguardAllows() against today's lists on every delivery. It does NOT
+        // hold where canRead() consults a MAP that note() populated: the `checkinhelper:` rule reads
+        // CHECKIN_HELPERS and calls checkinPermitted(), so it serves whatever THIS ROUTE installed. A
+        // `checkinperm:` d-tag in UPPERCASE hex was refused at the websocket door, installed here, and the
+        // session key served on it — until the ingest was made to apply accept()'s own d-tag rule.
+        //
+        // So: check whether the read gate RECOMPUTES before trusting it to cover the harm. Where it reads a
+        // derived map, note() is the gate, and note() must be exactly as strict as accept().
         setImmediate(() => { try { hydrateMaps(); } catch {} try { store.cull(); } catch {} });   // membership/groups/care live once this settles
       } catch (err) { try { res.writeHead(500, H); res.end(JSON.stringify({ error: 'import failed: ' + ((err && err.message) || 'error') })); } catch {} }
     });
@@ -5596,6 +6255,8 @@ async function syncChurchFromPeer(cp, peerBase) {
       let e; try { e = JSON.parse(s); } catch { return; }
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
       if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
+      if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
+      if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
       const put = store.put(e, cp);
       if (put === 'stored') { imported++; note(e); }
       if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
@@ -5659,7 +6320,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }

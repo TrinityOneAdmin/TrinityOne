@@ -148,8 +148,19 @@ async function checkin({ minors, guardians, present }) {
       useStewardSafeguard: () => ({ minors, minorsKnown: true }),
       useStewardGuardians: () => guardians,
       useStewardMembers: members,
+      // ADDED 2026-09-10 with slice 2 of check-in. The panel reads the calendar so a record can name its
+      // session (the tag a cleared helper's read gate keys on) — an empty list here means "no service
+      // today", which is exactly the state this file's own subject does not depend on.
+      useStewardServices: () => [],
+      useStewardIdv: () => 1, useStewardConn: () => 1,
       addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
     },
+    useStewNarrow: () => false,
+    // The clearances panel is now DashCheckin's sibling on the same page. Stubbed rather than sliced in:
+    // this file is about who is printed as a pickup contact, and that panel prints nobody.
+    CheckinClearances: () => null,
+    // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
+    CheckinSessionKeys: () => null,
   };
   const mod = await loadSlices(
     [['function DashCheckin()', 'DashCheckin'], ['function CheckinPicker(', 'CheckinPicker'],

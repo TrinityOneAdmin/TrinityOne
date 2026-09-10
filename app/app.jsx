@@ -1163,6 +1163,28 @@ function App() {
     if (F.subscribeChurchGroups) subs.push(F.subscribeChurchGroups(np, (gs) => { const g = gs || []; setChurchGroups(g); setChurchTeams(g.filter(x => x && x.kind === 'team')); lsSet('trinityone.serv.groups.' + np, g); }));
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, churches, connTick]);
+  // ── CHILDREN'S CHECK-IN: THE REGISTER, FOR SOMEBODY CLEARED TO WORK THE DOOR ────────────────────────────
+  // Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, read half. Feeds the Kids tab in
+  // ServingScreen; see Fellowship.subscribeCheckinRegister for the whole chain and what each field means.
+  //
+  // NOT CACHED IN localStorage, unlike its neighbours above, and that is the one deliberate difference. Those
+  // paint from cache so a serving card does not flash blank. THIS one must not: a stale register is a leader
+  // reading names and pickup codes for a room that has moved on, and the four states this screen exists to
+  // tell apart ("no key yet" / "cannot open" / "another session" / a real row) are all about what is true on
+  // this phone RIGHT NOW. The docs hub already persists the ciphertext, so a cold start is not a blank
+  // screen — it is the same reader over the same corpus, which is the honest kind of fast.
+  //
+  // `defaults` MATTERS: cleared:false with no keys is what makes the tab absent, so a church switch or a
+  // signed-out phone must land back on it rather than keep the last church's answer.
+  const CK_NONE = { cleared: false, lapsed: false, notYet: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
+  const [checkinRegister, setCheckinRegister] = useA(CK_NONE);
+  useAE(() => {
+    if (!lazyReady) return;
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.subscribeCheckinRegister) { setCheckinRegister(CK_NONE); return; }
+    return F.subscribeCheckinRegister(np, setCheckinRegister);
+  }, [activeChurch, churches, connTick, lazyReady]);
   // safeguarding: is THIS member a child for the active church, and who's cleared to contact youth.
   // Used to show a child only child-safe groups and to gate DMs (the relay enforces both regardless).
   // minorsKnown starts FALSE, and that is the whole point: an empty minors list is not the same answer as
@@ -1875,6 +1897,12 @@ function App() {
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
+    // Children's check-in, the WORKER's read view (Serving → Kids). Nothing to do with `safeguard.cleared`,
+    // which is the youth-contact clearance from trinityone/clearance: — these are two independent decisions a
+    // church makes, and a churchwarden sim on 2026-09-10 found that doing one and believing you had done the
+    // other is the likeliest mistake in this whole feature. This one is trinityone/checkinperm: plus a session
+    // key, and the relay requires BOTH.
+    checkinRegister,
     joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed } for the active church
     // How far this phone's clock is from the relay's, in whole minutes, when we have actually MEASURED it.
     // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date
