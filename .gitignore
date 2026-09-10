@@ -48,7 +48,12 @@ HANDOFF.md
 # reference/ is working material — audits, handoffs, findings, design docs, fix plans, session notes, and
 # working exploit reproductions. None of it is the product, and a live exploit in a public repo tells anyone
 # running an older relay exactly what to do. Keep it on disk; never publish it.
-reference/
+#
+# 2026-09-11: the real directory now lives OUTSIDE the tree at ../TrinityOne-internal/reference, and
+# `reference` here is a symlink to it (as is HANDOFF.md). git stores a symlink as its target string and
+# never follows it, so the content cannot be committed even by `git add -A` — which is how it was
+# published twice. No trailing slash on this pattern: `reference/` matches only a directory, not the link.
+reference
 
 # local/agent cruft — never publish
 .claude/

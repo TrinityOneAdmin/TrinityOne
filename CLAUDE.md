@@ -6,6 +6,11 @@ is named so nobody has to take it on faith.
 
 ## 0. START BY READING `HANDOFF.md`
 
+**`HANDOFF.md` and `reference/` are symlinks into `/mnt/storage/projects/TrinityOne-internal/`** (since
+2026-09-11). The repo is public and holds only the software; the working notes live outside the tree so a
+`git add -A` cannot publish them (git stores a link, never its target). A fresh clone has neither — they
+exist only on this machine, so back that directory up. Never `git add` either name.
+
 Its top section is the previous session's state: what is on which branch, what is device-verified, what is
 merged, what is decided, what is open, and — deliberately — **what that session got wrong**. Read it before
 touching code, and **measure the shas rather than quoting them**; they move.

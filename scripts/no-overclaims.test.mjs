@@ -22,7 +22,7 @@
 // The honesty of this product is the thing every single agent has praised. These two lines spend that.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 
 const site   = readFileSync(new URL('../welcome.html', import.meta.url), 'utf8');
 const extras = readFileSync(new URL('../app/screens-extras.jsx', import.meta.url), 'utf8');
@@ -31,7 +31,11 @@ const extras = readFileSync(new URL('../app/screens-extras.jsx', import.meta.url
 // it is the thing someone reads INSTEAD of the code. Both said "one of three roots" for a day after
 // `proveRelay()` stopped requiring a root at all (`src/relay-net.src.js:260` returns `{root:'software'}`
 // on its own). Round 7 found the divergence; this keeps it found.
-const admission = readFileSync(new URL('../reference/RELAY-ADMISSION.md', import.meta.url), 'utf8');
+// reference/ is NOT in the public repo (2026-09-11: it is a symlink out of the tree on the dev box, and
+// absent from a clone or a worktree). Read the two rule documents where they exist; the shipped surface
+// below is checked regardless.
+const optional = (f) => { const u = new URL('../' + f, import.meta.url); return existsSync(u) ? readFileSync(u, 'utf8') : null; };
+const admission = optional('reference/RELAY-ADMISSION.md');
 const rules     = readFileSync(new URL('../CLAUDE.md', import.meta.url), 'utf8');
 
 test('the site does not promise you are in the moment you tap', () => {
@@ -82,7 +86,8 @@ test('the admission rule is stated the same way everywhere it is stated at all',
   ];
   const stale = [];
   for (const f of surface) {
-    const body = readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+    const body = optional(f);
+    if (body === null) { assert.match(f, /^reference\//, f + ' is a shipped file and must exist'); continue; }
     if (/one of three roots/i.test(body)) stale.push(f);
   }
   assert.deepEqual(stale, [],
@@ -91,7 +96,7 @@ test('the admission rule is stated the same way everywhere it is stated at all',
     'the code no longer requires, and the vendor/ entries ship that claim to every church:\n  ' +
     stale.join('\n  '));
   // and the boundary must not be described as wider than it is
-  assert.match(admission, /same address|proxy at the/i,
+  if (admission !== null) assert.match(admission, /same address|proxy at the/i,
     'RELAY-ADMISSION.md must say plainly that a proxy at the SAME address is not refused — the previous ' +
     'wording implied the binding closed that case, and it never did');
 });
