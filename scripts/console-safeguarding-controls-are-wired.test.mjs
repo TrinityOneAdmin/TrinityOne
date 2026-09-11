@@ -114,7 +114,7 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
       setMinorNotice: (n) => calls.notice.push(n),
       _reseal: (...a) => calls.reseal.push(a),
       // the row's own furniture — none of it is the control under test
-      nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, parentSet,
+      nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, parentSet, ckClearedSet: new Set(),
       minorNotice: null, delegated: false, photosAllowed: false,
       SkBadge: Stub('SkBadge'), SkPill: Stub('SkPill'), Icon: Stub('Icon'),
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },

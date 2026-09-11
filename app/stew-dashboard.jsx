@@ -4764,6 +4764,9 @@ function DashMembers() {
   const isBlocked = (pk) => blockedSet.has(String(pk || '').toLowerCase());
   // safeguarding: who's a child, and which adults are cleared to contact youth (mirrors the church's cleared-worker list)
   const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], nophoto: [] };
+  // WHO HOLDS A CHECK-IN CLEARANCE, so that marking one of them as a child can withdraw it (see toggleMinor).
+  const ckPerms = window.useStewardCheckinPermissions ? window.useStewardCheckinPermissions() : [];
+  const ckClearedSet = new Set((Array.isArray(ckPerms) ? ckPerms : []).filter(p => p && !p._invalid && p.person).map(p => String(p.person).toLowerCase()));
   const minorsSet = new Set(sg.minors || []);
   const approvedSet = new Set(sg.approved || []);
   const nophotoSet = new Set(sg.nophoto || []);
@@ -4954,6 +4957,19 @@ function DashMembers() {
       }
       // the children they were unlinked from learn from their own sealed clearance; the parent's app is told directly
       unlinkedFrom.forEach(c => { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pk, c); } catch (e) {} });
+    }
+    // A CHILD IS NEVER A CLEARED CHECK-IN WORKER EITHER — so marking somebody withdraws the check-in clearance
+    // they hold, as unmarking withdraws the youth one below. Owner's decision 2026-09-11 (device finding D4's
+    // second half): the relay already refuses every USE of a marked child's clearance, but the document stayed
+    // on disk, this console went on listing them as cleared under Check-in, and unmarking them quietly brought
+    // it back. A refusal is REPORTED, never painted as done; the relay refuses the uses meanwhile either way.
+    if (!unmarking && ckClearedSet.has(pk)) {
+      let okC = null;
+      try { okC = await Promise.resolve(window.Steward.revokeCheckinPermission(pk)); } catch (e) { okC = null; }
+      if (!okC) {
+        setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is marked as a child, but their check-in clearance is still on the relay — '
+          + 'the withdrawal was refused. The relay refuses every use of it meanwhile; withdraw it under Check-in.' });
+      }
     }
     // SAY SO. Unmarking a child ALSO revokes their youth clearance, and that is deliberate — leaving a stale
     // clearance behind is how a six-year-old becomes someone the relay treats as cleared to message children
