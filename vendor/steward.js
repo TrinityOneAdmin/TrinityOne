@@ -15137,6 +15137,29 @@ zoo`.split("\n");
       return null;
     }
   }
+  function checkinGuardianPubs(rec) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const g of Array.isArray(rec && rec.guardians) ? rec.guardians : []) {
+      const h = (typeof g === "string" ? g : "").trim().toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(h) || seen.has(h)) continue;
+      seen.add(h);
+      out.push(h);
+    }
+    return out;
+  }
+  function checkinGuardianCopies(rec, seal) {
+    if (typeof seal !== "function") return [];
+    const out = [];
+    for (const g of checkinGuardianPubs(rec)) {
+      try {
+        const ct = seal(JSON.stringify(rec), g);
+        if (ct) out.push(["gk", String(ct)]);
+      } catch {
+      }
+    }
+    return out;
+  }
   function checkinSessionOf(tags) {
     if (!Array.isArray(tags)) return "";
     return String((tags.find((t) => Array.isArray(t) && t[0] === "session") || [])[1] || "").trim();
@@ -15412,7 +15435,7 @@ zoo`.split("\n");
     if (sid) out.push(["session", sid]);
     const seen = /* @__PURE__ */ new Set();
     for (const g of Array.isArray(rec.guardians) ? rec.guardians : []) {
-      const h = String(g || "").trim().toLowerCase();
+      const h = (typeof g === "string" ? g : "").trim().toLowerCase();
       if (!/^[0-9a-f]{64}$/.test(h) || seen.has(h)) continue;
       seen.add(h);
       out.push(["p", h]);
@@ -15430,6 +15453,11 @@ zoo`.split("\n");
     } catch (e) {
       return [];
     }
+  };
+  var _encGuardianCopies = (kind, obj) => {
+    if (kind !== "checkin") return [];
+    if (!sk) return [];
+    return checkinGuardianCopies(obj, (plain, guardianPub) => encrypt3(plain, getConversationKey(sk, guardianPub)));
   };
   var _ckSessionKeys = /* @__PURE__ */ new Map();
   var _encOpenSealedCopy = (kind, tags) => {
@@ -20428,8 +20456,9 @@ zoo`.split("\n");
       if (content == null) return Promise.resolve(null);
       const extra = _encCleartextTags(kind || "finance", obj);
       const sealed = _encSealedCopies(kind || "finance", obj);
-      const encVer = sealed.length ? "2" : "1";
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", encVer], ...extra, ...sealed], content }));
+      const guarded = _encGuardianCopies(kind || "finance", obj);
+      const encVer = sealed.length || guarded.length ? "2" : "1";
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", dtag], ["t", NET], ["enc", encVer], ...extra, ...sealed, ...guarded], content }));
     },
     encRemove(dtag) {
       if (!sk) return Promise.resolve(null);

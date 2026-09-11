@@ -45,7 +45,8 @@ import { pubSet, isPhotoSuppressed } from '../scripts/trinity-rules.mjs';
 import { eligibleHelpers, helperPolicy, lifetimeWindow, buildHelperGrant, HELPER_LIFETIMES,
          permittedHelpers, permissionPolicy, permissionWindow, buildCheckinPermission,
          readCheckinPermission, PERMISSION_LIFETIMES, GRANT_SOURCE, KEY_LEAD_SECONDS,
-         permissionFault, readCheckinHelperCopy, checkinSessionOf } from '../scripts/checkin-role-source.mjs';
+         permissionFault, readCheckinHelperCopy, checkinSessionOf,
+         checkinGuardianCopies } from '../scripts/checkin-role-source.mjs';
 
 // ---- backup encryption: seal an export to the CHURCH KEY, so only the church private key can open it ----
 // Hybrid ECIES: a throwaway ephemeral key does an ECDH (via NIP-44's key agreement) with the church PUBLIC
@@ -645,7 +646,13 @@ function _encCleartextTags(kind, obj) {
   // because a child listed twice in one guardian map would otherwise put the same tag on twice.
   const seen = new Set();
   for (const g of (Array.isArray(rec.guardians) ? rec.guardians : [])) {
-    const h = String(g || '').trim().toLowerCase();
+    // ⚠ `typeof === 'string'` FIRST, matching writeCheckin in src/fellowship.src.js and checkinGuardianPubs
+    // in the shared module BYTE FOR BYTE — see the note there on why the three must agree. JS stringifies a
+    // ONE-ELEMENT ARRAY to its element, so `String(['<64 hex>'])` is 64 hex characters and a bare
+    // String()+regex admitted a LIST where a pubkey belongs. Narrowed 2026-09-11: `guardianPubsOf` in
+    // app/stew-dashboard.jsx reads `guardians[pub]`, an array of pubkey STRINGS, so nothing legitimate is
+    // dropped — and the guardian copy sealed beside this tag must be sealed to exactly the same list.
+    const h = (typeof g === 'string' ? g : '').trim().toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(h) || seen.has(h)) continue;
     seen.add(h);
     out.push(['p', h]);
@@ -705,6 +712,39 @@ const _encSealedCopies = (kind, obj) => {
   // encSubscribe does `byId.set(id, { id, ...obj, ts })` and a body whose `id` disagreed with its address
   // would FORK the record: the same child present on one row and collected on another.
   try { return [['ck', nip44e(JSON.stringify(obj), _unhex(keyHex))]]; } catch (e) { return []; }
+};
+// ── AND THE GUARDIAN'S COPY — ONE PER ['p'] TAG, SEALED TO THAT PARENT ────────────────────────────────────
+//
+// STEP 2 of the parent surface. See `checkinGuardianCopies` in scripts/checkin-role-source.mjs for what the
+// tag is, why it is ADDITIVE rather than a reshaped `content`, and why every `gk` must be tried on the way
+// back out. The rules live there so the console, the worker's phone and the relay cannot disagree about them.
+//
+// ⚠ IT DOES NOT SHARE _encSealedCopies' EARLY RETURN, AND THAT IS THE WHOLE REASON IT IS A SEPARATE
+// FUNCTION. `_encSealedCopies` answers [] the moment a record has no `session` — "an ordinary Sunday with no
+// service document", which is a real and common church, and a perfectly ordinary record. Deriving the
+// guardian copy inside that branch would have cost every such church its PARENTS' pickup codes while the
+// church's own register carried on working, with nothing on any screen to look at. A parent's copy turns on
+// a GUARDIAN, never on a session, and this reads `obj.guardians` alone.
+//
+// SEALED BY WHOEVER IS ACTING. `sk` is the signing key of this console — the church key for an owner, the
+// steward's own key for a delegate — and encPublish signs the event with the same one, so the parent's
+// `nip44ck(theirSk, e.pubkey)` derives the identical conversation key. Deriving it from `churchSk` instead
+// would produce a copy no parent could ever open on a delegated console, and would fail silently.
+//
+// ONE DERIVATION, INSIDE encPublish, for exactly the argument _encSealedCopies makes above it:
+// `trinityone/checkin:` HAS TWO WRITERS on this console — publishCheckin() and migrateCheckinKeys(), the
+// latter republishing existing bodies on a 1200 ms timer with no user action. A migration that did not
+// re-emit this tag would SILENTLY STRIP every parent's copy off every record it re-keyed.
+//
+// A NO-OP FOR EVERY OTHER KIND, like the two derivations beside it: encPublish is shared with five other
+// call sites (app/stew-finance.jsx x4, src/steward-manna.src.js) and a finance document has no guardians.
+//
+// AND IT NEVER BLOCKS: checkinGuardianCopies swallows a per-guardian failure and answers [] for a record
+// with no guardians at all, which is the ordinary shape of most of this corpus.
+const _encGuardianCopies = (kind, obj) => {
+  if (kind !== 'checkin') return [];
+  if (!sk) return [];
+  return checkinGuardianCopies(obj, (plain, guardianPub) => nip44e(plain, nip44ck(sk, guardianPub)));
 };
 // WHICH SESSION KEYS THIS CONSOLE HOLDS — session id → 32 bytes of hex.
 //
@@ -6383,14 +6423,26 @@ window.Steward = {
     // measured reason this is an ADDED TAG and not a reshaped `content`, and for why it lives here rather
     // than in either of the two writers.
     const sealed = _encSealedCopies(kind || 'finance', obj);
+    // AND THE GUARDIAN'S COPY, one per ['p']-tagged parent — STEP 2 of the parent surface. Derived from the
+    // record's own `guardians`, which is the same field `_encCleartextTags` turned into those ['p'] tags a
+    // line above, so a parent is never sealed a copy of a record the relay will not serve them and a
+    // p-tagged parent is never left a record they cannot open. Deliberately NOT inside _encSealedCopies:
+    // that one gives up when a record has no session, and a church with no service document must still give
+    // its parents their pickup codes.
+    const guarded = _encGuardianCopies(kind || 'finance', obj);
     // THE MARKER FOLLOWS THE COPY, and only the copy. `['enc','2']` says "there is a second ciphertext in
     // the tags", after the ['enc','care1'] precedent in src/fellowship.src.js. A record with no second copy
     // stays `['enc','1']`, so it is byte-identical to what this writer produced yesterday — which is what
     // makes a mixed corpus honest rather than merely tolerated. THE MARKER RESCUES NO OLD READER: only
     // leaving `content` alone does that, and nothing in this codebase reads `enc` on a check-in path (the
     // one exact `enc === '1'` test is over kind-1 group messages).
-    const encVer = sealed.length ? '2' : '1';
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', dtag], ['t', NET], ['enc', encVer], ...extra, ...sealed], content }));
+    // THE MARKER COUNTS EVERY SECOND CIPHERTEXT IN THE TAGS, `gk` included — it says "there is one", not
+    // "there is a helper's one". A record with a guardian copy and no session key (the no-service-document
+    // church) really does carry a second ciphertext, and calling that `enc:1` would be a false statement in
+    // a signed document. Nothing in this codebase READS `enc` on a check-in path (the one exact `enc === '1'`
+    // test is over kind-1 group messages), so this rescues no reader and misleads none either.
+    const encVer = (sealed.length || guarded.length) ? '2' : '1';
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', dtag], ['t', NET], ['enc', encVer], ...extra, ...sealed, ...guarded], content }));
   },
   encRemove(dtag) {                    // tombstone an encrypted doc
     if (!sk) return Promise.resolve(null);

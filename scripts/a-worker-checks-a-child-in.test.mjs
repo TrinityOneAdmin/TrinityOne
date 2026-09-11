@@ -28,7 +28,8 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { requireFreePort } from './test-ports.mjs';
 import { fnBody } from './test-slice.mjs';
-import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE, readCheckinHelperCopy } from './checkin-role-source.mjs';
+import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE, readCheckinHelperCopy,
+         checkinGuardianPubs, checkinGuardianCopies, readCheckinGuardianCopy } from './checkin-role-source.mjs';
 import { D } from './trinity-doc-types.mjs';
 
 const PORT = 8934;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs; checked free by requireFreePort
@@ -106,6 +107,11 @@ function liftWriteCheckin(actor, keys /* sid -> hex */) {
     toPub: (x) => x, sk: actor.sk, pub: actor.pub,
     _ckMemKeyGet: (cp, sid) => keys[sid] || '',
     encrypt: (pt, k) => nip44.encrypt(pt, k), _unhex: unhex,
+    // STEP 2 of the parent surface: the writer seals a ['gk'] copy per guardian. THE REAL SHARED FUNCTION,
+    // not a stub — it is the derivation under test, and `getConversationKey` is the bundle's spelling of the
+    // nip44 pair it seals with.
+    getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
+    checkinGuardianCopies,
     finalizeEvent2: (t, s) => finalizeEvent(t, s),
     CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [],
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
@@ -150,6 +156,10 @@ function liftReleaseCheckin(actor, keys) {
     toPub: (x) => x, sk: actor.sk, pub: actor.pub,
     _ckMemKeyGet: (cp, sid) => keys[sid] || '',
     encrypt: (pt, k) => nip44.encrypt(pt, k), _unhex: unhex,
+    // STEP 2: a release now carries the guardian's ['p'] tag and their ['gk'] copy, so a parent learns their
+    // child was checked out from a document they can read. Both shared functions are the real ones.
+    getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
+    checkinGuardianPubs, checkinGuardianCopies,
     finalizeEvent2: (t, s) => finalizeEvent(t, s),
     CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [],
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },

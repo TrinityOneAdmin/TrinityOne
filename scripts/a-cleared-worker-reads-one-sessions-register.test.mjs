@@ -39,7 +39,8 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { fnBody, stmt } from './test-slice.mjs';
 import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE,
          readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
-         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide } from './checkin-role-source.mjs';
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide,
+         checkinGuardianPubs } from './checkin-role-source.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD    = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -176,6 +177,10 @@ function phone(who, profiles = {}) {
     _churchVoice: (cp, rec) => (rec && rec._by) === church.pub,
     readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf, readCheckinPermission, permissionAdmits,
     roomCode, roomCodesCollide,
+    // STEP 2 of the parent surface: openRec now normalises the record's `guardians` through the SAME shared
+    // function both writers seal by, so the checkout a worker writes from a row can carry the parent's copy.
+    // The real one, not a stub — a stub here would answer the question the sibling test file asks.
+    checkinGuardianPubs,
     // slice B: the reader now MIRRORS each session key it unwraps into the module-level _ckMemberKeys map, so
     // the WRITER (writeCheckin) can reach it. This file tests the READER, not the writer, so these are no-ops —
     // the reader's own `keys` closure is what every assertion below reads.

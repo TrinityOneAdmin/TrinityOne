@@ -6509,6 +6509,29 @@
       return null;
     }
   }
+  function checkinGuardianPubs(rec) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const g of Array.isArray(rec && rec.guardians) ? rec.guardians : []) {
+      const h = (typeof g === "string" ? g : "").trim().toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(h) || seen.has(h)) continue;
+      seen.add(h);
+      out.push(h);
+    }
+    return out;
+  }
+  function checkinGuardianCopies(rec, seal) {
+    if (typeof seal !== "function") return [];
+    const out = [];
+    for (const g of checkinGuardianPubs(rec)) {
+      try {
+        const ct = seal(JSON.stringify(rec), g);
+        if (ct) out.push(["gk", String(ct)]);
+      } catch {
+      }
+    }
+    return out;
+  }
   function checkinSessionOf(tags) {
     if (!Array.isArray(tags)) return "";
     return String((tags.find((t) => Array.isArray(t) && t[0] === "session") || [])[1] || "").trim();
@@ -11501,7 +11524,12 @@
           // slice C: a RELEASE record carries `rel` (the check-in it collects) and `manual` (by hand, no code).
           // Typed here for the same reason as the rest — a hostile body must not reach a row as an object.
           rel: _str(obj.rel),
-          manual: obj.manual === true
+          manual: obj.manual === true,
+          // STEP 2: the guardians this record names, normalised by the SAME shared function the writers seal
+          // by, so the checkout the worker writes from this row can carry the parent's ['p'] tag and their
+          // ['gk'] copy. Typed here with everything else — a sealed body is a helper's to write (F-B), so
+          // `guardians: {…}` must reach neither a tag nor a cipher.
+          guardians: checkinGuardianPubs(obj)
         });
         return "ok";
       };
@@ -11863,6 +11891,7 @@
         session: sid,
         guardians: guardian ? [guardian] : []
       };
+      const gks = checkinGuardianCopies(body, (plain, gp) => encrypt(plain, getConversationKey(sk, gp)));
       let ck, sentinel;
       try {
         ck = encrypt(JSON.stringify(body), _unhex(keyHex));
@@ -11882,7 +11911,8 @@
           // EXACTLY THE ONE PUBKEY THE SIGNED ARRIVAL DELIVERED, and never a second. A list here would be a
           // guess about a family, and a guess is what this writer has no map to make.
           ...guardian ? [["p", guardian]] : [],
-          ["ck", ck]
+          ["ck", ck],
+          ...gks
         ],
         content: sentinel
       }, sk);
@@ -11919,7 +11949,9 @@
       const keyHex = _ckMemKeyGet(cp, sid);
       if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: "no-key" };
       const id = "cr" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-      const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1e3), manual: o.manual === true, by: pub };
+      const gpubs = checkinGuardianPubs(o);
+      const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1e3), manual: o.manual === true, by: pub, guardians: gpubs };
+      const gks = checkinGuardianCopies(body, (plain, gp) => encrypt(plain, getConversationKey(sk, gp)));
       let ck, sentinel;
       try {
         ck = encrypt(JSON.stringify(body), _unhex(keyHex));
@@ -11930,7 +11962,17 @@
       const evt = finalizeEvent2({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
-        tags: [["d", CHECKIN_D + id], ["t", NET], ["church", cp], ["session", sid], ["rel", rel], ["enc", "2"], ["ck", ck]],
+        tags: [
+          ["d", CHECKIN_D + id],
+          ["t", NET],
+          ["church", cp],
+          ["session", sid],
+          ["rel", rel],
+          ["enc", "2"],
+          ...gpubs.map((h) => ["p", h]),
+          ["ck", ck],
+          ...gks
+        ],
         content: sentinel
       }, sk);
       try {

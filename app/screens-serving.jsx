@@ -649,7 +649,12 @@ function KidsRow({ rec, ctx, open, onToggle }) {
     if (busy) return;
     setBusy(true); setErr('');
     let res;
-    try { res = (ctx && ctx.checkinRelease) ? await ctx.checkinRelease({ session: rec.session, rel: rec.id, manual: !!manual }) : { ok: false }; }
+    // `guardians` RIDES ALONG — STEP 2 of the parent surface. The release is a separate document (F-B: a
+    // helper never rewrites the church's record), so a parent learns their child was checked out ONLY from a
+    // release they can read; that needs the ['p'] tag and the ['gk'] copy, and both come from the guardians
+    // this row names. Without it the parent's screen shows a child present for ever. The reader has already
+    // normalised this list to 64-hex (subscribeCheckinRegister's openRec), and the writer normalises again.
+    try { res = (ctx && ctx.checkinRelease) ? await ctx.checkinRelease({ session: rec.session, rel: rec.id, manual: !!manual, guardians: rec.guardians }) : { ok: false }; }
     catch (e) { res = { ok: false }; }
     setBusy(false);
     if (res && res.ok) { setMode(''); setEntry(''); }   // the collected row arrives from the relay and folds

@@ -39,10 +39,13 @@
 //   • `helperKeyFor()` has no product caller anywhere in src/ or app/. — NO LONGER TRUE of the reader chain:
 //     `readCheckinHelperCopy` beside it is called by the console's own encSubscribe, and both are exercised
 //     here against a record a real gateway stored and served.
-//   • a GUARDIAN holds neither key, so a parent served their own child's record can open nothing. — STILL
-//     TRUE, and deliberately: that is piece 2, which has an open owner decision attached (a guardian-readable
-//     copy turns inert blobs into readable safeguarding records cached in phone storage). No ['gk'] tag is
-//     emitted, and the guardian tests below still assert DELIVERY only.
+//   • a GUARDIAN holds neither key, so a parent served their own child's record can open nothing. — NO LONGER
+//     TRUE as of 2026-09-11, STEP 2 of the parent surface. A THIRD copy rides in one ['gk'] tag per
+//     ['p']-tagged guardian, sealed to that parent's own pubkey, and the two tests at the foot of this file
+//     prove a guardian opens it after this relay has stored and served it — while the worker, the
+//     safeguarding lead, another family's guardian and an ordinary member all open nothing from it.
+//     NO READ GATE CHANGED FOR IT: canRead's CHECKIN_D branch has served a ['p']-tagged pubkey since the
+//     feature shipped, which the guardian tests below have always asserted. Delivery was never the gap.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -56,7 +59,8 @@ import { v2 as nip44 } from 'nostr-tools/nip44';
 import { requireFreePort } from './test-ports.mjs';
 import { fnBody, stmt } from './test-slice.mjs';
 import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE,
-         readHelperGrant, helperKeyFor, readCheckinHelperCopy } from './checkin-role-source.mjs';
+         readHelperGrant, helperKeyFor, readCheckinHelperCopy,
+         checkinGuardianCopies, readCheckinGuardianCopy } from './checkin-role-source.mjs';
 import { D } from './trinity-doc-types.mjs';
 
 const PORT = 8908;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
@@ -155,6 +159,13 @@ function shippedWriter() {
   // (`_ckSessionKeys`, `nip44e`, `_unhex`), so it is evaluated with the scope.
   stubs._encSealedCopies = new Function('scope',
     'with (scope) { return (' + stmt(VENDOR, 'var _encSealedCopies = (kind, obj) =>', '_encSealedCopies')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(scope);
+  // AND THE GUARDIAN'S-COPY BUILDER — STEP 2 of the parent surface, lifted the same way and for the same
+  // reason. It closes over `sk` and the bundle's nip44 pair, and it calls the shared `checkinGuardianCopies`
+  // (inlined into the bundle by esbuild under its own name), so that too is reached through the scope.
+  stubs.checkinGuardianCopies = checkinGuardianCopies;
+  stubs._encGuardianCopies = new Function('scope',
+    'with (scope) { return (' + stmt(VENDOR, 'var _encGuardianCopies = (kind, obj) =>', '_encGuardianCopies')
       .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(scope);
   const lift = (sig, name) => {
     const body = fnBody(VENDOR, sig, name);
@@ -412,4 +423,58 @@ test('THE RECORD EVERY CHURCH HOLDS TODAY — no session, no guardian — reache
     'a record naming no guardian was served to a guardian anyway');
   assert.equal((await asks(sgLead, { kinds: [30078], '#d': [D.CHECKIN + 'live-5'] })).length, 1,
     'the safeguarding lead cannot read an untagged record either, which would break every register in use');
+});
+
+// ── STEP 2 OF THE PARENT SURFACE: SERVED *AND* OPENABLE ───────────────────────────────────────────────────
+// Delivery was never the question — `canRead`'s CHECKIN_D branch has served a ['p']-tagged pubkey since the
+// feature shipped, and the test above proves it against this running gateway. What a parent has never had is
+// a copy they hold the key to. These two drive the whole chain over a REAL relay: the shipped console writes
+// it, the box stores and serves it, and the parent opens it with nothing but their own secret key.
+//
+// NO GATE CHANGED FOR ANY OF THIS. If a future edit needs one, that is the signal to stop.
+const opensAs = (who, evt) => readCheckinGuardianCopy(evt.tags,
+  (ct) => nip44.decrypt(ct, nip44.utils.getConversationKey(who.sk, evt.pubkey)));
+
+test('THE GUARDIAN OPENS THE RECORD THE RELAY SERVED HER — and no other reader of it can', async () => {
+  await putShipped({ id: 'live-6', childName: 'Esther Ncube', code: '9317', session: S_NOW, guardians: [gina.pub] });
+  await sleep(200);
+  const [served] = await asks(gina, { kinds: [30078], '#d': [D.CHECKIN + 'live-6'] });
+  assert.ok(served, 're-anchor: the relay no longer serves a guardian her own child\'s record at all');
+  assert.ok(served.tags.some(t => t[0] === 'gk'),
+    'THE RECORD CAME OFF A REAL RELAY WITH NO GUARDIAN COPY ON IT. The tag is inside the event id, so a box ' +
+    'cannot strip it undetected — which means the writer did not put one there.');
+
+  assert.equal(opensAs(gina, served)?.code, '9317',
+    'THE GUARDIAN WAS SERVED HER OWN CHILD\'S RECORD AND COULD NOT OPEN IT. That is the state the parent ' +
+    'surface existed to end: served ciphertext, no key, and a screen that can only say "ask at the desk".');
+  assert.equal(opensAs(gina, served).childName, 'Esther Ncube');
+
+  // AND EVERY OTHER PERSON THIS BOX SERVES THE SAME RECORD GAINS NOTHING FROM THE GUARDIAN'S COPY. Ada (the
+  // cleared worker) and the safeguarding lead both read this record — through the ['ck'] copy and through
+  // `content` — and neither may read it through a parent's.
+  assert.equal(opensAs(ada, served), null, 'the cleared worker\'s key opened a GUARDIAN\'s copy');
+  assert.equal(opensAs(sgLead, served), null, 'the safeguarding lead\'s key opened a GUARDIAN\'s copy');
+  assert.equal(opensAs(hank, served), null, 'another family\'s guardian opened this child\'s copy');
+  assert.equal(opensAs(cara, served), null, 'an ordinary member opened this child\'s copy');
+  // …and `content` is still the ring's alone, on a record that has been through the box.
+  assert.equal(JSON.parse(nip44.decrypt(served.content, unhex(SG_CAP_KEY))).code, '9317',
+    'the safeguarding ring lost `content` on a record carrying a guardian copy');
+});
+
+test('A CHURCH WITH NO SERVICE DOCUMENT still hands its parents the pickup code', async () => {
+  // `_encSealedCopies` gives up the moment a record has no session ("an ordinary Sunday with no service
+  // document" — its own words). The guardian copy deliberately does not share that early return, or every
+  // such church would silently lose its PARENTS' codes while its own register carried on working.
+  await putShipped({ id: 'live-7', childName: 'A Child', code: '2280', guardians: [gina.pub] });
+  await sleep(200);
+  const [served] = await asks(gina, { kinds: [30078], '#d': [D.CHECKIN + 'live-7'] });
+  assert.ok(served, "the relay refused a guardian a record that names her but no session — the ['p'] rule " +
+    'is independent of the session rule and must stay so');
+  assert.equal(served.tags.filter(t => t[0] === 'session').length, 0,
+    're-anchor: this record DOES carry a session, so it is not testing the no-service-document church');
+  assert.equal(served.tags.filter(t => t[0] === 'ck').length, 0,
+    're-anchor: the helper copy survived a record with no session, so the early return this is about is gone');
+  assert.equal(opensAs(gina, served)?.code, '2280',
+    'A CHURCH WITH NO SERVICE DOCUMENT LOST ITS PARENTS\' PICKUP CODES — the guardian copy was derived ' +
+    'inside the session\'s early return.');
 });

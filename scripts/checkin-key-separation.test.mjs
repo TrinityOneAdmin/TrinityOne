@@ -23,7 +23,8 @@ import { fnBody, stripComments, stmt } from './test-slice.mjs';
 // THE SHIPPED GRANT BUILDER AND THE SHIPPED READERS, out of the module esbuild inlines into
 // vendor/steward.js. The acceptance tests at the foot of this file drive the whole double-lock chain, and a
 // test-local envelope or a test-local `ck` reader would be the test answering the question it is named after.
-import { buildHelperGrant, readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
+import { checkinGuardianCopies, checkinGuardianPubs, readCheckinGuardianCopy,
+         buildHelperGrant, readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
          GRANT_SOURCE } from './checkin-role-source.mjs';
 import { D } from './trinity-doc-types.mjs';
 
@@ -240,6 +241,15 @@ function publishedCheckin({ finance, checkin, ownerKey }) {
   // (`_ckSessionKeys`, `nip44e`, `_unhex`), so it is evaluated with the scope.
   stubs._encSealedCopies = new Function('scope',
     'with (scope) { return (' + stmt(VENDOR, 'var _encSealedCopies = (kind, obj) =>', '_encSealedCopies')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(scope);
+  // AND THE GUARDIAN'S-COPY BUILDER — STEP 2 of the parent surface, lifted for the same reason as the two
+  // above. It is deliberately NOT part of _encSealedCopies: that one gives up the moment a record has no
+  // session, and a church with no service document must still hand its parents their pickup code. It closes
+  // over `sk`, the bundle's nip44 pair and the shared `checkinGuardianCopies`, so it is evaluated with the
+  // scope and that shared function is reachable through it.
+  stubs.checkinGuardianCopies = checkinGuardianCopies;
+  stubs._encGuardianCopies = new Function('scope',
+    'with (scope) { return (' + stmt(VENDOR, 'var _encGuardianCopies = (kind, obj) =>', '_encGuardianCopies')
       .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(scope);
   // All three lifted together into ONE object, so publishCheckin's `window.Steward.encPublish` really is the
   // shipped encPublish, and encPublish's `encSeal` really is the shipped encSeal.

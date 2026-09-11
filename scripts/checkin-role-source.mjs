@@ -795,6 +795,110 @@ export function readCheckinHelperCopy(tags, keyHex, unseal) {
   } catch { return null; }
 }
 
+// ── THE GUARDIAN'S COPY OF A CHECK-IN RECORD — THE THIRD LOCK ─────────────────────────────────────────────
+//
+// STEP 2 of the parent surface, and the "third round" of reference/SCOPE-CHECKIN-SEALING-2026-09-10.md. A
+// record's `content` is sealed to the church's safeguarding ring and its `['ck']` copy to the session key a
+// worker holds. A PARENT holds NEITHER. The relay has always SERVED them the record (canRead's CHECKIN_D
+// branch returns true for a `['p']`-tagged pubkey) — they have simply never been able to open it. This is the
+// copy that makes the served record readable, and nothing here changes who is served what.
+//
+// ADDITIVE, EXACTLY AS `ck` IS, and for the same measured reason: `content` DOES NOT CHANGE. An empty or
+// reshaped `content` is the TOMBSTONE convention (`checkinTombstone` in the relay is `!e.content`, and both
+// register readers treat an empty content as a withdrawal), so a record whose body moved into the tags would
+// read as a DELETION at the box and on every phone. The worker's writer already pays for that lesson with a
+// non-empty sentinel; this adds a tag and touches `content` not at all.
+//
+// ── ONE TAG PER GUARDIAN, AND ONLY FOR A PUBKEY THE RECORD ALREADY NAMES ──────────────────────────────────
+// A child with two parents gets TWO `['gk']` tags, one sealed to each. That is the whole reason the reader
+// below iterates instead of taking the first: `tags.find(t => t[0] === 'gk')` returns the mother's copy to
+// the father, his own copy is never tried, and he reads nothing while she reads the code — a failure that
+// looks exactly like "the app does not work for me" and nothing like a bug.
+//
+// AND NEVER A GUESS. The guardians come from the record's own `guardians` list, which is the SAME list
+// `_encCleartextTags` turns into `['p']` tags — normalised identically here so the two can never disagree
+// about who is a guardian of this record. A worker's phone holds no `guardians:` map at all (the relay
+// withholds it from ordinary members, on purpose) and her writer passes exactly the one pubkey a SIGNED
+// ARRIVAL delivered. Nothing in this module invents a guardian.
+//
+// WHAT THE TAG DISCLOSES, stated rather than glossed: a relay operator already sees the `['p']` tag naming
+// this guardian. A `['gk']` beside it adds one opaque ciphertext per guardian — so the marginal disclosure is
+// the COUNT of guardians on a record, which the `['p']` tags already state exactly.
+export function checkinGuardianPubs(rec) {
+  // BYTE-FOR-BYTE THE NORMALISATION `_encCleartextTags` APPLIES TO THE SAME FIELD — trim, lower-case,
+  // 64-hex only, de-duplicated, order preserved. Written once here and asserted equal to the console's own
+  // ['p'] list by test, because a gk sealed to a pubkey that is NOT p-tagged would be a copy the relay never
+  // serves its recipient (unopenable and invisible), and a p-tag with no gk is a parent who is told nothing.
+  const out = [];
+  const seen = new Set();
+  for (const g of (Array.isArray(rec && rec.guardians) ? rec.guardians : [])) {
+    // ⚠ `typeof === 'string'` FIRST, and it is not belt-and-braces. JS stringifies a ONE-ELEMENT ARRAY to
+    // its element, so `String(['<64 hex>'])` is 64 hex characters and a bare String()+regex admits a LIST
+    // where a pubkey belongs — the trap writeCheckin's own guardian check was fixed for on 2026-09-11. A
+    // release's guardians come from a sealed body a helper may have written (F-B), so this is reachable.
+    const h = (typeof g === 'string' ? g : '').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(h) || seen.has(h)) continue;
+    seen.add(h);
+    out.push(h);
+  }
+  return out;
+}
+
+// SEAL ONE COPY OF `rec` TO EACH OF ITS GUARDIANS. `seal(plaintext, guardianPubHex)` is the caller's nip44 —
+// the console's and the worker's bundles spell their crypto differently, and the direction (a conversation
+// key between the AUTHOR's secret and the GUARDIAN's pubkey) is the caller's to get right; the tests drive
+// both shipped writers rather than this function alone.
+//
+// ⚠ IT NEVER BLOCKS AND NEVER THROWS. A seal that fails for one guardian costs that guardian their copy and
+// nothing else: reference/DOMAIN.md and design §10 — nothing in this feature may stand between a child and
+// the desk, so a record with no `gk` at all is a complete record that a parent simply cannot open. That is
+// the ordinary state of every record written before today, and the reader says so in words.
+//
+// ⚠ IT IS DELIBERATELY INDEPENDENT OF THE SESSION. `_encSealedCopies` returns [] the moment a record has no
+// `session` — "an ordinary Sunday with no service document", which is a real and common church — and deriving
+// the guardian copy inside that path would silently cost every such church its parents' pickup codes while
+// the worker's own copy carried on working. A parent's copy depends on a GUARDIAN, never on a session.
+export function checkinGuardianCopies(rec, seal) {
+  if (typeof seal !== 'function') return [];
+  const out = [];
+  for (const g of checkinGuardianPubs(rec)) {
+    try {
+      const ct = seal(JSON.stringify(rec), g);
+      if (ct) out.push(['gk', String(ct)]);
+    } catch { /* one guardian's copy, never the record */ }
+  }
+  return out;
+}
+
+// OPEN MY OWN GUARDIAN COPY, IF ONE OF THEM IS MINE. `unseal(ct)` is the caller's nip44 decrypt under the
+// conversation key between the READER's secret and the record AUTHOR's pubkey; it is expected to throw for a
+// ciphertext that is not ours, which is how "not mine" is told from "mine and corrupt".
+//
+// ⚠ EVERY `gk` TAG IS TRIED, WHICH IS THE OPPOSITE RULE TO readCheckinHelperCopy ABOVE, AND THE DIFFERENCE IS
+// THE POINT. A `ck` copy is ONE copy under a key a whole room shares, so trying several would let an author
+// offer alternatives and the first is taken. A `gk` copy is one copy PER PERSON under a key only that person
+// holds, so "the first one" is a coin toss between a child's two parents: the mother reads the pickup code
+// and the father reads nothing. Only a ciphertext sealed to MY key can open at all, so iterating widens
+// nothing — it is the only way the second parent is ever served.
+//
+// RETURNS null FOR ANYTHING IT CANNOT VOUCH FOR, and a caller must read null as "no copy for me" and NEVER as
+// "no record": the record exists, the church can read it, and the honest thing for a screen to say is that
+// the code must be asked for at the desk.
+export function readCheckinGuardianCopy(tags, unseal) {
+  if (!Array.isArray(tags)) return null;
+  if (typeof unseal !== 'function') return null;
+  for (const t of tags) {
+    if (!Array.isArray(t) || t[0] !== 'gk' || !t[1]) continue;
+    try {
+      const obj = JSON.parse(unseal(String(t[1])));
+      // A JSON string or array parses fine and would spread into a row as characters — the same refusal
+      // readCheckinHelperCopy makes, for the same reason.
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+    } catch { /* not mine, or not a body — try the next one */ }
+  }
+  return null;
+}
+
 // WHICH SESSION A RECORD BELONGS TO, read from its CLEARTEXT tag rather than from the sealed body.
 //
 // This is the one thing a reader must know BEFORE it can open anything: which session key to reach for. The

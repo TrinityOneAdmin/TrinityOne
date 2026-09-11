@@ -29,7 +29,8 @@ import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-r
 // and `readCheckinHelperCopy` had NO product caller anywhere in src/ or app/ before this; their only in-repo
 // caller was a test, which CLAUDE.md rule 1 says is not a feature.
 import { readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
-         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide } from '../scripts/checkin-role-source.mjs';
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide,
+         checkinGuardianPubs, checkinGuardianCopies } from '../scripts/checkin-role-source.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -4930,7 +4931,12 @@ window.Fellowship = {
         childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out),
         // slice C: a RELEASE record carries `rel` (the check-in it collects) and `manual` (by hand, no code).
         // Typed here for the same reason as the rest — a hostile body must not reach a row as an object.
-        rel: _str(obj.rel), manual: obj.manual === true });
+        rel: _str(obj.rel), manual: obj.manual === true,
+        // STEP 2: the guardians this record names, normalised by the SAME shared function the writers seal
+        // by, so the checkout the worker writes from this row can carry the parent's ['p'] tag and their
+        // ['gk'] copy. Typed here with everything else — a sealed body is a helper's to write (F-B), so
+        // `guardians: {…}` must reach neither a tag nor a cipher.
+        guardians: checkinGuardianPubs(obj) });
       return 'ok';
     };
 
@@ -5304,6 +5310,16 @@ window.Fellowship = {
       code: String(o.code || '').trim(), room: String(o.room || '').trim(),
       note: String(o.note || '').trim(), session: sid, guardians: guardian ? [guardian] : [],
     };
+    // THE PARENT'S OWN COPY — STEP 2 of the parent surface. One ['gk'] per guardian named in the body,
+    // which on this writer is EXACTLY the one pubkey a signed arrival delivered and never a guess (see the
+    // note above on why this phone holds no guardian map). Sealed under nip44ck(mySk, guardianPub), which
+    // the parent's phone re-derives as nip44ck(theirSk, e.pubkey) — the conversation key is symmetric.
+    // Derived from `body`, so it carries the same child name, pickup code and times the worker sees.
+    //
+    // IT IS NOT INSIDE THE try BELOW: checkinGuardianCopies swallows a per-guardian failure and answers []
+    // rather than throwing, because a parent's copy failing must cost that parent their copy and never cost
+    // the CHILD their check-in (reference/DOMAIN.md, design §10). A record with no gk is a complete record.
+    const gks = checkinGuardianCopies(body, (plain, gp) => nip44e(plain, nip44ck(sk, gp)));
     let ck, sentinel;
     try {
       ck = nip44e(JSON.stringify(body), _unhex(keyHex));
@@ -5323,7 +5339,7 @@ window.Fellowship = {
       tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['enc', '2'],
              // EXACTLY THE ONE PUBKEY THE SIGNED ARRIVAL DELIVERED, and never a second. A list here would be a
              // guess about a family, and a guess is what this writer has no map to make.
-             ...(guardian ? [['p', guardian]] : []), ['ck', ck]],
+             ...(guardian ? [['p', guardian]] : []), ['ck', ck], ...gks],
       content: sentinel }, sk);
     try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
     return { ok: true, id };
@@ -5355,15 +5371,32 @@ window.Fellowship = {
     const keyHex = _ckMemKeyGet(cp, sid);
     if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: 'no-key' };   // fail LOUD, same as writeCheckin
     const id = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-    const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1000), manual: o.manual === true, by: pub };
+    // THE GUARDIANS OF THE CHILD BEING CHECKED OUT, carried through from the check-in row the worker is
+    // releasing — normalised by the SAME shared function the tags and the seal use, so a hostile sealed body
+    // (`guardians: [{...}]`, `guardians: 'npub1…'`) reaches neither a tag nor a cipher. §7 of the design:
+    // a manual release must be "visible to the guardian afterwards", and the scope doc's KNOT 2 names this
+    // ['p'] tag for exactly that.
+    //
+    // ⚠ WITHOUT THIS A PARENT'S SCREEN SHOWS A CHILD PRESENT FOR EVER. A guardian is never served a
+    // tombstone, and a worker's checkout is a SEPARATE document rather than an edit of the check-in (F-B), so
+    // "collected" can only reach a parent as a release THEY can read. That is the known consequence the scope
+    // doc says to carry, and this is where it is paid for.
+    const gpubs = checkinGuardianPubs(o);
+    const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1000), manual: o.manual === true, by: pub, guardians: gpubs };
+    // One copy per guardian, same derivation as writeCheckin's. Outside the try for the same reason: a
+    // parent's copy failing must never be the thing that stops a child being signed out of a room.
+    const gks = checkinGuardianCopies(body, (plain, gp) => nip44e(plain, nip44ck(sk, gp)));
     let ck, sentinel;
     try {
       ck = nip44e(JSON.stringify(body), _unhex(keyHex));
       sentinel = nip44e(JSON.stringify({ enc: 2 }), _unhex(keyHex));   // non-empty, or the relay reads it as a tombstone (see writeCheckin)
     } catch (e) { return { ok: false, reason: 'seal-failed' }; }
-    // A ['rel'] tag routes the reader's fold; content is the sentinel, NOT a ring copy.
+    // A ['rel'] tag routes the reader's fold; ['p'] is what makes canRead's CHECKIN_D branch serve this
+    // release to the parent it names (that branch is UNCHANGED — it has always served a p-tagged pubkey);
+    // content is the sentinel, NOT a ring copy.
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
-      tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['rel', rel], ['enc', '2'], ['ck', ck]],
+      tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['rel', rel], ['enc', '2'],
+             ...gpubs.map(h => ['p', h]), ['ck', ck], ...gks],
       content: sentinel }, sk);
     try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
     return { ok: true, id };
