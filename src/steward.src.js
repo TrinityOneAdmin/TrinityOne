@@ -846,9 +846,20 @@ const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
 // clearance back-fill has no business running at all in this view.
 const _viewingNetwork = () => pub !== churchPub && !actingChurch;
 
+// THE MESSAGE MUST NOT TELL A STEWARD TO WAIT, because in both known causes waiting never ends.
+//   1. A BRAND-NEW CHURCH nobody has joined. The relay's NIP-42 challenge is lazy — it is sent only when a
+//      REQ actually withheld a stored private event (gateway.mjs, `wantsSafeguard` inside the store loop).
+//      An empty church has nothing to withhold, so no challenge is ever sent and this console can never
+//      authenticate. Measured 2026-09-11 on an empty relay: 0 AUTH frames; after one member joined AND
+//      published their sealed name doc, the challenge fired at once and the write went through.
+//   2. A DROPPED SOCKET RE-OPENED BY AN ORDINARY READ OR WRITE — the console is left permanently deaf and
+//      write-locked while every health check reads green (scripts/console-relay-health.test.mjs, "A SOCKET
+//      RE-OPENED BY AN ORDINARY WRITE MUST NOT READ AS HEALTHY"; still open).
+// The old wording ended "Wait a moment and try again." A steward followed that instruction indefinitely and
+// nothing changed. Say what is true, say nothing was saved, and name the two things that actually clear it.
 function _requireTrustedView(what) {
   if (_isRelayAuthed()) return;
-  const err = new Error('Can’t save the ' + what + ' yet — this device hasn’t finished connecting to your church’s relay, so it can’t see the current list. Wait a moment and try again.');
+  const err = new Error('Couldn’t save the ' + what + ' — nothing was changed. This device hasn’t proved who it is to your church’s relay, so it can’t see the current list. Reopen the console to reconnect. If nobody has joined this church yet, it clears as soon as your first member joins.');
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: err.message } })); } catch (e) {}
   throw err;
 }
