@@ -726,14 +726,18 @@ function KidsRow({ rec, ctx, open, onToggle }) {
     </div>
   );
 }
-// A NEW PICKUP CODE — four random digits the worker writes on the child's sticker and gives the parent. It is
+// A NEW PICKUP CODE — four random digits, shown to the worker and delivered to the parent's own phone. It is
 // per-record and it is what releases the child, so it is RANDOM (unlike the room code, which names a session
 // and admits nobody). Slice B / C.
 function svNewCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
 // ── A WORKER CHECKS A CHILD IN — slice B, the write half of slice 3. ──────────────────────────────────────
 // §7: most children have no phone, so the child is NAMED here at the desk; there is no account and no picker
 // of the church's children (a worker's phone does not hold that list — the relay withholds it). She types the
-// name, the app pre-fills a pickup code she writes on the sticker, and ctx.checkinAdd seals + publishes it.
+// name, the app pre-fills the pickup code, and ctx.checkinAdd seals + publishes it. NO STICKER: the owner's
+// decision of 2026-09-11 is that the code lives on the phones — the parent reads it off their own screen (the
+// guardian copy) and the worker off the register — so nothing is written by hand. The code is still SHOWN at
+// check-in, because a worker may have to read it aloud to a parent whose phone is dead; that is the same
+// fallback the by-hand release exists for.
 //
 // IT FAILS LOUD (§8). ctx.checkinAdd returns { ok:false } when the relay refused the write or the network
 // dropped mid-session; this says so and keeps the child OFF the register rather than showing them checked in
@@ -780,7 +784,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
     setPending(null);
     if (res && res.ok) {
       // A MOMENT, then cleared for the next child, with a fresh code. The row itself appears from the relay.
-      setMsg({ ok: true, text: childName + ' checked in. Write ' + code.trim() + ' on the sticker.' });
+      setMsg({ ok: true, text: childName + ' checked in. Pickup code ' + code.trim() + '.' });
       setName(''); setCode(svNewCode()); setPicked('');
     } else {
       // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
