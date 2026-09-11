@@ -2080,21 +2080,48 @@ function carereqIdOk(e, d) {
 //   * the import loop              -- beside carereqIdOk and checkinSessionOkOnIngest
 //   * syncChurchFromPeer()         -- the cursor pull, relay-to-relay
 //   * reconcileChurchWithPeer()    -- the negentropy walk, relay-to-relay
-const ARRIVAL_ADDR_RE = /^(.+):([0-9a-f]{64})$/;
+// BOUNDED AND SPLIT AT A FIXED POSITION, which is the house discipline (ID_OWNER_RE anchors at the start with
+// a bounded quantifier; checkinHelperSid caps a session id at 128 characters and checks its charset). The
+// first version of this read `/^(.+):([0-9a-f]{64})$/`, and a LEADING `.+` is the one shape that scans: for a
+// non-matching d-tag the engine retries the 64-character tail at every split point, so a megabyte d-tag —
+// which the advertised 1 MB message cap permits — is 64M character comparisons at a door that runs before
+// anything else. Nothing here needs a search: the author half is a FIXED 64 hex at the END, so the colon's
+// position is arithmetic. Self-audit of 7285dc1, 2026-09-11.
+//
+// THE CAP is the 128-character session id checkinHelperSid admits, plus the colon and the 64 hex, plus slack.
+// An address longer than that names a session no envelope can exist for, so refusing it costs nothing.
+const ARRIVAL_ADDR_MAX = 200;
+function arrivalAddrOf(d) {
+  const rest = String(d || '').slice(CHECKINARRIVAL_D.length);
+  if (!rest || rest.length > ARRIVAL_ADDR_MAX) return null;
+  const cut = rest.length - 65;                          // ':' + 64 hex, at the end and nowhere else
+  if (cut <= 0 || rest[cut] !== ':') return null;        // cut <= 0 also refuses an address with an EMPTY session id
+  const who = rest.slice(cut + 1);
+  // ONE SPELLING, lower case, as every other pubkey rule on this box. ⚠ NO TEST REDDENS THIS LINE, and that is
+  // stated rather than papered over (CLAUDE.md rule 4). The sabotage matrix of 2026-09-11 measured it: delete
+  // it and all 20 tests stay green, because every REACHABLE caller then refuses the same address one step
+  // later by comparison — arrivalIdOk compares `who` to e.pubkey and arrivalAuthor's result is compared to
+  // `authed`, and both of those are always 64 lower-case hex, so an upper-case or junk tail simply fails to
+  // equal them. It is kept as the parser's CONTRACT rather than as a live refusal: `arrivalSid` has no such
+  // comparison behind it, so a future caller that trusted a sid parsed out of a junk address would have no
+  // second line of defence. Do not read it as a gate, and do not delete it as dead.
+  if (!/^[0-9a-f]{64}$/.test(who)) return null;
+  return { sid: rest.slice(0, cut), who };
+}
 function arrivalIdOk(e, d) {
   if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKINARRIVAL_D)) return true;
-  const m = ARRIVAL_ADDR_RE.exec(String(d).slice(CHECKINARRIVAL_D.length));
-  if (!m) return false;                                  // ONE RULE: an address that names nobody names nobody
-  return String(e.pubkey || '').toLowerCase() === m[2];  // the address names them, so only they may write here
+  const a = arrivalAddrOf(d);
+  if (!a) return false;                                  // ONE RULE: an address that names nobody names nobody
+  return String(e.pubkey || '').toLowerCase() === a.who; // the address names them, so only they may write here
 }
 // The session an arrival's ADDRESS names -- the identity half of `<sessionId>:<authorpubhex>`. Read from the
 // address rather than from the ['session'] tag, because the address is what the store keys on and the tag is
 // one more thing a writer chooses; accept() then requires the tag to AGREE, so the cleartext tag every reader
 // routes by cannot name a session other than the one the record lives at (the F1 shape, refused by shape).
-const arrivalSid = (d) => { const m = ARRIVAL_ADDR_RE.exec(String(d || '').slice(CHECKINARRIVAL_D.length)); return m ? m[1] : ''; };
+const arrivalSid = (d) => { const a = arrivalAddrOf(d); return a ? a.sid : ''; };
 // The pubkey an arrival's ADDRESS names. Only ever equal to e.pubkey on a stored event (arrivalIdOk), so
 // canRead can answer "is this yours" from the d-tag alone.
-const arrivalAuthor = (d) => { const m = ARRIVAL_ADDR_RE.exec(String(d || '').slice(CHECKINARRIVAL_D.length)); return m ? m[2] : ''; };
+const arrivalAuthor = (d) => { const a = arrivalAddrOf(d); return a ? a.who : ''; };
 function idOwnerOk(owner, e, id) {
   const cp = namedChurch(e) || e.pubkey;
   if (!owner) {

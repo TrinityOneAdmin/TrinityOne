@@ -318,6 +318,39 @@ test('AN ADDRESS THAT NAMES NOBODY IS REFUSED OUTRIGHT, not waved through', asyn
   assert.equal((await copiesOf(D.CHECKINARRIVAL + MORNING)).length, 0, 'the unowned address is on disk');
 });
 
+test('AN OVER-LONG OR MIS-SHAPED ADDRESS IS REFUSED WITHOUT A SEARCH', async () => {
+  // SELF-AUDIT OF THE PREVIOUS COMMIT, 2026-09-11. The address parser read `/^(.+):([0-9a-f]{64})$/`, and a
+  // LEADING `.+` is the one shape that scans: for a NON-matching d-tag the engine retries the 64-character
+  // tail at every split point, so a megabyte d-tag — which the advertised 1 MB message cap permits — is 64M
+  // character comparisons at a door that runs before anything else, on every ingest path. It is now split at
+  // a fixed position and capped. These are the shapes that must still be refused, and the ones a naive
+  // arithmetic split could wave through.
+  const cases = {
+    'an address longer than any real session id': D.CHECKINARRIVAL + 'x'.repeat(4000) + ':' + gina.pub,
+    'an EMPTY session id': D.CHECKINARRIVAL + ':' + gina.pub,
+    'no colon before the author at all': D.CHECKINARRIVAL + MORNING + gina.pub,
+    'an UPPER-CASE author — one spelling only': D.CHECKINARRIVAL + MORNING + ':' + gina.pub.toUpperCase(),
+    'a 63-character author': D.CHECKINARRIVAL + MORNING + ':' + gina.pub.slice(0, 63),
+    'trailing junk after the author': D.CHECKINARRIVAL + MORNING + ':' + gina.pub + 'z',
+  };
+  for (const [why, d] of Object.entries(cases)) {
+    const evt = finalizeEvent({ kind: 30078, created_at: now(),
+      tags: [['d', d], ['t', NET], ['church', church.pub], ['session', MORNING]],
+      content: selfSeal(gina, { at: now() }) }, gina.sk);
+    const [ok] = await publishAs(gina, evt);
+    assert.equal(ok, false, 'the websocket door accepted ' + why + ': ' + d.slice(0, 80));
+    // …AND THE INGEST DOOR, which runs ONLY the stateless half and is therefore where this is a claim about
+    // the parser rather than about accept()'s other refusals.
+    const [status, body] = await importAs(church, [evt]);
+    assert.equal(status, 200, '/import refused the church key');
+    assert.equal(body.invalid, 1, 'the import door accepted ' + why + ': imported=' + body.imported + ' invalid=' + body.invalid);
+  }
+  // AND THE ORDINARY ADDRESS STILL WORKS, from the same actor over the same socket — without this the six
+  // refusals above are satisfied by a parser that refuses everything.
+  const [okReal] = await publishAs(gina, arrival(gina, MORNING));
+  assert.equal(okReal, true, 'the hardened parser refuses an ordinary arrival — every refusal above is vacuous');
+});
+
 test('THE CLEARTEXT SESSION TAG MUST AGREE WITH THE ADDRESS', async () => {
   // The F1 shape, one document over. Readers route by the ['session'] tag; the store keys on the d-tag. Left
   // to disagree, an arrival living at the afternoon's address renders on the morning worker's screen.
