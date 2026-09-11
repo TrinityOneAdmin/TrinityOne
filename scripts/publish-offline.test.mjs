@@ -38,6 +38,17 @@ function realPublishAny(pool, seen) {
   assert.ok(m, 'the failure-string pattern is gone');
   const sm = B.match(/_PUB_SILENT = (\/[^;]*?\/i);/);
   assert.ok(sm, 'the silence pattern is gone — a refusal and a dead pipe are being conflated again');
+  // ⚠ A THIRD PATTERN SINCE 2026-09-11, and forgetting it here broke both tests in this file with
+  // `ReferenceError: _PUB_REFUSED is not defined`. `_publishAny` now also records, on the error it throws,
+  // whether any relay actually ANSWERED NO — so a caller can tell a settled refusal from an acknowledgement
+  // that never came. That was written for writeArrival, which told a parent their child's arrival had not
+  // sent over writes that HAD sent (measured on the Pixel).
+  //
+  // THIS IS THE SECOND CALLER LIST, and it is the one that gets forgotten: adding a module-level name to a
+  // function costs an edit in every test that SLICES that function by name and supplies its scope. The
+  // product callers were all checked and needed nothing; this file was not, and the suite said so.
+  const rm = B.match(/_PUB_REFUSED = (\/\^\([^;]*?\/i);/);
+  assert.ok(rm, 'the refusal pattern is gone — "the relay said no" and "nobody answered" are one answer again');
   // _wedgeKey/_dedupeRelays come along because _publishAny collapses two spellings of one relay before it
   // publishes: the pool refuses the duplicate with "duplicate url", and that refusal used to read as the relay
   // TALKING, wiping the stall count for the relay that had just gone quiet.
@@ -48,9 +59,9 @@ function realPublishAny(pool, seen) {
   // own file (scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs), and running the real gate here
   // would empty the list before a socket was ever opened, so these tests would pass without ever reaching the
   // code they are named after.
-  return new Function('pool', '_PUB_FAILED', '_PUB_SILENT', '_noteSendResult', 'normalizeURL2', 'WEDGE_ACK_MS',
+  return new Function('pool', '_PUB_FAILED', '_PUB_SILENT', '_PUB_REFUSED', '_noteSendResult', 'normalizeURL2', 'WEDGE_ACK_MS',
     '_netRelays', 'churchRelaysRaw', 'NO_NETWORK_RELAY', src)(
-    pool, new RegExp(m[1].slice(1, -2), 'i'), new RegExp(sm[1].slice(1, -2), 'i'),
+    pool, new RegExp(m[1].slice(1, -2), 'i'), new RegExp(sm[1].slice(1, -2), 'i'), new RegExp(rm[1].slice(1, -2), 'i'),
     (url, outcome) => { if (seen) seen.push(outcome); }, normalizeURL, 11000,
     (list) => list, () => [], 'no-network-relay');
 }
