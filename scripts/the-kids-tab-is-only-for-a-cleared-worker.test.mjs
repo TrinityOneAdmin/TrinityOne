@@ -383,10 +383,10 @@ test('NEGATIVE: cleared with no key says nothing is wrong — it does not say th
   assert.ok(tabLabels(s.tree()).includes('Kids'), 'a cleared worker has no way to find out that no key has reached her phone');
   s.press('Kids');
   const out = s.reads();
-  assert.match(out, /No session keys have reached this phone\./,
+  assert.match(out, /room isn’t ready yet\./,
     'the commonest state in this whole feature — cleared, and a console has never issued a key — has no ' +
     'honest wording. As rendered: ' + out);
-  assert.match(out, /Nothing is wrong/,
+  assert.match(out, /nothing for you to do/i,
     '"no keys" is stated as a fault. It is not one: a church whose console stays shut has cleared helpers ' +
     'holding no keys, for any Sunday, ever. As rendered: ' + out);
   assert.doesNotMatch(out, /Nobody has been checked in/,
@@ -399,10 +399,10 @@ test('NEGATIVE: served ciphertext this phone cannot open says the register is NO
   const s = serving({ ...NONE, cleared: true, keysHeld: 1, unreadable: 3, sessions: oneSession([]) });
   s.press('Kids');
   const out = s.reads();
-  assert.match(out, /3 records this phone cannot open\./,
+  assert.match(out, /3 children are checked in that you can’t see\./,
     '"refused" and "served but unreadable" are different failures and look nothing like each other from a ' +
     'phone — and this one has no wording at all. As rendered: ' + out);
-  assert.match(out, /The register is not empty\./,
+  assert.match(out, /The list isn’t empty\./,
     'the one thing a worker must be told here is missing: there ARE children checked in and this phone ' +
     'cannot show them. As rendered: ' + out);
   assert.deepEqual(s.glued(), [], JSON.stringify(s.glued()));
@@ -412,10 +412,10 @@ test('NEGATIVE: records from a session this phone holds no key for are counted, 
   const s = serving({ ...NONE, cleared: true, keysHeld: 1, foreign: 2, sessions: oneSession([]) });
   s.press('Kids');
   const out = s.reads();
-  assert.match(out, /2 records belong to another session\./,
+  assert.match(out, /2 children are in another room\./,
     'a worker is shown nothing and told nothing about records that arrived for a session she holds no key ' +
     'for. As rendered: ' + out);
-  assert.match(out, /This phone holds no key for it\./, 'the reason is not on the screen. As rendered: ' + out);
+  assert.match(out, /You don’t have access to that one\./, 'the reason is not on the screen. As rendered: ' + out);
   // AND NOT ONE NAME OR CODE OUT OF THEM. The transport never opens them; this is the screen's half of the
   // same promise, so a later change that started passing foreign rows through has somewhere to fail.
   assert.doesNotMatch(out, /Esther|Amos|4417|9081/, 'a name or a pickup code from another session reached the screen');
@@ -459,14 +459,14 @@ test('NEGATIVE: a WITHDRAWN clearance says so — and, the phone now emptied, sa
   assert.ok(tabLabels(gone.tree()).includes('Kids'), 'THE TAB VANISHED on withdrawal — nothing tells the worker what happened');
   gone.press('Kids');
   const g = gone.reads();
-  assert.match(g, /withdrawn your clearance/i, 'the withdrawal is not said. As rendered: ' + g);
-  assert.match(g, /removed from this phone/i, 'the line does not say the register was removed. As rendered: ' + g);
+  assert.match(g, /ended your access/i, 'the withdrawal is not said. As rendered: ' + g);
+  assert.match(g, /cleared from this phone/i, 'the line does not say the register was removed. As rendered: ' + g);
   assert.doesNotMatch(g, /Show code|checked in/i, 'register wording remains on an emptied phone');
   // and the raced-in shape — something still held — is listed, and the copy says so
   const s = serving({ ...NONE, withdrawn: true, keysHeld: 1, sessions: oneSession(twoKids) });
   s.press('Kids');
   const out = s.reads();
-  assert.match(out, /withdrawn your clearance/i, 'As rendered: ' + out);
+  assert.match(out, /ended your access/i, 'As rendered: ' + out);
   assert.match(out, /still held/i, 'the line does not say that what is shown is what the phone still had');
   assert.match(out, /Esther Ncube/, 'a record still held was hidden rather than listed');
   // and somebody never cleared, holding a key by the cold-start race, is told nothing of the kind
@@ -638,7 +638,7 @@ test('…and an arrival whose NAME this phone has not opened says so, rather tha
   s.press('Kids');
   const out = s.reads();
   assert.doesNotMatch(out, /aaaaaaaa/, 'a raw pubkey is being shown to a worker as though it were a name');
-  assert.match(out, /name not on this phone/i,
+  assert.match(out, /name hasn’t reached your phone/i,
     'an arrival with no resolved name says nothing about that, so the worker cannot tell "a family I know" ' +
     'from "somebody this phone has never seen". As rendered: ' + out);
   assert.deepEqual(s.glued(), [], 'copy runs together: ' + JSON.stringify(s.glued()));

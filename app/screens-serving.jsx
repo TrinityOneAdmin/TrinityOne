@@ -677,7 +677,7 @@ function KidsRow({ rec, ctx, open, onToggle }) {
           </button>
         ) : (
           // A COPY WITH NO CODE IN IT IS NOT A CHILD WITH NO CODE. Say which of the two this is.
-          <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No code in this copy</span>
+          <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No pickup code for this child</span>
         )}
         {rec.out ? null : (
           <button onClick={() => { setMode(m => (m === 'collect' ? '' : 'collect')); setErr(''); setEntry(''); }} aria-pressed={mode === 'collect'}
@@ -740,7 +740,17 @@ function svNewCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
 // words back, which is an honest prompt to ask rather than a false reassurance.
 function svArrivalName(a) {
   const n = String((a && a.name) || '').trim();
-  return n || 'Someone at the door (name not on this phone)';
+  return n;   // '' when the sealed name has not arrived — the two CALLERS word that case, see below
+}
+// The two places an unresolved parent is worded, kept apart because one is a sentence and one is a label
+// inside a question, and a single string cannot read well as both. Neither invents a name: a screen that
+// substituted a key fragment would make an unresolved stranger look like a known family.
+function svArrivalLine(a) {
+  const n = svArrivalName(a);
+  return n ? n + ' has arrived' : 'Someone’s arrived — their name hasn’t reached your phone yet';
+}
+function svArrivalLabel(a) {
+  return svArrivalName(a) || 'the person who just arrived';
 }
 function KidsAddChild({ ctx, session, arrivals }) {
   const queue = Array.isArray(arrivals) ? arrivals : [];
@@ -783,7 +793,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
   const submit = async () => {
     const nm = name.trim();
     if (!nm || busy) return;
-    if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalName(pickedArrival) }); return; }
+    if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalLabel(pickedArrival) }); return; }
     await write(nm, '');
   };
   return (
@@ -798,7 +808,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
               style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 12, cursor: 'pointer',
                 border: '1px solid ' + (picked === a.pub ? 'var(--sage)' : 'var(--line)'), background: picked === a.pub ? 'color-mix(in oklab, var(--sage) 12%, var(--surface))' : 'var(--surface)' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{svArrivalName(a) + ' has arrived'}</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{svArrivalLine(a)}</div>
                 {a.checkedIn > 0 ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{a.checkedIn === 1 ? '1 child checked in so far' : a.checkedIn + ' children checked in so far'}</div> : null}
               </div>
               <span style={{ flexShrink: 0, fontSize: 12.5, fontWeight: 800, color: picked === a.pub ? 'var(--sage)' : 'var(--ink-3)' }}>{picked === a.pub ? 'Selected' : 'Check in'}</span>
@@ -892,8 +902,8 @@ function KidsRegister({ ctx }) {
            be held (a record that raced in before the purge), it is listed below as it would be under a lapsed
            clearance; the copy does not claim otherwise. */
         <div style={{ borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '12px 14px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-          <b style={{ color: 'var(--ink)' }}>Your church has withdrawn your clearance.</b>{' '}
-          {reg.keysHeld > 0 ? 'What is below is what this phone still held; nothing new will reach it.' : 'The register has been removed from this phone.'}
+          <b style={{ color: 'var(--ink)' }}>Your church has ended your access to children’s check-in.</b>{' '}
+          {reg.keysHeld > 0 ? 'What is below is what this phone still held; nothing new will reach it.' : 'The list has been cleared from this phone.'}
         </div>
       ) : null}
 
@@ -903,8 +913,8 @@ function KidsRegister({ ctx }) {
           from a phone, and the console's own panel was measured claiming the opposite. */}
       {reg.cleared && reg.keysHeld === 0 ? (
         <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: '15px 16px', fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
-          <b style={{ color: 'var(--ink)' }}>No session keys have reached this phone.</b>{' '}
-          Nothing is wrong — your church issues these from its console.
+          <b style={{ color: 'var(--ink)' }}>You’re cleared, but this room isn’t ready yet.</b>{' '}
+          Your church sets that up — nothing for you to do.
         </div>
       ) : null}
 
@@ -956,8 +966,8 @@ function KidsRegister({ ctx }) {
           {/* ONE EXPRESSION, NOT THREE NODES. `{n} record{n === 1 ? '' : 's'}` renders correctly and makes
               glued() — the guard that catches the JSX newline trap — report a false junction at "record][s",
               which trains a reader to ignore it. The count and its plural are one string instead. */}
-          <b style={{ color: 'var(--ink)' }}>{reg.unreadable + (reg.unreadable === 1 ? ' record' : ' records') + ' this phone cannot open.'}</b>{' '}
-          They were written without a copy for you. The register is not empty.
+          <b style={{ color: 'var(--ink)' }}>{reg.unreadable + (reg.unreadable === 1 ? ' child is' : ' children are') + ' checked in that you can’t see.'}</b>{' '}
+          They were added before you had access. The list isn’t empty.
         </div>
       ) : null}
 
@@ -966,8 +976,8 @@ function KidsRegister({ ctx }) {
           helper, so a record is only ever offered the key its own session tag names. */}
       {reg.foreign > 0 ? (
         <div style={{ borderRadius: 20, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '14px 16px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
-          <b style={{ color: 'var(--ink)' }}>{reg.foreign + (reg.foreign === 1 ? ' record belongs' : ' records belong') + ' to another session.'}</b>{' '}
-          This phone holds no key for it.
+          <b style={{ color: 'var(--ink)' }}>{reg.foreign + (reg.foreign === 1 ? ' child is' : ' children are') + ' in another room.'}</b>{' '}
+          You don’t have access to that one.
         </div>
       ) : null}
 

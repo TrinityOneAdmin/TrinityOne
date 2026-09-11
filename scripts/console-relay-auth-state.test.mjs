@@ -317,7 +317,7 @@ test('the trusted-view gate REFUSES a list write when the relay is gone', async 
 
   relay.kill('SIGKILL');
   await sleep(1200);
-  assert.throws(() => gate('list of children'), /hasn’t proved who it is/,
+  assert.throws(() => gate('list of children'), /hasn’t finished connecting to your church/,
     'with the relay dead, a minors-list write went through on an untrustworthy view. That write republishes ' +
     'the whole list from whatever the console currently holds and hard-deletes the previous version — so ' +
     'every child not in that stale view silently stops being a minor.');
@@ -331,7 +331,7 @@ test('the trusted-view gate REFUSES a list write when the relay is gone', async 
   assert.doesNotMatch(said, /wait a moment|try again shortly|in a moment/i,
     'the refusal tells the steward to WAIT, and in both known causes waiting never ends: ' + said);
   assert.match(said, /nothing was changed/i, 'the refusal does not say the church is unchanged: ' + said);
-  assert.match(said, /reopen the console|first member joins/i,
+  assert.match(said, /reopen it|first member joins/i,
     'the refusal names no way out — a steward is told it failed and not what clears it: ' + said);
   try { sub.close(); } catch {}
   s.close();

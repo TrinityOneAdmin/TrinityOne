@@ -859,7 +859,7 @@ const _viewingNetwork = () => pub !== churchPub && !actingChurch;
 // nothing changed. Say what is true, say nothing was saved, and name the two things that actually clear it.
 function _requireTrustedView(what) {
   if (_isRelayAuthed()) return;
-  const err = new Error('Couldn’t save the ' + what + ' — nothing was changed. This device hasn’t proved who it is to your church’s relay, so it can’t see the current list. Reopen the console to reconnect. If nobody has joined this church yet, it clears as soon as your first member joins.');
+  const err = new Error('Couldn’t save the ' + what + ' — nothing was changed. This console hasn’t finished connecting to your church, so it can’t see the current list. Reopen it to try again. If nobody has joined your church yet, this clears when your first member joins.');
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: err.message } })); } catch (e) {}
   throw err;
 }

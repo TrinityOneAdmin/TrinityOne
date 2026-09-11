@@ -15516,7 +15516,7 @@ zoo`.split("\n");
   var _viewingNetwork = () => pub !== churchPub && !actingChurch;
   function _requireTrustedView(what) {
     if (_isRelayAuthed()) return;
-    const err2 = new Error("Couldn\u2019t save the " + what + " \u2014 nothing was changed. This device hasn\u2019t proved who it is to your church\u2019s relay, so it can\u2019t see the current list. Reopen the console to reconnect. If nobody has joined this church yet, it clears as soon as your first member joins.");
+    const err2 = new Error("Couldn\u2019t save the " + what + " \u2014 nothing was changed. This console hasn\u2019t finished connecting to your church, so it can\u2019t see the current list. Reopen it to try again. If nobody has joined your church yet, this clears when your first member joins.");
     try {
       window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what, message: err2.message } }));
     } catch (e) {
