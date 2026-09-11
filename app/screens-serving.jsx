@@ -1098,14 +1098,24 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   const close = () => setSheet(null);
 
   return (
-    <Overlay open={open} onClose={onClose} docked={docked}>
+    <Overlay open={open} onClose={onClose} docked={docked} label="What's happening">
       <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 12px' }}>
           <button onClick={onClose} aria-label="Close" title="Close" style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, lineHeight: 1.05 }}>Serving</div>
-            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ctx.church ? ctx.church.name : 'Your church'}</div>
-          </div>
+          {/* NO TITLE AND NO CHURCH NAME — owner, 2026-09-11, and both halves have a reason.
+              The title said "Serving", and this page stopped being only that: the strip below it now carries
+              Serving, Rota, Kids, Events, Calendar and Care, so the heading named one tab out of six and
+              read as wrong from the moment Kids shipped. The church name was redundant beside it — a member
+              is inside one church, its name is already on the Today screen they came from, and this page is
+              reached by tapping "What's happening" there.
+              Both cost ~44px of a 360px-wide phone above a strip that already has to scroll sideways, so
+              removing them buys a row of content rather than just tidiness.
+              ⚠ THE ACCESSIBLE NAME NOW HAS TO BE PASSED EXPLICITLY. `Overlay` falls back to
+              useAutoDialogLabel, which reads the panel's FIRST LINE OF TEXT — with the heading gone that is
+              the first tab, so a screen reader would announce this dialog as "Serving", which is the exact
+              wrong name this change exists to remove. The `label` on Overlay below is that fix and is not
+              decoration; scripts/the-serving-page-is-not-only-serving.test.mjs holds it in place. */}
+          <div style={{ flex: 1, minWidth: 0 }} />
         </div>
         {/* Four tabs need 399px and a 360px phone offers 320 after padding and gaps, so Care was cut off at
             the right edge — tappable, but its label never readable, and nothing here scrolled. `flex: 1` is
