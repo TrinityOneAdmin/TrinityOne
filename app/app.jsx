@@ -1187,7 +1187,26 @@ function App() {
     const F = window.Fellowship;
     if (!np || !F || !F.subscribeCheckinRegister) { setCheckinRegister(CK_NONE); return; }
     return F.subscribeCheckinRegister(np, setCheckinRegister);
-  }, [activeChurch, churches, connTick, lazyReady]);
+    // `idTick` CLOSES A NARROW HOLE, and the narrowness is the point — an earlier draft of this comment
+    // claimed the whole live-update blocker and was wrong. What is true:
+    //
+    // Both check-in readers return a DEAD no-op when this phone has no key yet (`if (!me || !sk) { cb(EMPTY);
+    // return () => {}; }`) — every PIN-locked boot, and the wizard asks every member to set a PIN. Something
+    // must therefore re-run this effect once the key arrives. USUALLY connTick does: unlocking calls
+    // deriveFromIdentity, which calls reconnectAll(), which fires `trinity-reconnect`, which bumps connTick.
+    // But that reconnect is CONDITIONAL — src/fellowship.src.js only runs it `if (wasKeyless && sk)` AND some
+    // church-doc hub is already open (`if (hub.closer)`). Unlock before any hub has opened and connTick never
+    // moves, so these two effects keep the dead no-op they registered at mount for the rest of the session.
+    // `idTick` bumps on `trinity-identity`, which an unlock fires unconditionally, so it covers that case too.
+    //
+    // ⚠ THIS IS NOT THE FIX FOR THE 2026-09-11 TWO-PHONE BLOCKER (a parent's screen not updating while the
+    // app is open) and must not be recorded as one. Two measurements say so: at step 3 of
+    // reference/DEVICE-VERIFICATION-two-phone-2026-09-11.md that phone was showing a child CORRECTLY — its
+    // handler was registered and past the guard — and a second child eight seconds later never arrived; and
+    // scripts/a-parents-open-screen-is-told-live.test.mjs now proves the relay pushes exactly that second
+    // record to an already-open, already-authenticated guardian socket. The blocker is above the socket and
+    // still open.
+  }, [activeChurch, churches, connTick, lazyReady, idTick]);
   // MY OWN CHILDREN AT TODAY'S SESSION — STEP 2 of the parent surface, and the other half of check-in in
   // this app. `checkinRegister` above is the WORKER's view and needs a clearance and a session key;
   // THIS ONE NEEDS NEITHER AND IS FOR EVERY PARENT. It emits { children, askAtDesk, settled }, where
@@ -1200,7 +1219,8 @@ function App() {
     const F = window.Fellowship;
     if (!np || !F || !F.subscribeMyChildrenCheckins) { setMyChildren(MYKIDS_NONE); return; }
     return F.subscribeMyChildrenCheckins(np, setMyChildren);
-  }, [activeChurch, churches, connTick, lazyReady]);
+    // `idTick` for the same reason as the register above, including the warning about what it does NOT fix.
+  }, [activeChurch, churches, connTick, lazyReady, idTick]);
   // A WORKER CHECKS A CHILD IN — slice B. The raw session key never enters React; this hands the record to
   // Fellowship.writeCheckin, which seals it under the key the reader unwrapped and publishes it. Returns the
   // { ok, reason } the screen shows LOUDLY on failure (§8), or { ok:false } when the app is not ready.
