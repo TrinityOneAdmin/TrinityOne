@@ -633,26 +633,145 @@ function KidsHelpLink({ ctx, label }) {
   );
 }
 // ONE CHILD'S ROW. The pickup code is COVERED until it is asked for — see the note on `shown` in KidsRegister.
-function KidsRow({ rec, open, onToggle }) {
+//
+// CHECKOUT — slice C / §6 rule 5. The worker types the code the PARENT presents and the screen compares it
+// to `rec.code`; a failed match is LOUD and writes nothing. The code the parent claims is NEVER shown back
+// during entry (that would defeat the match), and the release is a SEPARATE document (ctx.checkinRelease),
+// never a rewrite of the church's record (F-B). "Release by hand" records a manual collection distinctly —
+// an ordinary Sunday (a dead phone, a grandparent), not an accusation (§7 / §10).
+function KidsRow({ rec, ctx, open, onToggle }) {
   const code = String((rec && rec.code) || '');
+  const [mode, setMode] = useSv('');            // '' | 'collect'
+  const [entry, setEntry] = useSv('');
+  const [busy, setBusy] = useSv(false);
+  const [err, setErr] = useSv('');
+  const release = async (manual) => {
+    if (busy) return;
+    setBusy(true); setErr('');
+    let res;
+    try { res = (ctx && ctx.checkinRelease) ? await ctx.checkinRelease({ session: rec.session, rel: rec.id, manual: !!manual }) : { ok: false }; }
+    catch (e) { res = { ok: false }; }
+    setBusy(false);
+    if (res && res.ok) { setMode(''); setEntry(''); }   // the collected row arrives from the relay and folds
+    else setErr('That did not save — see the desk. Nothing was written.');
+  };
+  const confirmCode = () => {
+    // COMPARED, never displayed to the wrong party; a failed match is LOUD (§6 rule 5).
+    if (entry.trim() === code && code) release(false);
+    else setErr('That code does not match. The child was NOT released.');
+  };
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderTop: '1px solid var(--line)' }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.childName || 'Name not in this copy'}</div>
-        {rec.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Collected{svClock(rec.out) ? ' · ' + svClock(rec.out) : ''}</div> : null}
+    <div style={{ borderTop: '1px solid var(--line)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.childName || 'Name not in this copy'}</div>
+          {rec.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Collected{svClock(rec.out) ? ' · ' + svClock(rec.out) : ''}{rec.manual ? ' · by hand' : ''}</div> : null}
+        </div>
+        {rec.out ? null : code ? (
+          <button onClick={onToggle} aria-pressed={!!open}
+            aria-label={open ? 'Hide the pickup code for ' + (rec.childName || 'this child') : 'Show the pickup code for ' + (rec.childName || 'this child')}
+            style={{ flexShrink: 0, minWidth: 84, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer',
+              fontFamily: open ? 'var(--font-display)' : 'var(--font-ui)', fontWeight: 800, fontSize: open ? 17 : 13,
+              letterSpacing: open ? '1.5px' : 0, background: open ? 'var(--surface-2)' : 'var(--surface)', color: open ? 'var(--ink)' : 'var(--ink-2)' }}>
+            {open ? code : 'Show code'}
+          </button>
+        ) : (
+          // A COPY WITH NO CODE IN IT IS NOT A CHILD WITH NO CODE. Say which of the two this is.
+          <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No code in this copy</span>
+        )}
+        {rec.out ? null : (
+          <button onClick={() => { setMode(m => (m === 'collect' ? '' : 'collect')); setErr(''); setEntry(''); }} aria-pressed={mode === 'collect'}
+            style={{ flexShrink: 0, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer', background: mode === 'collect' ? 'var(--surface-2)' : 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+            Collect
+          </button>
+        )}
       </div>
-      {code ? (
-        <button onClick={onToggle} aria-pressed={!!open}
-          aria-label={open ? 'Hide the pickup code for ' + (rec.childName || 'this child') : 'Show the pickup code for ' + (rec.childName || 'this child')}
-          style={{ flexShrink: 0, minWidth: 84, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer',
-            fontFamily: open ? 'var(--font-display)' : 'var(--font-ui)', fontWeight: 800, fontSize: open ? 17 : 13,
-            letterSpacing: open ? '1.5px' : 0, background: open ? 'var(--surface-2)' : 'var(--surface)', color: open ? 'var(--ink)' : 'var(--ink-2)' }}>
-          {open ? code : 'Show code'}
+      {/* THE CHECKOUT PANEL. The worker enters the code the PARENT shows and the screen compares it. A
+          mismatch is loud and writes nothing; "By hand" records a manual collection when a parent's phone is
+          dead.
+          ⚠ SAID EXACTLY: the code is not pre-filled or echoed INTO THIS PANEL — but the row's own "Show code"
+          toggle above is still one tap away while the panel is open, so this is NOT a claim that a worker
+          cannot see the code. It is not meant to be: reference/DOMAIN.md and design §10 — every gate here
+          exists to keep OTHER people out of the register, never to police the church's own team. The match is
+          a soft check that makes the ordinary pickup hard to get wrong, and "By hand" is the explicit,
+          recorded way past it. An earlier version of this comment claimed the code "is not revealed here",
+          which was true only of this panel and read as a boundary it is not (CLAUDE.md rule 4). */}
+      {mode === 'collect' && !rec.out ? (
+        <div style={{ padding: '0 13px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {code ? (
+              <input value={entry} onChange={e => { setEntry(e.target.value.replace(/\D/g, '').slice(0, 6)); setErr(''); }} aria-label={'Enter the pickup code for ' + (rec.childName || 'this child')}
+                inputMode="numeric" placeholder="Pickup code" style={{ width: 120, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15, letterSpacing: '2px', textAlign: 'center' }} />
+            ) : null}
+            {code ? (
+              <button onClick={confirmCode} disabled={busy || !entry.trim()}
+                style={{ padding: '9px 13px', borderRadius: 11, border: 'none', cursor: (busy || !entry.trim()) ? 'default' : 'pointer', opacity: (busy || !entry.trim()) ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+                Release
+              </button>
+            ) : null}
+            <button onClick={() => release(true)} disabled={busy} aria-label={'Collect ' + (rec.childName || 'this child') + ' by hand, without a code'}
+              style={{ padding: '9px 13px', borderRadius: 11, border: '1px solid var(--line)', cursor: busy ? 'default' : 'pointer', background: 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+              By hand
+            </button>
+          </div>
+          {err ? <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--danger, #b3261e)', lineHeight: 1.3 }}>{err}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+// A NEW PICKUP CODE — four random digits the worker writes on the child's sticker and gives the parent. It is
+// per-record and it is what releases the child, so it is RANDOM (unlike the room code, which names a session
+// and admits nobody). Slice B / C.
+function svNewCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
+// ── A WORKER CHECKS A CHILD IN — slice B, the write half of slice 3. ──────────────────────────────────────
+// §7: most children have no phone, so the child is NAMED here at the desk; there is no account and no picker
+// of the church's children (a worker's phone does not hold that list — the relay withholds it). She types the
+// name, the app pre-fills a pickup code she writes on the sticker, and ctx.checkinAdd seals + publishes it.
+//
+// IT FAILS LOUD (§8). ctx.checkinAdd returns { ok:false } when the relay refused the write or the network
+// dropped mid-session; this says so and keeps the child OFF the register rather than showing them checked in
+// when the room does not hold them. It never blocks a live worker — a refusal here is the relay's, not ours.
+function KidsAddChild({ ctx, session }) {
+  const [name, setName] = useSv('');
+  const [code, setCode] = useSv(svNewCode);
+  const [busy, setBusy] = useSv(false);
+  const [msg, setMsg] = useSv(null);          // { ok:bool, text } after a submit
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm || busy) return;
+    setBusy(true); setMsg(null);
+    let res;
+    try { res = (ctx && ctx.checkinAdd) ? await ctx.checkinAdd({ session, childName: nm, code: code.trim() }) : { ok: false, reason: 'unavailable' }; }
+    catch (e) { res = { ok: false, reason: 'threw' }; }
+    setBusy(false);
+    if (res && res.ok) {
+      // A MOMENT, then cleared for the next child, with a fresh code. The row itself appears from the relay.
+      setMsg({ ok: true, text: nm + ' checked in. Write ' + code.trim() + ' on the sticker.' });
+      setName(''); setCode(svNewCode());
+    } else {
+      // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
+      setMsg({ ok: false, text: 'That did not save — see the desk. Nothing was written.' });
+    }
+  };
+  return (
+    <div style={{ borderTop: '1px solid var(--line)', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Child’s name" aria-label="Child’s name"
+          style={{ flex: 1, minWidth: 0, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5 }} />
+        <input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} aria-label="Pickup code"
+          inputMode="numeric" style={{ width: 68, padding: '9px 8px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15, letterSpacing: '1.5px', textAlign: 'center' }} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button onClick={submit} disabled={!name.trim() || busy}
+          style={{ padding: '8px 14px', borderRadius: 11, border: 'none', cursor: (!name.trim() || busy) ? 'default' : 'pointer', opacity: (!name.trim() || busy) ? 0.5 : 1,
+            background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13.5 }}>
+          {busy ? 'Checking in…' : 'Check a child in'}
         </button>
-      ) : (
-        // A COPY WITH NO CODE IN IT IS NOT A CHILD WITH NO CODE. Say which of the two this is.
-        <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No code in this copy</span>
-      )}
+        {msg ? (
+          <span style={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.3, color: msg.ok ? 'var(--sage)' : 'var(--danger, #b3261e)' }}>{msg.text}</span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -731,12 +850,28 @@ function KidsRegister({ ctx }) {
                   "Collected" was the header the Oppo showed after the only child had gone home. */}
               <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{sn.rows.filter(r => !r.out).length} checked in{sn.rows.some(r => r.out) ? ' · ' + sn.rows.filter(r => r.out).length + ' collected' : ''}</div>
             </div>
+            {/* THE ROOM CODE — slice A. A short numeric name for this session, the same number the printed sheet
+                shows and a parent types; it CARRIES NO AUTHORITY (roomCode is a digest of the session id and
+                nothing secret), so it is shown openly, unlike the per-child pickup code. It lets a worker
+                confirm she is looking at the right session and read it aloud. `roomClash` warns when two of the
+                sessions this phone holds share four digits, so nobody confirms the wrong room back. */}
+            {sn.roomCode ? (
+              <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>Room code</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, letterSpacing: '2px', color: 'var(--ink)' }}>{sn.roomCode}</div>
+                {sn.roomClash ? <div style={{ fontSize: 10.5, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 1 }}>shared — name the room</div> : null}
+              </div>
+            ) : null}
           </div>
           {sn.rows.length
             ? sn.rows.map(r => (
-                <KidsRow key={r.id} rec={r} open={shown === r.id} onToggle={() => setShown(v => (v === r.id ? '' : r.id))} />
+                <KidsRow key={r.id} rec={r} ctx={ctx} open={shown === r.id} onToggle={() => setShown(v => (v === r.id ? '' : r.id))} />
               ))
             : <div style={{ borderTop: '1px solid var(--line)', padding: '13px 14px', fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>Nobody has been checked in yet.</div>}
+          {/* CHECK A CHILD IN — slice B. Only when the clearance is LIVE: a lapsed key still shows the register
+              (DOMAIN.md, do not lock someone out mid-session) but the relay would refuse a new write, so the
+              form is not offered on a clearance that has ended or not started. It never gates a live worker. */}
+          {reg.cleared ? <KidsAddChild ctx={ctx} session={sn.session} /> : null}
         </div>
       ))}
 

@@ -23,6 +23,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
+import { roomCode } from './checkin-role-source.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
@@ -81,7 +82,7 @@ const twoKids = [
   { id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am' },
   { id: 'ci-2', childName: 'Amos Bello', code: '9081', session: 'svc-am' },
 ];
-const oneSession = (rows) => [{ session: 'svc-am', from: AM_FROM, until: AM_FROM + 10800, helpers: 2, rows }];
+const oneSession = (rows) => [{ session: 'svc-am', roomCode: roomCode('svc-am'), roomClash: false, from: AM_FROM, until: AM_FROM + 10800, helpers: 2, rows }];
 
 function serving(register) {
   const { React, draw } = miniReact();
@@ -133,12 +134,39 @@ function serving(register) {
     // article list.
     openHelp: (id) => opened.push(id),
     toast() {},
+    // slice B: capture what the check-in form hands the transport, and let a test choose the verdict.
+    checkinAdd: async (rec) => { checkinCalls.push(rec); return checkinResult.v; },
+    // slice C: capture what the checkout hands the transport.
+    checkinRelease: async (rec) => { releaseCalls.push(rec); return releaseResult.v; },
   };
+  const checkinCalls = [];
+  const checkinResult = { v: { ok: true, id: 'ci-new' } };
+  const releaseCalls = [];
+  const releaseResult = { v: { ok: true, id: 'cr-new' } };
   const render = () => draw(mod.ServingScreen, { open: true, onClose() {}, ctx });
   render();                                  // the first draw queues the tab-strip effects…
   let tree = render();                       // …the second sees what they settled on
   return {
     mod, ctx, opened,
+    checkinCalls,
+    releaseCalls,
+    setCheckinResult(v) { checkinResult.v = v; },
+    setReleaseResult(v) { releaseResult.v = v; },
+    // Type into an input on the rendered tree, found by its aria-label, and redraw.
+    type(label, value) {
+      const inputs = shown(tree, n => n.type === 'input' && n.props && n.props['aria-label'] === label);
+      assert.equal(inputs.length, 1, 'expected one input labelled ' + JSON.stringify(label) + ', found ' + inputs.length);
+      inputs[0].props.onChange({ target: { value } });
+      return this.redraw();
+    },
+    // Click a button by label, then flush microtasks (the submit is async) and redraw.
+    async click(label) {
+      const b = shownButton(tree, label);
+      assert.equal(b.length, 1, 'expected one control reading ' + JSON.stringify(label) + ', found ' + b.length);
+      b[0].props.onClick();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      return this.redraw();
+    },
     tree: () => tree,
     redraw() { tree = render(); return tree; },
     press(label) {
@@ -182,6 +210,112 @@ test('POINT OF USE: a cleared worker gets a Kids tab, and it renders the registe
   assert.deepEqual(s.glued(), [],
     'two pieces of copy run together with no space between them — the JSX newline trap that shipped ' +
     '"whenever you openthis page" to a phone: ' + JSON.stringify(s.glued()));
+});
+
+test('POINT OF USE: the room code is shown OPENLY on the session card — it names the session and admits nobody', () => {
+  // Slice A. Unlike a pickup code (covered until asked for, because it releases a child), the room code
+  // carries no authority: it is a digest of the session id and a worker reads it aloud or matches it to the
+  // printed sheet. It must be ON THE SCREEN, or the numeric presentation of the identifier is the feature
+  // deleted with the derivation underneath it still tested.
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(twoKids) });
+  s.press('Kids');
+  const out = s.reads();
+  assert.ok(out.includes(roomCode('svc-am')),
+    'THE ROOM CODE IS NOT ON THE SESSION CARD. A worker has no number to read to a parent or match to the ' +
+    'printed sheet. Expected ' + JSON.stringify(roomCode('svc-am')) + ' — as rendered: ' + out);
+  assert.match(out, /Room code/i, 'the code is on the screen but nothing labels it as the room code');
+  // AND IT IS NOT TREATED AS A SECRET. There is no "Show code" control for it — that pattern is the pickup
+  // code's alone. The two "Show code" buttons are the two children's pickup codes, not the room code.
+  assert.equal(s.has('Show code'), 2, 'the room code grew a reveal control, or a pickup code lost one');
+  assert.deepEqual(s.glued(), [], 'copy runs together on the card: ' + JSON.stringify(s.glued()));
+});
+
+test('POINT OF USE: a live worker can CHECK A CHILD IN, and it hands the record to the transport', async () => {
+  // Slice B, the write half. The button, the name, and the call are all on the SCREEN — a well-tested
+  // writer nobody is required to consult is not a feature (rule 1).
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession([]) });
+  s.press('Kids');
+  assert.equal(s.has('Check a child in'), 1,
+    'THERE IS NO WAY TO CHECK A CHILD IN. A live worker holding this session\'s key has the register and no ' +
+    'door — the whole write half deleted from the screen.');
+  s.type('Child’s name', 'Ada Okonkwo');
+  await s.click('Check a child in');
+  assert.equal(s.checkinCalls.length, 1, 'pressing the button wrote nothing to the transport');
+  assert.equal(s.checkinCalls[0].session, 'svc-am', 'the check-in was not tied to THIS session — a record with the wrong session opens for the wrong room');
+  assert.equal(s.checkinCalls[0].childName, 'Ada Okonkwo', 'the child\'s name did not reach the writer');
+  assert.match(String(s.checkinCalls[0].code || ''), /^\d{4}$/, 'no pickup code was carried — the door has nothing to match at collection');
+});
+
+test('…and a check-in that the relay REFUSES fails LOUD — the child is not shown as checked in', async () => {
+  // Design §8: fail LOUDLY at the moment of check-in rather than accept it optimistically. A parent who
+  // believes their child is registered when the room does not is worse than an honest refusal.
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession([]) });
+  s.press('Kids');
+  s.setCheckinResult({ ok: false, reason: 'publish-failed' });
+  s.type('Child’s name', 'Ada Okonkwo');
+  await s.click('Check a child in');
+  const out = s.reads();
+  assert.match(out, /did not save|see the desk/i,
+    'A CHECK-IN THAT DID NOT SAVE SAID NOTHING. The worker walks away believing the child is registered ' +
+    'when the room does not hold them. As rendered: ' + out);
+  // The name is NOT cleared on failure, so she can retry without retyping.
+  const nameInput = shown(s.tree(), n => n.type === 'input' && n.props && n.props['aria-label'] === 'Child’s name');
+  assert.equal(nameInput[0].props.value, 'Ada Okonkwo', 'the form cleared on a FAILED save, so she must retype to retry');
+});
+
+test('…and the check-in form is NOT offered on a clearance that has ended — the register still shows', () => {
+  // DOMAIN.md: say a key has expired, do not lock someone out mid-session. The register stays visible on a
+  // lapsed key, but a new write would be refused by the relay, so the door is not offered.
+  const s = serving({ ...NONE, cleared: false, lapsed: true, keysHeld: 1, until: AM_FROM + 10800, sessions: oneSession(twoKids) });
+  s.press('Kids');
+  assert.equal(s.pane().length, 1, 'the register vanished on a lapsed clearance');
+  assert.equal(s.has('Check a child in'), 0,
+    'a check-in form was offered on a clearance that has ended — every write would be refused LOUD, which is a worse experience than not offering it');
+});
+
+// One child, so there is exactly one "Collect" control to drive.
+const oneKid = [{ id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am' }];
+
+test('POINT OF USE: a matching pickup code RELEASES the child — a separate release document, not a rewrite', async () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
+  s.press('Kids');
+  assert.equal(s.has('Collect'), 1, 'THERE IS NO WAY TO COLLECT A CHILD — the checkout half is gone from the screen');
+  await s.click('Collect');
+  s.type('Enter the pickup code for Esther Ncube', '4417');
+  await s.click('Release');
+  assert.equal(s.releaseCalls.length, 1, 'a matching code did not release the child');
+  assert.equal(s.releaseCalls[0].rel, 'ci-1', 'the release does not name the check-in it collects — the reader cannot fold it');
+  assert.equal(s.releaseCalls[0].session, 'svc-am', 'the release is not tied to the child\'s session');
+  assert.equal(s.releaseCalls[0].manual, false, 'a code-matched release was recorded as by-hand');
+});
+
+test('…and a WRONG code is LOUD and releases NOBODY (§6 rule 5)', async () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
+  s.press('Kids');
+  await s.click('Collect');
+  s.type('Enter the pickup code for Esther Ncube', '0000');
+  await s.click('Release');
+  assert.equal(s.releaseCalls.length, 0,
+    'A CHILD WAS RELEASED ON A CODE THAT DID NOT MATCH. This is the wrong-adult case the pickup code exists to prevent.');
+  assert.match(s.reads(), /does not match|not released/i, 'a failed match said nothing — §6 rule 5: a failed match must be LOUD. As rendered: ' + s.reads());
+});
+
+test('…and RELEASE BY HAND records a manual collection distinctly, with no code', async () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
+  s.press('Kids');
+  await s.click('Collect');
+  await s.click('By hand');
+  assert.equal(s.releaseCalls.length, 1, 'a dead-phone / grandparent collection could not be recorded — the fallback §7 requires is missing');
+  assert.equal(s.releaseCalls[0].manual, true,
+    'the manual release was not marked manual — §7: it must be recorded DISTINCTLY, or the register cannot tell it from a code collection');
+  assert.equal(s.releaseCalls[0].rel, 'ci-1', 'the manual release does not name the child');
+});
+
+test('…and an already-collected child offers no Collect control', () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, sessions: oneSession([{ id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am', out: AM_FROM + 5400 }]) });
+  s.press('Kids');
+  assert.equal(s.has('Collect'), 0, 'a child already collected still offered a Collect button — a double release');
+  assert.match(s.reads(), /Collected/, 'the collected child is not shown as collected');
 });
 
 test('…and a pickup code is COVERED until it is asked for, one at a time', () => {

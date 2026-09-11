@@ -6513,6 +6513,30 @@
     if (!Array.isArray(tags)) return "";
     return String((tags.find((t) => Array.isArray(t) && t[0] === "session") || [])[1] || "").trim();
   }
+  function roomCode(sessionId) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return "";
+    let h = 2166136261;
+    for (let i3 = 0; i3 < sid.length; i3++) {
+      h ^= sid.charCodeAt(i3);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return String(h % 1e4).padStart(4, "0");
+  }
+  function roomCodesCollide(sessionIds) {
+    const seen = /* @__PURE__ */ new Map();
+    const clash = /* @__PURE__ */ new Set();
+    for (const sid of Array.isArray(sessionIds) ? sessionIds : []) {
+      const s = String(sid || "").trim();
+      if (!s) continue;
+      const c = roomCode(s);
+      if (seen.has(c)) {
+        clash.add(s);
+        clash.add(seen.get(c));
+      } else seen.set(c, s);
+    }
+    return clash;
+  }
 
   // src/fellowship.src.js
   var _dmEncrypt = (sk2, peerPub, text) => encrypt(text, getConversationKey(sk2, peerPub));
@@ -6554,6 +6578,27 @@
   var CHECKINPERM_D = "trinityone/checkinperm:";
   var CHECKINHELPER_D = "trinityone/checkinhelper:";
   var CHECKIN_D = "trinityone/checkin:";
+  var _ckMemberKeys = /* @__PURE__ */ new Map();
+  var _ckMemKeySet = (cp, sid, k) => {
+    let m = _ckMemberKeys.get(cp);
+    if (!m) {
+      m = /* @__PURE__ */ new Map();
+      _ckMemberKeys.set(cp, m);
+    }
+    m.set(sid, k);
+  };
+  var _ckMemKeyDel = (cp, sid) => {
+    const m = _ckMemberKeys.get(cp);
+    if (m) m.delete(sid);
+  };
+  var _ckMemKeyClear = (cp) => {
+    const m = _ckMemberKeys.get(cp);
+    if (m) m.clear();
+  };
+  var _ckMemKeyGet = (cp, sid) => {
+    const m = _ckMemberKeys.get(cp);
+    return m && m.get(sid) || "";
+  };
   var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
   var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
   var MSGTAG_RESERVED = ["verse", "devotional", "note", "poll"];
@@ -11450,7 +11495,11 @@
           childName: _str(obj.childName),
           code: _str(obj.code),
           in: _when(obj.in),
-          out: _when(obj.out)
+          out: _when(obj.out),
+          // slice C: a RELEASE record carries `rel` (the check-in it collects) and `manual` (by hand, no code).
+          // Typed here for the same reason as the rest — a hostile body must not reach a row as an object.
+          rel: _str(obj.rel),
+          manual: obj.manual === true
         });
         return "ok";
       };
@@ -11459,6 +11508,7 @@
         const live = permissionAdmits(perm, at);
         let unreadable = 0, foreign = 0;
         const bySession = /* @__PURE__ */ new Map();
+        const releaseByRel = /* @__PURE__ */ new Map();
         for (const [id, r] of recs) {
           const state = rows.has(id) ? "ok" : openRec(id, r);
           if (state === "foreign") {
@@ -11469,17 +11519,36 @@
             unreadable++;
             continue;
           }
+          const row = rows.get(id);
+          const relId = (r.tags.find((t) => t[0] === "rel") || [])[1] || "";
+          if (relId) {
+            const key = r.sid + "|" + relId;
+            const prev = releaseByRel.get(key);
+            if (!prev || (row.ts || 0) >= (prev.ts || 0)) releaseByRel.set(key, { out: row.out, manual: row.manual, by: row._by, ts: row.ts });
+            continue;
+          }
           if (!bySession.has(r.sid)) bySession.set(r.sid, []);
-          bySession.get(r.sid).push(rows.get(id));
+          bySession.get(r.sid).push(row);
         }
-        const sessions = [...keys.keys()].map((sid) => {
+        const heldSids = [...keys.keys()];
+        const clash = roomCodesCollide(heldSids);
+        const sessions = heldSids.map((sid) => {
           const g = grants.get(sid);
           return {
             session: sid,
+            roomCode: roomCode(sid),
+            roomClash: clash.has(sid),
             from: g ? g.grant.from : null,
             until: g ? g.grant.until : null,
             helpers: g ? g.grant.pubs.length : 0,
-            rows: (bySession.get(sid) || []).slice().sort((a, b) => String(a.childName || "").localeCompare(String(b.childName || "")) || (a.ts || 0) - (b.ts || 0))
+            // FOLD A RELEASE ONTO ITS CHILD ROW — a new object, never mutating the `rows` memo. A collected
+            // child keeps their row (so the register stays a legible record of who was in the room) and gains
+            // `out` / `manual` / `releasedBy`. The release's `out` wins when present; otherwise whatever the
+            // check-in record itself carried.
+            rows: (bySession.get(sid) || []).map((r0) => {
+              const rel = releaseByRel.get(sid + "|" + r0.id);
+              return rel ? { ...r0, out: rel.out != null ? rel.out : r0.out, manual: !!rel.manual, releasedBy: rel.by } : r0;
+            }).sort((a, b) => String(a.childName || "").localeCompare(String(b.childName || "")) || (a.ts || 0) - (b.ts || 0))
           };
         }).sort((a, b) => (a.from || 0) - (b.from || 0));
         cb({
@@ -11528,6 +11597,7 @@
               permTomb = true;
               grants.clear();
               keys.clear();
+              _ckMemKeyClear(pubk);
               recs.clear();
               rows.clear();
               _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D]);
@@ -11562,6 +11632,7 @@
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
               grants.delete(sid);
               keys.delete(sid);
+              _ckMemKeyDel(pubk, sid);
               emit();
               return;
             }
@@ -11575,8 +11646,13 @@
             } catch (err) {
               k = "";
             }
-            if (k) keys.set(sid, k);
-            else keys.delete(sid);
+            if (k) {
+              keys.set(sid, k);
+              _ckMemKeySet(pubk, sid, k);
+            } else {
+              keys.delete(sid);
+              _ckMemKeyDel(pubk, sid);
+            }
             emit();
             return;
           }
@@ -11613,6 +11689,122 @@
           emit();
         }
       });
+    },
+    // ── A WORKER CHECKS A CHILD IN, FROM HER OWN PHONE ───────────────────────────────────────────────────────
+    // slice B of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. The write half of slice 3: a cleared,
+    // in-window worker adds a named child to the register. §7 of the design: most children have no phone, so the
+    // child is NAMED here (typed at the desk) and has no account.
+    //
+    // KNOT 1 — ONLY THE ['ck'] COPY. She holds the SESSION key (unwrapped from her envelope slot, kept in
+    // _ckMemberKeys by the reader) and NOT the safeguarding ring key, so she seals ONLY the ck copy and leaves
+    // `content` empty. The safeguarding ring still reads her record: the ring stewards are KEEPERS of this
+    // session's envelope, so they hold the session key and open her ck copy through it (the console's
+    // encSubscribe falls back to it, gateway serves it). She writes no ring copy because she cannot make one.
+    //
+    // NO ['p'] GUARDIAN TAG. The console names guardians from the church's guardian map; a WORKER's phone does
+    // not hold that map (the relay withholds minors:/guardians: from ordinary members, on purpose), so a
+    // worker-written record carries no guardian link. That is honest — she names the child at the desk — and it
+    // is why the parent-readable copy is the DEFERRED parent surface's concern, not this writer's.
+    //
+    // IT FAILS LOUD, NEVER OPTIMISTICALLY (design §8). No session key held → her turn is not on, or no envelope
+    // has reached this phone: she is not a writer the relay would admit, so this returns { ok:false } at once
+    // rather than pretending. And _publishAny THROWS unless a relay actually accepted the write — a relay
+    // refusal (not a helper, out of window) and a mid-session outage both land here as { ok:false }, so the
+    // screen tells her it did not work and to see the desk, rather than showing a child as checked in when the
+    // room does not. This is NOT "blocking a check-in": a worker with a live key is never refused by us; a
+    // phone with no key has no cryptographic means to write a readable record in the first place.
+    //
+    // Returns { ok:true, id } or { ok:false, reason }.
+    async writeCheckin(churchNpub, rec) {
+      const cp = toPub(churchNpub);
+      if (!cp || !sk || !pub) return { ok: false, reason: "no-identity" };
+      const o = rec || {};
+      const sid = String(o.session || "").trim();
+      if (!sid) return { ok: false, reason: "no-session" };
+      const keyHex = _ckMemKeyGet(cp, sid);
+      if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: "no-key" };
+      const childName = String(o.childName || "").replace(/\s+/g, " ").trim().slice(0, 80);
+      if (!childName) return { ok: false, reason: "no-name" };
+      const id = "ci" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const body = {
+        id,
+        child: "",
+        childName,
+        date: String(o.date || "") || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        in: Math.floor(Date.now() / 1e3),
+        out: null,
+        code: String(o.code || "").trim(),
+        room: String(o.room || "").trim(),
+        note: String(o.note || "").trim(),
+        session: sid,
+        guardians: []
+      };
+      let ck, sentinel;
+      try {
+        ck = encrypt(JSON.stringify(body), _unhex(keyHex));
+        sentinel = encrypt(JSON.stringify({ enc: 2 }), _unhex(keyHex));
+      } catch (e) {
+        return { ok: false, reason: "seal-failed" };
+      }
+      const evt = finalizeEvent2({
+        kind: 30078,
+        created_at: Math.floor(Date.now() / 1e3),
+        tags: [["d", CHECKIN_D + id], ["t", NET], ["church", cp], ["session", sid], ["enc", "2"], ["ck", ck]],
+        content: sentinel
+      }, sk);
+      try {
+        await _publishAny(relaysForChurch(cp), evt);
+      } catch (e) {
+        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+      }
+      return { ok: true, id };
+    },
+    // ── A WORKER RELEASES A CHILD — CHECKOUT AND MANUAL RELEASE ───────────────────────────────────────────────
+    // slice C / KNOT 2 of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. A checkout must NOT rewrite the
+    // check-in record: F-B refuses a helper writing at an address the church already holds one at, and a child
+    // checked in by the console lives at a church-held address. So a release is its OWN document — a fresh
+    // `checkin:<newId>` carrying a cleartext ['rel', <checkinId>] tag — authored by the helper, admitted by the
+    // SAME already-audited CHECKIN_D helper gate (fresh address → F-B and F1 both pass), and folded onto the
+    // check-in row by the reader when their SESSION tags match.
+    //
+    // THE CODE MATCH HAPPENS ON THE SCREEN, NOT HERE. The relay holds no keys, so it cannot compare a code; the
+    // worker's phone holds the record's ck copy and compares `rec.code` there (KidsRow), and a failed match is
+    // LOUD and writes nothing (§6 rule 5). This function is the WRITE that follows a match, or a MANUAL release
+    // (`manual:true`) for a dead phone / a grandparent — recorded distinctly so a register that omits it is not
+    // incomplete, NOT because we suspect the helper (§7 / §10).
+    //
+    // Returns { ok:true, id } or { ok:false, reason }.
+    async releaseCheckin(churchNpub, rec) {
+      const cp = toPub(churchNpub);
+      if (!cp || !sk || !pub) return { ok: false, reason: "no-identity" };
+      const o = rec || {};
+      const sid = String(o.session || "").trim();
+      const rel = String(o.rel || "").trim();
+      if (!sid) return { ok: false, reason: "no-session" };
+      if (!rel) return { ok: false, reason: "no-rel" };
+      const keyHex = _ckMemKeyGet(cp, sid);
+      if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: "no-key" };
+      const id = "cr" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1e3), manual: o.manual === true, by: pub };
+      let ck, sentinel;
+      try {
+        ck = encrypt(JSON.stringify(body), _unhex(keyHex));
+        sentinel = encrypt(JSON.stringify({ enc: 2 }), _unhex(keyHex));
+      } catch (e) {
+        return { ok: false, reason: "seal-failed" };
+      }
+      const evt = finalizeEvent2({
+        kind: 30078,
+        created_at: Math.floor(Date.now() / 1e3),
+        tags: [["d", CHECKIN_D + id], ["t", NET], ["church", cp], ["session", sid], ["rel", rel], ["enc", "2"], ["ck", ck]],
+        content: sentinel
+      }, sk);
+      try {
+        await _publishAny(relaysForChurch(cp), evt);
+      } catch (e) {
+        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+      }
+      return { ok: true, id };
     },
     // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a
     // need present on the church's relay was written by an authorised pubkey. cb([{ id, displayLabel, type,

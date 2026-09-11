@@ -29,7 +29,7 @@ import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-r
 // and `readCheckinHelperCopy` had NO product caller anywhere in src/ or app/ before this; their only in-repo
 // caller was a test, which CLAUDE.md rule 1 says is not a feature.
 import { readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
-         readCheckinPermission, permissionAdmits } from '../scripts/checkin-role-source.mjs';
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide } from '../scripts/checkin-role-source.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -92,6 +92,22 @@ const MSGTAGS_D = 'trinityone/msgtags';
 const CHECKINPERM_D = 'trinityone/checkinperm:';
 const CHECKINHELPER_D = 'trinityone/checkinhelper:';
 const CHECKIN_D = 'trinityone/checkin:';
+// ── THE SESSION KEYS THIS PHONE HOLDS, for the WRITER as well as the reader ───────────────────────────────
+// slice B of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. subscribeCheckinRegister already unwraps
+// each session key from MY OWN envelope slot; before this, that key lived only inside the reader's closure and
+// nothing could WRITE with it. A worker checking a child in seals the record's ['ck'] copy under this key —
+// and NOTHING ELSE, because she holds no safeguarding ring key and must not seal `content` (KNOT 1 of the
+// scope doc: the ring reads her ck copy through the session key it holds as an envelope keeper).
+//
+// KEYED BY CHURCH, THEN SESSION. Session ids can collide between churches (the console keeps _ckSessionKeys
+// and clears it on church switch for exactly this reason); keying by cp isolates them, and a withdrawal or a
+// church switch clears only that church's submap. It is fed by the ONE subscription the Kids screen runs and
+// read by writeCheckin; the raw key never crosses into React state, only into a signed, sealed event.
+const _ckMemberKeys = new Map();                 // cp -> Map(sid -> 32 bytes of hex)
+const _ckMemKeySet = (cp, sid, k) => { let m = _ckMemberKeys.get(cp); if (!m) { m = new Map(); _ckMemberKeys.set(cp, m); } m.set(sid, k); };
+const _ckMemKeyDel = (cp, sid) => { const m = _ckMemberKeys.get(cp); if (m) m.delete(sid); };
+const _ckMemKeyClear = (cp) => { const m = _ckMemberKeys.get(cp); if (m) m.clear(); };
+const _ckMemKeyGet = (cp, sid) => { const m = _ckMemberKeys.get(cp); return (m && m.get(sid)) || ''; };
 const MSGTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
 const MSGTAG_ACCENTS = ['gold', 'sage', 'clay', 'sky', 'plum', 'teal'];
 // 'prayer' is NOT reserved — it's the default tag, editable/removable like any other. Only the built-in
@@ -4898,7 +4914,10 @@ window.Fellowship = {
       const _str = (v) => (typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v) ? String(v) : ''));
       const _when = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && /^\d{1,12}$/.test(v) ? Number(v) : undefined));
       rows.set(id, { ...obj, id, session: r.sid, ts: r.ts, _by: r.by,
-        childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out) });
+        childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out),
+        // slice C: a RELEASE record carries `rel` (the check-in it collects) and `manual` (by hand, no code).
+        // Typed here for the same reason as the rest — a hostile body must not reach a row as an object.
+        rel: _str(obj.rel), manual: obj.manual === true });
       return 'ok';
     };
 
@@ -4907,6 +4926,12 @@ window.Fellowship = {
       const live = permissionAdmits(perm, at);
       let unreadable = 0, foreign = 0;
       const bySession = new Map();
+      // slice C / KNOT 2: a checkout is a SEPARATE document (a helper cannot rewrite the church's record —
+      // F-B), carrying a cleartext ['rel', <checkinId>] tag. Folded onto the check-in row it names, and ONLY
+      // when the release's own session matches the check-in's — both cleartext, so a release scoped to one
+      // session can never mark a child collected in another (the F1 shape, one level up). Keyed by
+      // session|checkinId so the match is structural.
+      const releaseByRel = new Map();
       for (const [id, r] of recs) {
         // ── AND THIS IS THE RETRY ────────────────────────────────────────────────────────────────────────
         // The records and the envelopes RACE, and on a cold start the records win: the hub replays its
@@ -4917,20 +4942,45 @@ window.Fellowship = {
         const state = rows.has(id) ? 'ok' : openRec(id, r);
         if (state === 'foreign') { foreign++; continue; }
         if (state === 'unreadable') { unreadable++; continue; }
+        const row = rows.get(id);
+        // A RELEASE, routed by its CLEARTEXT rel tag (no key needed to tell it from a child) — folded, never
+        // rendered as its own row, so it can never appear as a phantom child.
+        const relId = (r.tags.find(t => t[0] === 'rel') || [])[1] || '';
+        if (relId) {
+          const key = r.sid + '|' + relId;
+          const prev = releaseByRel.get(key);
+          if (!prev || (row.ts || 0) >= (prev.ts || 0)) releaseByRel.set(key, { out: row.out, manual: row.manual, by: row._by, ts: row.ts });
+          continue;
+        }
         if (!bySession.has(r.sid)) bySession.set(r.sid, []);
-        bySession.get(r.sid).push(rows.get(id));
+        bySession.get(r.sid).push(row);
       }
       // EVERY SESSION THIS PHONE HOLDS A KEY FOR, whether or not a child has been checked in yet — because
       // "nobody is here yet" and "you hold no key for this room" are different things a worker needs told
       // apart, and a session that only appeared once it had rows could never say the first.
-      const sessions = [...keys.keys()].map((sid) => {
+      // THE ROOM CODE, derived from the session id and NOTHING SECRET (slice A / roomCode), so a worker can
+      // read it to a parent or match it to the printed sheet. `clash` is over the sessions THIS PHONE holds a
+      // key for — the handful a church runs at once — so a screen can widen a collision rather than confirm
+      // the wrong session back. It carries no authority: it names the session, it does not admit anyone.
+      const heldSids = [...keys.keys()];
+      const clash = roomCodesCollide(heldSids);
+      const sessions = heldSids.map((sid) => {
         const g = grants.get(sid);
         return {
           session: sid,
+          roomCode: roomCode(sid),
+          roomClash: clash.has(sid),
           from: g ? g.grant.from : null,
           until: g ? g.grant.until : null,
           helpers: g ? g.grant.pubs.length : 0,
-          rows: (bySession.get(sid) || []).slice().sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
+          // FOLD A RELEASE ONTO ITS CHILD ROW — a new object, never mutating the `rows` memo. A collected
+          // child keeps their row (so the register stays a legible record of who was in the room) and gains
+          // `out` / `manual` / `releasedBy`. The release's `out` wins when present; otherwise whatever the
+          // check-in record itself carried.
+          rows: (bySession.get(sid) || []).map((r0) => {
+            const rel = releaseByRel.get(sid + '|' + r0.id);
+            return rel ? { ...r0, out: (rel.out != null ? rel.out : r0.out), manual: !!rel.manual, releasedBy: rel.by } : r0;
+          }).sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
         };
       }).sort((a, b) => (a.from || 0) - (b.from || 0));
       cb({
@@ -4992,7 +5042,7 @@ window.Fellowship = {
             // withdrawn worker everything from that moment, and what this phone already held — the envelope, the
             // names, the pickup codes — must go with it, from memory and from the cache the next boot replays. The
             // lost-phone trade in the scope doc is about phones the church cannot reach; this one it can.
-            grants.clear(); keys.clear(); recs.clear(); rows.clear();
+            grants.clear(); keys.clear(); _ckMemKeyClear(pubk); recs.clear(); rows.clear();
             _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D]);
             purged = true;
             emit(); return;
@@ -5016,7 +5066,7 @@ window.Fellowship = {
           if (held && (held.ts || 0) > (e.created_at || 0)) return;
           // A STOOD-DOWN SESSION'S KEY IS FORGOTTEN. revokeCheckinHelpers destroys the envelope, which was the
           // one place that key existed, so after this nobody opens that session's copies — the church included.
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { grants.delete(sid); keys.delete(sid); emit(); return; }
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { grants.delete(sid); keys.delete(sid); _ckMemKeyDel(pubk, sid); emit(); return; }
           const grant = readHelperGrant(e.content);
           if (!grant || grant.session !== sid) return;   // the relay refuses a document whose d-tag and body disagree, so they agree
           grants.set(sid, { grant, ts: e.created_at || 0 });
@@ -5030,7 +5080,7 @@ window.Fellowship = {
           // NO SEPARATE RETRY PASS. There was one, and the sabotage matrix proved it was dead code: deleting
           // the call left every test green, because the emit loop below re-opens each record it has not
           // opened yet, every time. One place decides, and it is the place a test can reach.
-          if (k) keys.set(sid, k); else keys.delete(sid);
+          if (k) { keys.set(sid, k); _ckMemKeySet(pubk, sid, k); } else { keys.delete(sid); _ckMemKeyDel(pubk, sid); }
           emit(); return;
         }
         // ── A CHILD'S PRESENCE AT A SESSION ───────────────────────────────────────────────────────────────
@@ -5061,6 +5111,114 @@ window.Fellowship = {
       oneose() { eosed = true; emit(); },
     });
   },
+
+  // ── A WORKER CHECKS A CHILD IN, FROM HER OWN PHONE ───────────────────────────────────────────────────────
+  // slice B of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. The write half of slice 3: a cleared,
+  // in-window worker adds a named child to the register. §7 of the design: most children have no phone, so the
+  // child is NAMED here (typed at the desk) and has no account.
+  //
+  // KNOT 1 — ONLY THE ['ck'] COPY. She holds the SESSION key (unwrapped from her envelope slot, kept in
+  // _ckMemberKeys by the reader) and NOT the safeguarding ring key, so she seals ONLY the ck copy and leaves
+  // `content` empty. The safeguarding ring still reads her record: the ring stewards are KEEPERS of this
+  // session's envelope, so they hold the session key and open her ck copy through it (the console's
+  // encSubscribe falls back to it, gateway serves it). She writes no ring copy because she cannot make one.
+  //
+  // NO ['p'] GUARDIAN TAG. The console names guardians from the church's guardian map; a WORKER's phone does
+  // not hold that map (the relay withholds minors:/guardians: from ordinary members, on purpose), so a
+  // worker-written record carries no guardian link. That is honest — she names the child at the desk — and it
+  // is why the parent-readable copy is the DEFERRED parent surface's concern, not this writer's.
+  //
+  // IT FAILS LOUD, NEVER OPTIMISTICALLY (design §8). No session key held → her turn is not on, or no envelope
+  // has reached this phone: she is not a writer the relay would admit, so this returns { ok:false } at once
+  // rather than pretending. And _publishAny THROWS unless a relay actually accepted the write — a relay
+  // refusal (not a helper, out of window) and a mid-session outage both land here as { ok:false }, so the
+  // screen tells her it did not work and to see the desk, rather than showing a child as checked in when the
+  // room does not. This is NOT "blocking a check-in": a worker with a live key is never refused by us; a
+  // phone with no key has no cryptographic means to write a readable record in the first place.
+  //
+  // Returns { ok:true, id } or { ok:false, reason }.
+  async writeCheckin(churchNpub, rec) {
+    const cp = toPub(churchNpub);
+    if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    const o = rec || {};
+    const sid = String(o.session || '').trim();
+    if (!sid) return { ok: false, reason: 'no-session' };            // a record with no session cannot be opened by a helper — and the door needs one
+    const keyHex = _ckMemKeyGet(cp, sid);
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: 'no-key' };   // fail LOUD: turn not on / no envelope on this phone
+    const childName = String(o.childName || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!childName) return { ok: false, reason: 'no-name' };
+    const id = 'ci' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    // THE SAME BODY SHAPE THE CONSOLE'S publishCheckin WRITES, so one reader opens both. `guardians: []` —
+    // this writer holds no guardian map (see the note above). `out: null` — a check-in is not a checkout;
+    // release is its own document (slice C / KNOT 2).
+    const body = {
+      id, child: '', childName,
+      date: String(o.date || '') || new Date().toISOString().slice(0, 10),
+      in: Math.floor(Date.now() / 1000), out: null,
+      code: String(o.code || '').trim(), room: String(o.room || '').trim(),
+      note: String(o.note || '').trim(), session: sid, guardians: [],
+    };
+    let ck, sentinel;
+    try {
+      ck = nip44e(JSON.stringify(body), _unhex(keyHex));
+      // ⚠ content MUST NOT BE EMPTY. An empty `content` is the TOMBSTONE convention: checkinTombstone() in the
+      // relay (`!e.content`) refuses it as a deletion (F-D: a helper writes records, never removes them), and
+      // subscribeCheckinRegister treats it as a withdrawal of the record. A worker holds no ring key, so she
+      // cannot write the ring's copy that fills `content` for a console record — she seals a NON-EMPTY
+      // sentinel under the SESSION key instead. It is opaque to the ring (encOpen tries the ring key, throws,
+      // and falls back to the ['ck'] copy) and no reader ever surfaces it: it exists only so the record is a
+      // record and not a tombstone. KNOT 1 of the scope doc.
+      sentinel = nip44e(JSON.stringify({ enc: 2 }), _unhex(keyHex));
+    } catch (e) { return { ok: false, reason: 'seal-failed' }; }
+    // CLEARTEXT TAGS, matching _encCleartextTags in the console so the relay's read gate and both readers key
+    // on the same strings. NO ['p'] here. content is the non-empty sentinel above, never the ring's copy.
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['enc', '2'], ['ck', ck]],
+      content: sentinel }, sk);
+    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    return { ok: true, id };
+  },
+
+  // ── A WORKER RELEASES A CHILD — CHECKOUT AND MANUAL RELEASE ───────────────────────────────────────────────
+  // slice C / KNOT 2 of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. A checkout must NOT rewrite the
+  // check-in record: F-B refuses a helper writing at an address the church already holds one at, and a child
+  // checked in by the console lives at a church-held address. So a release is its OWN document — a fresh
+  // `checkin:<newId>` carrying a cleartext ['rel', <checkinId>] tag — authored by the helper, admitted by the
+  // SAME already-audited CHECKIN_D helper gate (fresh address → F-B and F1 both pass), and folded onto the
+  // check-in row by the reader when their SESSION tags match.
+  //
+  // THE CODE MATCH HAPPENS ON THE SCREEN, NOT HERE. The relay holds no keys, so it cannot compare a code; the
+  // worker's phone holds the record's ck copy and compares `rec.code` there (KidsRow), and a failed match is
+  // LOUD and writes nothing (§6 rule 5). This function is the WRITE that follows a match, or a MANUAL release
+  // (`manual:true`) for a dead phone / a grandparent — recorded distinctly so a register that omits it is not
+  // incomplete, NOT because we suspect the helper (§7 / §10).
+  //
+  // Returns { ok:true, id } or { ok:false, reason }.
+  async releaseCheckin(churchNpub, rec) {
+    const cp = toPub(churchNpub);
+    if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    const o = rec || {};
+    const sid = String(o.session || '').trim();
+    const rel = String(o.rel || '').trim();
+    if (!sid) return { ok: false, reason: 'no-session' };
+    if (!rel) return { ok: false, reason: 'no-rel' };                // a release must name the check-in it collects
+    const keyHex = _ckMemKeyGet(cp, sid);
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: 'no-key' };   // fail LOUD, same as writeCheckin
+    const id = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1000), manual: o.manual === true, by: pub };
+    let ck, sentinel;
+    try {
+      ck = nip44e(JSON.stringify(body), _unhex(keyHex));
+      sentinel = nip44e(JSON.stringify({ enc: 2 }), _unhex(keyHex));   // non-empty, or the relay reads it as a tombstone (see writeCheckin)
+    } catch (e) { return { ok: false, reason: 'seal-failed' }; }
+    // A ['rel'] tag routes the reader's fold; content is the sentinel, NOT a ring copy.
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['rel', rel], ['enc', '2'], ['ck', ck]],
+      content: sentinel }, sk);
+    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    return { ok: true, id };
+  },
+
   // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a
   // need present on the church's relay was written by an authorised pubkey. cb([{ id, displayLabel, type,
   // startDate, endDate, recipient, notes, ts }]).

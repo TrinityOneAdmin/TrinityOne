@@ -39,7 +39,7 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { fnBody, stmt } from './test-slice.mjs';
 import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE,
          readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
-         readCheckinPermission, permissionAdmits } from './checkin-role-source.mjs';
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide } from './checkin-role-source.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD    = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -134,6 +134,20 @@ function record(id, obj, session, sessionKeyHex, over = {}) {
            content: 'RING-CIPHERTEXT-A-WORKER-CANNOT-OPEN-' + id };
 }
 
+// A RELEASE (slice C / KNOT 2), the way Fellowship.releaseCheckin writes one: its OWN fresh checkin: address,
+// a cleartext ['rel', <checkinId>] tag, and a ['ck'] body `{ rel, out, manual, by }` under the session key.
+// `content` is a non-empty sentinel, never a ring copy. Authored by the worker, as the shipped writer signs
+// it — the reader does not filter records by author (except tombstones), so this mirrors reality.
+function release(id, relId, session, sessionKeyHex, over = {}) {
+  const keys = new Map(); if (sessionKeyHex) keys.set(session, sessionKeyHex);
+  const { sealedCopies } = consoleSealer(keys);
+  const body = { id, rel: relId, session, out: over.out != null ? over.out : NOW + 1800, manual: over.manual === true, by: (over.by || morning).pub };
+  const tags = [['d', CHECKIN_D + id], ['t', 'trinityone'], ['church', church.pub], ['session', session], ['rel', relId], ['enc', '2'], ...sealedCopies('checkin', body)];
+  assert.ok(tags.find(t => t[0] === 'ck'), 'fixture: the shipped sealer produced no ck copy for the release, so the fold below is vacuous');
+  if (over.tagSession) { for (const t of tags) if (t[0] === 'session') t[1] = over.tagSession; }
+  return { pubkey: (over.by || morning).pub, created_at: over.at || (NOW + 1800), tags, content: 'RELEASE-SENTINEL-' + id };
+}
+
 // ── THE WORKER'S PHONE: THE SHIPPED READER OUT OF vendor/fellowship.js ────────────────────────────────────
 function phone(who) {
   const emitted = [];
@@ -159,6 +173,11 @@ function phone(who) {
     // (see the reader's own note on red-team F1 — it does not filter records by author, on purpose).
     _churchVoice: (cp, rec) => (rec && rec._by) === church.pub,
     readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf, readCheckinPermission, permissionAdmits,
+    roomCode, roomCodesCollide,
+    // slice B: the reader now MIRRORS each session key it unwraps into the module-level _ckMemberKeys map, so
+    // the WRITER (writeCheckin) can reach it. This file tests the READER, not the writer, so these are no-ops —
+    // the reader's own `keys` closure is what every assertion below reads.
+    _ckMemKeySet: () => {}, _ckMemKeyDel: () => {}, _ckMemKeyClear: () => {},
     _unhex,
     // ⚠ THE BUNDLE'S SPELLINGS. See the header note on esbuild renaming.
     decrypt: nip44.decrypt, getConversationKey: nip44.getConversationKey,
@@ -531,4 +550,64 @@ test('a tombstone from somebody the reader does not trust removes nothing', () =
   p.feed({ pubkey: church.pub, created_at: NOW + 120, content: '',
            tags: [['d', CHECKIN_D + 'ci-1'], ['deleted', '1'], ['session', AM]] });
   assert.deepEqual(namesOn(p.last()), [], 'CONTROL: the reader honours no tombstone at all, from anybody');
+});
+
+// ── SLICE C: a checkout is a SEPARATE document, folded onto its child row by the READER ────────────────────
+test('a RELEASE folds onto the child row it names — the child is COLLECTED, and the release is not a phantom row', () => {
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          release('cr-1', 'ci-1', AM, AM_KEY, { out: NOW + 1800 }))
+    .settle().last();
+  assert.deepEqual(namesOn(v), ['Esther Ncube'],
+    'THE RELEASE RENDERED AS ITS OWN ROW, or the child vanished. A release is folded onto its check-in, never shown as a phantom child.');
+  const row = v.sessions[0].rows.find(r => r.childName === 'Esther Ncube');
+  assert.equal(row.out, NOW + 1800, 'the child is not marked collected — the release did not fold onto the row');
+  assert.equal(row.manual, false, 'a code-matched release was recorded as by-hand');
+});
+
+test('a MANUAL release folds with its distinct marker, so the guardian and the lead can tell it apart', () => {
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          release('cr-1', 'ci-1', AM, AM_KEY, { manual: true, out: NOW + 1800 }))
+    .settle().last();
+  const row = v.sessions[0].rows.find(r => r.childName === 'Esther Ncube');
+  assert.equal(row.out, NOW + 1800, 'the manual release did not mark the child collected');
+  assert.equal(row.manual, true,
+    'A MANUAL RELEASE WAS NOT RECORDED DISTINCTLY. §7: a register that cannot tell a by-hand collection from a ' +
+    'code one is incomplete.');
+});
+
+test('a release for ANOTHER session does not collect a child — the session tags must match (the F1 shape, one level up)', () => {
+  // The phone holds BOTH keys, so both records are readable; the only thing standing between the AM release
+  // and the PM child is the session-match guard in the fold.
+  const v = phone(morning)
+    .feed(clearance(morning),
+          envelope(AM, AM_KEY, [morning]), envelope(PM, PM_KEY, [morning]),
+          record('ci-am', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          record('ci-pm', { childName: 'Amos Bello', code: '9081' }, PM, PM_KEY),
+          // an AM-session release that NAMES the PM child. It must not collect her.
+          release('cr-1', 'ci-pm', AM, AM_KEY, { out: NOW + 1800 }))
+    .settle().last();
+  const pm = v.sessions.find(s => s.session === PM).rows.find(r => r.childName === 'Amos Bello');
+  assert.equal(pm.out, undefined,
+    'A RELEASE SCOPED TO ONE SESSION COLLECTED A CHILD IN ANOTHER. The fold keyed on the checkin id alone, not ' +
+    'on session|id — the exact cross-session shape F1 was about, one level up.');
+  const am = v.sessions.find(s => s.session === AM).rows;
+  assert.deepEqual(am.map(r => r.childName), ['Esther Ncube'], 'the AM release leaked into the AM child list as a row');
+  assert.equal(am[0].out, undefined, 'the AM release folded onto the wrong AM child');
+});
+
+test('a release this phone holds no key for is counted, never folded and never rendered', () => {
+  // The release is sealed under the EVENING key; the morning phone cannot open it, so it is foreign — and a
+  // foreign release must not silently collect a child it names.
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          release('cr-1', 'ci-1', PM, PM_KEY, {}))
+    .settle().last();
+  const row = v.sessions[0].rows.find(r => r.childName === 'Esther Ncube');
+  assert.equal(row.out, undefined, 'a release this phone could not even open marked a child collected');
+  assert.equal(v.foreign, 1, 'the unreadable release was not counted as belonging to another session');
 });
