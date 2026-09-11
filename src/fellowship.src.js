@@ -4841,7 +4841,7 @@ window.Fellowship = {
   //     console's do. The raw window travels with them so a screen can be honest about what it is reading.
   subscribeCheckinRegister(churchNpub, cb) {
     const pubk = toPub(churchNpub);
-    const EMPTY = { cleared: false, lapsed: false, notYet: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
+    const EMPTY = { cleared: false, lapsed: false, notYet: false, withdrawn: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
     if (!pubk) { cb({ ...EMPTY }); return () => {}; }
     const me = String(pub || '').toLowerCase();
     if (!me || !sk) { cb({ ...EMPTY }); return () => {}; }
@@ -4915,6 +4915,13 @@ window.Fellowship = {
         // clearance had already ENDED. A window entirely in the future is not live and has not ended.
         lapsed: !!perm && !live && perm.until != null && at > perm.until,
         notYet: !!perm && !live && Number.isFinite(perm.from) && at < perm.from,
+        // WITHDRAWN, TOLD APART FROM NEVER CLEARED. Measured on the Oppo, 2026-09-11 (device finding D3): the
+        // church withdrew a helper's clearance, the relay refused her everything from that moment — and the
+        // phone, which had the register already, went on showing it through a resume AND a cold start with
+        // no line saying anything had changed. The tombstone DID arrive (perm went to null); the screen just
+        // had no word for it. `permTs` is only ever stamped by a clearance document for me, so "no clearance
+        // now, and I have seen one" is a withdrawal — not the cold-start race where nothing has arrived yet.
+        withdrawn: !perm && permTs > 0,
         from: perm ? perm.from : null,
         until: perm ? (perm.until == null ? null : perm.until) : null,
         lifetime: perm ? String(perm.lifetime || '') : '',

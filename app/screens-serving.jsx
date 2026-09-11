@@ -694,6 +694,17 @@ function KidsRegister({ ctx }) {
           <b style={{ color: 'var(--ink)' }}>Your clearance ended {svWhen(reg.until)}.</b>{' '}
           New records will stop reaching this phone.
         </div>
+      ) : reg.withdrawn && reg.keysHeld > 0 ? (
+        /* WITHDRAWN, AND THIS PHONE STILL HOLDS A KEY. Device finding D3, 2026-09-11: the register stayed on a
+           withdrawn helper's phone through a resume and a cold start, and nothing said so. The rows below are
+           what this phone already held — the relay serves it nothing new — and that is said in those words.
+           The console's own copy promises "withdrawing one ends their access at once"; what is already on a
+           phone is the part that promise cannot reach, and this line is the honest half of it. Whether the
+           cached copies should be DROPPED on withdrawal is the owner's decision, not this line's. */
+        <div style={{ borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '12px 14px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+          <b style={{ color: 'var(--ink)' }}>Your church has withdrawn your clearance.</b>{' '}
+          What is below is what this phone already held; nothing new will reach it.
+        </div>
       ) : null}
 
       {/* CLEARED — AND LIVE, WHICH IS THE HALF THAT WAS MISSING — AND NO KEY HAS BEEN ISSUED. Today this is the commonest state there is, and NOTHING IS

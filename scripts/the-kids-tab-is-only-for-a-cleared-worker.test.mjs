@@ -75,7 +75,7 @@ const shownButton = (tree, label) => shown(tree, n => n.type === 'button' && tex
 // The exact shape Fellowship.subscribeCheckinRegister emits. Every field is asserted against the shipped
 // reader in a-cleared-worker-reads-one-sessions-register.test.mjs, so these are that function's real answers
 // rather than a guess at them.
-const NONE = { cleared: false, lapsed: false, notYet: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: true };
+const NONE = { cleared: false, lapsed: false, notYet: false, withdrawn: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: true };
 const AM_FROM = 1788595200;   // 2026-09-06, a Sunday
 const twoKids = [
   { id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am' },
@@ -314,6 +314,24 @@ test('NEGATIVE: a lapsed clearance says so and does NOT take the register off th
     'the register was taken off the screen because a clearance lapsed. The app says a key has expired; it ' +
     'does not lock somebody out of a room mid-session');
   assert.equal(s.has('Show code'), 2, 'the pickup codes became unreachable, so the door stopped working');
+});
+
+test('NEGATIVE: a WITHDRAWN clearance says so over the register the phone still holds', () => {
+  // Device finding D3, 2026-09-11: the Oppo showed the register, unremarked, through a resume and a cold
+  // start after the church had withdrawn the clearance. The rows stay (owner's call whether to drop them);
+  // the line must not.
+  const s = serving({ ...NONE, withdrawn: true, keysHeld: 1, sessions: oneSession(twoKids) });
+  assert.ok(tabLabels(s.tree()).includes('Kids'), 're-anchor: a phone holding a key keeps its tab, as the lapsed state does');
+  s.press('Kids');
+  const out = s.reads();
+  assert.match(out, /withdrawn your clearance/i,
+    'A WITHDRAWN HELPER IS SHOWN THE REGISTER WITH NO WORD ABOUT IT. As rendered: ' + out);
+  assert.match(out, /already held/i, 'the line does not say that what is shown is what the phone already had');
+  assert.match(out, /Esther Ncube/, 'the rows were dropped — that is the owner\'s decision, not this screen\'s');
+  // and somebody never cleared, holding a key by the cold-start race, is told nothing of the kind
+  const n = serving({ ...NONE, keysHeld: 1, sessions: oneSession(twoKids) });
+  n.press('Kids');
+  assert.doesNotMatch(n.reads(), /withdrawn/i, '"withdrawn" is said to a phone that has never seen a clearance');
 });
 
 test('NEGATIVE: a lapsed clearance with NO keys shows nothing at all', () => {

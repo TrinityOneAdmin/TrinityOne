@@ -363,6 +363,28 @@ test('a clearance whose window has passed is "ended", and the register it alread
     'app says a key has expired, it does not lock somebody out of a room mid-session.');
 });
 
+test('a WITHDRAWN clearance is reported as withdrawn — not as "never cleared", and not silently', () => {
+  // Device finding D3, 2026-09-11: after the church withdrew a helper's clearance the phone kept the register
+  // through a resume and a cold start with no line saying anything had changed. The tombstone arrived; the
+  // state had no word for it. This is that word. The rows stay (the phone already holds them, and the relay
+  // serves nothing new) — whether to DROP them is the owner's call, not this reader's.
+  const tomb = { pubkey: church.pub, created_at: NOW - 60, content: '',
+                 tags: [['d', CHECKINPERM_D + morning.pub], ['t', 'trinityone'], ['church', church.pub], ['deleted', '1']] };
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY), tomb)
+    .settle().last();
+  assert.equal(v.cleared, false, 'a withdrawn clearance still admits');
+  assert.equal(v.withdrawn, true,
+    'A WITHDRAWAL IS SILENT. The church took this clearance away and the phone reports the same state as ' +
+    'somebody who was never cleared — the screen has nothing to say. State: ' + JSON.stringify({ cleared: v.cleared, lapsed: v.lapsed, notYet: v.notYet, withdrawn: v.withdrawn }));
+  assert.equal(v.lapsed, false, 'a withdrawal was reported as an expiry');
+  assert.deepEqual(namesOn(v), ['Esther Ncube'], 'the reader dropped the rows the phone already held — that decision is not this reader\'s to take');
+  // and never cleared is NOT withdrawn — the cold-start race, where nothing has arrived, must not say "withdrawn"
+  const never = phone(morning).feed(envelope(AM, AM_KEY, [morning])).settle().last();
+  assert.equal(never.withdrawn, false, 'a phone that has never seen a clearance document reports one as withdrawn');
+});
+
 // ── THE RACE THE CONSOLE'S HOLDING PEN GOT WRONG. ─────────────────────────────────────────────────────────
 test('records arriving BEFORE the envelope still open when the key lands', () => {
   // On a cold start this is the ORDINARY order: the docs hub replays its persisted corpus oldest-first, so the
