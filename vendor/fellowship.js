@@ -6513,6 +6513,30 @@
     if (!Array.isArray(tags)) return "";
     return String((tags.find((t) => Array.isArray(t) && t[0] === "session") || [])[1] || "").trim();
   }
+  function roomCode(sessionId) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return "";
+    let h = 2166136261;
+    for (let i3 = 0; i3 < sid.length; i3++) {
+      h ^= sid.charCodeAt(i3);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return String(h % 1e4).padStart(4, "0");
+  }
+  function roomCodesCollide(sessionIds) {
+    const seen = /* @__PURE__ */ new Map();
+    const clash = /* @__PURE__ */ new Set();
+    for (const sid of Array.isArray(sessionIds) ? sessionIds : []) {
+      const s = String(sid || "").trim();
+      if (!s) continue;
+      const c = roomCode(s);
+      if (seen.has(c)) {
+        clash.add(s);
+        clash.add(seen.get(c));
+      } else seen.set(c, s);
+    }
+    return clash;
+  }
 
   // src/fellowship.src.js
   var _dmEncrypt = (sk2, peerPub, text) => encrypt(text, getConversationKey(sk2, peerPub));
@@ -11472,10 +11496,14 @@
           if (!bySession.has(r.sid)) bySession.set(r.sid, []);
           bySession.get(r.sid).push(rows.get(id));
         }
-        const sessions = [...keys.keys()].map((sid) => {
+        const heldSids = [...keys.keys()];
+        const clash = roomCodesCollide(heldSids);
+        const sessions = heldSids.map((sid) => {
           const g = grants.get(sid);
           return {
             session: sid,
+            roomCode: roomCode(sid),
+            roomClash: clash.has(sid),
             from: g ? g.grant.from : null,
             until: g ? g.grant.until : null,
             helpers: g ? g.grant.pubs.length : 0,

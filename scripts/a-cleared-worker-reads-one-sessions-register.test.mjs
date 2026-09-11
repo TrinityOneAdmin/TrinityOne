@@ -39,7 +39,7 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { fnBody, stmt } from './test-slice.mjs';
 import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE,
          readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
-         readCheckinPermission, permissionAdmits } from './checkin-role-source.mjs';
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide } from './checkin-role-source.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD    = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -159,6 +159,7 @@ function phone(who) {
     // (see the reader's own note on red-team F1 — it does not filter records by author, on purpose).
     _churchVoice: (cp, rec) => (rec && rec._by) === church.pub,
     readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf, readCheckinPermission, permissionAdmits,
+    roomCode, roomCodesCollide,
     _unhex,
     // ⚠ THE BUNDLE'S SPELLINGS. See the header note on esbuild renaming.
     decrypt: nip44.decrypt, getConversationKey: nip44.getConversationKey,

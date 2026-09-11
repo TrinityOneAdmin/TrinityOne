@@ -805,3 +805,55 @@ export function checkinSessionOf(tags) {
   if (!Array.isArray(tags)) return '';
   return String(((tags.find(t => Array.isArray(t) && t[0] === 'session') || [])[1] || '')).trim();
 }
+
+// ── THE ROOM CODE: A SHORT, NUMERIC, DERIVED NAME FOR A SESSION — AND NOTHING MORE ────────────────────────
+//
+// Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the 2026-09-10 decision, and slice A of
+// reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. Three presentations of ONE session identifier —
+// printed sheet, this numeric code, and (later) a QR — and the rule the whole printed-sheet decision rests on
+// is that NONE OF THEM CARRIES AUTHORITY. The authority is the relay gates: a parent is proven a guardian by
+// the `p` tags and guardianOfIn, a worker proven cleared by envelope membership plus a live clearance. So
+// photographing this code, guessing it, or reading last week's off a sticker gains nothing — the pickup code,
+// which actually releases a child, is separate and per-record.
+//
+// ⚠ THE LINE THIS RESTS ON: this code must never carry key material or authority. It is a function of the
+// session id ALONE and of nothing secret. If anyone later feeds it a key or lets the relay gate on it, the
+// printed-sheet decision is void and it must rotate. It is here, in the shared module, for the same reason
+// everything else is: the console prints it, the member app shows it, a parent types it — and a second
+// spelling anywhere would name a different session and confirm the wrong one back.
+//
+// DERIVED, NOT ASSIGNED (the scope doc's word): a deterministic digest of the session id means the sheet, the
+// app and anyone typing it agree with no registry and no allocation step. FNV-1a over the id, mod 10000,
+// zero-padded to four digits — because "guessability does not matter; typos do", so the defence is not length
+// but a confirmation that NAMES THE SESSION BACK before anything is written, and four digits is ample for the
+// handful of sessions a church runs at once. Uniqueness is scoped to a church's LIVE sessions and checked at
+// DISPLAY time by whoever shows the code (roomCodesCollide below), never by length here. Returns '' for a
+// missing id, because a session with no id has no code and a caller must show nothing rather than "0000".
+export function roomCode(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return '';
+  let h = 0x811c9dc5;                         // FNV-1a 32-bit offset basis
+  for (let i = 0; i < sid.length; i++) {
+    h ^= sid.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;       // * FNV prime, kept in uint32
+  }
+  return String(h % 10000).padStart(4, '0');
+}
+
+// DO TWO OF THESE LIVE SESSIONS SHARE A CODE? Asked by whoever DISPLAYS the codes, over the sessions a church
+// is actually running at once — not globally, and not by this module, which has no idea which sessions are
+// live. Returns the set of session ids whose four digits collide with another's, so a screen can widen the
+// clash (show five digits, or name the room) rather than confirm the wrong session back to a parent. An empty
+// set is the ordinary answer for the one-to-six sessions a Sunday has.
+export function roomCodesCollide(sessionIds) {
+  const seen = new Map();                      // code -> first session id that produced it
+  const clash = new Set();
+  for (const sid of (Array.isArray(sessionIds) ? sessionIds : [])) {
+    const s = String(sid || '').trim();
+    if (!s) continue;
+    const c = roomCode(s);
+    if (seen.has(c)) { clash.add(s); clash.add(seen.get(c)); }
+    else seen.set(c, s);
+  }
+  return clash;
+}

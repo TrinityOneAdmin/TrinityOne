@@ -731,6 +731,18 @@ function KidsRegister({ ctx }) {
                   "Collected" was the header the Oppo showed after the only child had gone home. */}
               <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{sn.rows.filter(r => !r.out).length} checked in{sn.rows.some(r => r.out) ? ' · ' + sn.rows.filter(r => r.out).length + ' collected' : ''}</div>
             </div>
+            {/* THE ROOM CODE — slice A. A short numeric name for this session, the same number the printed sheet
+                shows and a parent types; it CARRIES NO AUTHORITY (roomCode is a digest of the session id and
+                nothing secret), so it is shown openly, unlike the per-child pickup code. It lets a worker
+                confirm she is looking at the right session and read it aloud. `roomClash` warns when two of the
+                sessions this phone holds share four digits, so nobody confirms the wrong room back. */}
+            {sn.roomCode ? (
+              <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>Room code</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, letterSpacing: '2px', color: 'var(--ink)' }}>{sn.roomCode}</div>
+                {sn.roomClash ? <div style={{ fontSize: 10.5, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 1 }}>shared — name the room</div> : null}
+              </div>
+            ) : null}
           </div>
           {sn.rows.length
             ? sn.rows.map(r => (

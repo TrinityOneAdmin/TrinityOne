@@ -19,7 +19,7 @@ import {
   permittedHelpers, permissionPolicy, permissionWindow, permissionFault, buildCheckinPermission,
   readCheckinPermission, permissionAdmits, PERMISSION_LIFETIMES, DEFAULT_PERMISSION_LIFETIME,
   isDeclaredPermissionLifetime, MAX_PERMISSION_SECONDS, KEY_LEAD_SECONDS,
-  readCheckinHelperCopy, checkinSessionOf
+  readCheckinHelperCopy, checkinSessionOf, roomCode, roomCodesCollide
 } from './checkin-role-source.mjs';
 import { D, DOC_TYPES } from './trinity-doc-types.mjs';
 
@@ -774,4 +774,37 @@ test('THE SESSION IS READ FROM THE CLEARTEXT TAG, because the answer is needed b
   assert.equal(checkinSessionOf([['session', '  svc-am  ']]), 'svc-am', 'the value is not trimmed');
   assert.equal(checkinSessionOf(null), '', 'a missing tag list threw');
   assert.equal(checkinSessionOf([['session']]), '', 'a session tag with no value');
+});
+
+test('THE ROOM CODE is a deterministic four-digit digest of the session id, and NOTHING SECRET goes into it', () => {
+  // Slice A. The code names a session; it does not admit anyone (the relay gates do), so it is derived from
+  // the session id ALONE — the property the whole printed-sheet decision rests on.
+  const a = roomCode('svc-am-2026-09-13');
+  assert.match(a, /^\d{4}$/, 'the room code is not four digits: ' + JSON.stringify(a));
+  assert.equal(roomCode('svc-am-2026-09-13'), a, 'the same session id gave two different codes — a printed sheet and the app would disagree');
+  assert.notEqual(roomCode('svc-pm-2026-09-13'), '', 'a real session id produced no code');
+  // NO KEY, NO CLOCK, NO RANDOMNESS — the same input across processes must give the same digit. FNV-1a is a
+  // pure function of the string; this pins that nobody quietly reaches for Math.random or Date.
+  assert.equal(roomCode('svc-am-2026-09-13'), roomCode('svc-am-2026-09-13'.slice(0) + ''), 'derivation is not pure over the id');
+  // A MISSING ID HAS NO CODE — a caller must show nothing, never "0000".
+  assert.equal(roomCode(''), '', 'an empty session id got a code');
+  assert.equal(roomCode(null), '', 'a null session id got a code');
+  assert.equal(roomCode('  '), '', 'a whitespace-only session id got a code');
+  assert.equal(roomCode('  svc-am  '), roomCode('svc-am'), 'the id is not trimmed, so a stray space names a different room');
+});
+
+test('roomCodesCollide flags only the LIVE sessions that share four digits, so the wrong room is never confirmed back', () => {
+  // Over the handful of sessions a church runs at once, not globally. The ordinary answer is an empty set.
+  assert.equal(roomCodesCollide(['svc-am', 'svc-pm', 'svc-creche']).size, 0,
+    'three distinct sessions were reported as colliding');
+  // Construct a genuine collision: two ids that FNV-1a maps to the same four digits. Search a small space so
+  // the test does not assert a collision it only hopes exists.
+  let a = 'svc-a', b = '';
+  for (let i = 0; i < 100000 && !b; i++) { const cand = 'svc-' + i; if (cand !== a && roomCode(cand) === roomCode(a)) b = cand; }
+  assert.ok(b, 'fixture: found no colliding session id in the search space — widen it');
+  const clash = roomCodesCollide([a, b, 'svc-lonely']);
+  assert.ok(clash.has(a) && clash.has(b), 'a real four-digit collision was not flagged');
+  assert.equal(clash.has('svc-lonely'), false, 'a session that collides with nothing was flagged as if it did');
+  assert.equal(roomCodesCollide([]).size, 0, 'an empty session list threw or reported a collision');
+  assert.equal(roomCodesCollide(['', '  ', 'x']).size, 0, 'blank ids were counted as colliding');
 });

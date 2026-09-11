@@ -29,7 +29,7 @@ import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-r
 // and `readCheckinHelperCopy` had NO product caller anywhere in src/ or app/ before this; their only in-repo
 // caller was a test, which CLAUDE.md rule 1 says is not a feature.
 import { readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
-         readCheckinPermission, permissionAdmits } from '../scripts/checkin-role-source.mjs';
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide } from '../scripts/checkin-role-source.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -4923,10 +4923,18 @@ window.Fellowship = {
       // EVERY SESSION THIS PHONE HOLDS A KEY FOR, whether or not a child has been checked in yet — because
       // "nobody is here yet" and "you hold no key for this room" are different things a worker needs told
       // apart, and a session that only appeared once it had rows could never say the first.
-      const sessions = [...keys.keys()].map((sid) => {
+      // THE ROOM CODE, derived from the session id and NOTHING SECRET (slice A / roomCode), so a worker can
+      // read it to a parent or match it to the printed sheet. `clash` is over the sessions THIS PHONE holds a
+      // key for — the handful a church runs at once — so a screen can widen a collision rather than confirm
+      // the wrong session back. It carries no authority: it names the session, it does not admit anyone.
+      const heldSids = [...keys.keys()];
+      const clash = roomCodesCollide(heldSids);
+      const sessions = heldSids.map((sid) => {
         const g = grants.get(sid);
         return {
           session: sid,
+          roomCode: roomCode(sid),
+          roomClash: clash.has(sid),
           from: g ? g.grant.from : null,
           until: g ? g.grant.until : null,
           helpers: g ? g.grant.pubs.length : 0,

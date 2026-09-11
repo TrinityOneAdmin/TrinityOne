@@ -23,6 +23,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
+import { roomCode } from './checkin-role-source.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
@@ -81,7 +82,7 @@ const twoKids = [
   { id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am' },
   { id: 'ci-2', childName: 'Amos Bello', code: '9081', session: 'svc-am' },
 ];
-const oneSession = (rows) => [{ session: 'svc-am', from: AM_FROM, until: AM_FROM + 10800, helpers: 2, rows }];
+const oneSession = (rows) => [{ session: 'svc-am', roomCode: roomCode('svc-am'), roomClash: false, from: AM_FROM, until: AM_FROM + 10800, helpers: 2, rows }];
 
 function serving(register) {
   const { React, draw } = miniReact();
@@ -182,6 +183,24 @@ test('POINT OF USE: a cleared worker gets a Kids tab, and it renders the registe
   assert.deepEqual(s.glued(), [],
     'two pieces of copy run together with no space between them — the JSX newline trap that shipped ' +
     '"whenever you openthis page" to a phone: ' + JSON.stringify(s.glued()));
+});
+
+test('POINT OF USE: the room code is shown OPENLY on the session card — it names the session and admits nobody', () => {
+  // Slice A. Unlike a pickup code (covered until asked for, because it releases a child), the room code
+  // carries no authority: it is a digest of the session id and a worker reads it aloud or matches it to the
+  // printed sheet. It must be ON THE SCREEN, or the numeric presentation of the identifier is the feature
+  // deleted with the derivation underneath it still tested.
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(twoKids) });
+  s.press('Kids');
+  const out = s.reads();
+  assert.ok(out.includes(roomCode('svc-am')),
+    'THE ROOM CODE IS NOT ON THE SESSION CARD. A worker has no number to read to a parent or match to the ' +
+    'printed sheet. Expected ' + JSON.stringify(roomCode('svc-am')) + ' — as rendered: ' + out);
+  assert.match(out, /Room code/i, 'the code is on the screen but nothing labels it as the room code');
+  // AND IT IS NOT TREATED AS A SECRET. There is no "Show code" control for it — that pattern is the pickup
+  // code's alone. The two "Show code" buttons are the two children's pickup codes, not the room code.
+  assert.equal(s.has('Show code'), 2, 'the room code grew a reveal control, or a pickup code lost one');
+  assert.deepEqual(s.glued(), [], 'copy runs together on the card: ' + JSON.stringify(s.glued()));
 });
 
 test('…and a pickup code is COVERED until it is asked for, one at a time', () => {
