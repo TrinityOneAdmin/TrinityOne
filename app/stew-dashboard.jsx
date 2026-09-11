@@ -5739,9 +5739,14 @@ function CheckinClearances() {
           between this panel and the one under it, and the temptation the original note was written against
           is "and they'll get this Sunday's key automatically", which describes the design and not the code.
           CLAUDE.md rule 4, applied to copy. */}
+      {/* "SEPARATE FROM CLEARED FOR YOUTH" — the persona sim's warden, 2026-09-11, cleared her helper for youth
+          on Members and then read "Nobody is cleared yet" here as the app losing her work. The two ARE
+          separate today; the one place that said so was a member help article. One clause, until
+          SCOPE-ONE-CLEARANCE merges them. */}
       <DismissibleNote id="checkin-clearance-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>
-        Your church’s sign-off for children’s work. The relay re-checks it on <b>every</b> request, so
-        withdrawing one ends their access at once — but it is <b>not</b> by itself a key on their phone.
+        Your church’s sign-off for children’s work — separate from “Cleared for youth” on Members. The relay
+        re-checks it on <b>every</b> request, so withdrawing one ends their access at once — but it is
+        <b> not</b> by itself a key on their phone.
       </DismissibleNote>
       {!rows.length && !loaded ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '34px 24px' }}><Icon name="shield" size={24} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>Loading who’s cleared…</p></div>

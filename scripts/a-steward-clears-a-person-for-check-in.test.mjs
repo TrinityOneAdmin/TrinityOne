@@ -519,6 +519,10 @@ test('the panel says ONCE that a clearance is not a key, and does not claim wiri
   const t = texts(note[0]).join(' ').replace(/\s+/g, ' ');
   assert.match(t, /every/, 'the note does not say the relay re-checks the clearance on every request: ' + t);
   assert.match(t, /not/, 'the note does not distinguish a clearance from a key: ' + t);
+  // The persona sim's warden (2026-09-11) cleared her helper for youth on Members and read "Nobody is cleared
+  // yet" here as lost work. Until the two clearances are one, the panel says they are two.
+  assert.match(t, /separate from .{0,3}Cleared for youth/i, 'the note does not say this is separate from "Cleared for youth" on Members: ' + t);
+  assert.deepEqual(glued(note[0]), [], 'copy runs together with no space: ' + JSON.stringify(glued(note[0])));
   assert.equal(shown(s.tree(), n => n.props && n.props['data-note']).length, 1,
     'more than one note on one panel is the nag reference/DOMAIN.md rules out');
 });
