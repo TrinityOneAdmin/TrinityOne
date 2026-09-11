@@ -61,9 +61,9 @@ const furniture = () => ({
 });
 
 // ── the Members panel, over a church whose guardians map and minors list we set ────────────────────────────
-async function membersPanel({ minors, guardians, requests = [] }) {
+async function membersPanel({ minors, guardians, requests = [], checkinCleared = [] }) {
   const { React, draw } = miniReact();
-  const calls = { minors: [], guardians: [] };
+  const calls = { minors: [], guardians: [], ckRevoked: [] };
   const g = {
     React, ...furniture(),
     window: {
@@ -73,7 +73,10 @@ async function membersPanel({ minors, guardians, requests = [] }) {
         setApproved: () => Promise.resolve(true),
         setGuardians: (m) => { calls.guardians.push(m); return Promise.resolve(true); },
         setNoPhoto: () => Promise.resolve(true),
+        revokeCheckinPermission: (p) => { calls.ckRevoked.push(p); return Promise.resolve({ id: 'x' }); },
       },
+      // who holds a CHECK-IN clearance, in the shape subscribeCheckinPermissions delivers
+      useStewardCheckinPermissions: () => checkinCleared.map(p => ({ person: p, source: 'steward', lifetime: 'open', from: 0, until: null })),
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({}), useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors, approved: [], nophoto: [], guardians }),
       useStewardGuardians: () => guardians,
@@ -91,6 +94,23 @@ async function membersPanel({ minors, guardians, requests = [] }) {
 }
 
 const tick = () => new Promise(r => setTimeout(r, 5));
+
+// ── 0. the whole panel, pressing the real control: marking withdraws a check-in clearance ─────────────
+// The audit of feb333f found the `ckClearedSet` derivation in DashMembers outside every slice — both slicing
+// tests inject it themselves — so the wire from the hook to toggleMinor was untested and could be cut without
+// a test moving. This presses "Mark as a child" on the rendered panel with the hook returning that person.
+
+test('MARKING A CHILD ON THE RENDERED PANEL withdraws the check-in clearance the hook says they hold', async () => {
+  const s = await membersPanel({ minors: [], guardians: {}, checkinCleared: [ADULT] });
+  const mark = s.btn(/^Mark as a child/);
+  assert.ok(mark.length >= 1, 're-anchor: no "Mark as a child" control on the rendered panel');
+  const mine = mark.find(b => String(b.props['aria-label'] || '').includes('Ruth Okafor')) || mark[0];
+  mine.props.onClick();
+  await tick(); await tick();
+  assert.deepEqual(s.calls.ckRevoked, [ADULT],
+    'THE WIRE FROM useStewardCheckinPermissions TO toggleMinor IS CUT: marking a cleared person withdrew nothing. ' +
+    'revoked: ' + JSON.stringify(s.calls.ckRevoked) + ' minors writes: ' + JSON.stringify(s.calls.minors));
+});
 
 // ── 1. a request from a child ──────────────────────────────────────────────────────────────────────────────
 test('CONTROL: a guardian request from an ADULT still has a live Confirm that links them', async () => {

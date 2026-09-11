@@ -123,7 +123,13 @@ test('MARKING somebody as a child withdraws the check-in clearance they hold', a
 });
 test('…and says so when the relay refuses the withdrawal', async () => {
   const c = await runToggle({ marking: true, kidPhotosAllowed: true, alreadySuppressed: false, ckCleared: true, revokeOk: false });
-  assert.equal(c.notice.filter(n => n && n.tone === 'fail' && /check-in clearance/.test(n.text)).length, 1, 'a refused withdrawal was painted as done');
+  // THE LAST WRITE IS WHAT THE SCREEN SHOWS. The first version of this asserted a call COUNT and passed while
+  // the tail of toggleMinor overwrote the refusal with null (or the guardian success line) in the same tick —
+  // measured by the audit of feb333f. setMinorNotice is a useState setter; only the final value renders.
+  const last = c.notice[c.notice.length - 1];
+  assert.ok(last && last.tone === 'fail' && /check-in clearance/.test(last.text),
+    'A REFUSED WITHDRAWAL IS NOT WHAT THE SCREEN ENDS UP SHOWING — the notice written last was: ' + JSON.stringify(last));
+  assert.equal(c.reseal.length, 1, 'the child\'s reseal was skipped on the refusal path');
 });
 test('…and touches nobody who holds no check-in clearance, nor anyone being UNMARKED', async () => {
   const a = await runToggle({ marking: true, kidPhotosAllowed: true, alreadySuppressed: false, ckCleared: false });

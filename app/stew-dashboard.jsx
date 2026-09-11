@@ -4967,8 +4967,14 @@ function DashMembers() {
       let okC = null;
       try { okC = await Promise.resolve(window.Steward.revokeCheckinPermission(pk)); } catch (e) { okC = null; }
       if (!okC) {
+        // AND STOP HERE, as the guardian-refusal branch above does: the tail of this function writes the final
+        // notice (null, or the guardian success line), and the audit of the first version measured the refusal
+        // being overwritten by it in the same tick — a refused withdrawal painted as "Marked as a child — and no
+        // longer listed as a guardian". The child's reseal still runs; the notice is the last write.
+        _reseal(next, nextApproved, nextG ? [pk, ...unlinkedFrom] : [pk], nextG || undefined);
         setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is marked as a child, but their check-in clearance is still on the relay — '
           + 'the withdrawal was refused. The relay refuses every use of it meanwhile; withdraw it under Check-in.' });
+        return r;
       }
     }
     // SAY SO. Unmarking a child ALSO revokes their youth clearance, and that is deliberate — leaving a stale
