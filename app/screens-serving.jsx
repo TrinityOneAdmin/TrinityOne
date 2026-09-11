@@ -633,26 +633,83 @@ function KidsHelpLink({ ctx, label }) {
   );
 }
 // ONE CHILD'S ROW. The pickup code is COVERED until it is asked for — see the note on `shown` in KidsRegister.
-function KidsRow({ rec, open, onToggle }) {
+//
+// CHECKOUT — slice C / §6 rule 5. The worker types the code the PARENT presents and the screen compares it
+// to `rec.code`; a failed match is LOUD and writes nothing. The code the parent claims is NEVER shown back
+// during entry (that would defeat the match), and the release is a SEPARATE document (ctx.checkinRelease),
+// never a rewrite of the church's record (F-B). "Release by hand" records a manual collection distinctly —
+// an ordinary Sunday (a dead phone, a grandparent), not an accusation (§7 / §10).
+function KidsRow({ rec, ctx, open, onToggle }) {
   const code = String((rec && rec.code) || '');
+  const [mode, setMode] = useSv('');            // '' | 'collect'
+  const [entry, setEntry] = useSv('');
+  const [busy, setBusy] = useSv(false);
+  const [err, setErr] = useSv('');
+  const release = async (manual) => {
+    if (busy) return;
+    setBusy(true); setErr('');
+    let res;
+    try { res = (ctx && ctx.checkinRelease) ? await ctx.checkinRelease({ session: rec.session, rel: rec.id, manual: !!manual }) : { ok: false }; }
+    catch (e) { res = { ok: false }; }
+    setBusy(false);
+    if (res && res.ok) { setMode(''); setEntry(''); }   // the collected row arrives from the relay and folds
+    else setErr('That did not save — see the desk. Nothing was written.');
+  };
+  const confirmCode = () => {
+    // COMPARED, never displayed to the wrong party; a failed match is LOUD (§6 rule 5).
+    if (entry.trim() === code && code) release(false);
+    else setErr('That code does not match. The child was NOT released.');
+  };
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderTop: '1px solid var(--line)' }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.childName || 'Name not in this copy'}</div>
-        {rec.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Collected{svClock(rec.out) ? ' · ' + svClock(rec.out) : ''}</div> : null}
+    <div style={{ borderTop: '1px solid var(--line)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.childName || 'Name not in this copy'}</div>
+          {rec.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Collected{svClock(rec.out) ? ' · ' + svClock(rec.out) : ''}{rec.manual ? ' · by hand' : ''}</div> : null}
+        </div>
+        {rec.out ? null : code ? (
+          <button onClick={onToggle} aria-pressed={!!open}
+            aria-label={open ? 'Hide the pickup code for ' + (rec.childName || 'this child') : 'Show the pickup code for ' + (rec.childName || 'this child')}
+            style={{ flexShrink: 0, minWidth: 84, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer',
+              fontFamily: open ? 'var(--font-display)' : 'var(--font-ui)', fontWeight: 800, fontSize: open ? 17 : 13,
+              letterSpacing: open ? '1.5px' : 0, background: open ? 'var(--surface-2)' : 'var(--surface)', color: open ? 'var(--ink)' : 'var(--ink-2)' }}>
+            {open ? code : 'Show code'}
+          </button>
+        ) : (
+          // A COPY WITH NO CODE IN IT IS NOT A CHILD WITH NO CODE. Say which of the two this is.
+          <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No code in this copy</span>
+        )}
+        {rec.out ? null : (
+          <button onClick={() => { setMode(m => (m === 'collect' ? '' : 'collect')); setErr(''); setEntry(''); }} aria-pressed={mode === 'collect'}
+            style={{ flexShrink: 0, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer', background: mode === 'collect' ? 'var(--surface-2)' : 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+            Collect
+          </button>
+        )}
       </div>
-      {code ? (
-        <button onClick={onToggle} aria-pressed={!!open}
-          aria-label={open ? 'Hide the pickup code for ' + (rec.childName || 'this child') : 'Show the pickup code for ' + (rec.childName || 'this child')}
-          style={{ flexShrink: 0, minWidth: 84, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer',
-            fontFamily: open ? 'var(--font-display)' : 'var(--font-ui)', fontWeight: 800, fontSize: open ? 17 : 13,
-            letterSpacing: open ? '1.5px' : 0, background: open ? 'var(--surface-2)' : 'var(--surface)', color: open ? 'var(--ink)' : 'var(--ink-2)' }}>
-          {open ? code : 'Show code'}
-        </button>
-      ) : (
-        // A COPY WITH NO CODE IN IT IS NOT A CHILD WITH NO CODE. Say which of the two this is.
-        <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No code in this copy</span>
-      )}
+      {/* THE CHECKOUT PANEL. The worker enters the code the PARENT shows — it is not revealed here — and the
+          screen compares it. A mismatch is loud and writes nothing; "Release by hand" records a manual
+          collection when a parent's phone is dead. */}
+      {mode === 'collect' && !rec.out ? (
+        <div style={{ padding: '0 13px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {code ? (
+              <input value={entry} onChange={e => { setEntry(e.target.value.replace(/\D/g, '').slice(0, 6)); setErr(''); }} aria-label={'Enter the pickup code for ' + (rec.childName || 'this child')}
+                inputMode="numeric" placeholder="Pickup code" style={{ width: 120, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15, letterSpacing: '2px', textAlign: 'center' }} />
+            ) : null}
+            {code ? (
+              <button onClick={confirmCode} disabled={busy || !entry.trim()}
+                style={{ padding: '9px 13px', borderRadius: 11, border: 'none', cursor: (busy || !entry.trim()) ? 'default' : 'pointer', opacity: (busy || !entry.trim()) ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+                Release
+              </button>
+            ) : null}
+            <button onClick={() => release(true)} disabled={busy} aria-label={'Collect ' + (rec.childName || 'this child') + ' by hand, without a code'}
+              style={{ padding: '9px 13px', borderRadius: 11, border: '1px solid var(--line)', cursor: busy ? 'default' : 'pointer', background: 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+              By hand
+            </button>
+          </div>
+          {err ? <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--danger, #b3261e)', lineHeight: 1.3 }}>{err}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -801,7 +858,7 @@ function KidsRegister({ ctx }) {
           </div>
           {sn.rows.length
             ? sn.rows.map(r => (
-                <KidsRow key={r.id} rec={r} open={shown === r.id} onToggle={() => setShown(v => (v === r.id ? '' : r.id))} />
+                <KidsRow key={r.id} rec={r} ctx={ctx} open={shown === r.id} onToggle={() => setShown(v => (v === r.id ? '' : r.id))} />
               ))
             : <div style={{ borderTop: '1px solid var(--line)', padding: '13px 14px', fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>Nobody has been checked in yet.</div>}
           {/* CHECK A CHILD IN — slice B. Only when the clearance is LIVE: a lapsed key still shows the register

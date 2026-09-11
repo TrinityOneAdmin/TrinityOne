@@ -4914,7 +4914,10 @@ window.Fellowship = {
       const _str = (v) => (typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v) ? String(v) : ''));
       const _when = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && /^\d{1,12}$/.test(v) ? Number(v) : undefined));
       rows.set(id, { ...obj, id, session: r.sid, ts: r.ts, _by: r.by,
-        childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out) });
+        childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out),
+        // slice C: a RELEASE record carries `rel` (the check-in it collects) and `manual` (by hand, no code).
+        // Typed here for the same reason as the rest — a hostile body must not reach a row as an object.
+        rel: _str(obj.rel), manual: obj.manual === true });
       return 'ok';
     };
 
@@ -4923,6 +4926,12 @@ window.Fellowship = {
       const live = permissionAdmits(perm, at);
       let unreadable = 0, foreign = 0;
       const bySession = new Map();
+      // slice C / KNOT 2: a checkout is a SEPARATE document (a helper cannot rewrite the church's record —
+      // F-B), carrying a cleartext ['rel', <checkinId>] tag. Folded onto the check-in row it names, and ONLY
+      // when the release's own session matches the check-in's — both cleartext, so a release scoped to one
+      // session can never mark a child collected in another (the F1 shape, one level up). Keyed by
+      // session|checkinId so the match is structural.
+      const releaseByRel = new Map();
       for (const [id, r] of recs) {
         // ── AND THIS IS THE RETRY ────────────────────────────────────────────────────────────────────────
         // The records and the envelopes RACE, and on a cold start the records win: the hub replays its
@@ -4933,8 +4942,18 @@ window.Fellowship = {
         const state = rows.has(id) ? 'ok' : openRec(id, r);
         if (state === 'foreign') { foreign++; continue; }
         if (state === 'unreadable') { unreadable++; continue; }
+        const row = rows.get(id);
+        // A RELEASE, routed by its CLEARTEXT rel tag (no key needed to tell it from a child) — folded, never
+        // rendered as its own row, so it can never appear as a phantom child.
+        const relId = (r.tags.find(t => t[0] === 'rel') || [])[1] || '';
+        if (relId) {
+          const key = r.sid + '|' + relId;
+          const prev = releaseByRel.get(key);
+          if (!prev || (row.ts || 0) >= (prev.ts || 0)) releaseByRel.set(key, { out: row.out, manual: row.manual, by: row._by, ts: row.ts });
+          continue;
+        }
         if (!bySession.has(r.sid)) bySession.set(r.sid, []);
-        bySession.get(r.sid).push(rows.get(id));
+        bySession.get(r.sid).push(row);
       }
       // EVERY SESSION THIS PHONE HOLDS A KEY FOR, whether or not a child has been checked in yet — because
       // "nobody is here yet" and "you hold no key for this room" are different things a worker needs told
@@ -4954,7 +4973,14 @@ window.Fellowship = {
           from: g ? g.grant.from : null,
           until: g ? g.grant.until : null,
           helpers: g ? g.grant.pubs.length : 0,
-          rows: (bySession.get(sid) || []).slice().sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
+          // FOLD A RELEASE ONTO ITS CHILD ROW — a new object, never mutating the `rows` memo. A collected
+          // child keeps their row (so the register stays a legible record of who was in the room) and gains
+          // `out` / `manual` / `releasedBy`. The release's `out` wins when present; otherwise whatever the
+          // check-in record itself carried.
+          rows: (bySession.get(sid) || []).map((r0) => {
+            const rel = releaseByRel.get(sid + '|' + r0.id);
+            return rel ? { ...r0, out: (rel.out != null ? rel.out : r0.out), manual: !!rel.manual, releasedBy: rel.by } : r0;
+          }).sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
         };
       }).sort((a, b) => (a.from || 0) - (b.from || 0));
       cb({
@@ -5148,6 +5174,46 @@ window.Fellowship = {
     // on the same strings. NO ['p'] here. content is the non-empty sentinel above, never the ring's copy.
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['enc', '2'], ['ck', ck]],
+      content: sentinel }, sk);
+    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    return { ok: true, id };
+  },
+
+  // ── A WORKER RELEASES A CHILD — CHECKOUT AND MANUAL RELEASE ───────────────────────────────────────────────
+  // slice C / KNOT 2 of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. A checkout must NOT rewrite the
+  // check-in record: F-B refuses a helper writing at an address the church already holds one at, and a child
+  // checked in by the console lives at a church-held address. So a release is its OWN document — a fresh
+  // `checkin:<newId>` carrying a cleartext ['rel', <checkinId>] tag — authored by the helper, admitted by the
+  // SAME already-audited CHECKIN_D helper gate (fresh address → F-B and F1 both pass), and folded onto the
+  // check-in row by the reader when their SESSION tags match.
+  //
+  // THE CODE MATCH HAPPENS ON THE SCREEN, NOT HERE. The relay holds no keys, so it cannot compare a code; the
+  // worker's phone holds the record's ck copy and compares `rec.code` there (KidsRow), and a failed match is
+  // LOUD and writes nothing (§6 rule 5). This function is the WRITE that follows a match, or a MANUAL release
+  // (`manual:true`) for a dead phone / a grandparent — recorded distinctly so a register that omits it is not
+  // incomplete, NOT because we suspect the helper (§7 / §10).
+  //
+  // Returns { ok:true, id } or { ok:false, reason }.
+  async releaseCheckin(churchNpub, rec) {
+    const cp = toPub(churchNpub);
+    if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    const o = rec || {};
+    const sid = String(o.session || '').trim();
+    const rel = String(o.rel || '').trim();
+    if (!sid) return { ok: false, reason: 'no-session' };
+    if (!rel) return { ok: false, reason: 'no-rel' };                // a release must name the check-in it collects
+    const keyHex = _ckMemKeyGet(cp, sid);
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: 'no-key' };   // fail LOUD, same as writeCheckin
+    const id = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1000), manual: o.manual === true, by: pub };
+    let ck, sentinel;
+    try {
+      ck = nip44e(JSON.stringify(body), _unhex(keyHex));
+      sentinel = nip44e(JSON.stringify({ enc: 2 }), _unhex(keyHex));   // non-empty, or the relay reads it as a tombstone (see writeCheckin)
+    } catch (e) { return { ok: false, reason: 'seal-failed' }; }
+    // A ['rel'] tag routes the reader's fold; content is the sentinel, NOT a ring copy.
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['rel', rel], ['enc', '2'], ['ck', ck]],
       content: sentinel }, sk);
     try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
     return { ok: true, id };

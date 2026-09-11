@@ -136,16 +136,22 @@ function serving(register) {
     toast() {},
     // slice B: capture what the check-in form hands the transport, and let a test choose the verdict.
     checkinAdd: async (rec) => { checkinCalls.push(rec); return checkinResult.v; },
+    // slice C: capture what the checkout hands the transport.
+    checkinRelease: async (rec) => { releaseCalls.push(rec); return releaseResult.v; },
   };
   const checkinCalls = [];
   const checkinResult = { v: { ok: true, id: 'ci-new' } };
+  const releaseCalls = [];
+  const releaseResult = { v: { ok: true, id: 'cr-new' } };
   const render = () => draw(mod.ServingScreen, { open: true, onClose() {}, ctx });
   render();                                  // the first draw queues the tab-strip effects…
   let tree = render();                       // …the second sees what they settled on
   return {
     mod, ctx, opened,
     checkinCalls,
+    releaseCalls,
     setCheckinResult(v) { checkinResult.v = v; },
+    setReleaseResult(v) { releaseResult.v = v; },
     // Type into an input on the rendered tree, found by its aria-label, and redraw.
     type(label, value) {
       const inputs = shown(tree, n => n.type === 'input' && n.props && n.props['aria-label'] === label);
@@ -265,6 +271,51 @@ test('…and the check-in form is NOT offered on a clearance that has ended — 
   assert.equal(s.pane().length, 1, 'the register vanished on a lapsed clearance');
   assert.equal(s.has('Check a child in'), 0,
     'a check-in form was offered on a clearance that has ended — every write would be refused LOUD, which is a worse experience than not offering it');
+});
+
+// One child, so there is exactly one "Collect" control to drive.
+const oneKid = [{ id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am' }];
+
+test('POINT OF USE: a matching pickup code RELEASES the child — a separate release document, not a rewrite', async () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
+  s.press('Kids');
+  assert.equal(s.has('Collect'), 1, 'THERE IS NO WAY TO COLLECT A CHILD — the checkout half is gone from the screen');
+  await s.click('Collect');
+  s.type('Enter the pickup code for Esther Ncube', '4417');
+  await s.click('Release');
+  assert.equal(s.releaseCalls.length, 1, 'a matching code did not release the child');
+  assert.equal(s.releaseCalls[0].rel, 'ci-1', 'the release does not name the check-in it collects — the reader cannot fold it');
+  assert.equal(s.releaseCalls[0].session, 'svc-am', 'the release is not tied to the child\'s session');
+  assert.equal(s.releaseCalls[0].manual, false, 'a code-matched release was recorded as by-hand');
+});
+
+test('…and a WRONG code is LOUD and releases NOBODY (§6 rule 5)', async () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
+  s.press('Kids');
+  await s.click('Collect');
+  s.type('Enter the pickup code for Esther Ncube', '0000');
+  await s.click('Release');
+  assert.equal(s.releaseCalls.length, 0,
+    'A CHILD WAS RELEASED ON A CODE THAT DID NOT MATCH. This is the wrong-adult case the pickup code exists to prevent.');
+  assert.match(s.reads(), /does not match|not released/i, 'a failed match said nothing — §6 rule 5: a failed match must be LOUD. As rendered: ' + s.reads());
+});
+
+test('…and RELEASE BY HAND records a manual collection distinctly, with no code', async () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
+  s.press('Kids');
+  await s.click('Collect');
+  await s.click('By hand');
+  assert.equal(s.releaseCalls.length, 1, 'a dead-phone / grandparent collection could not be recorded — the fallback §7 requires is missing');
+  assert.equal(s.releaseCalls[0].manual, true,
+    'the manual release was not marked manual — §7: it must be recorded DISTINCTLY, or the register cannot tell it from a code collection');
+  assert.equal(s.releaseCalls[0].rel, 'ci-1', 'the manual release does not name the child');
+});
+
+test('…and an already-collected child offers no Collect control', () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, sessions: oneSession([{ id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am', out: AM_FROM + 5400 }]) });
+  s.press('Kids');
+  assert.equal(s.has('Collect'), 0, 'a child already collected still offered a Collect button — a double release');
+  assert.match(s.reads(), /Collected/, 'the collected child is not shown as collected');
 });
 
 test('…and a pickup code is COVERED until it is asked for, one at a time', () => {

@@ -119,6 +119,27 @@ function liftWriteCheckin(actor, keys /* sid -> hex */) {
     fnBody(FELLOWSHIP, 'async writeCheckin(churchNpub, rec) {', 'writeCheckin') + ' }); }')(proxy);
   return { writeCheckin: api.writeCheckin, captured };
 }
+// Same lift, the RELEASE writer (slice C / KNOT 2).
+function liftReleaseCheckin(actor, keys) {
+  const captured = [];
+  const scope = {
+    toPub: (x) => x, sk: actor.sk, pub: actor.pub,
+    _ckMemKeyGet: (cp, sid) => keys[sid] || '',
+    encrypt: (pt, k) => nip44.encrypt(pt, k), _unhex: unhex,
+    finalizeEvent2: (t, s) => finalizeEvent(t, s),
+    CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [],
+    _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
+    String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped releaseCheckin needs a stub for ' + String(k)); },
+  });
+  const api = new Function('scope', 'with (scope) { return ({ ' +
+    fnBody(FELLOWSHIP, 'async releaseCheckin(churchNpub, rec) {', 'releaseCheckin') + ' }); }')(proxy);
+  return { releaseCheckin: api.releaseCheckin, captured };
+}
 
 async function boot() {
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
@@ -227,4 +248,49 @@ test('the relay REFUSES the shipped record when an UNCLEARED member signs it', a
   const [ok, msg] = await publishAs(cara, resigned);
   assert.equal(ok, false, 'an UNCLEARED member published into the children\'s register by re-signing a helper\'s record shape');
   assert.match(String(msg), /blocked|invalid|restricted|not/i, 'refused, but not as a policy refusal: ' + msg);
+});
+
+test('the shipped releaseCheckin (slice C) emits a SEPARATE release document the relay ADMITS', async () => {
+  // KNOT 2: a checkout is its own fresh checkin: address with a ['rel'] tag — never a rewrite of the church's
+  // record (F-B). It rides the same helper gate: fresh address, so checkinChurchHolds and the session-conflict
+  // check both pass, and checkinHelperOf admits her.
+  const { releaseCheckin, captured } = liftReleaseCheckin(ada, { [SESSION]: KEY });
+  const res = await releaseCheckin(church.pub, { session: SESSION, rel: 'ci-somechild', manual: false });
+  assert.equal(res.ok, true, 'the shipped release writer refused a cleared, in-window helper: ' + JSON.stringify(res));
+  const evt = captured[0];
+  const tag = (n) => (evt.tags.find(t => t[0] === n) || [])[1];
+  assert.equal(tag('rel'), 'ci-somechild', 'the release does not carry the ["rel"] tag the reader folds on');
+  assert.equal(tag('session'), SESSION, 'the release is not tagged with her session');
+  assert.ok(String(tag('d')).startsWith(D.CHECKIN) && tag('d') !== D.CHECKIN + 'ci-somechild',
+    'the release wrote AT the check-in\'s own address — a rewrite F-B refuses, not a separate document');
+  assert.notEqual(evt.content, '', 'empty content — the relay reads it as a tombstone');
+  const body = readCheckinHelperCopy(evt.tags, KEY, (ct, k) => nip44.decrypt(ct, unhex(k)));
+  assert.ok(body && body.rel === 'ci-somechild' && Number.isFinite(body.out) && body.manual === false && body.by === ada.pub,
+    'the release body is not the { rel, out, manual, by } the reader folds');
+  // The websocket door admits it.
+  const [ok, msg] = await publishAs(ada, evt);
+  assert.equal(ok, true, 'THE RELAY REFUSED THE RELEASE THE MEMBER APP EMITS: ' + msg);
+});
+
+test('a MANUAL release is admitted and marked manual; and the relay REFUSES a release from an uncleared member', async () => {
+  const { releaseCheckin, captured } = liftReleaseCheckin(ada, { [SESSION]: KEY });
+  await releaseCheckin(church.pub, { session: SESSION, rel: 'ci-x', manual: true });
+  const evt = captured[0];
+  const body = readCheckinHelperCopy(evt.tags, KEY, (ct, k) => nip44.decrypt(ct, unhex(k)));
+  assert.equal(body.manual, true, 'a manual release was not marked manual — §7 requires it recorded distinctly');
+  assert.equal((await publishAs(ada, evt))[0], true, 'the manual release was refused by the relay');
+  // An uncleared member cannot release a child: re-sign the shape and submit.
+  const resigned = finalizeEvent({ kind: 30078, created_at: now(), tags: evt.tags, content: evt.content }, cara.sk);
+  const [ok, msg] = await publishAs(cara, resigned);
+  assert.equal(ok, false, 'an UNCLEARED member released a child by re-signing a release shape');
+  assert.match(String(msg), /blocked|invalid|restricted|not/i, 'refused, but not as a policy refusal: ' + msg);
+});
+
+test('the shipped releaseCheckin FAILS LOUD with no key, and refuses a release naming no check-in', async () => {
+  const noKey = liftReleaseCheckin(cara, {});
+  assert.equal((await noKey.releaseCheckin(church.pub, { session: SESSION, rel: 'ci-x' })).reason, 'no-key', 'a phone with no key was told the release succeeded');
+  assert.equal(noKey.captured.length, 0, 'a release was published without a key (§8)');
+  const held = liftReleaseCheckin(ada, { [SESSION]: KEY });
+  assert.equal((await held.releaseCheckin(church.pub, { session: SESSION })).reason, 'no-rel', 'a release naming no check-in was written — the reader could fold it onto nothing');
+  assert.equal(held.captured.length, 0, 'a refused release still published something');
 });
