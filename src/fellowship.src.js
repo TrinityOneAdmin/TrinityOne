@@ -123,6 +123,16 @@ const CHECKINARRIVAL_D = 'trinityone/checkinarrival:';
 // CHILD WAS STILL IN THE ROOM and the worker's key was still live — and the release, when it came, then had
 // no row to fold onto. The parent's view must not expire before the session that produced it can.
 const MYKIDS_WINDOW = MAX_SESSION_SECONDS;
+// TODAY, IN THE ROOM THE CHILD IS STANDING IN — never the UTC day. The console's register filters
+// `recs.filter(r => r.date === today)` against ITS local day (app/stew-dashboard.jsx), and src/steward.src.js
+// has stamped records with a local `_todayISO()` since it was written. This phone was the odd one out: it
+// stamped `new Date().toISOString().slice(0, 10)`, so a worker checking a child in on a Sunday MORNING in
+// Auckland wrote the previous day's date and the child never appeared on the desk's own register — the
+// 2026-07-24 kids-roll bug, back in the one writer that post-dates the guard. Caught by
+// scripts/calendar-day.test.mjs, which scans this file for exactly that idiom.
+// ONE CALLER: writeCheckin. Mirrors steward.src.js:_todayISO deliberately — the two bundles must agree on
+// what day it is or a record written on a phone and a record written at the desk sort differently.
+const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const _ckMemberKeys = new Map();                 // cp -> Map(sid -> 32 bytes of hex)
 const _ckMemKeySet = (cp, sid, k) => { let m = _ckMemberKeys.get(cp); if (!m) { m = new Map(); _ckMemberKeys.set(cp, m); } m.set(sid, k); };
 const _ckMemKeyDel = (cp, sid) => { const m = _ckMemberKeys.get(cp); if (m) m.delete(sid); };
@@ -5317,7 +5327,7 @@ window.Fellowship = {
     // release is its own document (slice C / KNOT 2).
     const body = {
       id, child: '', childName,
-      date: String(o.date || '') || new Date().toISOString().slice(0, 10),
+      date: String(o.date || '') || _todayISO(),
       in: Math.floor(Date.now() / 1000), out: null,
       code: String(o.code || '').trim(), room: String(o.room || '').trim(),
       note: String(o.note || '').trim(), session: sid, guardians: guardian ? [guardian] : [],

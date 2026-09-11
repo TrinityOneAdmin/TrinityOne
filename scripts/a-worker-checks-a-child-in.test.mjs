@@ -27,7 +27,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { requireFreePort } from './test-ports.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE, readCheckinHelperCopy,
          checkinGuardianPubs, checkinGuardianCopies, readCheckinGuardianCopy } from './checkin-role-source.mjs';
 import { D } from './trinity-doc-types.mjs';
@@ -113,6 +113,12 @@ function liftWriteCheckin(actor, keys /* sid -> hex */) {
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     checkinGuardianCopies,
     finalizeEvent2: (t, s) => finalizeEvent(t, s),
+    // THE SHIPPED LOCAL-DAY HELPER, lifted rather than stubbed. `writeCheckin` stamps the record's calendar
+    // `date` with it, the console's register filters `r.date === today` against ITS local day, and a stub
+    // here could quietly agree with a UTC implementation — which is the bug scripts/calendar-day.test.mjs
+    // exists to stop. Lifting it means this harness gets whatever the bundle really does.
+    _todayISO: new Function('return (' + stmt(FELLOWSHIP, 'var _todayISO = () =>', '_todayISO')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
     CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [],
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
@@ -161,6 +167,12 @@ function liftReleaseCheckin(actor, keys) {
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     checkinGuardianPubs, checkinGuardianCopies,
     finalizeEvent2: (t, s) => finalizeEvent(t, s),
+    // THE SHIPPED LOCAL-DAY HELPER, lifted rather than stubbed. `writeCheckin` stamps the record's calendar
+    // `date` with it, the console's register filters `r.date === today` against ITS local day, and a stub
+    // here could quietly agree with a UTC implementation — which is the bug scripts/calendar-day.test.mjs
+    // exists to stop. Lifting it means this harness gets whatever the bundle really does.
+    _todayISO: new Function('return (' + stmt(FELLOWSHIP, 'var _todayISO = () =>', '_todayISO')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
     CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [],
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
@@ -449,4 +461,43 @@ test('writeArrival refuses to write a sessionless arrival rather than writing an
   const { writeArrival, captured } = liftWriteArrival(gina);
   assert.equal((await writeArrival(church.pub, {})).reason, 'no-session', 'an arrival naming no session — which the gate refuses and no reader can route — was written');
   assert.equal(captured.length, 0, 'it reported a refusal and published anyway');
+});
+
+// ── THE CALENDAR DAY THE RECORD IS STAMPED WITH ───────────────────────────────────────────────────────────
+//
+// The record's `date` is not decoration: the console's register is `recs.filter(r => r.date === today)`
+// (app/stew-dashboard.jsx), compared against the DESK's local day. src/steward.src.js has stamped a local
+// `_todayISO()` since it was written; this phone-side writer stamped `new Date().toISOString().slice(0,10)`
+// — the UTC day — so a worker checking a child in on a Sunday MORNING in Auckland or Sydney wrote YESTERDAY's
+// date, and the child she had just checked in never appeared on the desk's own register. That is the
+// 2026-07-24 kids-roll bug returning in the one writer that post-dates the guard, and scripts/calendar-day.
+// test.mjs (a source scan) was red on this branch because of it.
+//
+// A scan is not a point-of-use proof, so this drives the SHIPPED writer under a real timezone and reads the
+// date off the event. It is deterministic all year round without faking the clock: at every instant, at
+// least one of UTC+14 and UTC-12 sits on a different calendar day from UTC, so one of the two always makes
+// "local" and "UTC" disagree — and that is the case the bug lived in.
+test('the record is stamped with the LOCAL calendar day, or a morning check-in vanishes from the desk', async () => {
+  const was = process.env.TZ;
+  try {
+    const local = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+    let tz = null;
+    for (const cand of ['Pacific/Kiritimati', 'Etc/GMT+12']) {     // UTC+14 and UTC-12, the two extremes
+      process.env.TZ = cand;
+      if (local() !== new Date().toISOString().slice(0, 10)) { tz = cand; break; }
+    }
+    assert.ok(tz, 're-anchor: neither UTC+14 nor UTC-12 differs from UTC right now, which should be impossible');
+    const utcDay = new Date().toISOString().slice(0, 10);
+    const localDay = local();
+    const { writeCheckin, captured } = liftWriteCheckin(ada, { [SESSION]: KEY });
+    await writeCheckin(church.pub, { childName: 'A Child', code: '4821', session: SESSION });
+    assert.equal(captured.length, 1, 'the shipped writer published ' + captured.length + ' documents, not one');
+    const body = JSON.parse(nip44.decrypt((captured[0].tags.find(t => t[0] === 'ck') || [])[1], unhex(KEY)));
+    assert.equal(body.date, localDay,
+      'THE CHECK-IN WAS STAMPED WITH THE WRONG CALENDAR DAY in ' + tz + ': the record says ' + body.date +
+      ' and the desk beside her believes it is ' + localDay + '. The console filters its register on exactly ' +
+      'this field, so the child she just checked in is not on the list — and neither is the pickup code.');
+    assert.notEqual(body.date, utcDay,
+      're-anchor: the local day and the UTC day agree in ' + tz + ', so this assertion proved nothing');
+  } finally { if (was === undefined) delete process.env.TZ; else process.env.TZ = was; }
 });

@@ -6616,6 +6616,10 @@
   var CHECKIN_D = "trinityone/checkin:";
   var CHECKINARRIVAL_D = "trinityone/checkinarrival:";
   var MYKIDS_WINDOW = MAX_SESSION_SECONDS;
+  var _todayISO = () => {
+    const d = /* @__PURE__ */ new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  };
   var _ckMemberKeys = /* @__PURE__ */ new Map();
   var _ckMemKeySet = (cp, sid, k) => {
     let m = _ckMemberKeys.get(cp);
@@ -11896,7 +11900,7 @@
         id,
         child: "",
         childName,
-        date: String(o.date || "") || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        date: String(o.date || "") || _todayISO(),
         in: Math.floor(Date.now() / 1e3),
         out: null,
         code: String(o.code || "").trim(),

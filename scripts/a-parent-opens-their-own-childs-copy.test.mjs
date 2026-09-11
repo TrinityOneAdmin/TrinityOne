@@ -134,6 +134,12 @@ function workerWriter(actor, keys, name) {
     checkinGuardianPubs, checkinGuardianCopies,
     _unhex: unhex,
     finalizeEvent2: (t, s) => finalizeEvent(t, s),
+    // THE SHIPPED LOCAL-DAY HELPER, lifted rather than stubbed. `writeCheckin` stamps the record's calendar
+    // `date` with it, the console's register filters `r.date === today` against ITS local day, and a stub
+    // here could quietly agree with a UTC implementation — which is the bug scripts/calendar-day.test.mjs
+    // exists to stop. Lifting it means this harness gets whatever the bundle really does.
+    _todayISO: new Function('return (' + stmt(FELLOWSHIP, 'var _todayISO = () =>', '_todayISO')
+      .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
     CHECKIN_D: D.CHECKIN, NET: 'trinityone', relaysForChurch: () => [],
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
