@@ -243,11 +243,7 @@ test('a helper cannot TOMBSTONE a record — not even one in her own session —
   assert.equal(okHer, false, 'A HELPER\'S TOMBSTONE OF A RECORD IN HER OWN SESSION WAS ACCEPTED: ' + msg);
   const [okEmpty] = await publishAs(ada, doc(ada, D.CHECKIN + 'am1', '', [['church', church.pub], ['session', MORNING]]));
   assert.equal(okEmpty, false, 'an empty-content record from a helper (a tombstone without the tag) was accepted');
-  const [status, body] = await importAs(church, [tomb(ada, 'am1')]);
-  assert.equal(status, 200, '/import refused the church key — the import door is not being exercised');
-  assert.equal(body.invalid, 1, '/import installed a helper\'s tombstone: imported=' + body.imported + ' invalid=' + body.invalid);
-  await sleep(300);
-  assert.equal((await copiesOf(D.CHECKIN + 'am1')).filter(e => e.pubkey === ada.pub && !e.content).length, 0, 'the helper\'s tombstone is on the box');
+  // (NOT applied on /import — see the RESTORE test at the foot of this file for why, and what it costs.)
   // the controls: the church and a safeguarding steward still remove records, and the helper still writes
   const [okSg] = await publishAs(sgLead, tomb(sgLead, 'sg-gone'));
   assert.equal(okSg, true, 'a safeguarding steward\'s tombstone was refused — removeCheckin from a steward console is dead');
@@ -373,4 +369,32 @@ test('…and a RESTART does not reinstate it', async () => {
   assert.equal(badCopies.filter(e => e.pubkey === ada.pub).length, 0, 'the forgery came back after a restart');
   const okCopies = await copiesOf(D.CHECKIN + 'imp-ok');
   assert.equal(okCopies.length, 1, 'the honest record did NOT survive the restart — the assertion above is measuring an empty box');
+});
+
+test('A RESTORE keeps a safeguarding steward\'s tombstone — the ingest door consults no roster', async () => {
+  // Audit of b0ba242, 2026-09-11: the first version of the helper-tombstone refusal ran on /import through
+  // stewardCan(), and /import puts every line BEFORE hydrateMaps() reads the roster in the same archive — so
+  // a steward's tombstone was judged a helper's, refused, and the child she had removed came back as present
+  // on every restore. Measured: imported=6 invalid=1, the record on disk with tomb:false. Here: an EMPTY relay
+  // receives an archive carrying the roster, the steward's record and her tombstone of it, in one request.
+  try { w.close(); } catch {}
+  await stopRelay();
+  try { rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  dataDir = mkdtempSync(join(tmpdir(), 'trin-ck-restore-'));
+  await boot();
+  await sleep(500);
+  w = await conn();
+  const roster = doc(church, D.STEWARDS + church.pub, { pubkeys: [sgLead.pub], caps: { [sgLead.pub]: ['safeguarding'] } });
+  const member = doc(sgLead, D.MEMBER + church.pub, { joined: now() });
+  const rec = record(sgLead, 'mistake', MORNING, KEY_AM, { code: '1111' });
+  // LATER than the record by a clear margin: a tombstone in the same second as the record it replaces loses
+  // the store's same-second tie (lowest id wins), which would fail this test for a reason that is not the rule.
+  const gone = finalizeEvent({ kind: 30078, created_at: now() + 30, tags: [['d', D.CHECKIN + 'mistake'], ['t', NET], ['church', church.pub], ['deleted', '1']], content: '' }, sgLead.sk);
+  const [status, body] = await importAs(church, [member, roster, rec, gone]);
+  assert.equal(status, 200, '/import refused the church key — the restore door is not being exercised');
+  assert.equal(body.invalid, 0, 'THE RESTORE REFUSED SOMETHING: imported=' + body.imported + ' invalid=' + body.invalid +
+    ' — a steward\'s tombstone judged before the roster it sits beside has been read');
+  await sleep(400);
+  const copies = await copiesOf(D.CHECKIN + 'mistake');
+  assert.ok(copies.some(e => e.pubkey === sgLead.pub && !e.content), 'the steward\'s tombstone did not survive the restore — the child she removed is back');
 });

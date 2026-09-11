@@ -1831,14 +1831,18 @@ const checkinSessionConflict = (d, cp, sid) => {
 // tombstone. Both readers happened to ignore a non-church tombstone, so no child vanished — but a relay
 // gate that is looser than the written invariant is one reader change from hiding a present child. The
 // church and a safeguarding steward keep the tombstone (removeCheckin); a helper's record write must carry
-// a body. Applied at the websocket door and on ingest alike, as the session rule is.
+// a body. Applied at the WEBSOCKET DOOR ONLY — the first version applied it on ingest too, through
+// stewardCan(), and the independent audit of that commit measured what the contract comment above already
+// says: /import puts every line before hydrateMaps() runs, so the roster inside the archive had not been
+// read when the steward's tombstone was judged, it was refused as a helper's, and a child a safeguarding
+// steward had removed came back as present on every restore. The ingest doors are the church key's own
+// archive and peers that ran this same door; a helper cannot reach them.
 const checkinTombstone = (e) => !!(e && ((e.tags || []).some(t => t[0] === 'deleted') || !e.content));
 const checkinSessionOkOnIngest = (e, d) => {
   if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKIN_D)) return true;
   if (CHURCH_PUBS.has(e.pubkey)) return true;
   const cp = namedChurch(e) || '';
   if (!cp) return true;                       // ownership unproven — owningChurch()/canRead() deny it anyway
-  if (checkinTombstone(e) && !stewardCan(e.pubkey, cp, 'safeguarding')) return false;
   const sid = ((e.tags || []).find(t => t[0] === 'session') || [])[1] || '';
   if (!sid) return true;
   return !checkinSessionConflict(d, cp, sid);
@@ -4104,7 +4108,15 @@ function canRead(e, authed) {
       // The same one spelling as the write gate above, and for the same reason — a read rule that accepted an
       // npub form would serve a document the write gate can never have stored.
       const who = String(d.slice(CHECKINPERM_D.length) || '');
-      return /^[0-9a-f]{64}$/.test(who) && !!authed && authed === who;
+      if (!(/^[0-9a-f]{64}$/.test(who) && !!authed && authed === who)) return false;
+      // A STEWARD'S CLEARANCE IS SERVED ONLY WHILE SHE STILL HOLDS SAFEGUARDING; HER WITHDRAWAL ALWAYS. The
+      // same asymmetry checkinPermitted() enforces at use, mirrored at the read: the general retraction above
+      // keeps serving a re-scoped steward's documents (she is still on the roster), so the phone was handed a
+      // clearance this box had already stopped honouring and said "cleared — nothing is wrong" while the desk
+      // refused her (audit of 18da387, 2026-09-11). Only the console and the relay know the roster; the phone
+      // cannot judge this, so the box must not serve what it does not honour.
+      const tomb = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
+      return tomb || checkinPermAuthorLive(e.pubkey, cp);
     }
     if (d.startsWith(CHECKIN_D)) {
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';

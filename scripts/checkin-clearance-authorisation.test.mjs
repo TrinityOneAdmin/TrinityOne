@@ -360,6 +360,14 @@ test('F4 — a clearance GRANTED by a steward stops granting the moment that ste
     'refusal this test is about would be indistinguishable from a broken rehydrate');
 
   await setLeadCaps(['members']);
+  // …AND THE PHONE IS NOT HANDED THE DOCUMENT THIS BOX HAS STOPPED HONOURING. Audit of 18da387, 2026-09-11:
+  // the general retraction kept serving the re-scoped steward's clearance (she is still on the roster), so a
+  // phone that trusts what its relay serves said "cleared — nothing is wrong" while the desk refused her.
+  const servedLive = async (who) => (await asks(who, { kinds: [30078], '#d': [D.CHECKINPERM + who.pub] }))
+    .filter(e => e.content && !(e.tags || []).some(t => t[0] === 'deleted')).length;
+  assert.equal(await servedLive(vera), 0,
+    'A DE-CAPPED STEWARD\'S CLEARANCE IS STILL SERVED to the person it names, while every use of it is refused — ' +
+    'her phone says cleared and the desk says no');
   assert.deepEqual(await clearance(vera), REFUSED,
     'THE CLAIM: the steward who cleared Vera holds no safeguarding capability any more and her clearance ' +
     'still admits — the session key served, the register served, writes accepted — because authorisation ' +
@@ -374,6 +382,7 @@ test('F4 — a clearance GRANTED by a steward stops granting the moment that ste
     'the desk while the console still listed her as cleared');
 
   await setLeadCaps(['safeguarding']);
+  assert.equal(await servedLive(vera), 1, 're-capping the lead did not bring the clearance document back to Vera\'s phone');
   assert.deepEqual(await clearance(vera), CLEARED,
     'A ONE-WAY DOOR. Re-ticking the lead for safeguarding must bring her clearances back: de-capping ' +
     'somebody by mistake otherwise destroys work no console can restore. This is why note() records the ' +
