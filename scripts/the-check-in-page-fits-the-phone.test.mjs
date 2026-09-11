@@ -100,7 +100,7 @@ import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const CDP = 9360;   // taken in the 93xx band: 9317, 9333, 9350-9352, 9354-9358 (see scripts/test-ports.test.mjs)
+const CDP = 9360;   // taken in the 93xx band: 9350-9352, 9354-9358, 9361, 9381, 9390, 9395, 9397 (scripts/test-ports.test.mjs checks this, probes included since 2026-09-11)
 // ⚠ THIS WAS 9357 AND IT COLLIDED with a-tampered-module-is-refused.test.mjs, which claimed 9357 first.
 // `node --test` runs files in parallel, so one bound the port and the other sat waiting for a port that
 // could not free up until the first file finished — the suite looks like it hangs, with no stray process
