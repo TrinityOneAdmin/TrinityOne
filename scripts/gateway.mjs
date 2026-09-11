@@ -748,6 +748,7 @@ const FINANCEKEY_D = D.FINANCEKEY;   // the church books' key, wrapped to the ch
 const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — d=checkin:<id>, sealed under the safeguarding key
 const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S key, wrapped to whoever the church's PERMISSIONS admit — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
 const CHECKINPERM_D = D.CHECKINPERM;   // A PERSON IS CLEARED for children's check-in — d=checkinperm:<personPub>. Owner-only, cleartext, and CARRIES NO KEY. The half of the old grant that says WHO, split out 2026-09-09 so a church can clear its volunteers once a year as it actually does, rather than once a service.
+const CHECKINARRIVAL_D = D.CHECKINARRIVAL; // A PARENT SAYS “WE ARE HERE” — d=checkinarrival:<sid>:<authorpubhex>, authored by the parent. NOT a register row and never convertible into one: a parent never authors a trinityone/checkin:. See arrivalIdOk for the whole reason.
 const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to the church + every safeguarding-capable steward. Separate from FINANCEKEY_D on purpose: they shared one derived key until 2026-08-20, so a treasurer could read every child's name, room and pickup code.
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
@@ -1595,6 +1596,39 @@ const checkinHelperOf = (pub, cp, sessionId) => {
   // property no change to this feature may touch.
   return checkinPermitted(pub, cp);
 };
+// ── IS THIS SESSION OPEN TO AN ARRIVAL RIGHT NOW? ─────────────────────────────────────────────────────────
+//
+// The WINDOW half of the arrival rule (the stateless half is arrivalIdOk, far below beside carereqIdOk).
+// A parent is not a helper, so this is deliberately NOT checkinHelperOf: it asks only that the session the
+// address names is a REAL session of this church that is open now — a live envelope in CHECKIN_HELPERS, and
+// the clock inside [from - KEY_LEAD_SECONDS, until]. It never asks whether the writer is in `pubs`, because
+// the writer is a parent and will never be, and it never asks for a permission, because a parent is not
+// cleared for anything.
+//
+// THE SAME LEAD AS canRead's CHECKINHELPER_D FETCH, and for a related reason rather than a copied one: the
+// envelope is minted ahead of time by machinery, so `from` is a service's start and not the moment a family
+// walks in. A church that runs a 9 a.m. session does not want the door to open at 8:59.
+//
+// THE CLOCK IS THE SERVER'S, ALWAYS, never the event's created_at — same rule as checkinHelperOf, same
+// reason: created_at is the writer's to choose, so a window compared against it is no window at all.
+//
+// ⚠ IT CONSULTS A HYDRATED MAP, SO IT MUST NEVER RUN ON INGEST. CHECKIN_HELPERS is filled by note(), and
+// /import puts every line BEFORE hydrateMaps() has read the archive it is importing — so on a restore this
+// would answer "no such session" for every session in the box and refuse a church its own arrivals. That is
+// exactly the mistake b0ba242 made with stewardCan() and 9f17160 reverted, and the finance journal lost in
+// 2026-08 by the same shape. WEBSOCKET DOOR ONLY. The stateless half is what holds at all four doors.
+//
+// CALLERS — every one, per CLAUDE.md rule 2, and there is ONE: accept()'s CHECKINARRIVAL_D branch.
+const checkinArrivalWindowOpen = (cp, sessionId) => {
+  if (!cp || !sessionId) return false;
+  const byS = CHECKIN_HELPERS.get(cp);
+  const g = byS && byS.get(String(sessionId));
+  if (!g) return false;                                  // no envelope: this church is not running that session
+  const t = Math.floor(Date.now() / 1000);
+  if (t < g.from - KEY_LEAD_SECONDS) return false;
+  if (g.until == null || t > g.until) return false;      // a closed session takes no more arrivals
+  return true;
+};
 // IS `pub` CLEARED BY THIS CHURCH FOR CHILDREN'S CHECK-IN, RIGHT NOW?
 //
 // THE CLOCK IS THE SERVER'S, as it is for the grant window and for the same reason: created_at is the writer's
@@ -2014,6 +2048,53 @@ function carereqIdOk(e, d) {
   if (!m) return false;                                  // ONE RULE: an id that names nobody names nobody
   return String(e.pubkey || '').startsWith(m[1]);        // the id names them, so only they may write here
 }
+// -- AN ARRIVAL'S ADDRESS NAMES ITS AUTHOR, AND THAT HOLDS AT EVERY DOOR ----------------------------------
+//
+// THE STATELESS HALF of the arrival rule, in the shape carereqIdOk has and for the identical reason: a rule
+// that must hold on disk cannot live only in accept(). The import loop and the two relay-to-relay paths call
+// store.put() directly and never reach accept(), so a forged arrival could arrive by replication and sit
+// beside the honest one -- and every reader is newest-wins. This check holds NO STATE and consults NO MAP: it
+// is a property of the event, true at every door, on every relay, after every restart, and for any entry
+// point added later. Read carereqIdOk's own comment for the measurement that made this the house shape.
+//
+// AND THAT MAP-FREEDOM IS NOT TIDINESS, IT IS THE RESTORE. The other half of this rule -- is the session open
+// -- reads CHECKIN_HELPERS, which the import loop has not hydrated when it runs, so it stays at the websocket
+// door (see checkinArrivalWindowOpen). This half is what an archive and a peer sync get, and it can be given
+// to them precisely because it asks the event about itself.
+//
+// WHAT IT BUYS: a member may write an arrival at their OWN address and at nobody else's. That is the whole
+// authority an arrival carries -- "this pubkey, which the church knows, says it is here" -- so binding the
+// address to the signer is binding the document to its only claim.
+//
+// THE SUFFIX IS `<sessionId>:<authorpubhex>`, split from the RIGHT, because a session id may legally contain
+// a colon (checkinHelperSid admits `[A-Za-z0-9._:-]`). An address that names nobody is REFUSED outright, not
+// waved through -- carereqIdOk's "ONE RULE, NOT TWO": a fallback for unprefixed ids is the very bypass the
+// check exists to close, preserved inside the thing that replaced it.
+//
+// IT IS INERT FOR EVERY OTHER DOCUMENT, and in particular it can never fire on a `trinityone/checkin:` --
+// the two prefixes are disjoint (`checkin:` vs `checkina...`), so no register row is ever judged by this rule
+// and no arrival is ever judged by the register's.
+//
+// CALLERS -- every one, per CLAUDE.md rule 2, and there are four, which is BOTH DOORS:
+//   * accept()                     -- the websocket door, the CHECKINARRIVAL_D branch
+//   * the import loop              -- beside carereqIdOk and checkinSessionOkOnIngest
+//   * syncChurchFromPeer()         -- the cursor pull, relay-to-relay
+//   * reconcileChurchWithPeer()    -- the negentropy walk, relay-to-relay
+const ARRIVAL_ADDR_RE = /^(.+):([0-9a-f]{64})$/;
+function arrivalIdOk(e, d) {
+  if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKINARRIVAL_D)) return true;
+  const m = ARRIVAL_ADDR_RE.exec(String(d).slice(CHECKINARRIVAL_D.length));
+  if (!m) return false;                                  // ONE RULE: an address that names nobody names nobody
+  return String(e.pubkey || '').toLowerCase() === m[2];  // the address names them, so only they may write here
+}
+// The session an arrival's ADDRESS names -- the identity half of `<sessionId>:<authorpubhex>`. Read from the
+// address rather than from the ['session'] tag, because the address is what the store keys on and the tag is
+// one more thing a writer chooses; accept() then requires the tag to AGREE, so the cleartext tag every reader
+// routes by cannot name a session other than the one the record lives at (the F1 shape, refused by shape).
+const arrivalSid = (d) => { const m = ARRIVAL_ADDR_RE.exec(String(d || '').slice(CHECKINARRIVAL_D.length)); return m ? m[1] : ''; };
+// The pubkey an arrival's ADDRESS names. Only ever equal to e.pubkey on a stored event (arrivalIdOk), so
+// canRead can answer "is this yours" from the d-tag alone.
+const arrivalAuthor = (d) => { const m = ARRIVAL_ADDR_RE.exec(String(d || '').slice(CHECKINARRIVAL_D.length)); return m ? m[2] : ''; };
 function idOwnerOk(owner, e, id) {
   const cp = namedChurch(e) || e.pubkey;
   if (!owner) {
@@ -2038,7 +2119,12 @@ const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D,
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
 // not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
-const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D, CAREREQ_D, NAME_D];
+// CLAUDE.md rule 2 -- EVERY USER OF THIS LIST, and there is exactly one: canRead's `memberWritable`, which
+// exempts these from the REVOKED-STEWARD RETRACTION. Nothing else reads it; accept() does not. An arrival
+// joins it for the reason the comment above gives: it is a member's own document, authorised by
+// authorship, and without the exemption the retraction would refuse to serve a parent's own arrival to
+// the worker it is addressed to (the author is neither the church nor a steward). Sibling of CAREREQ_D.
+const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D, CAREREQ_D, NAME_D, CHECKINARRIVAL_D];
 function owningChurch(e, d) {
   const suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
   if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
@@ -3678,6 +3764,65 @@ function accept(e) {
       //      CREATE is untouched: an address this box holds nothing at is the volunteer at the desk.
       return !checkinSessionConflict(d, cp, sid);
     }
+    // A PARENT SAYS "WE ARE HERE", AND THAT IS ALL IT SAYS. STEP 1 of the parent surface, 2026-09-11.
+    //
+    // WHY A PARENT NEVER AUTHORS THE BRANCH ABOVE. In the normal case the child has NO ACCOUNT -- design
+    // section 7, the owner: "most children getting checked in will not have a phone" -- so there is nothing at
+    // this relay that links a parent to a child. guardianOfIn() is keyed on the CHILD's pubkey, and a child
+    // with no key appears in no map; `guardians:` is owner-only and is not served to ordinary members at all.
+    // A parent-authored `checkin:` row would therefore have had no authority to check against and would have
+    // reduced to "ANY MEMBER MAY INVENT A CHILD AND A PICKUP CODE" -- which is the hole F-B (90c4bf5) closed
+    // three weeks ago, reopened by the front door. So the CHECKIN_D branch above is UNCHANGED by this work,
+    // and so is its read rule.
+    //
+    // WHAT THE PARENT WRITES INSTEAD IS THIS, AND THE WORKER TURNS IT INTO A ROW. The arrival's ONLY job is
+    // to deliver the parent's pubkey provably, which the signature already does; the worker's phone -- which
+    // holds the session key and belongs to a person the church cleared -- is what writes the register row,
+    // through the already-audited writeCheckin. Forging an arrival buys a spurious line on a worker's screen,
+    // which is the same data-quality nuisance the printed room code already knowingly accepts. Forging a
+    // register row buys a child.
+    //
+    // IT CARRIES NO KEY MATERIAL AND NO CHILD'S NAME. The body is the parent's own self-sealed ciphertext,
+    // opaque to everyone including the worker, and nothing reads it. The worker types the child's name at the
+    // desk exactly as she does today.
+    //
+    // SPLIT IN TWO HALVES, exactly as carereqIdOk / checkinSessionOkOnIngest are split:
+    //   * arrivalIdOk            -- STATELESS, a property of the event, applied here AND at all three ingest
+    //                               sites. The address names the author, so only the author may write there.
+    //   * checkinArrivalWindowOpen -- consults the hydrated CHECKIN_HELPERS map, so it is THIS DOOR ONLY. An
+    //                               author-authority check on the import loop, which runs before
+    //                               hydrateMaps(), refused a safeguarding steward's own archive on restore
+    //                               this week (9f17160); that mistake is not repeated here.
+    //
+    // AND THE CLEARTEXT TAG MUST AGREE WITH THE ADDRESS. Readers route by the ['session'] tag; the store keys
+    // on the d-tag. Letting them disagree is the F1 shape one document over -- an arrival living at one
+    // session's address and rendering on another session's screen -- so it is refused by shape rather than
+    // reasoned about.
+    if (d.startsWith(CHECKINARRIVAL_D)) {
+      const cp = namedChurch(e);
+      if (!cp) return false;                                   // ownership unproven: owningChurch()/canRead() deny it anyway
+      if (!arrivalIdOk(e, d)) return false;                    // the address names somebody else, or nobody
+      // SCOPED TO THE NAMED CHURCH, and `isMember` a few lines up in accept() is deliberately NOT what is
+      // used: it is the relay-wide union (any configured church key, any declared network, anyone who
+      // published a member: doc to ANY church on the box), which on a shared relay would let a co-tenant's
+      // member write arrivals into this congregation's children's session. churchWriter delegates to
+      // effMemberOf, which is the per-church rule every other church-scoped gate on this box asks.
+      if (!churchWriter(e.pubkey, cp)) return false;
+      const sid = arrivalSid(d);
+      const tagSid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
+      if (!sid || tagSid !== sid) return false;                // the tag readers route by IS the address they live at
+      // A TOMBSTONE IS NOT SPECIAL-CASED, and that is the decision rather than an omission. "We are not coming
+      // after all" is the same act as "we are here", by the same person, at the same address, in the same
+      // session -- so it passes or fails by the same rule, and a family that changes its mind inside the
+      // window can always withdraw. What it must NOT become is a way to reach a CLOSED session, which is why
+      // there is no exemption below this line.
+      // AND IT RETURNS RATHER THAN FALLING TO M1's PER-MEMBER DOC CAP, which is safe here for a structural
+      // reason rather than a hopeful one: the address is `<sessionId>:<authorpubhex>`, so one member has
+      // exactly ONE arrival address per session, and an addressable write REPLACES it. The most a member can
+      // hold is one document per session this church currently has an open envelope for -- the handful a
+      // church runs at once -- so there is no unique-d-tag flood to bound.
+      return checkinArrivalWindowOpen(cp, sid);
+    }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
@@ -4141,6 +4286,35 @@ function canRead(e, authed) {
       // cannot judge this, so the box must not serve what it does not honour.
       const tomb = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
       return tomb || checkinPermAuthorLive(e.pubkey, cp);
+    }
+    // AN ARRIVAL IS NOT SERVED TO THE CONGREGATION. Two people have a use for "the Henderson family is at the
+    // door of the creche": the family, and whoever is working in that room this morning. Nobody else does, and
+    // an arrival is a presence record for a named household -- who was at church, and when -- which is exactly
+    // the kind of fact the rest of this gate withholds from the pews.
+    //
+    // IT RETURNS, WITH NO FALL-THROUGH TO THE ORDINARY MEMBER RULE. That fall-through is not a hypothetical
+    // tidiness: it is the defect the HELPER GRANT carried until 2026-09-09, where a branch that narrowed a
+    // document and then fell through served it to every member anyway, and it was measured on a live gateway.
+    // DEFAULT-DENY, `return false` at the foot, and any future reader of an arrival is added by name here.
+    //
+    // WHO STILL READS IT: the church, its network, any steward and a care admin, all of whom returned true at
+    // the privileged short-circuit far above -- and these two:
+    //   * THE AUTHOR, from the d-tag rather than from e.pubkey. arrivalIdOk means the two are equal on any
+    //     stored event, so this is the same answer by the cheaper route, and it stays correct for a tombstone.
+    //   * AN IN-WINDOW HELPER OF THE NAMED SESSION -- checkinHelperOf, the same conjunction (named in the
+    //     envelope AND a live permission AND the server's clock inside the window) that decides who reads the
+    //     register itself. A worker whose turn is over is refused, which is the point of tying it to the rota.
+    //
+    // THE SESSION COMES FROM THE ADDRESS, not from the ['session'] tag, for the reason arrivalSid records: the
+    // address is what the store keys on. accept() refuses any event whose tag and address disagree, so on a
+    // stored event the two are the same string -- but a read gate that trusted the tag would be trusting the
+    // writer's choice, and that is precisely the F1 shape.
+    if (d.startsWith(CHECKINARRIVAL_D)) {
+      if (!authed) return false;
+      if (authed === arrivalAuthor(d)) return true;
+      const asid = arrivalSid(d);
+      if (asid && checkinHelperOf(authed, cp, asid)) return true;
+      return false;
     }
     if (d.startsWith(CHECKIN_D)) {
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
@@ -5136,6 +5310,10 @@ function serveStatic(req, res) {
           // straight to the store, so without this a forged request arrives by import or by relay-to-relay sync, sits
           // beside the genuine one (addressable events are per author), and every reader picks newest-wins.
           if (!carereqIdOk(e, dtag(e))) { invalid++; continue; }
+          // …and never an ARRIVAL at another member's address. STATELESS (arrivalIdOk consults no map), so
+          // unlike the window half it is safe here: this loop runs before hydrateMaps(), and a check that
+          // needed a hydrated map would refuse a church its own archive (9f17160).
+          if (!arrivalIdOk(e, dtag(e))) { invalid++; continue; }
           // …AND A CHECK-IN RECORD BELONGS TO ONE SESSION, WHICH ALSO HOLDS AT EVERY DOOR. Same argument as
           // the line above, on the register instead of on care: this route writes straight to the store with
           // no accept() pass, so without this a helper's forgery at another session's address arrives by
@@ -6348,6 +6526,7 @@ async function syncChurchFromPeer(cp, peerBase) {
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
       if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
       if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
+      if (!arrivalIdOk(e, dtag(e))) return;                  // …and never an arrival at another member's address
       if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
       const put = store.put(e, cp);
       if (put === 'stored') { imported++; note(e); }
@@ -6412,7 +6591,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }
