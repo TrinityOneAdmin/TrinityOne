@@ -138,7 +138,16 @@ function record(id, obj, session, sessionKeyHex, over = {}) {
 function phone(who) {
   const emitted = [];
   let handler = null;
+  const dropped = [];       // what the reader asked the hub cache to forget, and when
+  const refetches = [];
+  const hub = { since: 42, fullAt: 42 };
   const scope = {
+    // THE CACHE, as far as this reader touches it: a withdrawal must DROP the check-in slices (owner 2026-09-11),
+    // and a later re-clearance must reset the cursor and refetch in full. Recorded, never simulated further.
+    _hubDropSlices: (cp, prefixes) => { dropped.push(prefixes.slice()); return 0; },
+    _docsHubs: new Map([[church.pub, hub]]),
+    refetchChurchDocs: () => refetches.push(Date.now()),
+    setTimeout: (fn) => { fn(); return 0; },   // the deferred refetch runs at once here
     toPub: (x) => x,
     pub: who.pub, sk: who.sk,
     // The real _coalesce defers to a macrotask; here it runs at once so a test reads the answer without a
@@ -175,7 +184,9 @@ function phone(who) {
     're-anchor: the reader no longer asks the hub for these three document types, so it is replaying a ' +
     'different slice of the corpus than this test feeds it');
   const dtag = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+  const cache = () => ({ dropped, refetches, hub });
   return {
+    cache,
     feed(...events) { for (const e of events) handler.onevent(e, dtag(e)); return this; },
     settle() { handler.oneose(); return this; },
     last() { assert.ok(emitted.length, 'the shipped reader emitted nothing at all, not even an empty answer'); return emitted[emitted.length - 1]; },
@@ -405,6 +416,33 @@ test('a helper copy with the WRONG TYPES in it reaches the screen as strings and
   assert.equal(rows.numeric.out, 1789084514, 'a numeric string `out` (an older writer) was dropped');
 });
 
+test('a WITHDRAWAL EMPTIES THE PHONE — memory and the cache the next boot replays — and a re-clearance refetches in full', () => {
+  // Owner's decision 2026-09-11 (device finding D3, second half): the relay refuses a withdrawn worker
+  // everything from that moment; what the phone already held must go too, and not come back on a cold start.
+  const tomb = { pubkey: church.pub, created_at: NOW - 60, content: '',
+                 tags: [['d', CHECKINPERM_D + morning.pub], ['t', 'trinityone'], ['church', church.pub], ['deleted', '1']] };
+  const p = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY))
+    .settle();
+  assert.deepEqual(namesOn(p.last()), ['Esther Ncube'], 'fixture: the register was never there to be dropped');
+  p.feed(tomb);
+  const v = p.last();
+  assert.deepEqual(namesOn(v), [], 'the rows survived the withdrawal in memory');
+  assert.equal(v.keysHeld, 0, 'the key survived the withdrawal in memory');
+  assert.deepEqual(p.cache().dropped, [[CHECKINHELPER_D, CHECKIN_D]],
+    'THE CACHE WAS NOT TOLD TO FORGET the envelope and the records — a force-stop and relaunch replays them, ' +
+    'names and pickup codes included, exactly as the Oppo did. dropped: ' + JSON.stringify(p.cache().dropped));
+  // …and records arriving AFTER the withdrawal (a replay, a race) do not resurrect anything: no key, so unopenable
+  p.feed(record('ci-2', { childName: 'Amos Bello', code: '9081' }, AM, AM_KEY));
+  assert.deepEqual(namesOn(p.last()), [], 'a record arriving after the withdrawal was opened — the key came back');
+  // the church clears her again: the documents it will serve are older than the cursor, so refetch in FULL
+  p.feed({ ...clearance(morning), created_at: NOW - 30 });
+  assert.equal(p.cache().hub.since, 0, 're-clearance did not reset the hub cursor — a cursored refetch returns none of the old envelope or records');
+  assert.equal(p.cache().refetches.length, 1, 're-clearance did not refetch the church documents');
+  assert.equal(p.last().cleared, true, 're-anchor: the re-clearance did not clear');
+});
+
 test('a WITHDRAWN clearance is reported as withdrawn — not as "never cleared", and not silently', () => {
   // Device finding D3, 2026-09-11: after the church withdrew a helper's clearance the phone kept the register
   // through a resume and a cold start with no line saying anything had changed. The tombstone arrived; the
@@ -421,7 +459,9 @@ test('a WITHDRAWN clearance is reported as withdrawn — not as "never cleared",
     'A WITHDRAWAL IS SILENT. The church took this clearance away and the phone reports the same state as ' +
     'somebody who was never cleared — the screen has nothing to say. State: ' + JSON.stringify({ cleared: v.cleared, lapsed: v.lapsed, notYet: v.notYet, withdrawn: v.withdrawn }));
   assert.equal(v.lapsed, false, 'a withdrawal was reported as an expiry');
-  assert.deepEqual(namesOn(v), ['Esther Ncube'], 'the reader dropped the rows the phone already held — that decision is not this reader\'s to take');
+  // OWNER'S DECISION 2026-09-11 (reversing the first version of this test): a withdrawal EMPTIES the phone.
+  assert.deepEqual(namesOn(v), [], 'A WITHDRAWN WORKER STILL HOLDS THE REGISTER — names and pickup codes stay on a phone the church has just refused: ' + JSON.stringify(namesOn(v)));
+  assert.equal(v.keysHeld, 0, 'the session key survived the withdrawal');
   // and never cleared is NOT withdrawn — the cold-start race, where nothing has arrived, must not say "withdrawn"
   const never = phone(morning).feed(envelope(AM, AM_KEY, [morning])).settle().last();
   assert.equal(never.withdrawn, false, 'a phone that has never seen a clearance document reports one as withdrawn');

@@ -316,18 +316,25 @@ test('NEGATIVE: a lapsed clearance says so and does NOT take the register off th
   assert.equal(s.has('Show code'), 2, 'the pickup codes became unreachable, so the door stopped working');
 });
 
-test('NEGATIVE: a WITHDRAWN clearance says so over the register the phone still holds', () => {
+test('NEGATIVE: a WITHDRAWN clearance says so — and, the phone now emptied, says the register is gone', () => {
   // Device finding D3, 2026-09-11: the Oppo showed the register, unremarked, through a resume and a cold
-  // start after the church had withdrawn the clearance. The rows stay (owner's call whether to drop them);
-  // the line must not.
+  // start after the church had withdrawn the clearance. Owner's decision the same day: the reader EMPTIES the
+  // phone, so the ordinary shape of this state is withdrawn:true with nothing held — and the tab must not
+  // simply vanish, or the worker reads it as the app breaking.
+  const gone = serving({ ...NONE, withdrawn: true, keysHeld: 0, sessions: [] });
+  assert.ok(tabLabels(gone.tree()).includes('Kids'), 'THE TAB VANISHED on withdrawal — nothing tells the worker what happened');
+  gone.press('Kids');
+  const g = gone.reads();
+  assert.match(g, /withdrawn your clearance/i, 'the withdrawal is not said. As rendered: ' + g);
+  assert.match(g, /removed from this phone/i, 'the line does not say the register was removed. As rendered: ' + g);
+  assert.doesNotMatch(g, /Show code|checked in/i, 'register wording remains on an emptied phone');
+  // and the raced-in shape — something still held — is listed, and the copy says so
   const s = serving({ ...NONE, withdrawn: true, keysHeld: 1, sessions: oneSession(twoKids) });
-  assert.ok(tabLabels(s.tree()).includes('Kids'), 're-anchor: a phone holding a key keeps its tab, as the lapsed state does');
   s.press('Kids');
   const out = s.reads();
-  assert.match(out, /withdrawn your clearance/i,
-    'A WITHDRAWN HELPER IS SHOWN THE REGISTER WITH NO WORD ABOUT IT. As rendered: ' + out);
-  assert.match(out, /already held/i, 'the line does not say that what is shown is what the phone already had');
-  assert.match(out, /Esther Ncube/, 'the rows were dropped — that is the owner\'s decision, not this screen\'s');
+  assert.match(out, /withdrawn your clearance/i, 'As rendered: ' + out);
+  assert.match(out, /still held/i, 'the line does not say that what is shown is what the phone still had');
+  assert.match(out, /Esther Ncube/, 'a record still held was hidden rather than listed');
   // and somebody never cleared, holding a key by the cold-start race, is told nothing of the kind
   const n = serving({ ...NONE, keysHeld: 1, sessions: oneSession(twoKids) });
   n.press('Kids');

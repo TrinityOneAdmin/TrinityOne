@@ -2011,6 +2011,26 @@ function _hubBufSet(hub, key, e) {
   if (!sl) { sl = new Map(); hub.idx.set(dk, sl); }
   sl.set(key, e);
 }
+// DROP A SLICE OF THE CACHE — by document type, for every author — and forget it on disk in the same breath.
+// Written for a check-in worker whose clearance the church withdrew (owner's decision 2026-09-11, device finding
+// D3): the relay refuses her everything from that moment, but this cache had the session envelope and the
+// register and replayed them, names and pickup codes included, through a resume and a cold start. Deleting from
+// `buf` alone would leave the `idx` slice replaying them; deleting from memory alone would leave the disk copy
+// for the next boot. Both, then save NOW rather than in 800 ms, so a force-stop cannot keep them.
+function _hubDropSlices(cp, prefixes) {
+  const hub = _docsHubs.get(cp);
+  if (!hub || !hub.buf) return 0;
+  let n = 0;
+  for (const [key, e] of [...hub.buf.entries()]) {
+    const d = _dtag(e);
+    if (!prefixes.some(p => d.startsWith(p))) continue;
+    hub.buf.delete(key);
+    const sl = hub.idx.get(_dkeyOf(d)); if (sl) sl.delete(key);
+    n++;
+  }
+  if (n) { hub.dirty = true; _docsHubSaveNow(hub); }
+  return n;
+}
 function _docsHubSaveNow(hub) {
   if (!_mayCache()) return;
   if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
@@ -4848,6 +4868,7 @@ window.Fellowship = {
     let perm = null;                 // my own clearance, or null — readCheckinPermission's verdict, never a guess
     let permTomb = false;            // the newest clearance document for me was a WITHDRAWAL (not merely unreadable)
     let permTs = 0;
+    let purged = false;              // a withdrawal emptied this phone; the next clearance must refetch in full
     const grants = new Map();        // sessionId -> { grant, ts } (the parsed envelope; window + pubs)
     const keys = new Map();          // sessionId -> 32 bytes of hex, unwrapped from MY OWN slot
     const recs = new Map();          // record id (the d-tag suffix) -> { sid, tags, ts, by }
@@ -4965,9 +4986,26 @@ window.Fellowship = {
           if ((e.created_at || 0) < permTs) return;  // newest wins, mirroring the relay's guard
           permTs = e.created_at || 0;
           // A WITHDRAWAL IS A TOMBSTONE, and it must land as "no clearance" rather than be ignored.
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { perm = null; permTomb = true; emit(); return; }
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) {
+            perm = null; permTomb = true;
+            // A WITHDRAWAL EMPTIES THIS PHONE. Owner's decision 2026-09-11 (device finding D3): the relay refuses a
+            // withdrawn worker everything from that moment, and what this phone already held — the envelope, the
+            // names, the pickup codes — must go with it, from memory and from the cache the next boot replays. The
+            // lost-phone trade in the scope doc is about phones the church cannot reach; this one it can.
+            grants.clear(); keys.clear(); recs.clear(); rows.clear();
+            _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D]);
+            purged = true;
+            emit(); return;
+          }
           permTomb = false;
           perm = readCheckinPermission(e.content);   // null for anything it cannot vouch for — never "no limits"
+          // RE-CLEARED AFTER A PURGE: the documents the relay will serve again are OLDER than the hub's cursor, so
+          // a cursored refetch would return none of them — the same trap the admission path records above.
+          // Reset the cursor and refetch once, deferred, because this runs inside the hub's own onevent.
+          if (perm && purged) {
+            purged = false;
+            setTimeout(() => { const hub = _docsHubs.get(pubk); if (hub) { hub.since = 0; hub.fullAt = 0; } try { refetchChurchDocs(); } catch (err) {} }, 0);
+          }
           emit(); return;
         }
         // ── ONE SESSION'S KEY ─────────────────────────────────────────────────────────────────────────────

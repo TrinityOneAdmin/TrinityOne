@@ -672,7 +672,7 @@ function KidsRegister({ ctx }) {
   const [shown, setShown] = useSv('');
   // WHETHER THIS TAB EXISTS AT ALL is decided in ServingScreen from the same three fields; kept here beside
   // the states it selects so the two cannot drift.
-  const nothingKnown = !reg.cleared && !reg.notYet && !(reg.keysHeld > 0);
+  const nothingKnown = !reg.cleared && !reg.notYet && !reg.withdrawn && !(reg.keysHeld > 0);
   if (nothingKnown) return null;
   return (
     <React.Fragment>
@@ -694,16 +694,16 @@ function KidsRegister({ ctx }) {
           <b style={{ color: 'var(--ink)' }}>Your clearance ended {svWhen(reg.until)}.</b>{' '}
           New records will stop reaching this phone.
         </div>
-      ) : reg.withdrawn && reg.keysHeld > 0 ? (
-        /* WITHDRAWN, AND THIS PHONE STILL HOLDS A KEY. Device finding D3, 2026-09-11: the register stayed on a
-           withdrawn helper's phone through a resume and a cold start, and nothing said so. The rows below are
-           what this phone already held — the relay serves it nothing new — and that is said in those words.
-           The console's own copy promises "withdrawing one ends their access at once"; what is already on a
-           phone is the part that promise cannot reach, and this line is the honest half of it. Whether the
-           cached copies should be DROPPED on withdrawal is the owner's decision, not this line's. */
+      ) : reg.withdrawn ? (
+        /* WITHDRAWN. Device finding D3, 2026-09-11: the register stayed on a withdrawn helper's phone through a
+           resume and a cold start, and nothing said so. The owner's decision the same day: a withdrawal EMPTIES
+           the phone (subscribeCheckinRegister drops the envelope and the records from memory and from the cache),
+           and this line says both halves — the clearance is gone, and so is the register. Should anything still
+           be held (a record that raced in before the purge), it is listed below as it would be under a lapsed
+           clearance; the copy does not claim otherwise. */
         <div style={{ borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '12px 14px', marginBottom: 14, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
           <b style={{ color: 'var(--ink)' }}>Your church has withdrawn your clearance.</b>{' '}
-          What is below is what this phone already held; nothing new will reach it.
+          {reg.keysHeld > 0 ? 'What is below is what this phone still held; nothing new will reach it.' : 'The register has been removed from this phone.'}
         </div>
       ) : null}
 
@@ -860,7 +860,9 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // anything to do, and a tab reading "ended in June" for the rest of the year is the clutter the copy cull of
   // 2026-09-10 was about.
   const _ckReg = ctx.checkinRegister || {};
-  const kidsOn = !!(_ckReg.cleared || _ckReg.notYet || (_ckReg.keysHeld > 0));
+  // `withdrawn` keeps the tab too: a withdrawal now empties the phone (owner 2026-09-11), so without it the tab
+  // would simply vanish and a worker would read that as the app breaking. The tab stays to say what happened.
+  const kidsOn = !!(_ckReg.cleared || _ckReg.notYet || _ckReg.withdrawn || (_ckReg.keysHeld > 0));
   const _tabs = [['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ...(kidsOn ? [['kids', 'Kids', 'child']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])];
   const _tabKeys = _tabs.map(t => t[0]).join(',');
   React.useEffect(() => {

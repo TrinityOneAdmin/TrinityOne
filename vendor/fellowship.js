@@ -8097,6 +8097,24 @@
     }
     sl.set(key, e);
   }
+  function _hubDropSlices(cp, prefixes) {
+    const hub = _docsHubs.get(cp);
+    if (!hub || !hub.buf) return 0;
+    let n = 0;
+    for (const [key, e] of [...hub.buf.entries()]) {
+      const d = _dtag(e);
+      if (!prefixes.some((p) => d.startsWith(p))) continue;
+      hub.buf.delete(key);
+      const sl = hub.idx.get(_dkeyOf(d));
+      if (sl) sl.delete(key);
+      n++;
+    }
+    if (n) {
+      hub.dirty = true;
+      _docsHubSaveNow(hub);
+    }
+    return n;
+  }
   function _docsHubSaveNow(hub) {
     if (!_mayCache()) return;
     if (hub.saveT) {
@@ -11409,6 +11427,7 @@
       let perm = null;
       let permTomb = false;
       let permTs = 0;
+      let purged = false;
       const grants = /* @__PURE__ */ new Map();
       const keys = /* @__PURE__ */ new Map();
       const recs = /* @__PURE__ */ new Map();
@@ -11507,11 +11526,31 @@
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
               perm = null;
               permTomb = true;
+              grants.clear();
+              keys.clear();
+              recs.clear();
+              rows.clear();
+              _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D]);
+              purged = true;
               emit();
               return;
             }
             permTomb = false;
             perm = readCheckinPermission(e.content);
+            if (perm && purged) {
+              purged = false;
+              setTimeout(() => {
+                const hub = _docsHubs.get(pubk);
+                if (hub) {
+                  hub.since = 0;
+                  hub.fullAt = 0;
+                }
+                try {
+                  refetchChurchDocs();
+                } catch (err) {
+                }
+              }, 0);
+            }
             emit();
             return;
           }
