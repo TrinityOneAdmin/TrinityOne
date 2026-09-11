@@ -15,10 +15,15 @@
 //
 // ── WHAT THIS COVERS AND WHAT IT CANNOT ──────────────────────────────────────────────────────────────────
 // It covers relay → socket: the live fanout at gateway.mjs's EVENT branch, which re-runs canRead per event
-// against that client's CURRENT auth. It does NOT cover the phone above the socket — nostr-tools' pool, the
-// church-docs hub, or the React effect (that half is pinned by
-// scripts/a-locked-boot-still-subscribes-when-it-unlocks.test.mjs). If this file is green and a phone is
-// still blind, the fault is above the socket, and that is exactly the split the device round could not make.
+// against that client's CURRENT auth, under the filters the app really sends — `since` included.
+//
+// IT DOES NOT COVER the phone above the socket: nostr-tools' pool, the church-docs hub, the reader, or the
+// React effect (that last is pinned by scripts/a-locked-boot-still-subscribes-when-it-unlocks.test.mjs).
+// Nor does it cover a church on MORE THAN ONE relay: `_publishAny` writes to all of `relaysForChurch`, and
+// one box accepting while another refuses is a topology this single-relay harness cannot produce.
+//
+// So the honest reading is narrow: the fanout loop itself is correct, and the last test below marks the one
+// state where a correct loop still delivers nothing. "The relay is excluded" would be too strong.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -33,7 +38,7 @@ import { requireFreePort } from './test-ports.mjs';
 import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE, checkinGuardianCopies } from './checkin-role-source.mjs';
 import { D } from './trinity-doc-types.mjs';
 
-const PORT = 8914;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const PORT = 8914;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs — scripts/test-ports.test.mjs enforces BOTH since 2026-09-11 (it read only *.test.mjs before, so that comment was an honour-system claim wherever it appeared)
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const NET = 'trinityone';
 const now = () => Math.floor(Date.now() / 1000);
@@ -55,18 +60,30 @@ const send = (s, e) => new Promise(res => {
 const doc = (who, d, content, extra = []) => finalizeEvent({ kind: 30078, created_at: now(),
   tags: [['d', d], ['t', NET], ...extra], content: typeof content === 'string' ? content : JSON.stringify(content) }, who.sk);
 
-// THE SUBSCRIPTION THE APP ACTUALLY OPENS. Both filters, verbatim from _docsHubOpen in
+// THE SUBSCRIPTION THE APP ACTUALLY OPENS. Both filters verbatim from `_docsHubOpen` in
 // src/fellowship.src.js — a church-authored half and a member-authored half, both pinned to ['t']. The
 // check-in record is written by a WORKER, so only the second filter can ever match it, and getting that
 // wrong here would make this file assert nothing.
-const HUB_FILTERS = (cp) => [
-  { kinds: [30078], authors: [cp], '#t': [NET] },
-  { kinds: [30078], '#church': [cp], '#t': [NET] },
-];
+//
+// ⚠ `since` IS PART OF WHAT THE APP SENDS AND AN EARLIER VERSION OF THIS FILE OMITTED IT — which made the
+// harness measure a first-ever open and call the result "the relay is excluded". `_docsHubOpen` does
+// `if (since) for (const f of filters) f.since = since`, where `_hubSince()` returns
+// `hub.since - SINCE_SLOP` (3 days) on every open EXCEPT the at-most-daily full re-sync. A returning phone —
+// the state both phones in the 2026-09-11 round were in — always carries it. It is load-bearing at the
+// relay: gateway.mjs pushes on `matchAny(evt, filters)`, and matchFilter drops anything older than `since`.
+const HUB_FILTERS = (cp, since = 0) => {
+  const f = [
+    { kinds: [30078], authors: [cp], '#t': [NET] },
+    { kinds: [30078], '#church': [cp], '#t': [NET] },
+  ];
+  if (since) for (const x of f) x.since = since;
+  return f;
+};
+const APP_SINCE = () => now() - 3 * 86400;   // what a warm hub sends: its cursor less SINCE_SLOP
 
 // Open a socket, authenticate it, subscribe with the app's filters, and keep it open. Returns a live
 // collector: `.seen` grows as the relay pushes. This is the part no other test in this repo does.
-async function watching(who) {
+async function watching(who, since = APP_SINCE()) {
   const s = await conn();
   const seen = [];
   const sub = 'hub' + Math.random().toString(36).slice(2, 7);
@@ -81,20 +98,20 @@ async function watching(who) {
   // for the wrong reason. Wait until this phone is genuinely authed, then open the real one.
   s.send(JSON.stringify(['REQ', 'warm', { kinds: [30078], limit: 1 }]));
   await sleep(400);
-  s.send(JSON.stringify(['REQ', sub, ...HUB_FILTERS(church.pub)]));
+  s.send(JSON.stringify(['REQ', sub, ...HUB_FILTERS(church.pub, since)]));
   await sleep(300);
   seen.length = 0;   // drop the backlog: only what arrives AFTER this line is a live delivery
   return { s, seen, close: () => { try { s.close(); } catch {} } };
 }
 
 // A check-in record with the tags the relay's gates key on and one guardian copy per parent named.
-function record(id, guardians) {
+function record(id, guardians, createdAt = now()) {
   const body = { id, child: 'kid-' + id, childName: 'Child ' + id, date: '2026-09-13', in: now(), code: '4821',
                  session: SESSION, guardians: guardians.map(g => g.pub) };
   // The SHARED builder, the same one both shipped writers call — it reads `body.guardians` itself and seals
   // one copy per parent, so a fixture here cannot disagree with what a phone would actually receive.
   const gk = checkinGuardianCopies(body, (plain, gp) => nip44.encrypt(plain, nip44.utils.getConversationKey(ada.sk, gp)));
-  return finalizeEvent({ kind: 30078, created_at: now(),
+  return finalizeEvent({ kind: 30078, created_at: createdAt,
     tags: [['d', D.CHECKIN + id], ['t', NET], ['church', church.pub], ['session', SESSION], ['enc', '2'],
            ...guardians.map(g => ['p', g.pub]), ...gk],
     content: nip44.encrypt(JSON.stringify(body), nip44.utils.getConversationKey(ada.sk, church.pub)) }, ada.sk);
@@ -176,7 +193,7 @@ test('an unauthenticated socket is pushed nothing, however long it waits', async
   const s = await conn();
   const seen = [];
   s.on('message', d => { const m = JSON.parse(d); if (m[0] === 'EVENT' && m[1] === 'anon') seen.push(m[2]); });
-  s.send(JSON.stringify(['REQ', 'anon', ...HUB_FILTERS(church.pub)]));   // no AUTH reply, ever
+  s.send(JSON.stringify(['REQ', 'anon', ...HUB_FILTERS(church.pub, APP_SINCE())]));   // no AUTH reply, ever
   await sleep(400);
   seen.length = 0;
   const ev = record('live4', [gina]);
@@ -186,4 +203,79 @@ test('an unauthenticated socket is pushed nothing, however long it waits', async
   assert.equal(seen.filter(e => e.id === ev.id).length, 0,
     'A SOCKET THAT NEVER AUTHENTICATED WAS PUSHED A CHILD\'S CHECK-IN RECORD live. Anyone who can reach the ' +
     'relay would learn which children are in the building.');
+});
+
+// ── THE STATE WHERE A CORRECT FANOUT STILL DELIVERS NOTHING ───────────────────────────────────────────────
+//
+// Found by audit, 2026-09-11, after the first version of this file concluded too much from four green tests.
+// `since` is a filter like any other, so a record whose `created_at` is older than the WATCHING phone's
+// cursor is never pushed to it — and `created_at` is stamped by the WRITER's clock. The relay refuses a
+// timestamp too far in the FUTURE and deliberately accepts any past one (gateway.mjs says why: created_at is
+// fixed at signing, and marking the refusal permanent meant a cheap phone with no NTP failed to send every
+// message instead of every message landing a minute later — "the first audience, exactly").
+//
+// So a worker phone whose clock is more than SINCE_SLOP (3 days) slow writes a record the relay STORES and
+// SERVES on request, and never pushes to a parent already watching. The parent sees it on the next cold
+// start — which is precisely the shape measured on two phones on 2026-09-11, and precisely why this file
+// must not be read as clearing the relay of that blocker. Neither phone's clock was checked against 3 days;
+// the parent's drift was measured at 194 seconds and the worker's was never measured at all.
+//
+// This test PINS THE BEHAVIOUR RATHER THAN CALLING IT A BUG. Widening it is not free — `since` is what keeps
+// a returning phone from re-downloading the corpus over a thin pipe, which is this product's first audience.
+test('KNOWN LIMIT: a record stamped by a slow writer clock is stored and served, but never pushed live', async () => {
+  const parent = await watching(gina);
+  const stale = record('live5', [gina], now() - 4 * 86400);   // a writer phone four days behind
+  const [ok, msg] = await send(w, stale);
+  assert.equal(ok, true, 'the relay refused a past-stamped record, which would make this test measure the door: ' + msg);
+  await sleep(600);
+  parent.close();
+  assert.equal(parent.seen.filter(e => e.id === stale.id).length, 0,
+    're-anchor: the relay now pushes records older than the subscriber\'s `since`. If that is deliberate the ' +
+    'note above is stale; if it is not, a thin-pipe phone is re-downloading history it already holds.');
+
+  // …and it IS on the box: served the moment anyone asks for it. That is the half that makes this a live-push
+  // limit rather than a lost record, and it is why a cold start shows the child and an open screen does not.
+  const asked = await watching(gina, 0);          // a full re-sync carries no `since` — the cold-start path
+  await sleep(400);
+  asked.close();
+  const s2 = await conn();
+  const seen = [];
+  s2.on('message', d => { const m = JSON.parse(d);
+    if (m[0] === 'AUTH') s2.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(),
+      tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, gina.sk)]));
+    else if (m[0] === 'EVENT' && m[1] === 'cold') seen.push(m[2]); });
+  s2.send(JSON.stringify(['REQ', 'warm', { kinds: [30078], limit: 1 }]));
+  await sleep(400);
+  s2.send(JSON.stringify(['REQ', 'cold', ...HUB_FILTERS(church.pub, 0)]));
+  await sleep(600);
+  try { s2.close(); } catch {}
+  assert.ok(seen.some(e => e.id === stale.id),
+    'the record is not even served on a full re-sync, so it is lost rather than merely undelivered — a worse ' +
+    'defect than the one this test was written for');
+});
+
+// CANDIDATE 1'S SHAPE, from reference/DEVICE-VERIFICATION-two-phone-2026-09-11.md: a session that began
+// PIN-LOCKED subscribes before it can answer an AUTH challenge. Nothing pinned what the relay does then.
+test('a socket that subscribed BEFORE it authenticated is pushed the record once it does', async () => {
+  const s = await conn();
+  const seen = [];
+  let challenge = null;
+  s.on('message', d => { const m = JSON.parse(d);
+    if (m[0] === 'AUTH') challenge = m[1];
+    else if (m[0] === 'EVENT' && m[1] === 'late') seen.push(m[2]); });
+  s.send(JSON.stringify(['REQ', 'late', ...HUB_FILTERS(church.pub, APP_SINCE())]));   // subscribe as nobody
+  await sleep(500);
+  assert.ok(challenge, 're-anchor: the relay never challenged this socket, so the test below proves nothing');
+  s.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(),
+    tags: [['relay', WS_URL], ['challenge', challenge]], content: '' }, gina.sk)]));   // …and only now say who we are
+  await sleep(400);
+  seen.length = 0;
+  const ev = record('live6', [gina]);
+  await send(w, ev);
+  await sleep(600);
+  try { s.close(); } catch {}
+  assert.ok(seen.map(e => e.id).includes(ev.id),
+    'A SUBSCRIPTION OPENED BEFORE AUTHENTICATION STAYS DEAF AFTER IT. Every PIN-locked boot subscribes in ' +
+    'that order, so a parent who unlocks would be told nothing for the rest of the session — the blocker\'s ' +
+    'exact shape. The live fanout reads `client._auth` at push time, so this should hold.');
 });
