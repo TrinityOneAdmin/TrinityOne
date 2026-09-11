@@ -6243,16 +6243,50 @@ function DashCheckin() {
   // button, on the one screen a safeguarding lead reads.
   //
   // ⚠ IT MUST STILL NOT BE UNBOUNDED. Nothing ever arrives to say "that session was abandoned", so a record
-  // with no release would otherwise sit here for ever. It ages out on THE SAME MEASURE THE PARENT'S SCREEN
-  // ALREADY USES — `MYKIDS_WINDOW` in src/fellowship.src.js is MAX_SESSION_SECONDS, and
-  // Steward.checkinRegisterWindow() is the same constant — so the two sides of one record now agree about
-  // when it stops being live. That is a second thing this fixes: they did not agree before, because one was
-  // a calendar day and the other a 26-hour window.
+  // with no release would otherwise sit here for ever. It ages out on the measure the PARENT'S SCREEN
+  // already applies to the same record: `MYKIDS_WINDOW` in src/fellowship.src.js is MAX_SESSION_SECONDS, and
+  // Steward.checkinRegisterWindow() is the same constant. Same length, same field, so the desk and the
+  // parent stop disagreeing about when one record is live — which they did while one was a calendar day and
+  // the other a 26-hour window.
   //
-  // OFF THE RECORD'S OWN `ts` (the event's created_at), NEVER the sealed body's `in`, and SYMMETRIC —
-  // the three properties the parent reader is commented at length for, each of them measured: `in` is a
-  // field a helper writes and is unbounded in the future, and a console clock drift silently emptied the
-  // screen. Same expression here so neither can drift into the other's faults.
+  // ⚠⚠ AND THEN ONE EXTRA UPPER BOUND, WHICH THE PARENT'S SIDE DELIBERATELY DOES NOT HAVE. `ts` ALONE IS
+  // NOT SAFE ON THIS SCREEN, and the reason is a writer that does not exist on the parent's:
+  //
+  //   `Steward.migrateCheckinKeys()` re-publishes EVERY legacy check-in record through encPublish, which
+  //   stamps `created_at: now()` — and encSubscribe sets `ts = e.created_at`. It runs AUTOMATICALLY, 1.2s
+  //   after this console mounts, once per church per session (the capability-key effect above calls it).
+  //   So the first time a pilot church's owner opens the console, every never-released record it has ever
+  //   written gets a `ts` of this minute. Measured against this compiled screen: two records from three
+  //   weeks ago rendered as "Checked in · 2", and `available` came back EMPTY — CheckinPicker then says
+  //   "Everyone's already checked in." to a worker with actual children in front of her.
+  //
+  //   PRESERVING THE ORIGINAL created_at IS NOT AVAILABLE, checked before choosing this: the address is
+  //   replaceable and scripts/event-store.mjs refuses an equal-or-older timestamp as 'have-newer'
+  //   (`if (rt > et) return 'have-newer'`, and on a tie the lower id wins), so a migration that kept the old
+  //   stamp would be a coin flip at best and would usually not land at all.
+  //
+  // So `in` — which the migration DOES preserve, because it re-publishes the opened body — is taken as a
+  // second upper bound, and the shape of the conjunction is the whole of its safety: **it can only ever
+  // REMOVE a row, never resurrect one.** A record is live iff its `ts` is in window AND its `in`, when there
+  // is a usable one, is in window too. A missing or non-numeric `in` removes nothing.
+  //
+  // WHAT THAT DOES AND DOES NOT COST, stated rather than inherited:
+  //   · A FORGED FUTURE `in` (the fault that pinned a row on the parent's screen at +399 days) now REMOVES a
+  //     row instead of pinning one. It buys an attacker nothing: a helper who wants a child off this
+  //     register simply does not write the record, and one who can overwrite another's record can already
+  //     set `out` and mark the child collected, which is worse.
+  //   · CLOCK DRIFT BETWEEN `in` AND `ts` IS NOT A THING ON THIS PATH, and the earlier version of this
+  //     comment claimed it was, inherited from the parent-side note without being re-measured. Both come
+  //     from ONE clock microseconds apart — `checkIn` below stamps `in: Math.floor(Date.now() / 1000)` and
+  //     encPublish stamps `created_at: now()` on the same device; the phone's writeCheckin does the same on
+  //     its device. What drifts is the WRITER's clock against this VIEWER's, and that moves `in` and `ts`
+  //     together, so the conjunction never throws away a record `ts` would have kept. The ONE case where the
+  //     two disagree is the migration above, which is exactly what this is for.
+  //   · The parent's screen has no migration of its own to defend against and DELIBERATELY prefers showing a
+  //     record whose body disagrees with the clock to hiding one (test-locked in
+  //     scripts/a-parent-reads-their-own-children.test.mjs, "A RECORD PUBLISHED THIS MINUTE WAS HIDDEN").
+  //     That decision is not overturned here. It does mean a migrated record reaches a PARENT's screen with
+  //     a fresh ts and no upper bound — unfixed, and recorded so nobody believes this commit closed it.
   //
   // NOTHING ABOUT WHAT IS WRITTEN CHANGES. `date` is still stamped on every record by checkIn below and by
   // publishCheckin in the bundle; this screen has simply stopped selecting on it, and now only READS it, to
@@ -6268,10 +6302,43 @@ function DashCheckin() {
   // scripts/the-register-shows-who-is-in-the-room.test.mjs renders BOTH paths against MAX_SESSION_SECONDS
   // itself, so the fallback cannot quietly drift away from it.
   const ckWindow = (window.Steward && typeof window.Steward.checkinRegisterWindow === 'function' && window.Steward.checkinRegisterWindow()) || (26 * 3600);
-  const live = recs.filter(r => Math.abs(at - (r.ts || 0)) <= ckWindow);
+  const inWindow = (t) => Number.isFinite(t) && Math.abs(at - t) <= ckWindow;
+  // `r.in` IS UNTYPED — it comes straight out of the sealed body, which a helper writes. Anything that is not
+  // a FINITE number is not a bound and must not be treated as one, so it removes nothing: `Number.isFinite`
+  // and not `typeof`, because `typeof NaN === 'number'` and a NaN `in` would otherwise delete a live child
+  // from a safeguarding register because a body was malformed. It does not coerce either, so the string
+  // '1789084514' is not a measure. The parent's reader types every painted field (`_str`/`_when` in openRec)
+  // for the same reason.
+  const live = recs.filter(r => inWindow(r.ts) && !(Number.isFinite(r.in) && !inWindow(r.in)));
   const present = live.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
   const out = live.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
-  const inIds = new Set(present.map(r => r.child));
+  // ── THE DOOR IS NEVER BLOCKED, AND THIS IS WHERE THAT IS DECIDED ──────────────────────
+  // `available` is what CheckinPicker offers; an empty one renders "Everyone's already checked in." The
+  // exclusion exists to stop ONE accident — checking the same child in twice in one session, which puts two
+  // live rows and two pickup codes on the register for one child.
+  //
+  // ⚠ SO IT IS SCOPED TO THE VIEWER'S OWN DAY, and that is not tidiness. Now that a row can outlive a
+  // midnight, a Saturday youth club nobody pressed Check out on would otherwise stand between that child and
+  // the desk until 26 hours had passed: Sunday 09:30 the register says she is in the room, shows Saturday's
+  // code, and will not offer her. reference/DOMAIN.md is explicit — *"Do not block. A ratio outside policy, a
+  // helper whose clearance has lapsed, a rota with a gap — none of these may stop a child being checked in.
+  // Blocking at the door harms the child in the room to satisfy a rule in a database."*
+  //
+  // WHY THIS RATHER THAN AN "she left without being checked out" ACTION, which was the other shape
+  // considered. A new action would still leave the door shut until somebody performed it, which is the thing
+  // DOMAIN.md forbids; it would need a new written field on a safeguarding record; and it would not be
+  // needed for the ordinary case, where nobody at the desk wants to record anything about yesterday — they
+  // want to check a child in. This costs nothing, invents nothing, and writes nothing.
+  //
+  // AND IT REMOVES THE FABRICATION TRAP. Before this, the only way past a forgotten check-out was
+  // CheckoutModal, which requires the OLD code and then stamps `out: Math.floor(Date.now() / 1000)` —
+  // recording that the child was collected on SUNDAY MORNING. Check out stays on a not-today row because a
+  // watchnight or a lock-in genuinely needs it; it is simply no longer the only way through.
+  //
+  // A record with NO usable day is treated as not-today, i.e. offerable. Where the two readings disagree the
+  // non-blocking one wins, by the rule above.
+  const blocksToday = (r) => !!(r && typeof r.date === 'string' && r.date === today);
+  const inIds = new Set(present.filter(blocksToday).map(r => r.child));
   const available = minors.filter(c => !inIds.has(c));
   const [picking, setPicking] = React.useState(false);
   const [checkout, setCheckout] = React.useState(null);
@@ -6295,7 +6362,37 @@ function DashCheckin() {
   // Sunday row is untouched — the copy cull's rule, said once where it is useful (reference/DOMAIN.md).
   // It reads `r.date`, which is exactly the field this screen stopped SELECTING on: it is still written, and
   // it is still the writer's own local day, which is the day the child actually walked in.
-  const fmtDay = (iso) => { try { return new Date(iso + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }); } catch { return String(iso || ''); } };
+  //
+  // ⚠ IT TYPES ITS INPUT, AND A try/catch IS NOT ENOUGH ON ITS OWN. `date` is untyped sealed-body content,
+  // like `in` above, and `new Date('x' + 'T00:00')` DOES NOT THROW: it returns an Invalid Date whose
+  // toLocaleDateString RETURNS THE STRING "Invalid Date", so a record carrying a non-ISO `date` painted
+  // "· Invalid Date" beside a child's name on a safeguarding screen.
+  //
+  // ⚠⚠ AND A SHAPE CHECK IS NOT ENOUGH EITHER, which is why this is a ROUND-TRIP and not a regex. Measured:
+  // `'2026-02-30'` matches /^\d{4}-\d{2}-\d{2}$/ AND parses — JavaScript rolls it over — and rendered
+  // "Mon, Mar 2". A confidently WRONG day beside a child's name is worse than no day at all, because a
+  // worker at a door has no way to tell it is wrong. So the parsed day is written back out in the same
+  // format and must equal what came in; anything else produces NO marker, and the row falls back to the bare
+  // arrival time, which is the ordinary rendering and says nothing false.
+  //
+  // (It also drops the handful of exotic strings that parse correctly but are not written in this shape —
+  // `'+002026-09-13'` is the one I found. Nothing in this product writes one: both writers stamp `date` with
+  // a `_todayISO()` that produces exactly this format.)
+  //
+  // ONE RULE, NOT THREE. A typeof check and an `isFinite(d.getTime())` read-back were both here and a
+  // sabotage pass could not make either of them bite: the round-trip already subsumes them, because an
+  // Invalid Date writes back "NaN-NaN-NaN" and a non-string never equals the string it was concatenated
+  // into. A guard no test can distinguish is a claim with nothing behind it, so they are gone rather than
+  // left as reassurance. The try/catch stays for the one thing the round-trip cannot absorb — a value whose
+  // `+` throws — and is the outer net, not the guard.
+  const fmtDay = (iso) => {
+    try {
+      const d = new Date(iso + 'T00:00');
+      const back = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      if (back !== iso) return '';
+      return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    } catch (e) { return ''; }
+  };
   const notToday = (r) => (r && typeof r.date === 'string' && r.date && r.date !== today ? fmtDay(r.date) : '');
   // AWAITED, AND ANSWERED. This was fire-and-forget: publishCheckin's promise was dropped on the floor, so a
   // refused write left the child on screen as "in" and nothing on the relay. On the day the register got its

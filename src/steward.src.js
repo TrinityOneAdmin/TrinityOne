@@ -6925,10 +6925,16 @@ window.Steward = {
   // The console's register (DashCheckin in app/stew-dashboard.jsx) shows WHO IS IN THE ROOM, not who was
   // stamped with today's date — owner's decision 2026-09-11, asked as "should the register show 'checked in
   // today' or 'still in the room'?": *"still in the room — that's what a worker at a door actually needs"*.
-  // A record with no release must still not sit there for ever, so the desk ages one out on exactly the
-  // measure the PARENT's screen already uses: MYKIDS_WINDOW in src/fellowship.src.js is MAX_SESSION_SECONDS,
-  // and so is this. The two sides of the same record now agree about when it stops being live, which they
-  // could not while one was a calendar day and the other a window.
+  // A record with no release must still not sit there for ever, so the desk ages one out on the measure the
+  // PARENT's screen already uses: MYKIDS_WINDOW in src/fellowship.src.js is MAX_SESSION_SECONDS, and so is
+  // this. Same length, same field (`created_at`), where before one side was a calendar day and the other a
+  // window.
+  //
+  // ⚠ THE DESK ALSO BOUNDS ON THE SEALED `in`, WHICH THE PARENT'S SIDE DOES NOT — because of
+  // migrateCheckinKeys() below. It re-publishes every legacy record through encPublish, which stamps a fresh
+  // created_at, so `ts` on a migrated record is the MIGRATION time and not an arrival. The conjunction that
+  // fixes it is written up at the top of DashCheckin; this function supplies only the length, and the length
+  // is the same on both sides.
   //
   // Exposed rather than restated on the screen, for the same reason as checkinPermissionLifetimes() below: a
   // screen holding its own figure is free to disagree with the rest of the product about it. ONE CALLER:

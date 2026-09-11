@@ -43,6 +43,11 @@ const DAY = 86400;
 const localISO = (secs) => { const d = new Date(secs * 1000); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const TODAY = localISO(NOW);
 const YESTERDAY = localISO(NOW - DAY);
+// LAST NIGHT, DETERMINISTICALLY. `NOW - 20 * 3600` is yesterday only when the suite happens to run before
+// 20:00, which would make the door test vacuous for four hours a day. Yesterday at 23:00 local is always
+// yesterday's date and always between 1 and 25 hours ago, so it is always inside a 26-hour window.
+const startOfToday = (() => { const d = new Date(NOW * 1000); d.setHours(0, 0, 0, 0); return Math.floor(d.getTime() / 1000); })();
+const LAST_NIGHT = startOfToday - 3600;
 
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
@@ -125,10 +130,27 @@ async function desk({ recs = [], minors = [KID, KID2], guardians = {}, today = T
 }
 
 // A record in the shape subscribeCheckins emits: `ts` is the event's created_at (set in steward.src.js beside
-// the opened body), `date` is the writer's own local day, `out`/`manual` are folded on from a release.
+// the opened body), `date` and `in` are the writer's own local day and clock, `out`/`manual` are folded on
+// from a release.
+//
+// ⚠ `in` DEFAULTS TO `ts` HERE BECAUSE THAT IS WHAT A LIVE RECORD LOOKS LIKE — the console's checkIn stamps
+// `in: Math.floor(Date.now()/1000)` and encPublish stamps `created_at: now()` on the SAME device
+// microseconds apart. Pass `in` explicitly to model the one writer that separates them: migrateCheckinKeys.
 const rec = (o) => ({ id: o.id, child: o.child || KID, childName: o.childName || 'Alice Fenn',
   date: o.date, ts: o.ts, in: o.in != null ? o.in : o.ts, code: o.code || '4182',
   ...(o.out != null ? { out: o.out } : {}), ...(o.manual != null ? { manual: o.manual } : {}) });
+
+// WHAT THE PICKER WOULD BE OFFERED — read off the real `available` prop, by pressing the real button.
+async function offered(d) {
+  const open = shown(d.tree(), n => n.type === 'button' && texts(n).join(' ').includes('Check a child in'));
+  assert.equal(open.length, 1, 're-anchor: the "Check a child in" button is gone');
+  open[0].props.onClick();
+  d.redraw();
+  const p = shown(d.tree(), n => n.type && n.type.name === 'CheckinPicker');
+  assert.equal(p.length, 1, 'pressing the button did not open the picker');
+  assert.ok(Array.isArray(p[0].props.available), 're-anchor: the picker is no longer handed an `available` list');
+  return p[0].props.available;
+}
 
 // ══════════════════════════ BASELINE ══════════════════════════
 
@@ -258,22 +280,13 @@ test('A BY-HAND RELEASE IS STILL MARKED AS ONE, and an overnight collection says
     'to say the arrival was not today: ' + d.collected());
 });
 
-test('A CHILD ALREADY ON THE REGISTER IS NOT OFFERED FOR CHECK-IN AGAIN, across a midnight', async () => {
-  const d = await desk({ recs: [rec({ id: 'r1', child: KID, date: YESTERDAY, ts: NOW - 240 })] });
-  const before = shown(d.tree(), n => n.type && n.type.name === 'CheckinPicker');
-  assert.equal(before.length, 0, 'the picker was open before anybody pressed anything');
-  const open = shown(d.tree(), n => n.type === 'button' && texts(n).join(' ').includes('Check a child in'));
-  assert.equal(open.length, 1, 're-anchor: the "Check a child in" button is gone');
-  open[0].props.onClick();
-  d.redraw();
-  const p = shown(d.tree(), n => n.type && n.type.name === 'CheckinPicker');
-  assert.equal(p.length, 1, 'pressing the button did not open the picker');
-  assert.ok(Array.isArray(p[0].props.available), 're-anchor: the picker is no longer handed an `available` list');
-  assert.ok(!p[0].props.available.includes(KID),
-    'a child who is still in the room is offered for check-in again, so one press would put a second live ' +
-    'row and a second pickup code on the register for one child');
-  assert.ok(p[0].props.available.includes(KID2), 'a child who is NOT checked in has stopped being offered');
-});
+// ⚠ A TEST WAS REMOVED HERE, deliberately, and this note is its account (CLAUDE.md rule 8).
+// 'A CHILD ALREADY ON THE REGISTER IS NOT OFFERED FOR CHECK-IN AGAIN, across a midnight' asserted that a
+// child with a live row from an EARLIER DAY is withheld from the picker. That is the blocker the audit
+// found: a Saturday club nobody checked out then shuts the door on that child until 26 hours have passed,
+// and reference/DOMAIN.md forbids exactly that. The half of it that was right — no second live code for one
+// child in one session — survives as 'CONTROL: a child checked in TODAY is still not offered twice', and
+// the half that was wrong is now asserted the other way round in the door section below.
 
 test('THE RECORD STILL CARRIES `date` — this screen stopped SELECTING on it, not writing it', async () => {
   const d = await desk({ guardians: { [KID]: [MUM] } });
@@ -287,4 +300,137 @@ test('THE RECORD STILL CARRIES `date` — this screen stopped SELECTING on it, n
     'THE WRITER STOPPED STAMPING `date`. Other readers have it — it is the writer\'s own local day, which is ' +
     'the day the child actually walked in, and it is what the row now prints when that day is not the ' +
     'viewer\'s. Dropping it from the record is a data change this fix does not make.');
+});
+
+
+// ══════════════════════ THE MIGRATION: `ts` IS NOT A PROXY FOR WHEN A CHILD ARRIVED ══════════════════════
+//
+// Steward.migrateCheckinKeys() re-publishes every legacy `trinityone/checkin:` record through encPublish,
+// which stamps `created_at: now()`; encSubscribe then sets `ts = e.created_at`. It runs AUTOMATICALLY about
+// 1.2s after this console mounts, once per church per session. So on the first open after an upgrade, every
+// never-released record a pilot church ever wrote has a `ts` of this minute — and the old `r.date === today`
+// filter was immune to that, because the migration preserves the sealed body.
+//
+// Preserving the original created_at instead is NOT available: the address is replaceable and
+// scripts/event-store.mjs answers an equal-or-older timestamp with 'have-newer'. Verified before choosing.
+
+test('A MIGRATED RECORD FROM THREE WEEKS AGO IS NOT A CHILD IN THE ROOM', async () => {
+  const threeWeeks = NOW - 21 * DAY;
+  const d = await desk({ recs: [
+    rec({ id: 'ci-old-1', child: KID, childName: 'Alice Fenn', date: localISO(threeWeeks), ts: NOW - 5, in: threeWeeks }),
+    rec({ id: 'ci-old-2', child: KID2, childName: 'Bobby Okafor', date: localISO(threeWeeks), ts: NOW - 5, in: threeWeeks }),
+  ] });
+  assert.doesNotMatch(d.words(), /Alice Fenn|Bobby Okafor/,
+    'THE MIGRATION RESURRECTED A DEAD REGISTER. migrateCheckinKeys re-stamps created_at, so every ' +
+    'never-released record a church ever wrote reads as an arrival this minute. As rendered: ' + d.words());
+  assert.match(d.words(), /Nobody is checked in/, 'the desk does not say the register is empty');
+});
+
+test('…AND THE DOOR IS NOT SHUT BY ONE: both children are still offered', async () => {
+  // This is the half that actually hurt. `available` came back EMPTY, so CheckinPicker rendered
+  // "Everyone's already checked in." to a worker with real children in front of her.
+  const threeWeeks = NOW - 21 * DAY;
+  const d = await desk({ recs: [
+    rec({ id: 'ci-old-1', child: KID, childName: 'Alice Fenn', date: localISO(threeWeeks), ts: NOW - 5, in: threeWeeks }),
+    rec({ id: 'ci-old-2', child: KID2, childName: 'Bobby Okafor', date: localISO(threeWeeks), ts: NOW - 5, in: threeWeeks }),
+  ] });
+  const av = await offered(d);
+  assert.deepEqual([...av].sort(), [KID, KID2].sort(),
+    'a worker at the door was offered ' + av.length + ' of 2 children after the migration ran');
+  assert.doesNotMatch(d.words(), /Everyone.s already checked in/,
+    'the picker told a worker with children in front of her that everyone was already checked in');
+});
+
+test('THE `in` BOUND CAN ONLY REMOVE A ROW, NEVER RESURRECT ONE', async () => {
+  // The conjunction is what makes reading a helper-written field safe. A record whose `ts` is outside the
+  // window stays gone however friendly its body is — otherwise a forged `in` would be a way of PUTTING a row
+  // on a safeguarding register, which is strictly worse than the fault it was added to fix.
+  const d = await desk({ recs: [rec({ id: 'r1', date: TODAY, ts: NOW - MAX_SESSION_SECONDS - 600, in: NOW - 60 })] });
+  assert.doesNotMatch(d.words(), /Alice Fenn/,
+    'a record OUTSIDE the ts window was pulled back onto the register by its own sealed body — the `in` ' +
+    'bound has become a disjunction, and a helper can now add rows by writing a friendly `in`');
+});
+
+test('a FORGED FUTURE `in` removes the row rather than pinning it for ever', async () => {
+  const d = await desk({ recs: [rec({ id: 'r1', date: TODAY, ts: NOW - 60, in: NOW + 400 * DAY })] });
+  assert.doesNotMatch(d.words(), /Alice Fenn/,
+    'a body claiming the child arrived in 400 days is on the register. On the parent\'s side this exact ' +
+    'shape sat on screen at +0, +30, +200 and +399 days.');
+});
+
+test('a non-numeric `in` bounds nothing — it must not be treated as a measure', async () => {
+  // `in` is untyped sealed-body content. Anything that is not a number is not a bound, and removing a row on
+  // the strength of one would hide a live child because a body was malformed.
+  // NaN IS IN THIS LIST ON PURPOSE: `typeof NaN === 'number'`, so a `typeof` gate would let it through and
+  // `Math.abs(at - NaN) <= w` is false, which DELETES a live child from the register.
+  for (const bad of ['1789084514', { at: 1 }, null, undefined, NaN, true, []]) {
+    const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600, in: bad, code: '4182' }] });
+    assert.match(d.checkedIn(), /Alice Fenn/,
+      'a child in the room was hidden because `in` was ' + JSON.stringify(bad) + ' rather than a number');
+  }
+});
+
+// ══════════════════════ THE DOOR IS NEVER BLOCKED ══════════════════════════════════════════════════════
+//
+// reference/DOMAIN.md: "Do not block. A ratio outside policy, a helper whose clearance has lapsed, a rota
+// with a gap — none of these may stop a child being checked in. Blocking at the door harms the child in the
+// room to satisfy a rule in a database."
+
+test('A FORGOTTEN CHECK-OUT DOES NOT STOP THAT CHILD BEING CHECKED IN THE NEXT MORNING', async () => {
+  // Saturday youth club, nobody pressed Check out. Sunday 09:30, inside the 26h window, the register still
+  // shows her. She must STILL be offerable, with no action required of the worker and nothing invented.
+  const sat = LAST_NIGHT;
+  assert.notEqual(localISO(sat), TODAY, 'fixture: LAST_NIGHT is not a previous day, so this test asserts nothing');
+  const d = await desk({ recs: [rec({ id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(sat), ts: sat, in: sat, code: '4182' })] });
+  assert.match(d.checkedIn(), /Alice Fenn/, 'fixture: the overnight row is not on the register at all, so this test is about nothing');
+  const av = await offered(d);
+  assert.ok(av.includes(KID),
+    'THE DESK IS SHUT. A child whose Saturday check-out nobody pressed cannot be checked in on Sunday ' +
+    'morning, and the only way through is CheckoutModal — which requires yesterday\'s code and then records ' +
+    'that she was collected this morning, a collection that never happened.');
+  assert.doesNotMatch(d.words(), /Everyone.s already checked in/, 'the picker refused a worker at the door');
+});
+
+test('CONTROL: a child checked in TODAY is still not offered twice', async () => {
+  // The exclusion is not deleted, only scoped. Two live rows for one child means two pickup codes on one
+  // register, which is the accident it was written to prevent.
+  const d = await desk({ recs: [rec({ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600 })] });
+  const av = await offered(d);
+  assert.ok(!av.includes(KID), 'a child already checked in TODAY is offered again — one press puts a second live code on the register');
+  assert.ok(av.includes(KID2), 'a child who is not checked in has stopped being offered');
+});
+
+test('a live row with NO usable day is offerable — where the two readings disagree, the door wins', async () => {
+  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', ts: NOW - 600, in: NOW - 600, code: '4182' }] });
+  const av = await offered(d);
+  assert.ok(av.includes(KID), 'a record carrying no day at all shut the door on that child');
+});
+
+// ══════════════════════ A MALFORMED DAY SAYS NOTHING RATHER THAN SOMETHING FALSE ════════════════════════
+
+test('A MALFORMED `date` PAINTS NO DAY MARKER — never "Invalid Date", and never a WRONG day', async () => {
+  // `new Date('x' + 'T00:00')` does not throw; it returns an Invalid Date whose toLocaleDateString RETURNS
+  // the string "Invalid Date", so a try/catch never fires and the screen printed it beside a child's name.
+  //
+  // ⚠ '2026-02-30' IS THE ONE THAT MATTERS MOST and is why a shape check alone is not the fix: it is
+  // well-formed, it PARSES, and JavaScript rolls it over to 2 March. A confidently wrong day beside a
+  // child's name is worse than no day, because a worker at a door cannot tell it is wrong.
+  //
+  // ASSERTED AS "IDENTICAL TO A TODAY ROW", which is locale-free and is the whole claim: no marker at all.
+  const plain = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600, in: NOW - 600, code: '4182' }] });
+  for (const bad of ['not-a-date', '2026-13-45', '13/09/2026', '', '2026-09-13T10:00:00Z', '2026-02-30', '2026-9-3', 42, null, undefined, { d: 1 }]) {
+    const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: bad, ts: NOW - 600, in: NOW - 600, code: '4182' }] });
+    assert.doesNotMatch(d.words(), /Invalid Date/,
+      'the register painted "Invalid Date" beside a child\'s name for date ' + JSON.stringify(bad));
+    assert.equal(d.checkedIn(), plain.checkedIn(),
+      'a malformed date ' + JSON.stringify(bad) + ' put SOMETHING on the row where a today-stamped record ' +
+      'puts nothing. For 2026-02-30 that something was "Mon, Mar 2" — a day the record does not claim and ' +
+      'the worker cannot check. As rendered: ' + d.checkedIn());
+  }
+});
+
+test('CONTROL: a WELL-FORMED previous day still paints its marker', async () => {
+  const d = await desk({ recs: [rec({ id: 'r1', date: YESTERDAY, ts: NOW - 240 })] });
+  const dom = String(new Date(YESTERDAY + 'T00:00').getDate());
+  assert.ok(d.checkedIn().includes(dom), 'the day marker has gone altogether — the typing above threw out the good case with the bad');
 });

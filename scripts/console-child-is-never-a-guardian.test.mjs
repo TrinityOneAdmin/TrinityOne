@@ -50,7 +50,7 @@ async function loadSlices(anchors, exportNames, globals) {
 }
 
 const furniture = () => ({
-  CustomEvent, setTimeout, clearTimeout, Promise, Date, Math, JSON, Set, Object, String, Array,
+  CustomEvent, setTimeout, clearTimeout, Promise, Date, Math, JSON, Set, Object, String, Array, Number,
   location: { search: '', hostname: 'x' },
   document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
   SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },

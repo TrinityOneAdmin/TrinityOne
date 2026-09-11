@@ -133,10 +133,26 @@ const MYKIDS_WINDOW = MAX_SESSION_SECONDS;
 // (`recs.filter(r => r.date === today)` in app/stew-dashboard.jsx), and therefore that an Auckland morning
 // stamped as Saturday put the child on no register at all. IT NO LONGER SELECTS ON IT. The desk shows who is
 // still in the room — not checked out, and inside one MAX_SESSION_SECONDS window of the record's own `ts`,
-// which is the SAME measure MYKIDS_WINDOW applies above — so the two sides of a record now agree, and a
-// mis-stamped day costs a wrong DAY LABEL on the row rather than the whole row. Still worth getting right:
-// the console prints this field beside the arrival time whenever it is not the viewer's own day, so a wrong
-// one tells a worker at a door that a child arrived yesterday when they walked in this morning.
+// the same length and the same field MYKIDS_WINDOW applies above. So a mis-stamped day now costs a wrong DAY
+// LABEL on the row rather than the whole row. Still worth getting right: the console prints this field beside
+// the arrival time whenever it is not the viewer's own day, so a wrong one tells a worker at a door that a
+// child arrived yesterday when they walked in this morning. It also decides, on that screen alone, whether a
+// child is offered for check-in again — a row from ANOTHER day never withholds one, because nothing may
+// block a child at the door.
+//
+// ⚠ AND THE TWO SIDES ARE NOT IDENTICAL, which the first version of this note claimed. The desk adds ONE
+// bound this reader deliberately does not have: a record is live there only if the sealed body's `in` is
+// ALSO inside the window (a conjunction, so it can only ever REMOVE a row). It has to, because
+// `Steward.migrateCheckinKeys()` re-publishes every legacy record through encPublish with a fresh
+// `created_at` and runs automatically when an owner opens the console — which hands every never-released
+// record in a church's history a `ts` of that minute.
+//
+// THIS READER HAS NO SUCH BOUND AND IS THEREFORE EXPOSED TO THE SAME MIGRATION: a re-published record
+// carries its guardian copies, so a parent's screen can show a three-week-old check-in as live for one
+// window. Not fixed here, because the opposite decision is deliberate and test-locked below ("A RECORD
+// PUBLISHED THIS MINUTE WAS HIDDEN because the body it carried disagreed with the clock"), and overturning
+// it is a decision about what a parent at a door is shown, not a tidy-up. Recorded so the next reader knows
+// it is open rather than handled.
 // ONE CALLER: writeCheckin. Mirrors steward.src.js:_todayISO deliberately — the two bundles must agree on
 // what day it is or a record written on a phone and a record written at the desk sort differently.
 const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
