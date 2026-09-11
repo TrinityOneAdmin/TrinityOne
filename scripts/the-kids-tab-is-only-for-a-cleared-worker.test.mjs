@@ -532,3 +532,158 @@ test('the register never claims a child cannot be checked in', () => {
       'rendered: ' + out);
   }
 });
+
+// ══════════════ THE PARENT'S ARRIVAL, ON THE WORKER'S SCREEN ══════════════
+// STEP 1 of the parent surface, 2026-09-11. A parent NEVER authors a register row (the relay half is
+// scripts/a-parent-writes-an-arrival-never-a-register-row.test.mjs); she writes an ARRIVAL, and the worker's
+// phone turns it into the row. Everything below is about the SECOND half of that sentence, on the rendered
+// screen, because a gate nobody's screen consults is not a feature (rule 1).
+
+const SARAH = 'aa'.repeat(32);   // a parent's pubkey, in the one spelling the relay stores
+const OMAR = 'bb'.repeat(32);    // a second parent, at the door at the same moment — the measured risk
+// The exact shape Fellowship.subscribeCheckinRegister emits for a session, now carrying its arrivals queue.
+const withArrivals = (rows, arrivals) => [{ session: 'svc-am', roomCode: roomCode('svc-am'), roomClash: false, from: AM_FROM, until: AM_FROM + 10800, helpers: 2, rows, arrivals }];
+const live = (sessions) => ({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions });
+
+test('POINT OF USE: an arrival appears on the worker\'s screen as a queue', async () => {
+  const s = serving(live(withArrivals([], [{ pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 0 }])));
+  s.press('Kids');
+  const out = s.reads();
+  assert.match(out, /Sarah Henderson has arrived/,
+    'THE ARRIVAL IS NOT ON THE SCREEN. A parent announced herself at the room door and the worker\'s phone ' +
+    'shows nothing — the whole queue deleted from the screen with the reader underneath it still tested. ' +
+    'As rendered: ' + out);
+  assert.deepEqual(s.glued(), [], 'copy runs together in the queue: ' + JSON.stringify(s.glued()));
+});
+
+test('POINT OF USE: checking in FROM an arrival must CONFIRM A NAMED PAIRING — never a bare tap', async () => {
+  // ⚠ THE MITIGATION. The measured risk from the review that settled this design: two parents arrive at once,
+  // the worker taps the wrong queue row, and a child\'s name and PICKUP CODE — the value that releases them —
+  // go to the wrong family. Deleting the confirmation FROM THIS SCREEN is what this test exists to redden.
+  const s = serving(live(withArrivals([], [
+    { pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 0 },
+    { pub: OMAR, name: 'Omar Haddad', at: AM_FROM + 70, checkedIn: 0 },
+  ])));
+  s.press('Kids');
+  await s.click('Sarah Henderson');
+  s.type('Child’s name', 'Milo');
+  await s.click('Check a child in');
+  // NOTHING IS WRITTEN YET. This is the assertion that fails if the confirmation is removed and `submit`
+  // writes straight through.
+  assert.equal(s.checkinCalls.length, 0,
+    'A CHILD WAS CHECKED IN AGAINST A PARENT ON ONE TAP, with no confirmation. Two parents are at the door in ' +
+    'this very test; a mis-tap hands the second family the first family\'s pickup code.');
+  const out = s.reads();
+  assert.match(out, /Milo → Sarah Henderson\?/,
+    'THE CONFIRMATION DOES NOT NAME THE PAIRING. A prompt that does not say BOTH names is not a check on a ' +
+    'mis-tap — the worker is confirming the thing she just got wrong. As rendered: ' + out);
+  // …and the OTHER parent is not the one named.
+  assert.doesNotMatch(out, /Milo → Omar Haddad/, 'the confirmation named the wrong parent');
+  // THE AFFIRMATIVE ACT, and only then the write.
+  await s.click('Yes, check in');
+  assert.equal(s.checkinCalls.length, 1, 'confirming the pairing wrote nothing — the door is now a dead end');
+  assert.equal(s.checkinCalls[0].childName, 'Milo', 'the child\'s name did not reach the writer');
+  assert.equal(s.checkinCalls[0].session, 'svc-am', 'the record was not tied to this session');
+  assert.equal(s.checkinCalls[0].guardian, SARAH,
+    'THE RECORD NAMES THE WRONG GUARDIAN, OR NONE. It must carry exactly the pubkey the SIGNED arrival ' +
+    'delivered — a worker\'s phone holds no guardian map and may never guess. Got: ' + JSON.stringify(s.checkinCalls[0].guardian));
+  assert.deepEqual(s.glued(), [], 'copy runs together on the confirmation: ' + JSON.stringify(s.glued()));
+});
+
+test('…and the SECOND parent in the queue is the one named when she is the one picked', async () => {
+  // The mis-tap this guards is a mis-tap between TWO rows, so one row proves nothing about which row was read.
+  const s = serving(live(withArrivals([], [
+    { pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 0 },
+    { pub: OMAR, name: 'Omar Haddad', at: AM_FROM + 70, checkedIn: 0 },
+  ])));
+  s.press('Kids');
+  await s.click('Omar Haddad');
+  s.type('Child’s name', 'Yara');
+  await s.click('Check a child in');
+  assert.match(s.reads(), /Yara → Omar Haddad\?/, 'picking the second arrival confirmed the first. As rendered: ' + s.reads());
+  await s.click('Yes, check in');
+  assert.equal(s.checkinCalls[0].guardian, OMAR, 'the record p-tags the parent who was NOT picked');
+});
+
+test('…and answering NO writes nothing at all', async () => {
+  const s = serving(live(withArrivals([], [{ pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 0 }])));
+  s.press('Kids');
+  await s.click('Sarah Henderson');
+  s.type('Child’s name', 'Milo');
+  await s.click('Check a child in');
+  await s.click('No, go back');
+  assert.equal(s.checkinCalls.length, 0, 'declining the confirmation checked the child in anyway — the answer is not read');
+  assert.doesNotMatch(s.reads(), /Milo → Sarah Henderson\?/, 'the confirmation stayed on screen after it was declined');
+});
+
+test('…and a check-in with NO arrival is UNCHANGED — one tap, no confirmation, and no guardian guessed', async () => {
+  // design §10 and reference/DOMAIN.md: nothing in this feature blocks a child reaching the room. A family
+  // with no app, a flat battery, a grandparent at the desk — all still one tap, exactly as before today.
+  const s = serving(live(withArrivals([], [{ pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 0 }])));
+  s.press('Kids');
+  s.type('Child’s name', 'Ada Okonkwo');
+  await s.click('Check a child in');
+  assert.equal(s.checkinCalls.length, 1,
+    'A CHECK-IN WITH NO ARRIVAL NOW NEEDS A CONFIRMATION. There is no pairing to confirm, and a child at the ' +
+    'door of a church with no app has been given an extra tap for nothing.');
+  assert.ok(!s.checkinCalls[0].guardian,
+    'A GUARDIAN WAS ATTACHED TO A CHILD NOBODY CLAIMED. The worker\'s phone holds no guardian map; the only ' +
+    'lawful source of that pubkey is a signed arrival she confirmed. Got: ' + JSON.stringify(s.checkinCalls[0].guardian));
+});
+
+test('…and an arrival whose NAME this phone has not opened says so, rather than inventing one', async () => {
+  // The name is what the pairing is confirmed against. A screen that substituted a key fragment for a name
+  // would make an unresolved stranger read as a known family, which is the mis-tap this whole panel guards.
+  const s = serving(live(withArrivals([], [{ pub: SARAH, name: '', at: AM_FROM + 60, checkedIn: 0 }])));
+  s.press('Kids');
+  const out = s.reads();
+  assert.doesNotMatch(out, /aaaaaaaa/, 'a raw pubkey is being shown to a worker as though it were a name');
+  assert.match(out, /name not on this phone/i,
+    'an arrival with no resolved name says nothing about that, so the worker cannot tell "a family I know" ' +
+    'from "somebody this phone has never seen". As rendered: ' + out);
+  assert.deepEqual(s.glued(), [], 'copy runs together: ' + JSON.stringify(s.glued()));
+});
+
+test('…and a family already part-way through is kept in the queue, counted, not dropped', async () => {
+  // A parent with two children checks both in from ONE arrival. A queue that emptied itself after the first
+  // would make the second child look like a mistake and send the parent back to the desk.
+  const s = serving(live(withArrivals(
+    [{ id: 'ci-1', childName: 'Milo', code: '4417', session: 'svc-am' }],
+    [{ pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 1 }])));
+  s.press('Kids');
+  const out = s.reads();
+  assert.match(out, /Sarah Henderson has arrived/, 'the family vanished from the queue after one child went in');
+  assert.match(out, /1 child checked in so far/, 'the queue does not say how many of this family are already in the room. As rendered: ' + out);
+  assert.deepEqual(s.glued(), [], 'copy runs together: ' + JSON.stringify(s.glued()));
+});
+
+test('…and NO arrival ever renders as a child in the register', async () => {
+  // An arrival is a family at a door, not a child in a room. If one ever reached the rows it would be a
+  // phantom child on a safeguarding register, with no pickup code and nobody able to collect them.
+  const s = serving(live(withArrivals([], [{ pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 0 }])));
+  s.press('Kids');
+  const out = s.reads();
+  assert.match(out, /0 checked in/,
+    'the session header counts somebody in the room when only a parent has said they are at the door. ' +
+    'As rendered: ' + out);
+  assert.match(out, /Nobody has been checked in yet/, 'the empty-register line was replaced by an arrival masquerading as a row');
+  assert.equal(s.has('Show code'), 0, 'an arrival grew a pickup code — it is not a child\'s record');
+});
+
+test('…and RETYPING the child\'s name cancels a confirmation already on screen', async () => {
+  // FOUND IN MY OWN AUDIT OF THIS COMMIT, 2026-09-11. `pending` FREEZES the pairing the worker was asked
+  // about, which is right — she must confirm what she was shown. But the name box stayed editable
+  // underneath it, so the panel could read "Milo → Sarah Henderson?" over a box now reading "Yara", and
+  // whichever of the two she believed, one was wrong. The confirmation is withdrawn and she is asked again.
+  const s = serving(live(withArrivals([], [{ pub: SARAH, name: 'Sarah Henderson', at: AM_FROM + 60, checkedIn: 0 }])));
+  s.press('Kids');
+  await s.click('Sarah Henderson');
+  s.type('Child’s name', 'Milo');
+  await s.click('Check a child in');
+  assert.match(s.reads(), /Milo → Sarah Henderson\?/, 'fixture: no confirmation was on screen to cancel');
+  s.type('Child’s name', 'Yara');
+  assert.doesNotMatch(s.reads(), /Milo → Sarah Henderson\?/,
+    'A STALE CONFIRMATION SURVIVED A RETYPE. The panel names one child and the box names another, and one tap ' +
+    'writes whichever the worker is not looking at. As rendered: ' + s.reads());
+  assert.equal(s.checkinCalls.length, 0, 'retyping the name wrote a record on its own');
+});

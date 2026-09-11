@@ -260,6 +260,14 @@ test('THE STRONG FORM, SECOND HALF: nothing in the member app writes a check-in 
     'SOMETHING OTHER THAN writeCheckin/releaseCheckin COMPOSES A CHECK-IN RECORD ADDRESS in the member app. ' +
     'Both of those are gated on holding a session key the church issued to a CLEARED worker; a third writer is ' +
     'a route into the children\'s register that this file has never looked at.');
+  // …and the ARRIVAL writer is NOT one of them: it must compose its own namespace and never the register's.
+  // Absence of a construct, not presence of text (rule 3): a d-tag the writer cannot compose is an address
+  // it cannot write at, and `false &&` cannot hide that.
+  const arrivalW = fnBody(src, '  async writeArrival(churchNpub, rec) {', 'writeArrival');
+  assert.doesNotMatch(arrivalW, /CHECKIN_D/,
+    'writeArrival reaches for the REGISTER\'s d-tag. An arrival that can be written at a checkin: address is a ' +
+    'parent-authored register row by another name — the hole F-B closed, reopened by the writer this document ' +
+    'exists to avoid needing.');
 });
 
 // ══════════════ 2. AN ARRIVAL'S ADDRESS NAMES ITS AUTHOR ══════════════

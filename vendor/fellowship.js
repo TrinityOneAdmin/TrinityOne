@@ -6578,6 +6578,7 @@
   var CHECKINPERM_D = "trinityone/checkinperm:";
   var CHECKINHELPER_D = "trinityone/checkinhelper:";
   var CHECKIN_D = "trinityone/checkin:";
+  var CHECKINARRIVAL_D = "trinityone/checkinarrival:";
   var _ckMemberKeys = /* @__PURE__ */ new Map();
   var _ckMemKeySet = (cp, sid, k) => {
     let m = _ckMemberKeys.get(cp);
@@ -11476,6 +11477,7 @@
       const grants = /* @__PURE__ */ new Map();
       const keys = /* @__PURE__ */ new Map();
       const recs = /* @__PURE__ */ new Map();
+      const arrivals = /* @__PURE__ */ new Map();
       const rows = /* @__PURE__ */ new Map();
       let eosed = false;
       const openRec = (id, r) => {
@@ -11534,10 +11536,26 @@
         const clash = roomCodesCollide(heldSids);
         const sessions = heldSids.map((sid) => {
           const g = grants.get(sid);
+          const checkedFor = /* @__PURE__ */ new Map();
+          for (const [, r] of recs) {
+            if (r.sid !== sid) continue;
+            if ((r.tags.find((t) => t[0] === "rel") || [])[1]) continue;
+            for (const t of r.tags) if (t[0] === "p" && t[1]) checkedFor.set(String(t[1]).toLowerCase(), (checkedFor.get(String(t[1]).toLowerCase()) || 0) + 1);
+          }
           return {
             session: sid,
             roomCode: roomCode(sid),
             roomClash: clash.has(sid),
+            // THE ARRIVALS QUEUE. `name` is resolved from the same `profiles` map every other screen in this
+            // app resolves a pubkey through, and is '' when this phone has not opened that member's sealed
+            // name yet -- which the screen must say honestly rather than paper over, because the name is what
+            // the worker confirms the child-to-parent pairing against.
+            arrivals: [...arrivals.values()].filter((a) => a.session === sid).map((a) => ({
+              pub: a.pub,
+              name: String((profiles[a.pub] || {}).name || ""),
+              at: a.at,
+              checkedIn: checkedFor.get(a.pub) || 0
+            })).sort((x, y) => (x.at || 0) - (y.at || 0)),
             from: g ? g.grant.from : null,
             until: g ? g.grant.until : null,
             helpers: g ? g.grant.pubs.length : 0,
@@ -11582,11 +11600,21 @@
           settled: eosed
         });
       });
-      return _onChurchDocs(pubk, {
+      const onNames = () => {
+        try {
+          emit();
+        } catch (err) {
+        }
+      };
+      try {
+        window.addEventListener("trinity-profiles", onNames);
+      } catch (err) {
+      }
+      const offDocs = _onChurchDocs(pubk, {
         emit,
         // so the hub can cancel a queued emit when this handler tears down
-        want: [CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D],
-        // replay only these three slices (see _hubBufSet)
+        want: [CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D],
+        // replay only these four slices (see _hubBufSet)
         onevent(e, d) {
           if (d.startsWith(CHECKINPERM_D)) {
             if (String(d.slice(CHECKINPERM_D.length) || "").toLowerCase() !== me) return;
@@ -11600,7 +11628,8 @@
               _ckMemKeyClear(pubk);
               recs.clear();
               rows.clear();
-              _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D]);
+              arrivals.clear();
+              _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D]);
               purged = true;
               emit();
               return;
@@ -11656,6 +11685,25 @@
             emit();
             return;
           }
+          if (d.startsWith(CHECKINARRIVAL_D)) {
+            const rest = d.slice(CHECKINARRIVAL_D.length);
+            const cut = rest.lastIndexOf(":");
+            const sid = cut > 0 ? rest.slice(0, cut) : "";
+            const who = cut > 0 ? rest.slice(cut + 1).toLowerCase() : "";
+            if (!sid || !/^[0-9a-f]{64}$/.test(who) || who !== String(e.pubkey || "").toLowerCase()) return;
+            if (checkinSessionOf(e.tags) !== sid) return;
+            const key = sid + "|" + who;
+            const held = arrivals.get(key);
+            if (held && (held.ts || 0) > (e.created_at || 0)) return;
+            if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+              arrivals.delete(key);
+              emit();
+              return;
+            }
+            arrivals.set(key, { pub: who, session: sid, at: e.created_at || 0, ts: e.created_at || 0 });
+            emit();
+            return;
+          }
           if (d.startsWith(CHECKIN_D)) {
             const id = d.slice(CHECKIN_D.length);
             if (!id) return;
@@ -11689,6 +11737,72 @@
           emit();
         }
       });
+      return () => {
+        try {
+          window.removeEventListener("trinity-profiles", onNames);
+        } catch (err) {
+        }
+        offDocs();
+      };
+    },
+    // ── A PARENT SAYS "WE ARE HERE" ──────────────────────────────────────────────────────────────────────────
+    // STEP 1 of the parent surface. reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md section 3: a
+    // parent announces themselves at the door of the children's room, and the WORKER turns that into the
+    // register row.
+    //
+    // WHY THIS IS NOT A CHECK-IN, and the whole reason the document exists. Design section 7, the owner: "most
+    // children getting checked in will not have a phone." So in the ordinary case nothing at the relay links a
+    // parent to a child -- `guardianOfIn` is keyed on the CHILD's pubkey, and `guardians:` is owner-only and is
+    // never served to an ordinary member. A parent-authored `checkin:` row would therefore have had no
+    // authority to be checked against and would have reduced to "ANY MEMBER MAY INVENT A CHILD AND A PICKUP
+    // CODE" -- the hole F-B (90c4bf5) closed. Forging an arrival buys a spurious line on a worker's screen, the
+    // same data-quality nuisance the printed room code already knowingly accepts. Forging a register row buys a
+    // child.
+    //
+    // IT CARRIES NO KEY MATERIAL AND NO CHILD'S NAME. The body is sealed to the author's OWN key -- non-empty
+    // (an empty content is the tombstone convention; see writeCheckin's sentinel for what that cost once) and
+    // opaque to every reader including the worker, who never opens it and does not need to. The document's only
+    // job is to deliver the parent's pubkey provably, and the signature has already done that. The worker types
+    // the child's name at the desk exactly as she does today.
+    //
+    // ⚠ NOTHING IN app/ CALLS THIS YET, AND THAT IS SAID PLAINLY RATHER THAN LEFT TO BE FOUND. The parent's own
+    // surface -- entering the room code from the door, and reading their child's record back -- is STEP 2,
+    // because reading back needs a guardian-sealed copy that does not exist (see the STOP-AND-PLAN section of
+    // reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md). This function ships now so that the relay tests
+    // drive the SHIPPED writer rather than a mirror of it, which is the trap tests-must-drive-shipped-code
+    // records. It grants no authority it did not already have: any member could sign this event by hand, and
+    // the gate that matters is the relay's.
+    //
+    // IT FAILS LOUD, NEVER OPTIMISTICALLY (design section 8). _publishAny THROWS unless a relay accepted the
+    // write, so a refusal (not a member, a closed session, somebody else's address) and a mid-service outage
+    // both land here as { ok:false } -- the parent is told to see the desk rather than believing they are
+    // expected in a room that has never heard of them.
+    //
+    // Returns { ok:true, id } or { ok:false, reason }.
+    async writeArrival(churchNpub, rec) {
+      const cp = toPub(churchNpub);
+      if (!cp || !sk || !pub) return { ok: false, reason: "no-identity" };
+      const sid = String((rec || {}).session || "").trim();
+      if (!sid) return { ok: false, reason: "no-session" };
+      const d = CHECKINARRIVAL_D + sid + ":" + pub;
+      let body;
+      try {
+        body = encrypt(JSON.stringify({ at: Math.floor(Date.now() / 1e3) }), getConversationKey(sk, pub));
+      } catch (e) {
+        return { ok: false, reason: "seal-failed" };
+      }
+      const evt = finalizeEvent2({
+        kind: 30078,
+        created_at: Math.floor(Date.now() / 1e3),
+        tags: [["d", d], ["t", NET], ["church", cp], ["session", sid]],
+        content: body
+      }, sk);
+      try {
+        await _publishAny(relaysForChurch(cp), evt);
+      } catch (e) {
+        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+      }
+      return { ok: true, id: d };
     },
     // ── A WORKER CHECKS A CHILD IN, FROM HER OWN PHONE ───────────────────────────────────────────────────────
     // slice B of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. The write half of slice 3: a cleared,
@@ -11701,10 +11815,19 @@
     // session's envelope, so they hold the session key and open her ck copy through it (the console's
     // encSubscribe falls back to it, gateway serves it). She writes no ring copy because she cannot make one.
     //
-    // NO ['p'] GUARDIAN TAG. The console names guardians from the church's guardian map; a WORKER's phone does
-    // not hold that map (the relay withholds minors:/guardians: from ordinary members, on purpose), so a
-    // worker-written record carries no guardian link. That is honest — she names the child at the desk — and it
-    // is why the parent-readable copy is the DEFERRED parent surface's concern, not this writer's.
+    // THE ['p'] GUARDIAN TAG COMES FROM A SIGNED ARRIVAL, OR IT DOES NOT COME AT ALL. 2026-09-11, step 1 of the
+    // parent surface. The console names guardians from the church's guardian map; a WORKER's phone does not hold
+    // that map and must not gain it (the relay withholds minors:/guardians: from ordinary members, on purpose).
+    // So this writer NEVER GUESSES A GUARDIAN. `rec.guardian` is only ever the pubkey the WORKER CONFIRMED off an
+    // arrival on her screen — a document the relay admitted only from that pubkey's own address, so the link
+    // between the tag and the person is a signature and not an inference. Absent or malformed, the record is
+    // written with no guardian link at all, exactly as it was before today: DOMAIN.md and design §10, nothing in
+    // this feature blocks a child reaching the room, and "the family has no app" is the ordinary Sunday.
+    //
+    // WHAT THE TAG BUYS AND WHAT IT DOES NOT. canRead's CHECKIN_D branch serves a p-tagged pubkey the record, so
+    // the named guardian is handed CIPHERTEXT they cannot open — there is no guardian-sealed copy, which is
+    // STEP 2 and deliberately not built here (a `gk` written with no reader is an engine nobody consults). That
+    // delivery is not new: a console-written record has carried p-tags since the feature shipped.
     //
     // IT FAILS LOUD, NEVER OPTIMISTICALLY (design §8). No session key held → her turn is not on, or no envelope
     // has reached this phone: she is not a writer the relay would admit, so this returns { ok:false } at once
@@ -11725,6 +11848,7 @@
       if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: "no-key" };
       const childName = String(o.childName || "").replace(/\s+/g, " ").trim().slice(0, 80);
       if (!childName) return { ok: false, reason: "no-name" };
+      const guardian = typeof o.guardian === "string" && /^[0-9a-f]{64}$/.test(o.guardian.toLowerCase()) ? o.guardian.toLowerCase() : "";
       const id = "ci" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       const body = {
         id,
@@ -11737,7 +11861,7 @@
         room: String(o.room || "").trim(),
         note: String(o.note || "").trim(),
         session: sid,
-        guardians: []
+        guardians: guardian ? [guardian] : []
       };
       let ck, sentinel;
       try {
@@ -11749,7 +11873,17 @@
       const evt = finalizeEvent2({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
-        tags: [["d", CHECKIN_D + id], ["t", NET], ["church", cp], ["session", sid], ["enc", "2"], ["ck", ck]],
+        tags: [
+          ["d", CHECKIN_D + id],
+          ["t", NET],
+          ["church", cp],
+          ["session", sid],
+          ["enc", "2"],
+          // EXACTLY THE ONE PUBKEY THE SIGNED ARRIVAL DELIVERED, and never a second. A list here would be a
+          // guess about a family, and a guess is what this writer has no map to make.
+          ...guardian ? [["p", guardian]] : [],
+          ["ck", ck]
+        ],
         content: sentinel
       }, sk);
       try {

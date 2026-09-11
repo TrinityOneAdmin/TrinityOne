@@ -48,7 +48,21 @@ test('every store.put is either accept-gated or carries the id check', () => {
     // Strip comments ENTIRELY, not just whole-line ones: a trailing `// !carereqIdOk(...) return` above a
     // neutered door satisfied the match. Same trap this repo has hit before — an assertion satisfied by the
     // comment that explains the rule.
-    const window = LINES.slice(Math.max(0, i - 14), i + 1)
+    // THE WINDOW IS BOUNDED BY THE PREVIOUS store.put, NOT BY A LINE COUNT, and that is the 2026-09-11 fix.
+    // It was a flat 14 lines, which is a measurement of how much COMMENT the house style puts between the id
+    // checks and the write they guard — not of anything about the rule. Adding a fourth stateless id check to
+    // the import loop (arrivalIdOk) pushed carereqIdOk three lines past the edge and this test went red over
+    // code that was entirely correct, which is the fixed-character-window trap test-slice.mjs exists to cure,
+    // one file over.
+    //
+    // WIDENING ALONE WOULD HAVE WEAKENED IT: a new, UNGUARDED door added twenty lines below a guarded one
+    // would borrow its neighbour's `!carereqIdOk(…) continue` and report clean. So the window instead starts
+    // at the line after the PREVIOUS store.put — every door is judged only on the code that is actually
+    // between it and the door before it, which is the region that can possibly gate it. A cap stays as a
+    // backstop for the first site in the file.
+    const prev = sites.filter(x => x < i).pop();
+    const from = Math.max(0, prev == null ? i - 40 : prev + 1, i - 40);
+    const window = LINES.slice(from, i + 1)
       .map(l => l.replace(/\/\/.*$/, ''))
       .join('\n');
     // Deliberately not bracket-counting: the argument is `dtag(e)`, so the call nests a paren and a regex that

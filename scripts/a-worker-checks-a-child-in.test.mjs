@@ -44,6 +44,7 @@ const church = K();
 const sgLead = K();       // a steward ticked for safeguarding — a KEEPER of the session envelope
 const ada = K();          // cleared, in-window: the worker
 const cara = K();         // an ordinary member, never cleared
+const gina = K();         // A PARENT — an ordinary member whose SIGNED ARRIVAL is the only lawful source of a guardian p-tag
 const SESSION = 'svc-morning';
 const KEY = '11'.repeat(32);
 
@@ -119,6 +120,29 @@ function liftWriteCheckin(actor, keys /* sid -> hex */) {
     fnBody(FELLOWSHIP, 'async writeCheckin(churchNpub, rec) {', 'writeCheckin') + ' }); }')(proxy);
   return { writeCheckin: api.writeCheckin, captured };
 }
+// Same lift, the PARENT'S ARRIVAL writer (step 1 of the parent surface). No session key and no key material
+// of any kind: she seals to her OWN key, which is why the only crypto stub it needs is the conversation key
+// with herself.
+function liftWriteArrival(actor) {
+  const captured = [];
+  const scope = {
+    toPub: (x) => x, sk: actor.sk, pub: actor.pub,
+    encrypt: (pt, k) => nip44.encrypt(pt, k),
+    getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
+    finalizeEvent2: (t, sec) => finalizeEvent(t, sec),
+    CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => [],
+    _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
+    String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped writeArrival needs a stub for ' + String(k)); },
+  });
+  const api = new Function('scope', 'with (scope) { return ({ ' +
+    fnBody(FELLOWSHIP, 'async writeArrival(churchNpub, rec) {', 'writeArrival') + ' }); }')(proxy);
+  return { writeArrival: api.writeArrival, captured };
+}
 // Same lift, the RELEASE writer (slice C / KNOT 2).
 function liftReleaseCheckin(actor, keys) {
   const captured = [];
@@ -155,7 +179,7 @@ before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'trin-worker-checkin-'));
   await boot();
   w = await conn();
-  for (const who of [sgLead, ada, cara]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
+  for (const who of [sgLead, ada, cara, gina]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
   await send(w, doc(church, D.STEWARDS + church.pub, { pubkeys: [sgLead.pub], caps: { [sgLead.pub]: ['safeguarding'] } }));
   await send(w, doc(church, D.GUARDIANS + church.pub, { links: {} }));
   await sleep(200);
@@ -179,7 +203,7 @@ test('BASELINE: the shipped writer, run as an in-window helper, emits a record t
   assert.equal(tag('enc'), '2', 'the additive marker is missing');
   assert.ok(String(tag('d')).startsWith(D.CHECKIN), 'the d-tag is not a check-in address');
   assert.ok(tag('ck'), 'NO ck COPY — she holds the session key and must seal one');
-  assert.equal(evt.tags.some(t => t[0] === 'p'), false, 'a guardian was tagged — the worker\'s phone holds no guardian map (KNOT 1)');
+  assert.equal(evt.tags.some(t => t[0] === 'p'), false, 'a guardian was tagged for a check-in nobody claimed — the worker\'s phone holds no guardian map (KNOT 1) and may only ever name a pubkey a SIGNED ARRIVAL delivered');
   // ⚠ content MUST BE NON-EMPTY or the relay refuses it as a TOMBSTONE and the reader deletes the row.
   assert.notEqual(evt.content, '', 'content is EMPTY — read as a tombstone (F-D) by the relay and the reader');
   assert.equal(nip44.decrypt(evt.content, unhex(KEY)), JSON.stringify({ enc: 2 }), 'the sentinel is not the expected non-body marker under the session key');
@@ -293,4 +317,126 @@ test('the shipped releaseCheckin FAILS LOUD with no key, and refuses a release n
   const held = liftReleaseCheckin(ada, { [SESSION]: KEY });
   assert.equal((await held.releaseCheckin(church.pub, { session: SESSION })).reason, 'no-rel', 'a release naming no check-in was written — the reader could fold it onto nothing');
   assert.equal(held.captured.length, 0, 'a refused release still published something');
+});
+
+// ══════════════ THE GUARDIAN P-TAG — ONLY EVER FROM A SIGNED ARRIVAL ══════════════
+// STEP 1 of the parent surface, 2026-09-11. The worker's phone holds NO guardian map: the relay withholds
+// minors:/guardians: from ordinary members on purpose, and it must stay that way. So `rec.guardian` is only
+// ever the pubkey the worker CONFIRMED off an arrival on her screen — a document the relay admitted only from
+// that pubkey's own address (scripts/a-parent-writes-an-arrival-never-a-register-row.test.mjs). The link
+// between the tag and the person is therefore a SIGNATURE, never an inference.
+
+test('a check-in FROM AN ARRIVAL p-tags exactly that guardian, and the relay admits it', async () => {
+  const { writeCheckin, captured } = liftWriteCheckin(ada, { [SESSION]: KEY });
+  const res = await writeCheckin(church.pub, { session: SESSION, childName: 'Milo Henderson', code: '5512', guardian: gina.pub });
+  assert.equal(res.ok, true, 'the shipped writer refused a check-in carrying a guardian: ' + JSON.stringify(res));
+  const evt = captured[0];
+  const ps = evt.tags.filter(t => t[0] === 'p').map(t => t[1]);
+  assert.deepEqual(ps, [gina.pub],
+    'THE RECORD DOES NOT NAME THE GUARDIAN THE ARRIVAL DELIVERED, or names more than one. Exactly one pubkey, ' +
+    'and it is the one the worker confirmed — a second would be a guess about a family this phone has no map ' +
+    'for. Tagged: ' + JSON.stringify(ps));
+  // …and the sealed body agrees with the cleartext tag, so a reader with a key and a reader without one
+  // cannot disagree about who this child belongs to.
+  const body = readCheckinHelperCopy(evt.tags, KEY, (ct, k) => nip44.decrypt(ct, unhex(k)));
+  assert.deepEqual(body.guardians, [gina.pub], 'the sealed body names a different guardian set from the cleartext tag');
+  // THE WEBSOCKET DOOR. A p-tag must not make the record something the gate refuses — a check-in that the
+  // relay rejects is a child not in the register.
+  const [ok, msg] = await publishAs(ada, evt);
+  assert.equal(ok, true, 'THE RELAY REFUSED A WORKER RECORD CARRYING A GUARDIAN TAG — the parent surface writes records the box will not take: ' + msg);
+  await sleep(300);
+  const d = (evt.tags.find(t => t[0] === 'd') || [])[1];
+  assert.ok((await asks(church, { kinds: [30078], '#d': [d] })).some(e => e.id === evt.id), 'the admitted record is not on the box');
+  // AND THE NAMED GUARDIAN IS SERVED IT. canRead's CHECKIN_D branch already does this for a p-tagged pubkey;
+  // said out loud because it is the ONLY thing the tag buys today. She is handed CIPHERTEXT SHE CANNOT OPEN —
+  // there is no guardian-sealed copy, which is STEP 2 and deliberately not built (a `gk` written with no
+  // reader is an engine nobody consults). This is delivery, not readability, and must not be described as more.
+  const hers = await asks(gina, { kinds: [30078], '#d': [d] });
+  assert.equal(hers.length, 1, 'the guardian the record names is not served it at all');
+  assert.equal(readCheckinHelperCopy(hers[0].tags, '00'.repeat(32), (ct, k) => nip44.decrypt(ct, unhex(k))), null,
+    'a guardian-openable copy exists — that is STEP 2 and is not supposed to be here yet; if it has been ' +
+    'built, it needs the non-guardian negative test the scope doc makes mandatory before it ships');
+});
+
+test('a MALFORMED guardian is dropped SILENTLY — the child is still checked in', async () => {
+  // reference/DOMAIN.md and design §10: nothing in this feature blocks a child reaching the room. A record
+  // with no guardian link is a complete record; refusing the whole check-in over a display detail is not.
+  // And the spellings matter: an npub, an object or a list would each reach the tag as something the relay's
+  // read gate cannot match, and a reader would paint a guardian who is not one.
+  for (const bad of ['npub1ginaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'Sarah Henderson',
+                     gina.pub.toUpperCase() + 'ff', {}, [gina.pub], null, 12345]) {
+    const { writeCheckin, captured } = liftWriteCheckin(ada, { [SESSION]: KEY });
+    const res = await writeCheckin(church.pub, { session: SESSION, childName: 'Yara', code: '1200', guardian: bad });
+    assert.equal(res.ok, true, 'A CHILD WAS BLOCKED FROM THE REGISTER over a malformed guardian field: ' + JSON.stringify(bad));
+    assert.equal(captured[0].tags.some(t => t[0] === 'p'), false,
+      'a malformed guardian reached the record as a p-tag: ' + JSON.stringify(bad) +
+      ' — tagged ' + JSON.stringify(captured[0].tags.filter(t => t[0] === 'p')));
+    const body = readCheckinHelperCopy(captured[0].tags, KEY, (ct, k) => nip44.decrypt(ct, unhex(k)));
+    assert.deepEqual(body.guardians, [], 'the malformed guardian reached the sealed body instead: ' + JSON.stringify(body.guardians));
+  }
+});
+
+test('a guardian pubkey is normalised to ONE spelling, the one the relay stores', async () => {
+  // The relay's read gate matches a p-tag against a 64-hex `authed`. An upper-case copy of the same key is
+  // the same person and a different string, so a record carrying one would be served to nobody.
+  const { writeCheckin, captured } = liftWriteCheckin(ada, { [SESSION]: KEY });
+  await writeCheckin(church.pub, { session: SESSION, childName: 'Milo', code: '9000', guardian: gina.pub.toUpperCase() });
+  assert.deepEqual(captured[0].tags.filter(t => t[0] === 'p').map(t => t[1]), [gina.pub],
+    'an upper-case guardian pubkey was written as-is, so the relay serves the record to nobody and no reader matches it');
+});
+
+// ══════════════ THE SHIPPED ARRIVAL WRITER, AGAINST THE SHIPPED GATE ══════════════
+// tests-must-drive-shipped-code: the relay-side file builds its arrivals by hand, which proves the GATE.
+// This proves the two agree — that the event the member app actually signs is the event the box admits.
+//
+// ⚠ NOTHING IN app/ CALLS writeArrival YET. The parent's own surface (entering the room code from the door,
+// and reading their child's record back) is STEP 2, because reading back needs a guardian-sealed copy that
+// does not exist. Said here, not left to be found: by CLAUDE.md rule 1 that makes this a writer with no
+// screen, and the honest mitigation is that it grants no authority — any member could sign this event by
+// hand, and the gate that matters is the relay's, which IS driven end to end below.
+
+test('the shipped writeArrival emits an arrival the RELAY ADMITS, carrying no key material and no child', async () => {
+  const { writeArrival, captured } = liftWriteArrival(gina);
+  const res = await writeArrival(church.pub, { session: SESSION });
+  assert.equal(res.ok, true, 'the shipped writer refused a member announcing her own arrival: ' + JSON.stringify(res));
+  assert.equal(captured.length, 1, 'writeArrival returned ok but published nothing');
+  const evt = captured[0];
+  const tag = (n) => (evt.tags.find(t => t[0] === n) || [])[1];
+  assert.equal(tag('d'), D.CHECKINARRIVAL + SESSION + ':' + gina.pub,
+    'THE ADDRESS DOES NOT NAME ITS AUTHOR. arrivalIdOk refuses that at all four doors, so this is a writer ' +
+    'the gate can never admit. Wrote: ' + tag('d'));
+  assert.equal(tag('session'), SESSION, 'no cleartext session tag, so no reader can route it without a key');
+  assert.equal(tag('church'), church.pub, 'no church tag, so namedChurch cannot resolve the owner and the gate refuses it');
+  assert.ok(!String(tag('d')).startsWith(D.CHECKIN),
+    'THE ARRIVAL IS BEING WRITTEN AT A REGISTER ADDRESS. A parent-authored `checkin:` row is the hole F-B closed.');
+  // ⚠ content MUST BE NON-EMPTY, or the relay and every reader take it for a TOMBSTONE — the same trap the
+  // worker's sentinel exists for, one document over.
+  assert.notEqual(evt.content, '', 'content is EMPTY — read as a withdrawal by the relay and by the reader');
+  // IT CARRIES NO KEY MATERIAL AND NO CHILD. Opened here ONLY to prove that, and by the author herself — no
+  // other party in this product can, which is the point.
+  const mine = nip44.decrypt(evt.content, nip44.utils.getConversationKey(gina.sk, gina.pub));
+  const body = JSON.parse(mine);
+  assert.deepEqual(Object.keys(body), ['at'], 'the arrival body carries something other than a timestamp: ' + mine);
+  assert.doesNotMatch(mine, /[0-9a-f]{64}/i, 'something that looks like a key or a pubkey is sealed into the arrival body');
+  // THE WEBSOCKET DOOR admits her own signed event, and it lands.
+  const [ok, msg] = await publishAs(gina, evt);
+  assert.equal(ok, true, 'THE RELAY REFUSED THE ARRIVAL THE MEMBER APP ACTUALLY EMITS — writer and gate disagree: ' + msg);
+  await sleep(300);
+  assert.ok((await asks(church, { kinds: [30078], '#d': [tag('d')] })).some(e => e.id === evt.id), 'the admitted arrival is not on the box');
+});
+
+test('the shipped writeArrival cannot be pointed at somebody else, because it composes the address from its OWN key', async () => {
+  // The relay refuses a foreign address anyway. This is the belt: the caller has no parameter that reaches
+  // the author half of the address, so the shipped writer can never be the thing that violates the rule.
+  const { writeArrival, captured } = liftWriteArrival(gina);
+  await writeArrival(church.pub, { session: SESSION, pub: cara.pub, author: cara.pub, guardian: cara.pub });
+  assert.equal((captured[0].tags.find(t => t[0] === 'd') || [])[1], D.CHECKINARRIVAL + SESSION + ':' + gina.pub,
+    'a caller-supplied field reached the author half of the address');
+  assert.equal(captured[0].pubkey, gina.pub, 'the arrival was signed by somebody other than the address names');
+});
+
+test('writeArrival refuses to write a sessionless arrival rather than writing an unroutable one', async () => {
+  const { writeArrival, captured } = liftWriteArrival(gina);
+  assert.equal((await writeArrival(church.pub, {})).reason, 'no-session', 'an arrival naming no session — which the gate refuses and no reader can route — was written');
+  assert.equal(captured.length, 0, 'it reported a refusal and published anyway');
 });

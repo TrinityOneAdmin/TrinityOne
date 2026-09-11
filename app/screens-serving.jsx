@@ -732,39 +732,110 @@ function svNewCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
 // IT FAILS LOUD (§8). ctx.checkinAdd returns { ok:false } when the relay refused the write or the network
 // dropped mid-session; this says so and keeps the child OFF the register rather than showing them checked in
 // when the room does not hold them. It never blocks a live worker — a refusal here is the relay's, not ours.
-function KidsAddChild({ ctx, session }) {
+// HOW A PARENT IS NAMED ON THIS SCREEN. `name` is the church's sealed display name, opened on this phone
+// like every other member's — and it is '' until that document has arrived. THAT MUST BE SAID, NOT PAPERED
+// OVER: the name is what the worker confirms the pairing against, and a screen that quietly substituted a
+// key fragment for a name would make an unresolved stranger look like a known family. So an unresolved
+// arrival reads "Someone at the door (name not on this phone)" and the confirmation below says the same
+// words back, which is an honest prompt to ask rather than a false reassurance.
+function svArrivalName(a) {
+  const n = String((a && a.name) || '').trim();
+  return n || 'Someone at the door (name not on this phone)';
+}
+function KidsAddChild({ ctx, session, arrivals }) {
+  const queue = Array.isArray(arrivals) ? arrivals : [];
   const [name, setName] = useSv('');
   const [code, setCode] = useSv(svNewCode);
   const [busy, setBusy] = useSv(false);
   const [msg, setMsg] = useSv(null);          // { ok:bool, text } after a submit
-  const submit = async () => {
-    const nm = name.trim();
-    if (!nm || busy) return;
+  // WHICH FAMILY THIS CHILD IS BEING CHECKED IN FOR — a pubkey off a SIGNED arrival, or '' for none.
+  const [picked, setPicked] = useSv('');
+  // …AND THE PAIRING THE WORKER HAS BEEN ASKED TO CONFIRM, held separately so the confirmation can only ever
+  // name what was on screen when she was asked.
+  const [pending, setPending] = useSv(null);  // { childName, guardian, label } | null
+  const pickedArrival = queue.find(a => a && a.pub === picked) || null;
+  const write = async (childName, guardian) => {
+    if (busy) return;
     setBusy(true); setMsg(null);
     let res;
-    try { res = (ctx && ctx.checkinAdd) ? await ctx.checkinAdd({ session, childName: nm, code: code.trim() }) : { ok: false, reason: 'unavailable' }; }
+    try { res = (ctx && ctx.checkinAdd) ? await ctx.checkinAdd({ session, childName, code: code.trim(), guardian: guardian || '' }) : { ok: false, reason: 'unavailable' }; }
     catch (e) { res = { ok: false, reason: 'threw' }; }
     setBusy(false);
+    setPending(null);
     if (res && res.ok) {
       // A MOMENT, then cleared for the next child, with a fresh code. The row itself appears from the relay.
-      setMsg({ ok: true, text: nm + ' checked in. Write ' + code.trim() + ' on the sticker.' });
-      setName(''); setCode(svNewCode());
+      setMsg({ ok: true, text: childName + ' checked in. Write ' + code.trim() + ' on the sticker.' });
+      setName(''); setCode(svNewCode()); setPicked('');
     } else {
       // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
       setMsg({ ok: false, text: 'That did not save — see the desk. Nothing was written.' });
     }
   };
+  // ⚠ THE MITIGATION THIS SCREEN EXISTS TO CARRY. Checking in FROM AN ARRIVAL must never be a bare tap.
+  // The measured risk, from the review that settled this design: two parents arrive at once, the worker taps
+  // the wrong queue row, and a child's NAME and PICKUP CODE — the thing that releases them — go to the wrong
+  // family. So an arrival-backed check-in asks for one confirmation that NAMES BOTH SIDES, "Milo → Sarah
+  // Henderson?", and writes nothing until she answers it.
+  //
+  // A CHECK-IN WITH NO ARRIVAL IS UNCHANGED and is NOT confirmed: there is no pairing to confirm, and design
+  // §10 is that nothing in this feature blocks a child reaching the room. A family with no app, a flat
+  // battery, a grandparent — all still one tap, exactly as yesterday.
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm || busy) return;
+    if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalName(pickedArrival) }); return; }
+    await write(nm, '');
+  };
   return (
     <div style={{ borderTop: '1px solid var(--line)', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/* THE ARRIVALS QUEUE — who has said they are at the door. A family is NOT dropped once one child is
+          in: a parent with two children checks both in from one arrival, and a queue that emptied itself
+          after the first would make the second look like a mistake. It says how many so far instead. */}
+      {queue.length ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {queue.map(a => (
+            <button key={a.pub} onClick={() => { setPicked(p => (p === a.pub ? '' : a.pub)); setPending(null); setMsg(null); }} aria-pressed={picked === a.pub}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 12, cursor: 'pointer',
+                border: '1px solid ' + (picked === a.pub ? 'var(--sage)' : 'var(--line)'), background: picked === a.pub ? 'color-mix(in oklab, var(--sage) 12%, var(--surface))' : 'var(--surface)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{svArrivalName(a) + ' has arrived'}</div>
+                {a.checkedIn > 0 ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{a.checkedIn === 1 ? '1 child checked in so far' : a.checkedIn + ' children checked in so far'}</div> : null}
+              </div>
+              <span style={{ flexShrink: 0, fontSize: 12.5, fontWeight: 800, color: picked === a.pub ? 'var(--sage)' : 'var(--ink-3)' }}>{picked === a.pub ? 'Selected' : 'Check in'}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Child’s name" aria-label="Child’s name"
+        {/* EDITING THE NAME CANCELS A CONFIRMATION THAT IS ALREADY ON SCREEN. `pending` freezes the pairing
+            she was asked about, so without this the panel could read "Milo → Sarah Henderson?" over a box
+            that now says "Yara" — and whichever she then believed, one of the two is wrong. */}
+        <input value={name} onChange={e => { setName(e.target.value); setPending(null); }} placeholder="Child’s name" aria-label="Child’s name"
           style={{ flex: 1, minWidth: 0, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5 }} />
         <input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} aria-label="Pickup code"
           inputMode="numeric" style={{ width: 68, padding: '9px 8px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15, letterSpacing: '1.5px', textAlign: 'center' }} />
       </div>
+      {/* THE NAMED PAIRING. Both names, in one sentence, before anything is written. Deleting this panel —
+          or letting `submit` write straight through when an arrival is picked — is the mitigation removed,
+          and a point-of-use test reddens for exactly that. */}
+      {pending ? (
+        <div style={{ borderRadius: 14, border: '1px solid var(--sage)', background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, lineHeight: 1.25, color: 'var(--ink)' }}>{pending.childName + ' → ' + pending.label + '?'}</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button onClick={() => write(pending.childName, pending.guardian)} disabled={busy}
+              style={{ padding: '8px 14px', borderRadius: 11, border: 'none', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13.5 }}>
+              Yes, check in
+            </button>
+            <button onClick={() => setPending(null)} disabled={busy}
+              style={{ padding: '8px 14px', borderRadius: 11, border: '1px solid var(--line)', cursor: busy ? 'default' : 'pointer', background: 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13.5 }}>
+              No, go back
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button onClick={submit} disabled={!name.trim() || busy}
-          style={{ padding: '8px 14px', borderRadius: 11, border: 'none', cursor: (!name.trim() || busy) ? 'default' : 'pointer', opacity: (!name.trim() || busy) ? 0.5 : 1,
+        <button onClick={submit} disabled={!name.trim() || busy || !!pending}
+          style={{ padding: '8px 14px', borderRadius: 11, border: 'none', cursor: (!name.trim() || busy || !!pending) ? 'default' : 'pointer', opacity: (!name.trim() || busy || !!pending) ? 0.5 : 1,
             background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13.5 }}>
           {busy ? 'Checking in…' : 'Check a child in'}
         </button>
@@ -871,7 +942,7 @@ function KidsRegister({ ctx }) {
           {/* CHECK A CHILD IN — slice B. Only when the clearance is LIVE: a lapsed key still shows the register
               (DOMAIN.md, do not lock someone out mid-session) but the relay would refuse a new write, so the
               form is not offered on a clearance that has ended or not started. It never gates a live worker. */}
-          {reg.cleared ? <KidsAddChild ctx={ctx} session={sn.session} /> : null}
+          {reg.cleared ? <KidsAddChild ctx={ctx} session={sn.session} arrivals={sn.arrivals} /> : null}
         </div>
       ))}
 

@@ -66,6 +66,7 @@ const WIN = { from: NOW - 3600, until: NOW + 3600 };
 const CHECKINPERM_D = 'trinityone/checkinperm:';
 const CHECKINHELPER_D = 'trinityone/checkinhelper:';
 const CHECKIN_D = 'trinityone/checkin:';
+const CHECKINARRIVAL_D = 'trinityone/checkinarrival:';
 
 // ── THE CHURCH'S SIDE, ALL SHIPPED ────────────────────────────────────────────────────────────────────────
 // An envelope: one session's key, wrapped per recipient by the shipped minter with real nip44.
@@ -149,8 +150,9 @@ function release(id, relId, session, sessionKeyHex, over = {}) {
 }
 
 // ── THE WORKER'S PHONE: THE SHIPPED READER OUT OF vendor/fellowship.js ────────────────────────────────────
-function phone(who) {
+function phone(who, profiles = {}) {
   const emitted = [];
+  const listeners = [];   // what the reader subscribed to on `window`, so the teardown can be measured
   let handler = null;
   const dropped = [];       // what the reader asked the hub cache to forget, and when
   const refetches = [];
@@ -181,7 +183,12 @@ function phone(who) {
     _unhex,
     // ⚠ THE BUNDLE'S SPELLINGS. See the header note on esbuild renaming.
     decrypt: nip44.decrypt, getConversationKey: nip44.getConversationKey,
-    CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D,
+    CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D,
+    // A PARENT'S NAME, resolved the way every other screen in this app resolves a pubkey. The reader reads
+    // this map and re-emits when `trinity-profiles` fires, so both are here: an empty map is the cold-start
+    // answer and the tests below put names into it to prove the resolution is real and not hard-coded.
+    profiles,
+    window: { addEventListener: (ev, fn) => { listeners.push([ev, fn]); }, removeEventListener: (ev, fn) => { const i = listeners.findIndex(x => x[0] === ev && x[1] === fn); if (i >= 0) listeners.splice(i, 1); } },
     Date: { now: () => NOW * 1000 },
     Map, Math, String, Number, Array, Object, JSON, Boolean, console,
   };
@@ -199,13 +206,18 @@ function phone(who) {
   // here rather than reporting a clean sheet.
   assert.ok(handler && typeof handler.onevent === 'function',
     'the lifted subscribeCheckinRegister never registered a docs-hub handler — this harness is running nothing');
-  assert.deepEqual(handler.want, [CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D],
-    're-anchor: the reader no longer asks the hub for these three document types, so it is replaying a ' +
-    'different slice of the corpus than this test feeds it');
+  assert.deepEqual(handler.want, [CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D],
+    're-anchor: the reader no longer asks the hub for these four document types, so it is replaying a ' +
+    'different slice of the corpus than this test feeds it. An omitted CHECKINARRIVAL_D is the parent queue ' +
+    'silently never replayed from cache on a cold start.');
   const dtag = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
   const cache = () => ({ dropped, refetches, hub });
   return {
     cache,
+    listeners,
+    // A NAME ARRIVING LATE, the way it really arrives: the sealed `name:` document opens on the docs hub,
+    // writes into `profiles`, and fires `trinity-profiles`. Driven here rather than simulated by re-feeding.
+    nameArrives(pubkey, name) { profiles[pubkey] = { ...(profiles[pubkey] || {}), name }; for (const [ev, fn] of listeners) if (ev === 'trinity-profiles') fn(); return this; },
     feed(...events) { for (const e of events) handler.onevent(e, dtag(e)); return this; },
     settle() { handler.oneose(); return this; },
     last() { assert.ok(emitted.length, 'the shipped reader emitted nothing at all, not even an empty answer'); return emitted[emitted.length - 1]; },
@@ -449,7 +461,10 @@ test('a WITHDRAWAL EMPTIES THE PHONE — memory and the cache the next boot repl
   const v = p.last();
   assert.deepEqual(namesOn(v), [], 'the rows survived the withdrawal in memory');
   assert.equal(v.keysHeld, 0, 'the key survived the withdrawal in memory');
-  assert.deepEqual(p.cache().dropped, [[CHECKINHELPER_D, CHECKIN_D]],
+  // …AND THE ARRIVAL SLICE BY NAME. `startsWith(CHECKIN_D)` does NOT match `checkinarrival:` — the colon
+  // makes the two prefixes disjoint — so a drop list that named only the register would leave a withdrawn
+  // worker's phone replaying, from disk and through a cold start, the list of WHICH FAMILIES WERE AT CHURCH.
+  assert.deepEqual(p.cache().dropped, [[CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D]],
     'THE CACHE WAS NOT TOLD TO FORGET the envelope and the records — a force-stop and relaunch replays them, ' +
     'names and pickup codes included, exactly as the Oppo did. dropped: ' + JSON.stringify(p.cache().dropped));
   // …and records arriving AFTER the withdrawal (a replay, a race) do not resurrect anything: no key, so unopenable
@@ -610,4 +625,140 @@ test('a release this phone holds no key for is counted, never folded and never r
   const row = v.sessions[0].rows.find(r => r.childName === 'Esther Ncube');
   assert.equal(row.out, undefined, 'a release this phone could not even open marked a child collected');
   assert.equal(v.foreign, 1, 'the unreadable release was not counted as belonging to another session');
+});
+
+// ══════════════ THE PARENT'S ARRIVAL, THROUGH THE SHIPPED READER ══════════════
+// STEP 1 of the parent surface, 2026-09-11. The relay half is
+// scripts/a-parent-writes-an-arrival-never-a-register-row.test.mjs; the screen half is
+// scripts/the-kids-tab-is-only-for-a-cleared-worker.test.mjs. THIS is the join between them: what the
+// shipped subscribeCheckinRegister actually puts in `sessions[].arrivals`, out of vendor/fellowship.js.
+//
+// THE BODY IS NEVER OPENED, and that is the design rather than a limitation this file works around. A parent
+// seals her arrival to her OWN key, so this phone cannot read it and does not need to: the document's whole
+// job is to deliver her pubkey provably, which the relay checked the signature for. Everything the reader
+// takes is CLEARTEXT — the address, the session tag, created_at.
+
+const gina = keypair();          // a parent
+const omar = keypair();          // a second parent, at the door at the same moment
+const ARRIVAL_D = 'trinityone/checkinarrival:';
+// An arrival exactly as Fellowship.writeArrival signs one, minus the self-seal (nothing reads it, so a
+// non-empty opaque string is a faithful stand-in for a ciphertext nothing opens — and a test that "decrypted"
+// it would be asserting a path the product does not have).
+function arrival(who, session, over = {}) {
+  const tags = [['d', ARRIVAL_D + (over.addrSession || session) + ':' + (over.addrPub || who.pub)], ['t', 'trinityone'],
+                ['church', church.pub], ['session', over.tagSession || session]];
+  if (over.deleted) tags.push(['deleted', '1']);
+  return { pubkey: over.by || who.pub, created_at: over.at || NOW, tags,
+           content: over.deleted ? '' : 'SELF-SEALED-TO-THE-PARENT-ONLY' };
+}
+const arrivalsOn = (v, sid) => ((v.sessions.find(s => s.session === sid) || {}).arrivals || []);
+
+test('ARRIVALS: a parent at the door reaches the worker\'s session, named', () => {
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM))
+    .settle();
+  const q = arrivalsOn(p.last(), AM);
+  assert.equal(q.length, 1, 'THE ARRIVAL NEVER REACHED THE REGISTER. The queue the worker\'s screen renders is empty at source.');
+  assert.equal(q[0].pub, gina.pub, 'the arrival names the wrong pubkey — the one thing it exists to deliver');
+  assert.equal(q[0].name, 'Sarah Henderson', 'the parent\'s name was not resolved, so the worker confirms a pairing against nothing');
+  assert.equal(q[0].checkedIn, 0, 'a family with no child in the room yet is reported as already checked in');
+  // …AND IT IS NOT A CHILD. An arrival reaching `rows` would be a phantom on a safeguarding register.
+  assert.deepEqual(namesOn(p.last()), [], 'AN ARRIVAL RENDERED AS A CHILD IN THE REGISTER — a phantom child with no pickup code and nobody able to collect them');
+  assert.equal(p.last().unreadable, 0, 'the arrival was counted as a record this phone cannot open — it is not a record, and that banner says the register is incomplete');
+  assert.equal(p.last().foreign, 0, 'the arrival was counted as another session\'s record');
+});
+
+test('ARRIVALS: a name that arrives LATE still reaches the queue', () => {
+  // On a cold start the arrival wins the race with the sealed `name:` document every time. Without the
+  // re-emit the queue keeps the name it had when the arrival landed — none — and the worker confirms a
+  // pairing against "name not on this phone" for a family whose name the phone does in fact hold.
+  const p = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM))
+    .settle();
+  assert.equal(arrivalsOn(p.last(), AM)[0].name, '', 'fixture: the name was already resolved, so the re-emit below proves nothing');
+  p.nameArrives(gina.pub, 'Sarah Henderson');
+  assert.equal(arrivalsOn(p.last(), AM)[0].name, 'Sarah Henderson',
+    'A NAME THAT ARRIVED AFTER THE ARRIVAL NEVER REACHED THE SCREEN. The queue is stuck on the cold-start ' +
+    'answer, and the name is what the worker confirms the child-to-parent pairing against.');
+});
+
+test('ARRIVALS: "we are not coming after all" removes the family from the queue', () => {
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM))
+    .settle();
+  assert.equal(arrivalsOn(p.last(), AM).length, 1, 'fixture: nothing was in the queue to withdraw');
+  p.feed(arrival(gina, AM, { deleted: true, at: NOW + 60 }));
+  assert.equal(arrivalsOn(p.last(), AM).length, 0,
+    'A WITHDRAWN ARRIVAL STAYED IN THE QUEUE. The family went home; the worker is still being offered them, ' +
+    'and a mis-tap now pairs a child with a parent who is not in the building.');
+});
+
+test('ARRIVALS: an arrival whose ADDRESS and SIGNATURE disagree is DROPPED, whatever the relay served', () => {
+  // The relay refuses this at all four doors (arrivalIdOk). A phone that trusted its relay to have done so
+  // would show a family's NAME beside somebody else's key on a hostile or out-of-date box — and the name is
+  // exactly what the confirmation is checked against, so this is the mis-pairing the screen cannot catch.
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' }, [omar.pub]: { name: 'Omar Haddad' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          arrival(omar, AM, { addrPub: gina.pub }))       // signed by omar, addressed as gina
+    .settle();
+  assert.deepEqual(arrivalsOn(p.last(), AM), [],
+    'A FORGED ARRIVAL REACHED THE WORKER\'S QUEUE under another family\'s name. Served: ' +
+    JSON.stringify(arrivalsOn(p.last(), AM)));
+});
+
+test('ARRIVALS: an arrival whose SESSION TAG and ADDRESS disagree is DROPPED, BOTH WAYS ROUND', () => {
+  // The F1 shape, one document over: readers route by the tag, the store keys on the address. THE DIRECTION
+  // THAT BITES IS ADDRESS-HERE / TAG-ELSEWHERE. Found by the sabotage matrix, 2026-09-11: the first version
+  // of this test put the ADDRESS on the afternoon and the TAG on the morning, and deleting the agreement
+  // check left it green — the reader takes `sid` from the ADDRESS, so that document was already filtered out
+  // by session scoping and the test was pinning the wrong rule. This way round the address IS the morning,
+  // so nothing else refuses it and only the agreement check does.
+  const wrongTag = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          arrival(gina, AM, { addrSession: AM, tagSession: PM }))
+    .settle();
+  assert.deepEqual(arrivalsOn(wrongTag.last(), AM), [],
+    'an arrival at the MORNING address carrying an AFTERNOON session tag reached the morning queue — the ' +
+    'cleartext tag every reader routes by does not have to agree with the address the document lives at');
+  // …and the mirror image, which the session scoping refuses for its own reason. Kept because a later reader
+  // that routed by the tag rather than the address would make this the live direction.
+  const wrongAddr = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          arrival(gina, AM, { addrSession: PM, tagSession: AM }))
+    .settle();
+  assert.deepEqual(arrivalsOn(wrongAddr.last(), AM), [], 'an arrival stored at the afternoon\'s address rendered on the morning\'s queue');
+});
+
+test('ARRIVALS: a session this phone holds NO KEY for shows no queue at all', () => {
+  // The sessions list is "every session this phone holds a key for". An arrival for a room she is not on
+  // must not conjure a card, or a worker is shown families at a door she has no business at.
+  const p = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, PM))
+    .settle();
+  assert.deepEqual(p.last().sessions.map(s => s.session), [AM], 'an arrival for an unheld session created a session card out of nothing');
+  assert.deepEqual(arrivalsOn(p.last(), AM), [], 'the afternoon\'s arrival was folded onto the morning\'s queue');
+});
+
+test('ARRIVALS: a family part-way through is COUNTED, not dropped — from the record\'s cleartext p-tag', () => {
+  // A parent with two children checks both in from ONE arrival. The count comes from the record's CLEARTEXT
+  // ['p'] tag, so it needs no key and holds for a record this phone cannot open.
+  const rec = record('ci-1', { childName: 'Milo', code: '4417' }, AM, AM_KEY);
+  rec.tags.push(['p', gina.pub]);
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM), rec)
+    .settle();
+  const q = arrivalsOn(p.last(), AM);
+  assert.equal(q.length, 1, 'THE FAMILY VANISHED FROM THE QUEUE once one child was in. The second child now looks like a mistake and the parent is sent back to the desk.');
+  assert.equal(q[0].checkedIn, 1, 'the queue does not say how many of this family are already in the room');
+  assert.deepEqual(namesOn(p.last()), ['Milo'], 'fixture: the child\'s record did not land, so the count above is measuring nothing');
+});
+
+test('ARRIVALS: the reader lets go of its name listener when it tears down', () => {
+  // The docs-hub teardown was the ONLY thing this subscription returned before today. A listener left on
+  // `window` after a church switch keeps a dead closure alive and re-emits into a screen that is gone.
+  const p = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning])).settle();
+  assert.equal(p.listeners.filter(l => l[0] === 'trinity-profiles').length, 1, 'the reader never subscribed to name resolution at all');
+  p.stop();
+  assert.equal(p.listeners.filter(l => l[0] === 'trinity-profiles').length, 0,
+    'THE NAME LISTENER SURVIVED THE TEARDOWN. Every church switch and every reconnect leaves another one behind.');
 });
