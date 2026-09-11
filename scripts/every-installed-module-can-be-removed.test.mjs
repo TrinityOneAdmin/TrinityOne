@@ -37,6 +37,17 @@
 // the screen. The record now carries what was registered, and a record written by an older build is
 // repaired on the next launch by restoreInstalled.
 //
+// AND THE THIRD, FOUND BY THE SECOND AUDIT: a name is only unique INSIDE ITS CATEGORY, and the code that
+// mapped a name back to a module did not know it. addSource, addCommentary and addDict dedupe within their
+// own store — deliberately, because "KJV" on a commentary is how a member reads "notes on the KJV" — so a
+// Bible and a commentary can both be KJV. Three places treated the name as unique across the phone:
+// removeModule's lookup scanned the whole installed map (measured: removing the KJV BIBLE from the reader
+// deleted a 27.6 MB imported COMMENTARY instead, record and bytes, no undo), and both the Library's
+// `isActive` and the engine's active-Bible refusal compared any record's name to the active BIBLE's. Every
+// one of them is scoped by category now; an ambiguous name with no category is refused rather than guessed
+// at; and "is this row the Bible being read?" is answered by the url the active module was really loaded
+// from (`urlOf`), so a record whose module never loaded can no longer borrow its identity. T19-T23.
+//
 // WHY THE ENGINE RUNS FOR REAL HERE. "Removed" is a claim about bytes, so a stubbed cache would answer the
 // question the test is named after (memory/stub-answers-the-question). engine.js's own installModule,
 // restoreInstalled, removeModule, addSource/addCommentary/addDict/applyMeta, recordInstalled/getInstalled/
@@ -62,19 +73,17 @@
 //     rest of that session, so a tap on a Strong's number in a later session installs it again. The space
 //     does come back at the moment of removal, and every other module stays removed. Giving a member a way
 //     to say "and do not fetch it again" is a product decision, not this fix.
-//   · AN IMPORTED DICTIONARY IS NOT REMOVABLE HERE BECAUSE IT IS NEVER INSTALLED: the file-import path
-//     passes no meta, so addDict registers it under "" and loadModuleBytes hands back an empty abbr, and
-//     that path records a module only `if(r && r.abbr)`. An imported dict is therefore neither cached nor
-//     listed and does not survive a restart. A defect in IMPORT, upstream of removal, left alone here.
-//     It is also why removeDict keeps its `if(!abbr) return;` guard: an anonymous dictionary cannot be
-//     told apart from any other anonymous dictionary, and no path records one, so there is nothing that
-//     reaches it. If import ever starts naming them, that guard must be revisited with this note.
-//   · ONE NARROW WINDOW SURVIVES THE COLLISION FIX, and it is worth writing down: between boot and the
-//     idle parse of a deferred JSON dictionary, two colliding dictionaries whose records were written by an
-//     older build both sit in _pendingDicts under the same abbr, so removing either drops both from memory
-//     until the next launch. The record and the bytes of the kept one are untouched and the repair lands
-//     when the parse runs, and no screen removes a dictionary by abbr (the Library passes the url), so
-//     nothing in the product reaches it — but a future caller passing an abbr would.
+//   · AN IMPORTED DICTIONARY USED NOT TO BE INSTALLED AT ALL, and now is. The file-import path and
+//     `?module=<url>` pass no metadata, addDict registered such a dictionary under "", and both paths
+//     record a module only `if(r && r.abbr)` — so an imported lexicon was never cached, never listed,
+//     never restored and never removable. addDict names it (Dict, Dict2…) exactly as addCommentary has
+//     always named a commentary, which makes it an ordinary installed module. T25 and T28 cover it.
+//   · A CORRECTION TO WHAT THE PREVIOUS COMMIT CLAIMED HERE, since it is the permanent record: it said the
+//     deferred-parse window was unreachable because "no screen removes a dictionary by abbr — the Library
+//     passes the url". That was false. The Library does pass the url, but removeModule turns the url into
+//     the RECORD'S NAME to find the copy in memory, so the shipped Remove button reached removeDict and a
+//     removal really could throw away another dictionary's queued parse. It is fixed rather than argued
+//     away: a pending parse carries its url and is matched by it (T29).
 //   · A MODULE LOADED BUT NEVER RECORDED still leaves memory and still reports success, and any bytes it
 //     cached under a url nothing wrote down stay where they are. The one shipped path that landed there —
 //     autoLoad's `?module=<url>`, which cached bytes and recorded nothing — now records what it caches, so
@@ -89,8 +98,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody, stmt } from './test-slice.mjs';
+import { fnBody, stmt, stripComments } from './test-slice.mjs';
 import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { createRequire } from 'node:module';
+import * as fflate from 'fflate';
+
+const require = createRequire(import.meta.url);
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const ENGINE = readFileSync(ROOT + 'engine.js', 'utf8');
@@ -100,7 +113,7 @@ const ENGINE = readFileSync(ROOT + 'engine.js', 'utf8');
 // objectStore + get/put/delete/getAllKeys, each an async request object). `breakDeleteOf` makes one key
 // undeletable, which is how the honest-failure path is exercised — that is a broken store, not a broken
 // engine, and the engine must notice and say so.
-function fakeIndexedDB({ breakDeleteOf = null, unavailable = false } = {}) {
+function fakeIndexedDB({ breakDeleteOf = null, unavailable = false, missingStore = false, abortReads = false } = {}) {
   const stores = new Map();
   let upgraded = false;
   const req = () => ({ onsuccess: null, onerror: null, onupgradeneeded: null, result: undefined, error: null });
@@ -108,14 +121,23 @@ function fakeIndexedDB({ breakDeleteOf = null, unavailable = false } = {}) {
   const db = {
     createObjectStore(name) { if (!stores.has(name)) stores.set(name, new Map()); return {}; },
     transaction(name) {
+      // A store that is not there throws SYNCHRONOUSLY from transaction(), exactly as IndexedDB does.
+      if (missingStore) { const e = new Error('no object store named ' + name); e.name = 'NotFoundError'; throw e; }
       const m = stores.get(name) || stores.set(name, new Map()).get(name);
-      return { objectStore: () => ({
-        get: (k) => settle(req(), m.has(k) ? m.get(k) : undefined),
+      // `abortReads` models a transaction that dies without the REQUEST ever firing: a version change, the
+      // database being deleted, the quota withdrawn mid-read. Only tx.onabort is called — which is why a
+      // reader that listens for onsuccess/onerror alone simply never settles.
+      const tx = { onabort: null, onerror: null, error: null };
+      const store = {
+        transaction: tx,
+        get: (k) => { const r = req(); if (abortReads) setTimeout(() => { if (tx.onabort) tx.onabort(); }, 0); else settle(r, m.has(k) ? m.get(k) : undefined); return r; },
         count: (k) => settle(req(), m.has(k) ? 1 : 0),
         put: (v, k) => { m.set(k, v); return settle(req(), k); },
         delete: (k) => { if (k !== breakDeleteOf) m.delete(k); return settle(req(), undefined); },
         getAllKeys: () => settle(req(), [...m.keys()]),
-      }) };
+      };
+      tx.objectStore = () => store;
+      return tx;
     },
   };
   const api = {
@@ -132,6 +154,8 @@ function fakeIndexedDB({ breakDeleteOf = null, unavailable = false } = {}) {
   };
   // what is on disk, as the test sees it
   api._breakOpen = (v) => { unavailable = !!v; };
+  api._loseStore = (v) => { missingStore = !!v; };
+  api._abortReads = (v) => { abortReads = !!v; };
   api._keys = () => [...(stores.get('modules') || new Map()).keys()];
   api._bytes = () => [...(stores.get('modules') || new Map()).values()].reduce((n, v) => n + (v.byteLength || v.length || 0), 0);
   return api;
@@ -161,6 +185,9 @@ function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {})
     stmt(ENGINE, 'const _pendingDicts = [];'),
     'let _dictsLoaded = false;',
     stmt(ENGINE, 'const commentaries = {};'),
+    stmt(ENGINE, 'const urlOf = {};'),
+    stmt(ENGINE, 'const urlKey = ('),
+    fnBody(ENGINE, 'function noteLoadedFrom(url, abbr, cat){'),
     stmt(ENGINE, 'const subs = new Set();'),
     stmt(ENGINE, 'const notify = ('),
     // the real subscribe, lifted out of the window.Bible literal as an object method
@@ -171,7 +198,7 @@ function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {})
     fnBody(ENGINE, 'function addDict(entries, abbr){'),
     fnBody(ENGINE, 'function _ensureDicts(){'),
     fnBody(ENGINE, 'function hasDict(abbr){'),
-    fnBody(ENGINE, 'function removeDict(abbr){'),
+    fnBody(ENGINE, 'function removeDict(abbr, url){'),
     fnBody(ENGINE, 'function loadDictJSON(obj, abbr){'),
     fnBody(ENGINE, 'function addCommentary(src){'),
     fnBody(ENGINE, 'function addSource(src){'),
@@ -190,6 +217,7 @@ function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {})
         arrayBuffer: async () => FIXTURE(url).bytes.buffer.slice(0) });
      async function loadModuleBytes(u8, srcName, meta){
        const f = FIXTURE(srcName);
+       if(f.kind === "corrupt") throw new Error("unrecognized file — " + srcName);
        if(f.kind === "comment") return { kind: "comment", abbr: addCommentary(applyMeta({ abbr: f.declares, name: (meta && meta.name) || srcName, getComment: () => [] }, meta)) };
        if(f.kind === "dict")    return { kind: "dict",    abbr: addDict(JSON.parse(new TextDecoder().decode(u8)).entries, meta && meta.abbr) };
        return { kind: "bible", abbr: addSource(applyMeta({ abbr: f.declares, name: (meta && meta.name) || srcName, books: [], maxChap: {} }, meta)) };
@@ -219,10 +247,10 @@ function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {})
     fnBody(ENGINE, 'function getInstalled(){'),
     fnBody(ENGINE, 'function setInstalled(map){'),
     fnBody(ENGINE, 'function catOf(item){'),
-    fnBody(ENGINE, 'function recordInstalled(item, registered){'),
+    fnBody(ENGINE, 'function recordInstalled(item){'),
     fnBody(ENGINE, 'function noteRegisteredAbbr(url, abbr){'),
     fnBody(ENGINE, 'function isInstalled(url){'),
-    fnBody(ENGINE, 'async function removeModule(id){'),
+    fnBody(ENGINE, 'async function removeModule(id, category){'),
     fnBody(ENGINE, 'function getCommentary(b, c, version){'),
     // lex() is how a dictionary is actually consulted — a tap on a Strong's number. It needs the built-in
     // fallback set and the tag stripper; the lazy full-lexicon install is stubbed out because it downloads.
@@ -234,19 +262,21 @@ function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {})
     fnBody(ENGINE, 'function searchDict(query, cap){'),
   ];
   const win = { Bible: {}, addEventListener() {}, removeEventListener() {} };
+  const loc = { search };   // mutable, so a test can drive a second launch with a different query string
   const api = new Function('indexedDB', 'localStorage', 'console', 'FIXTURE', 'window', 'requestIdleCallback', 'location',
     parts.join('\n') +
     '\nreturn { modules, dicts, _pendingDicts, commentaries, installing, addDict, _ensureDicts, loadDictJSON,' +
     ' addCommentary, addSource, cacheGet, cachePut, cacheKeys, cacheDelete, getInstalled, recordInstalled,' +
     ' isInstalled, removeModule, getCommentary, lex, searchDict, cacheHas, noteRegisteredAbbr, installModule,' +
+    ' noteLoadedFrom, activeUrl: () => (active && urlOf[urlKey("bibles", active)]) || null,' +
     ' restoreInstalled, autoLoad, subscribe: _sub.subscribe,' +
     ' order: () => order, active: () => active, setActive: (a) => { active = a; } };'
-  )(idb, fakeLocalStorage(), console, fixture, win, undefined, { search });
+  )(idb, fakeLocalStorage(), console, fixture, win, undefined, loc);
   // The vacuity counter goes through the engine's OWN notify/subscribe, so it also proves the harness is
   // running engine.js's pub/sub rather than a stand-in.
   let notified = 0;
   api.subscribe(() => { notified++; });
-  return { ...api, idb, notified: () => notified };
+  return { ...api, idb, setSearch: (q) => { loc.search = q; }, notified: () => notified };
 }
 
 // ── the modules on the phone ──────────────────────────────────────────────────────────────────────────────
@@ -281,6 +311,18 @@ async function phone(opts = {}) {
   return e;
 }
 
+// ctx.removeTranslation, LIFTED OUT OF app/app.jsx AND RUN rather than retyped here. It is the one hop
+// between the Translations sheet and the engine, and what it passes is now load-bearing: the sheet means a
+// BIBLE, and without that word removeModule resolves the name against whichever record was written first
+// and can delete a commentary of the same name. A copy of the line in this file would keep passing after
+// somebody deleted the word from the app (CLAUDE.md rule 3 is the same lesson one level up).
+const APP = stripComments(readFileSync(ROOT + 'app/app.jsx', 'utf8'));
+function liftRemoveTranslation(e) {
+  const m = /removeTranslation:\s*(\([^)]*\)\s*=>\s*Bible\.removeModule\([^)]*\))/.exec(APP);
+  assert.ok(m, 'app.jsx no longer wires ctx.removeTranslation to Bible.removeModule — re-anchor this test');
+  return new Function('Bible', 'return ' + m[1])({ removeModule: e.removeModule });
+}
+
 // ── the screen ────────────────────────────────────────────────────────────────────────────────────────────
 // The real InstalledBrowser, compiled from app/screens-library.jsx, over the real engine above.
 function screen(e) {
@@ -296,6 +338,7 @@ function screen(e) {
       Bible: {
         installedMap: e.getInstalled,
         get activeVersion() { return e.active(); },
+        get activeUrl() { return e.activeUrl(); },
         removeModule: e.removeModule,
         isInstalled: e.isInstalled,
         versions: () => e.order().map(a => ({ abbr: a, name: e.modules[a].name })),
@@ -541,7 +584,7 @@ function versionSheet(e) {
   };
   const { VersionSheet } = loadScreen('app/screens-read.jsx', ['VersionSheet'], g);
   const toasts = [];
-  const ctx = { toast: (t) => toasts.push(t), setVersion() {}, removeTranslation: (abbr) => e.removeModule(abbr) };
+  const ctx = { toast: (t) => toasts.push(t), setVersion() {}, removeTranslation: liftRemoveTranslation(e) };
   const props = { open: true, onClose() {}, version: BIBLE.abbr, onPick() {}, onAdd() {}, ctx };
   let tree = draw(VersionSheet, props);
   const redraw = () => (tree = draw(VersionSheet, props));
@@ -791,6 +834,289 @@ test('A MODULE OPENED WITH ?module=<url> IS LISTED, AND CAN THEREFORE BE REMOVED
   assert.equal(e.idb._keys().includes(NT_A.url), false, 'the bytes stayed');
 });
 
+// ── T20-T22: A NAME IS ONLY UNIQUE INSIDE ITS CATEGORY ────────────────────────────────────────────────────
+// Found by audit 2026-09-12, and it pre-dates this branch. A member imports a MySword commentary whose own
+// Details table calls it KJV — ordinary, since buildCommentaryFromDb takes the abbr from the module and
+// Import is offered in the Share sheet — and now has a Bible and a commentary both called KJV. That is
+// CORRECT: "KJV" on a commentary is how a member reads "notes on the KJV", and the three stores dedupe
+// separately on purpose. What was wrong was every piece of code that mapped a name back to a module as if
+// it were unique across the phone.
+const CMT_KJV = { id: 'notes-on-kjv', abbr: 'KJV', name: 'Notes on the KJV', kind: 'comment', format: 'MySword',
+                  category: 'commentaries', url: 'modules/notes-on-kjv.cmt.mybible.zip' };
+FIXTURE.set('notes-on-kjv.cmt.mybible.zip', { kind: 'comment', bytes: new Uint8Array(27_600_000), declares: 'KJV' });
+
+test('REMOVING THE KJV BIBLE DOES NOT DELETE THE KJV COMMENTARY', async () => {
+  // The measured defect: the app toasted "Removed KJV", the Bible stayed on the phone and in the reader,
+  // and 27.6 MB of the member's commentary was deleted — record, bytes and all, with no undo.
+  const e = await phone({ modules: [BIBLE, SECOND, CMT_KJV] });   // BSB is active; SECOND is the KJV Bible
+  assert.equal(e.getInstalled()[SECOND.url].abbr, 'KJV');
+  assert.equal(e.getInstalled()[CMT_KJV.url].abbr, 'KJV', 'the commentary did not keep its own name — re-anchor');
+
+  const v = versionSheet(e);
+  await v.byLabel(new RegExp('Remove ' + SECOND.name))[0].props.onClick({ stopPropagation() {} });
+
+  assert.equal(e.idb._keys().includes(CMT_KJV.url), true, 'the member\'s commentary was deleted instead');
+  assert.ok(e.commentaries.KJV, 'the commentary was unloaded instead');
+  assert.ok(e.getInstalled()[CMT_KJV.url], 'the commentary\'s record was deleted instead');
+  assert.equal(e.idb._keys().includes(SECOND.url), false, 'the Bible the member asked to remove is still here');
+  assert.equal(e.modules.KJV, undefined, 'the Bible is still loaded, so the reader still offers it');
+  assert.deepEqual(v.toasts, ['Removed KJV']);
+});
+
+test('…AND A NAME WITH NO CATEGORY IS REFUSED, NOT GUESSED AT', async () => {
+  // Any future caller that hands removeModule a bare name gets a refusal rather than whichever record was
+  // written first. The Library passes the url and the Translations sheet passes "bibles", so nothing in the
+  // app relies on the guess that used to happen here.
+  const e = await phone({ modules: [BIBLE, SECOND, CMT_KJV] });
+  assert.equal(await e.removeModule('KJV'), false, 'an ambiguous name still deletes something');
+  assert.ok(e.idb._keys().includes(SECOND.url) && e.idb._keys().includes(CMT_KJV.url), 'something was deleted anyway');
+  assert.equal(await e.removeModule('KJV', 'commentaries'), true, 'naming the category does not work');
+  assert.equal(e.idb._keys().includes(CMT_KJV.url), false, 'the commentary was not the one removed');
+  assert.ok(e.idb._keys().includes(SECOND.url), 'the Bible went too');
+});
+
+test('A COMMENTARY NAMED AFTER THE BIBLE BEING READ IS STILL REMOVABLE', async () => {
+  // B1 case (a), one shelf along: `r.abbr === active` disabled Remove on ANY row whose name matched the
+  // active Bible's. 27.6 MB behind "Switch to another Bible before removing this one" — and if that Bible
+  // is the member's only one, as it is for a congregation with one minority-language New Testament, there
+  // is nothing to switch to and the row is dead for ever.
+  const e = await phone({ modules: [SECOND, CMT_KJV] });          // the KJV Bible is the ONLY Bible, and active
+  assert.equal(e.active(), 'KJV', 'fixture: the KJV Bible should be the active one');
+  const s = screen(e);
+  assert.equal(s.removeBtn(SECOND.name).props.disabled, true, 'the only Bible can be removed');
+  assert.equal(s.removeBtn(CMT_KJV.name).props.disabled, false,
+    'the commentary cannot be removed because it shares the active Bible\'s name');
+
+  await s.tapRemove(CMT_KJV.name);
+
+  assert.deepEqual(s.toasts, ['Removed KJV']);
+  assert.equal(e.idb._keys().includes(CMT_KJV.url), false, 'the 27.6 MB did not come back');
+  assert.ok(e.modules.KJV && e.idb._keys().includes(SECOND.url), 'the Bible being read went with it');
+
+  // …and the same scope on the FALLBACK branch of that guard — the one that compares names, used when the
+  // active Bible was loaded from no url to compare. Nothing in the app reaches that today (every load path
+  // notes its url), which is exactly why it is worth pinning: it is the branch that would rot unnoticed.
+  const e2 = engine();
+  e2.addSource({ abbr: 'KJV', name: SECOND.name, books: [], maxChap: {} });   // loaded, from nowhere
+  e2.addCommentary({ abbr: 'KJV', name: CMT_KJV.name, getComment: () => [] });
+  await e2.cachePut(CMT_KJV.url, rawOf(CMT_KJV));
+  e2.recordInstalled(CMT_KJV);
+  assert.equal(e2.activeUrl(), null, 'fixture: the active Bible must have been loaded from no url');
+  assert.equal(await e2.removeModule(CMT_KJV.url), true,
+    'with no url to compare the guard falls back to the name, and refuses a commentary that merely shares it');
+  assert.ok(e2.modules.KJV, 'it removed the Bible instead');
+});
+
+// ── T23: a record whose module never loaded ───────────────────────────────────────────────────────────────
+test('A RECORD WHOSE MODULE COULD NOT LOAD IS STILL REMOVABLE', async () => {
+  // restoreInstalled cannot repair a record it could not load — `if(!bytes) continue;` and the enclosing
+  // catch both skip the repair — so such a record keeps whatever name was written at install time. If that
+  // name is also the active Bible's (two "NT" records, one of them stale), the name comparison made the
+  // Library disable Remove on it and removeModule refuse it: its megabytes, if any, were unreclaimable.
+  // The active check asks the url the ACTIVE module was really loaded from, so a record that loaded nothing
+  // can no longer borrow its identity.
+  const e = engine();
+  await e.cachePut(NT_A.url, rawOf(NT_A));
+  await e.cachePut(NT_B.url, rawOf(NT_B));
+  e.recordInstalled(NT_A);            // both written by an older build, both saying "NT"
+  e.recordInstalled(NT_B);
+  FIXTURE.set('bhi-nt.zip', { kind: 'corrupt', bytes: rawOf(NT_B), declares: 'NT' });   // this one will not parse
+
+  await e.restoreInstalled();
+
+  assert.equal(e.getInstalled()[NT_A.url].abbr, 'NT', 'the loadable one was not repaired — re-anchor this test');
+  assert.equal(e.getInstalled()[NT_B.url].abbr, 'NT', 'the unloadable one was repaired, which cannot happen');
+  assert.equal(e.active(), 'NT');
+  const s = screen(e);
+  assert.equal(s.removeBtn(NT_B.name).props.disabled, false,
+    'a record that loaded nothing is treated as the Bible being read, so its bytes can never be reclaimed');
+
+  await s.tapRemove(NT_B.name);
+
+  assert.deepEqual(s.toasts, ['Removed NT']);
+  assert.equal(e.idb._keys().includes(NT_B.url), false, 'the unloadable module\'s bytes are still on the phone');
+  assert.ok(e.modules.NT && e.idb._keys().includes(NT_A.url), 'the Bible being read was removed instead');
+  FIXTURE.set('bhi-nt.zip', { kind: NT_B.kind, bytes: rawOf(NT_B), declares: NT_B.abbr });
+});
+
+test('?module= OVER A MODULE THAT IS ALREADY INSTALLED DOES NOTHING', async () => {
+  // Found by audit 2026-09-12. Recording what this path caches was right; doing it over an existing record
+  // was not. fetchAndCacheModule is called with NO catalogue metadata, so the module is named from its own
+  // file; addSource sees a second name for one abbr and registers a DUPLICATE, and the new record then
+  // named the duplicate — leaving the originally-loaded copy in the reader with no record at all, so Remove
+  // would strip its bytes while it went on being readable.
+  const e = await phone({ modules: [BIBLE] });
+  const before = JSON.stringify(e.getInstalled());
+  const loadedBefore = e.order().slice();
+
+  e.setSearch('?module=' + BIBLE.url);
+  await e.autoLoad();
+
+  assert.equal(JSON.stringify(e.getInstalled()), before, 'the good record was overwritten');
+  assert.deepEqual(e.order(), loadedBefore, 'the module was loaded a second time under another name');
+  assert.equal(e.getInstalled()[BIBLE.url].name, BIBLE.name, 'the record lost the catalogue name');
+});
+
+test('A DICTIONARY OPENED WITH ?module= IS RECORDED TOO, and can be removed', async () => {
+  // The other half of the same finding: addDict returned "" when nothing named the dictionary, so the
+  // `if(r && r.abbr)` guard skipped it and it was never recorded — cached bytes nothing could reclaim.
+  // Every dictionary gets a name now, the same way a commentary always has.
+  const e = engine({ search: '?module=' + DICT.url });
+  await e.autoLoad();
+  const rec = e.getInstalled()[DICT.url];
+  assert.ok(rec, 'the dictionary was cached and not recorded — its bytes are unreachable');
+  assert.equal(rec.category, 'dictionaries');
+  assert.equal(rec.abbr, 'Dict', 'it was not given a name, so removeDict cannot find it');
+  assert.equal(e.lex('G26').short, 'love', 'it did not actually load — re-anchor this test');
+
+  const s = screen(e);
+  await s.tapRemove(rec.name);
+  assert.deepEqual(s.toasts, ['Removed Dict']);
+  assert.equal(e.lex('G26').missing, true, 'the dictionary is still answering lookups');
+  assert.equal(e.idb._keys().includes(DICT.url), false, 'the bytes stayed');
+});
+
+test('A STORE WHOSE OBJECT STORE IS GONE IS A PROVABLE ABSENCE, not an unknown', async () => {
+  // cacheHas refuses on anything it cannot answer, which is right — but a MISSING object store is an
+  // answer: bytes cannot be in a store that does not exist. Refusing there would leave a phone that lost
+  // its store unable to clear a single record, for ever.
+  const e = await phone();
+  e.idb._loseStore(true);
+  const s = screen(e);
+  await s.tapRemove(CMT.name);
+  assert.deepEqual(s.toasts, [`Removed ${CMT.abbr}`],
+    `the screen said ${JSON.stringify(s.toasts)} about bytes that provably are not there`);
+  assert.equal(e.getInstalled()[CMT.url], undefined, 'the record stayed, so the row is stuck for ever');
+});
+
+test('AN ABORTED READ IS AN HONEST FAILURE, NOT A BUTTON THAT NEVER COMES BACK', async () => {
+  // An IndexedDB transaction can die without the REQUEST ever firing — a version change, the database being
+  // deleted, the quota withdrawn mid-read. Only tx.onabort is called, so a reader that waits on
+  // onsuccess/onerror alone never settles: `await window.Bible.removeModule(...)` hangs and the member's
+  // Remove button spins with no toast, for ever. A dead control is the failure this whole programme exists
+  // to stop, so the read rejects and the screen says so.
+  const e = await phone();
+  e.idb._abortReads(true);
+  const s = screen(e);
+
+  const settled = await Promise.race([
+    s.tapRemove(CMT.name).then(() => 'settled'),
+    new Promise(r => setTimeout(() => r('HUNG'), 3000)),
+  ]);
+
+  assert.equal(settled, 'settled', 'the Remove button never came back — no toast, no failure, nothing');
+  assert.deepEqual(s.toasts, [`Couldn't remove ${CMT.name}`]);
+  assert.ok(e.getInstalled()[CMT.url], 'the record was dropped over a read that never completed');
+});
+
+// ── T28: the REAL loadModuleBytes, on a real SQLite dictionary ────────────────────────────────────────────
+// Named by the audit as the one thing the harness above could not reach: the install path is driven through
+// the engine's own installModule, but loadModuleBytes itself is stood in for, so the two lines this branch
+// changed INSIDE it — the SQLite dict branch and the zip-SQLite dict branch — were exercised by nothing, and
+// sabotaging either scored a clean 19/0. This closes that: a MySword-shaped dictionary is built with the
+// same sql.js the app ships, handed to the REAL loadModuleBytes raw and then zipped, and what comes back is
+// what the record is written from.
+const loadModuleBytesChain = (() => {
+  const parts = [
+    stmt(ENGINE, 'const SQLITE_MAGIC = '),
+    fnBody(ENGINE, 'function isSqlite(u8){'),
+    fnBody(ENGINE, 'function isZip(u8){'),
+    fnBody(ENGINE, 'async function openDb(dbBytes){'),
+    fnBody(ENGINE, 'function stripTags(s){'),
+    fnBody(ENGINE, 'function detailsOf(db, fb){'),
+    fnBody(ENGINE, 'function buildCommentaryFromDb(db, fb){'),
+    fnBody(ENGINE, 'function buildDictFromDb(db){'),
+    fnBody(ENGINE, 'function applyMeta(src, meta){'),
+    fnBody(ENGINE, 'function addDict(entries, abbr){'),
+    fnBody(ENGINE, 'function hasDict(abbr){'),
+    fnBody(ENGINE, 'function removeDict(abbr, url){'),
+    stmt(ENGINE, 'const dicts = [];'),
+    stmt(ENGINE, 'const _pendingDicts = [];'),
+    fnBody(ENGINE, 'async function loadModuleBytes(u8, srcName, meta){'),
+  ];
+  return () => {
+    const api = new Function('initSqlJs', 'SQLJS_BASE', 'fflate', 'notify', 'commentaries', 'addCommentary',
+      'addSource', 'parseVerse', 'buildBibleFromDb', 'buildFromUSFM', 'console',
+      parts.join('\n') +
+      '\nreturn { loadModuleBytes, dicts, _pendingDicts, removeDict, hasDict };')(
+      require(ROOT + 'vendor/sqljs/sql-wasm.js'), ROOT + 'vendor/sqljs/', fflate, () => {},
+      {}, () => 'CMT', () => 'BIB', (s) => s, () => null, () => null, console);
+    return api;
+  };
+})();
+
+// A MySword dictionary: one table matching /dictionary/i, a topic column and a definition column — which is
+// all buildDictFromDb looks for.
+async function sqliteDictionary() {
+  const SQL = await require(ROOT + 'vendor/sqljs/sql-wasm.js')({ locateFile: (f) => ROOT + 'vendor/sqljs/' + f });
+  const db = new SQL.Database();
+  db.run('CREATE TABLE dictionary (topic TEXT, definition TEXT);');
+  db.run("INSERT INTO dictionary VALUES ('H1', '<b>father</b>, ancestor');");
+  db.run("INSERT INTO dictionary VALUES ('H2', 'to perish');");
+  const bytes = new Uint8Array(db.export());
+  db.close();
+  return bytes;
+}
+
+test('THE REAL loadModuleBytes NAMES A SQLITE DICTIONARY, raw and inside a zip', async () => {
+  const raw = await sqliteDictionary();
+
+  // (1) the bare .mybible branch
+  const a = loadModuleBytesChain();
+  const r1 = await a.loadModuleBytes(raw, 'bdb.dct.mybible', { abbr: 'BDB', name: 'Brown-Driver-Briggs', category: 'dictionaries' });
+  assert.equal(r1.kind, 'dict');
+  assert.equal(r1.abbr, 'BDB',
+    'loadModuleBytes does not report the name the dictionary was registered under, so recordInstalled ' +
+    'writes the catalogue name and removeDict can be pointed at the wrong dictionary');
+  assert.equal(a.dicts.length, 1);
+  assert.equal(a.dicts[0].entries.H1.short.slice(0, 6), 'father', 'the module did not really parse');
+  // a second one under the same catalogue name is deduped, and the caller is told the real name
+  const r2 = await a.loadModuleBytes(raw, 'bdb.dct.mybible', { abbr: 'BDB', name: 'Another lexicon', category: 'dictionaries' });
+  assert.equal(r2.abbr, 'BDB2');
+  a.removeDict('BDB2');
+  assert.deepEqual(a.dicts.map(d => d.abbr), ['BDB'], 'removeDict took the wrong one');
+
+  // (2) the zip branch, which is a separate line in the same function
+  const b = loadModuleBytesChain();
+  const zipped = fflate.zipSync({ 'bdb.dct.mybible': raw });
+  const r3 = await b.loadModuleBytes(zipped, 'bdb.zip', { abbr: 'BDB', name: 'Brown-Driver-Briggs', category: 'dictionaries' });
+  assert.equal(r3.kind, 'dict');
+  assert.equal(r3.abbr, 'BDB', 'the zip branch does not report the registered name either');
+  assert.equal(b.dicts.length, 1);
+
+  // (3) and with NO metadata — a file import, or ?module= — it still gets a name, which is what makes it
+  // recordable and therefore removable at all.
+  const c = loadModuleBytesChain();
+  const r4 = await c.loadModuleBytes(raw, 'unknown.dct.mybible');
+  assert.equal(r4.abbr, 'Dict', 'an unnamed dictionary is still unnamed, so it can never be removed');
+});
+
+test('REMOVING ONE DEFERRED DICTIONARY DOES NOT THROW AWAY THE OTHER ONE\'S PARSE', async () => {
+  // Written after the audit corrected a claim in the previous commit message. The Library's Remove passes a
+  // url, but removeModule turns it into the record's NAME to find the copy in memory — so the button really
+  // does reach removeDict, and two records written by an older build under one name ("BDB" and "BDB") had
+  // one removal splice BOTH queued parses. The member kept a dictionary that then answered nothing until
+  // the next launch. The pending entries carry their url, and that is not ambiguous.
+  const B = { ...DICT, id: 'lex-2', name: 'Abbott-Smith', url: 'modules/lex-abbott.json' };
+  FIXTURE.set('lex-abbott.json', { kind: 'dict', bytes: new TextEncoder().encode(
+    JSON.stringify({ entries: { H1: { lemma: 'אָב', short: 'father' } } })) });
+  const e = engine();
+  await e.cachePut(DICT.url, rawOf(DICT));
+  await e.cachePut(B.url, rawOf(B));
+  e.recordInstalled(DICT);          // both written by an older build, both saying "BDB"
+  e.recordInstalled(B);
+  await e.restoreInstalled();       // a JSON lexicon is queued, not parsed, at boot
+  assert.equal(e.dicts.length, 0, 'the lexicons were parsed at boot — re-anchor this test');
+  assert.equal(e._pendingDicts.length, 2, 'both parses should be queued');
+
+  await screen(e).tapRemove(B.name);
+  e._ensureDicts();                 // the idle callback fires
+
+  assert.equal(e.lex('G26').short, 'love',
+    'the dictionary the member KEPT never parsed: removing the other one threw its queued parse away too');
+  assert.equal(e.lex('H1').missing, true, 'the removed dictionary parsed anyway');
+});
+
 // ── T9: what is NOT claimed ───────────────────────────────────────────────────────────────────────────────
 test('NO DEVOTIONAL CAN BE INSTALLED, so there is none to remove — stated, not papered over', async () => {
   // catOf() knows the category and the Library has a Devotionals section, but nothing can put a module in
@@ -807,7 +1133,7 @@ test('NO DEVOTIONAL CAN BE INSTALLED, so there is none to remove — stated, not
     'loadModuleBytes has a devotional branch now — the same applies');
   // And a record in a category with nothing in memory is still removable: the record and the bytes go.
   const e = await phone();
-  e.recordInstalled({ url: 'modules/a-devotional.zip', id: 'dv', abbr: 'DVT', name: 'A devotional', kind: 'devotional' }, 'DVT');
+  e.recordInstalled({ url: 'modules/a-devotional.zip', id: 'dv', abbr: 'DVT', name: 'A devotional', kind: 'devotional' });
   await e.cachePut('modules/a-devotional.zip', new Uint8Array(1000));
   assert.equal(await e.removeModule('modules/a-devotional.zip'), true);
   assert.equal(e.idb._keys().includes('modules/a-devotional.zip'), false, 'the bytes stayed');

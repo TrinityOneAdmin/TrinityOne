@@ -13,7 +13,8 @@ function SearchScreen({ ctx, onBack }) {
   const isStrong = /^[GH]\d+$/i.test(active);
   const lexEntry = isStrong ? Bible.lex(active) : null;
   // perf #7: memoize the full-corpus LIKE scan (~31k verses) — it re-ran on every keystroke of the box AND every
-  // background App re-render once a term was active. Now it runs only when the term or version changes.
+  // background App re-render once a term was active. Now it runs only when the term or the version changes,
+  // or when a module is installed or removed (modTick, below) — which is rare and has to invalidate it.
   // A MODULE UNINSTALLED WHILE RESULTS ARE ON SCREEN HAS TO TAKE ITS RESULTS WITH IT. Both memos below hold
   // a COPY of what the engine returned, and neither dependency list mentions the module store — so a
   // dictionary removed from the Library went on showing definitions read out of bytes that had just been
