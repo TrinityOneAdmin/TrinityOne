@@ -1402,7 +1402,14 @@ function tdyClock(ts) {
   if (!Number.isFinite(ts)) return '';
   try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; }
 }
+const MYKIDS_OPEN_KEY = 'trinityone.kids.open';
 function MyChildrenCard({ ctx }) {
+  // ⚠ BOTH HOOKS SIT ABOVE THE `return null` BELOW, and must stay there. This card returns null for every
+  // member who has nothing to do with check-in — which is most of the congregation, every Sunday — so a hook
+  // placed after that early return would run on some renders and not others and React would throw on the
+  // first child checked in. scripts/no-hook-after-an-early-return.test.mjs is the guard.
+  const [open, setOpen] = React.useState(() => { try { const v = localStorage.getItem(MYKIDS_OPEN_KEY); return v === null ? true : v === '1'; } catch (e) { return true; } });
+  const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(MYKIDS_OPEN_KEY, v ? '1' : '0'); } catch (e) {} };
   const mine = (ctx && ctx.myChildren) || {};
   const kids = Array.isArray(mine.children) ? mine.children : [];
   const askAtDesk = Number(mine.askAtDesk) || 0;
@@ -1412,11 +1419,29 @@ function MyChildrenCard({ ctx }) {
   if (!kids.length && !askAtDesk) return null;
   return (
     <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden', marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px' }}>
+      {/* COLLAPSIBLE, AND IT OPENS BY DEFAULT — owner request 2026-09-11. Same shape as CareSection above:
+          a header button, a chevron, and the choice remembered. The default is the load-bearing part: this
+          card exists so a parent can hold a pickup code up at a door, and a code behind one more tap is a
+          parent fumbling at the one moment it is needed. So `true` when nothing is stored, and only a member
+          who has deliberately closed it gets it closed.
+          THE COUNT IS IN THE HEADER FOR THE SAME REASON. Collapsed, this card would otherwise be a title
+          with nothing behind it, and a child checked in while it is shut would change nothing a parent could
+          see — the silent-blank shape this codebase keeps paying for. The number moves whether it is open or
+          not. */}
+      <button onClick={toggle} aria-expanded={open}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
         <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="child" size={18} /></div>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1 }}>Your children at church</div>
-      </div>
-      {kids.map(k => (
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1, color: 'var(--ink)' }}>
+            Your children at church{kids.length ? <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {kids.length}</span> : null}
+          </span>
+          {/* Shut, with a child the desk holds no copy of, this is the only thing that would tell a parent to
+              go and ask. It says so in the header rather than only inside the fold. */}
+          {!open && askAtDesk > 0 ? <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.35 }}>Ask the worker for {askAtDesk === 1 ? 'a pickup code' : askAtDesk + ' pickup codes'}</span> : null}
+        </span>
+        <Icon name={open ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
+      </button>
+      {open ? kids.map(k => (
         <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 15px', borderTop: '1px solid var(--line)' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.childName || 'Name not in this copy'}</div>
@@ -1434,13 +1459,13 @@ function MyChildrenCard({ ctx }) {
             <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No pickup code for this child</span>
           )}
         </div>
-      ))}
+      )) : null}
       {/* SERVED, AND THIS PHONE HOLDS NO COPY OF IT. The walk-up at the desk, the dead phone, the record
           written before the guardian copy shipped. It says so AT ONCE — subscribeMyChildrenCheckins counts
           this from the first event rather than at EOSE — because a parent standing at a door is the person
           least able to wait on a spinner that never resolves, and a blank screen is the worst of the three
           things this card can be. */}
-      {askAtDesk > 0 ? (
+      {open && askAtDesk > 0 ? (
         <div style={{ borderTop: '1px solid var(--line)', padding: '12px 15px', fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
           Checked in at the desk? Ask the worker for the pickup code.
         </div>

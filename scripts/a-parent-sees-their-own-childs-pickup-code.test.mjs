@@ -58,6 +58,14 @@ function shown(n, pred, out = []) {
 }
 const buttons = (tree) => shown(tree, n => n.type === 'button');
 const controls = (tree) => shown(tree, n => n.type === 'button' || n.type === 'input' || n.type === 'a' || n.type === 'select');
+// EVERY control except the one that only folds the card away. The card became collapsible on 2026-09-11
+// (owner request), which put a real button on a screen whose whole point is that it carries NO controls — so
+// this narrows the absence rather than abandoning it. A disclosure toggle is identified by `aria-expanded`,
+// which belongs to a control that opens and closes something; anything else on this card — a second button,
+// a link, an input — still fails the tests below, and the release-vocabulary check still runs over the
+// toggle's own text, so a "Collect" button could not sneak past by wearing an aria-expanded.
+const isDisclosure = (n) => n.type === 'button' && n.props && n.props['aria-expanded'] !== undefined;
+const controlsBesidesTheFold = (tree) => controls(tree).filter(n => !isDisclosure(n));
 
 // ── WHAT THE TRANSPORT HANDS THE SCREEN ───────────────────────────────────────────────────────────────────
 // The exact shape Fellowship.subscribeMyChildrenCheckins emits. Every field is asserted against the SHIPPED
@@ -67,8 +75,16 @@ const NONE = { children: [], askAtDesk: 0, settled: true };
 const IVY  = { id: 'ci-ivy', childName: 'Ivy Henderson', code: '4417', session: 'svc-am', in: 1788599400, ts: 1788599400 };
 const MILO = { id: 'ci-milo', childName: 'Milo Henderson', code: '9081', session: 'svc-am', in: 1788599410, ts: 1788599410 };
 
-function today(myChildren, over = {}) {
+function today(myChildren, over = {}, stored = null) {
   const { React, draw } = miniReact();
+  // A REAL, PER-CALL STORE. The card remembers whether the member folded it away, so a shared always-null
+  // stub could only ever test the default. `stored` seeds it; writes are kept so a toggle can be read back.
+  const LS = {
+    _v: { ...(stored || {}) },
+    getItem(k) { return Object.prototype.hasOwnProperty.call(this._v, k) ? this._v[k] : null; },
+    setItem(k, v) { this._v[k] = String(v); },
+    removeItem(k) { delete this._v[k]; },
+  };
   const win = {
     Fellowship: { myPubkey: 'me' },
     Capacitor: { isNativePlatform: () => false },
@@ -76,7 +92,7 @@ function today(myChildren, over = {}) {
     Bible: BIBLE,
     addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-    localStorage: MEM_LS,
+    localStorage: LS,
     innerWidth: 390,
   };
   const globals = {
@@ -84,7 +100,7 @@ function today(myChildren, over = {}) {
     window: win,
     document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
     navigator: { userAgent: '' },
-    localStorage: MEM_LS,
+    localStorage: LS,
     setTimeout, clearTimeout, setInterval, clearInterval, console,
     // PASSTHROUGHS, NOT STUBS, for anything the card under test renders INSIDE — miniReact cannot render the
     // children of a stubbed component, so a stub there would swallow the whole subtree and every assertion
@@ -116,7 +132,7 @@ function today(myChildren, over = {}) {
     toggleDark() {}, toast() {}, openShareSheet() {}, openEvent() {}, openHelp() {},
     ...over,
   };
-  return { card: draw(mod.MyChildrenCard, { ctx }), screen: draw(mod.TodayScreen, { ctx }), mod, ctx, React, draw };
+  return { card: draw(mod.MyChildrenCard, { ctx }), screen: draw(mod.TodayScreen, { ctx }), mod, ctx, React, draw, LS };
 }
 
 // The Today screen leans on TrinityData and Bible for the verse of the day, the reading plan and the streak.
@@ -167,10 +183,16 @@ test('THERE IS NO WAY TO CHECK A CHILD OUT FROM A PARENT\'S SCREEN', () => {
   // brought them; a control on the parent's own phone that released a child routes straight round it. This
   // is asserted as an ABSENCE because an absence is exactly what a later "helpful" addition undoes quietly.
   const { card } = today({ children: [IVY, MILO], askAtDesk: 1, settled: true });
-  assert.deepEqual(controls(card), [],
+  assert.deepEqual(controlsBesidesTheFold(card), [],
     'A CONTROL APPEARED ON THE PARENT\'S CARD. A parent must never be able to check their own child out, ' +
     'sign them out, collect them, confirm a pickup or release them — every one of those routes round the ' +
-    'code. Found ' + controls(card).length + ' interactive element(s).');
+    'code. The fold-away toggle is the ONLY control allowed here. Found ' +
+    controlsBesidesTheFold(card).length + ' other interactive element(s).');
+  // …and there is exactly ONE fold, not a row of them: a per-child disclosure would be a per-child control,
+  // which is how an absence like this gets eroded a step at a time.
+  assert.equal(controls(card).filter(isDisclosure).length, 1,
+    'the parent\'s card carries ' + controls(card).filter(isDisclosure).length + ' disclosure toggles. One, ' +
+    'for the whole card, is the shape that was agreed.');
   const t = reads(card).toLowerCase();
   for (const word of ['check out', 'sign out', 'collect', 'release', 'confirm']) {
     assert.ok(!t.includes(word),
@@ -194,7 +216,7 @@ test('a record this phone cannot open says "ask the worker", unconditionally and
       'must not wait to say it.');
     assert.match(t, /Checked in at the desk\?/i, 'the line no longer names the situation it is about');
     assert.match(reads(screen), /Ask the worker for the pickup code/i, 'the line is not reachable from the Today screen');
-    assert.deepEqual(controls(card), [], 'the ask-at-the-desk state offered a control');
+    assert.deepEqual(controlsBesidesTheFold(card), [], 'the ask-at-the-desk state offered a control besides the fold-away toggle');
   }
 });
 
@@ -268,4 +290,70 @@ test('a row with a missing name renders a word, not an empty line', () => {
   assert.match(reads(card), /Name not in this copy/i,
     'a row with no name rendered as blank space beside a pickup code, which reads as a fault rather than as ' +
     'a partial copy');
+});
+
+// ── THE CARD FOLDS AWAY — owner request, 2026-09-11 ───────────────────────────────────────────────────────
+//
+// The card sits at the top of the Today page and is several rows tall in a family with three children, above
+// everything else a member opened the app for. So it folds. What follows pins the three things that make a
+// fold safe on THIS card rather than on any card.
+const OPEN_KEY = 'trinityone.kids.open';
+
+test('it opens by DEFAULT — a pickup code at a door is never behind a tap', () => {
+  // The load-bearing half. This card exists so a parent can hold a code up to a volunteer; shipping it shut
+  // would mean every parent taps before they can do the one thing it is for.
+  const { card } = today({ children: [IVY, MILO], askAtDesk: 0, settled: true });
+  const t = reads(card);
+  assert.match(t, /4417/, 'the card shipped FOLDED SHUT by default, so a parent at a door has to tap before ' +
+    'they can show the pickup code. Nothing is stored on a first launch, and that state must read as open.');
+  assert.match(t, /9081/);
+});
+
+test('folded away, it shows no codes and no names — that is what folding means', () => {
+  const { card } = today({ children: [IVY, MILO], askAtDesk: 0, settled: true }, {}, { [OPEN_KEY]: '0' });
+  const t = reads(card);
+  assert.ok(!t.includes('4417') && !t.includes('9081'),
+    'a folded card still had a pickup code on screen: ' + t);
+  assert.ok(!t.includes('Ivy Henderson'), 'a folded card still listed a child by name: ' + t);
+  assert.match(t, /Your children at church/, 're-anchor: the whole card vanished rather than folding');
+});
+
+test('folded, the COUNT still moves — or a child arriving changes nothing a parent can see', () => {
+  // The silent-blank shape this codebase keeps paying for: shut, the card would otherwise be a title with
+  // nothing behind it, and a child checked in while it is shut would be invisible.
+  const one = reads(today({ children: [IVY], askAtDesk: 0, settled: true }, {}, { [OPEN_KEY]: '0' }).card);
+  const two = reads(today({ children: [IVY, MILO], askAtDesk: 0, settled: true }, {}, { [OPEN_KEY]: '0' }).card);
+  assert.match(one, /·\s*1/, 'a folded card does not say how many children are checked in: ' + one);
+  assert.match(two, /·\s*2/, 'the folded count did not change when a second child was checked in — a parent ' +
+    'would see nothing at all happen: ' + two);
+});
+
+test('folded, "ask the worker" still reaches the parent', () => {
+  // A record this phone holds no copy of is the one case where the parent must DO something. Hiding that
+  // behind the fold would leave them at a door with no code and no idea there is one to ask for.
+  const { card } = today({ children: [], askAtDesk: 1, settled: true }, {}, { [OPEN_KEY]: '0' });
+  assert.match(reads(card).toLowerCase(), /ask the worker/,
+    'a folded card said nothing about the child the desk holds no copy of: ' + reads(card));
+});
+
+test('the fold is remembered, and the toggle is a real one', () => {
+  const { card, LS } = today({ children: [IVY], askAtDesk: 0, settled: true });
+  const fold = controls(card).filter(isDisclosure)[0];
+  assert.ok(fold, 'there is no disclosure control on the card at all');
+  assert.equal(fold.props['aria-expanded'], true, 'the toggle does not report its state to a screen reader');
+  fold.props.onClick();
+  assert.equal(LS.getItem(OPEN_KEY), '0',
+    'folding the card away was not remembered, so it springs open again on the next render — ' +
+    'stored: ' + JSON.stringify(LS.getItem(OPEN_KEY)));
+});
+
+test('folding it away does NOT put a release control on the screen', () => {
+  // The absence in the test above, re-checked in the folded state — a fold is new render branches, and a
+  // branch nobody looks at is where a control appears.
+  const { card } = today({ children: [IVY, MILO], askAtDesk: 1, settled: true }, {}, { [OPEN_KEY]: '0' });
+  assert.deepEqual(controlsBesidesTheFold(card), [], 'the folded card carries a control besides the fold');
+  const t = reads(card).toLowerCase();
+  for (const word of ['check out', 'sign out', 'collect', 'release', 'confirm']) {
+    assert.ok(!t.includes(word), 'the folded card offers "' + word + '": ' + t);
+  }
 });
