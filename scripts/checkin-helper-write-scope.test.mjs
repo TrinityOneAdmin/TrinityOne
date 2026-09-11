@@ -210,8 +210,11 @@ test('BASELINE: the helper can still do her job — a new record, and an update 
   // exactly the shape a broken before() produces.
   const [okNew] = await publishAs(ada, forgery('ada-new', MORNING, { out: null }));
   assert.equal(okNew, true, 'a cleared, in-window helper could not check a child in — the feature is dead, and every refusal below is vacuous');
-  const [okOwn] = await publishAs(ada, forgery('am1', MORNING, {}));
-  assert.equal(okOwn, true, 'a helper could not update a record in her OWN session — the gate is refusing the case the capability exists for');
+  // Her OWN record she may update; the church's she may not, even in her session (F-B below). A clear second
+  // later, or the STORE refuses the same-second rewrite as `have-newer` (see the note on canWrite).
+  await sleep(1100);
+  const [okOwn] = await publishAs(ada, forgery('ada-new', MORNING, { out: 1 }));
+  assert.equal(okOwn, true, 'a helper could not update a record SHE wrote in her own session — the gate is refusing the case the capability exists for');
   const [okChurch] = await publishAs(church, record(church, 'pm1', AFTERNOON, KEY_PM, { code: '5555' }));
   assert.equal(okChurch, true, 'the church key was refused its own register');
   const [okSg] = await publishAs(sgLead, record(sgLead, 'pm1', AFTERNOON, KEY_PM, { code: '6666' }));
@@ -232,6 +235,23 @@ test('THE DEFECT: a helper cannot publish at another session\'s address by taggi
 test('…and she cannot reach it by tagging the session she does NOT hold either', async () => {
   const [ok] = await publishAs(ada, forgery('pm1', AFTERNOON, {}));
   assert.equal(ok, false, 'a helper wrote into a session she holds no clearance for by naming it honestly');
+});
+
+test('F-B: a helper cannot REPLACE the church\'s record for a child in her own session — she creates, she never overwrites', async () => {
+  // Red team 2026-09-11: a helper in her window republished the church's record — forged pickup code, forged
+  // "collected" — and the console and every co-helper's phone rendered her copy newest-wins with no author.
+  const [ok, msg] = await publishAs(ada, forgery('am1', MORNING, { code: '0000', out: 'collected by A. Stranger' }));
+  assert.equal(ok, false, 'A HELPER REPLACED THE CHURCH\'S RECORD FOR A CHILD IN HER SESSION — her pickup code now renders on the console: ' + msg);
+  const copies = await copiesOf(D.CHECKIN + 'am1');
+  assert.equal(copies.filter(e => e.pubkey === ada.pub).length, 0, 'the helper\'s copy is on the box beside the church\'s');
+  // a safeguarding steward's record is the church's voice too
+  const [okSgRec] = await publishAs(sgLead, record(sgLead, 'sg-owned', MORNING, KEY_AM, {}));
+  assert.equal(okSgRec, true, 'fixture: a safeguarding steward could not write a record');
+  const [okOver] = await publishAs(ada, forgery('sg-owned', MORNING, {}));
+  assert.equal(okOver, false, 'a helper replaced a record a safeguarding steward wrote');
+  // and the church may still overwrite HERS (a leader correcting a helper's entry)
+  const [okC] = await publishAs(church, record(church, 'ada-new', MORNING, KEY_AM, { code: '7777' }));
+  assert.equal(okC, true, 'the church could not correct a helper-written record');
 });
 
 test('a helper cannot TOMBSTONE a record — not even one in her own session — at either door', async () => {

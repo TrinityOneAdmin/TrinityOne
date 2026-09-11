@@ -1838,6 +1838,15 @@ const checkinSessionConflict = (d, cp, sid) => {
 // steward had removed came back as present on every restore. The ingest doors are the church key's own
 // archive and peers that ran this same door; a helper cannot reach them.
 const checkinTombstone = (e) => !!(e && ((e.tags || []).some(t => t[0] === 'deleted') || !e.content));
+// Does this church — its own key, or a steward it ticked for safeguarding — already hold a record at this
+// address? Websocket door only (see checkinTombstone's note on why a roster read must not run on ingest).
+const checkinChurchHolds = (d, cp) => {
+  if (!d || !cp) return false;
+  for (const x of store.query({ kinds: [30078], '#d': [d], limit: 200 })) {
+    if (x.pubkey === cp || stewardCan(x.pubkey, cp, 'safeguarding')) return true;
+  }
+  return false;
+};
 const checkinSessionOkOnIngest = (e, d) => {
   if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKIN_D)) return true;
   if (CHURCH_PUBS.has(e.pubkey)) return true;
@@ -3650,6 +3659,15 @@ function accept(e) {
       if (checkinTombstone(e)) return false;      // F-D: a helper writes records, never removes them
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
       if (!sid || !checkinHelperOf(e.pubkey, cp, sid)) return false;
+      // …AND NEVER REPLACES THE CHURCH'S RECORD. Red team 2026-09-11, F-B: a helper in her window could
+      // republish a record the church wrote for a child in her session — a forged pickup code, a forged
+      // "collected" — and the console and every co-helper's phone rendered her copy newest-wins with no
+      // author shown. The pickup code is what CheckoutModal releases a child on. Owner's decision the same
+      // day: a helper may CREATE records and update her own; an address the church (or a safeguarding
+      // steward) already holds a record at is closed to her. Nothing shipped writes a helper record today
+      // (the worker view is read-only); when slice 4 gives a helper checkout, it writes its own document.
+      // The relay holds no keys, so this is the boundary that CAN be enforced here.
+      if (checkinChurchHolds(d, cp)) return false;
       //      d. AND THE RECORD AT THAT ADDRESS MUST BE THEIR SESSION'S. Everything above this line asks about
       //      the tag on the incoming event, which the writer chose; nothing asked which session the record the
       //      d-tag ADDRESSES belongs to. RED TEAM 2026-09-10 F1: a helper in-window for S1 only, correctly
