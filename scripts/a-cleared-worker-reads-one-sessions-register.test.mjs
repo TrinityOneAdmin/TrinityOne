@@ -160,6 +160,10 @@ function phone(who) {
     _churchVoice: (cp, rec) => (rec && rec._by) === church.pub,
     readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf, readCheckinPermission, permissionAdmits,
     roomCode, roomCodesCollide,
+    // slice B: the reader now MIRRORS each session key it unwraps into the module-level _ckMemberKeys map, so
+    // the WRITER (writeCheckin) can reach it. This file tests the READER, not the writer, so these are no-ops —
+    // the reader's own `keys` closure is what every assertion below reads.
+    _ckMemKeySet: () => {}, _ckMemKeyDel: () => {}, _ckMemKeyClear: () => {},
     _unhex,
     // ⚠ THE BUNDLE'S SPELLINGS. See the header note on esbuild renaming.
     decrypt: nip44.decrypt, getConversationKey: nip44.getConversationKey,

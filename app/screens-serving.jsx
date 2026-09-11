@@ -656,6 +656,61 @@ function KidsRow({ rec, open, onToggle }) {
     </div>
   );
 }
+// A NEW PICKUP CODE — four random digits the worker writes on the child's sticker and gives the parent. It is
+// per-record and it is what releases the child, so it is RANDOM (unlike the room code, which names a session
+// and admits nobody). Slice B / C.
+function svNewCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
+// ── A WORKER CHECKS A CHILD IN — slice B, the write half of slice 3. ──────────────────────────────────────
+// §7: most children have no phone, so the child is NAMED here at the desk; there is no account and no picker
+// of the church's children (a worker's phone does not hold that list — the relay withholds it). She types the
+// name, the app pre-fills a pickup code she writes on the sticker, and ctx.checkinAdd seals + publishes it.
+//
+// IT FAILS LOUD (§8). ctx.checkinAdd returns { ok:false } when the relay refused the write or the network
+// dropped mid-session; this says so and keeps the child OFF the register rather than showing them checked in
+// when the room does not hold them. It never blocks a live worker — a refusal here is the relay's, not ours.
+function KidsAddChild({ ctx, session }) {
+  const [name, setName] = useSv('');
+  const [code, setCode] = useSv(svNewCode);
+  const [busy, setBusy] = useSv(false);
+  const [msg, setMsg] = useSv(null);          // { ok:bool, text } after a submit
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm || busy) return;
+    setBusy(true); setMsg(null);
+    let res;
+    try { res = (ctx && ctx.checkinAdd) ? await ctx.checkinAdd({ session, childName: nm, code: code.trim() }) : { ok: false, reason: 'unavailable' }; }
+    catch (e) { res = { ok: false, reason: 'threw' }; }
+    setBusy(false);
+    if (res && res.ok) {
+      // A MOMENT, then cleared for the next child, with a fresh code. The row itself appears from the relay.
+      setMsg({ ok: true, text: nm + ' checked in. Write ' + code.trim() + ' on the sticker.' });
+      setName(''); setCode(svNewCode());
+    } else {
+      // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
+      setMsg({ ok: false, text: 'That did not save — see the desk. Nothing was written.' });
+    }
+  };
+  return (
+    <div style={{ borderTop: '1px solid var(--line)', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Child’s name" aria-label="Child’s name"
+          style={{ flex: 1, minWidth: 0, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5 }} />
+        <input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} aria-label="Pickup code"
+          inputMode="numeric" style={{ width: 68, padding: '9px 8px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15, letterSpacing: '1.5px', textAlign: 'center' }} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button onClick={submit} disabled={!name.trim() || busy}
+          style={{ padding: '8px 14px', borderRadius: 11, border: 'none', cursor: (!name.trim() || busy) ? 'default' : 'pointer', opacity: (!name.trim() || busy) ? 0.5 : 1,
+            background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13.5 }}>
+          {busy ? 'Checking in…' : 'Check a child in'}
+        </button>
+        {msg ? (
+          <span style={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.3, color: msg.ok ? 'var(--sage)' : 'var(--danger, #b3261e)' }}>{msg.text}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 function KidsRegister({ ctx }) {
   const reg = (ctx && ctx.checkinRegister) || {};
   const sessions = Array.isArray(reg.sessions) ? reg.sessions : [];
@@ -749,6 +804,10 @@ function KidsRegister({ ctx }) {
                 <KidsRow key={r.id} rec={r} open={shown === r.id} onToggle={() => setShown(v => (v === r.id ? '' : r.id))} />
               ))
             : <div style={{ borderTop: '1px solid var(--line)', padding: '13px 14px', fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>Nobody has been checked in yet.</div>}
+          {/* CHECK A CHILD IN — slice B. Only when the clearance is LIVE: a lapsed key still shows the register
+              (DOMAIN.md, do not lock someone out mid-session) but the relay would refuse a new write, so the
+              form is not offered on a clearance that has ended or not started. It never gates a live worker. */}
+          {reg.cleared ? <KidsAddChild ctx={ctx} session={sn.session} /> : null}
         </div>
       ))}
 

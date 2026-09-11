@@ -6578,6 +6578,27 @@
   var CHECKINPERM_D = "trinityone/checkinperm:";
   var CHECKINHELPER_D = "trinityone/checkinhelper:";
   var CHECKIN_D = "trinityone/checkin:";
+  var _ckMemberKeys = /* @__PURE__ */ new Map();
+  var _ckMemKeySet = (cp, sid, k) => {
+    let m = _ckMemberKeys.get(cp);
+    if (!m) {
+      m = /* @__PURE__ */ new Map();
+      _ckMemberKeys.set(cp, m);
+    }
+    m.set(sid, k);
+  };
+  var _ckMemKeyDel = (cp, sid) => {
+    const m = _ckMemberKeys.get(cp);
+    if (m) m.delete(sid);
+  };
+  var _ckMemKeyClear = (cp) => {
+    const m = _ckMemberKeys.get(cp);
+    if (m) m.clear();
+  };
+  var _ckMemKeyGet = (cp, sid) => {
+    const m = _ckMemberKeys.get(cp);
+    return m && m.get(sid) || "";
+  };
   var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
   var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
   var MSGTAG_RESERVED = ["verse", "devotional", "note", "poll"];
@@ -11556,6 +11577,7 @@
               permTomb = true;
               grants.clear();
               keys.clear();
+              _ckMemKeyClear(pubk);
               recs.clear();
               rows.clear();
               _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D]);
@@ -11590,6 +11612,7 @@
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
               grants.delete(sid);
               keys.delete(sid);
+              _ckMemKeyDel(pubk, sid);
               emit();
               return;
             }
@@ -11603,8 +11626,13 @@
             } catch (err) {
               k = "";
             }
-            if (k) keys.set(sid, k);
-            else keys.delete(sid);
+            if (k) {
+              keys.set(sid, k);
+              _ckMemKeySet(pubk, sid, k);
+            } else {
+              keys.delete(sid);
+              _ckMemKeyDel(pubk, sid);
+            }
             emit();
             return;
           }
@@ -11641,6 +11669,75 @@
           emit();
         }
       });
+    },
+    // ── A WORKER CHECKS A CHILD IN, FROM HER OWN PHONE ───────────────────────────────────────────────────────
+    // slice B of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. The write half of slice 3: a cleared,
+    // in-window worker adds a named child to the register. §7 of the design: most children have no phone, so the
+    // child is NAMED here (typed at the desk) and has no account.
+    //
+    // KNOT 1 — ONLY THE ['ck'] COPY. She holds the SESSION key (unwrapped from her envelope slot, kept in
+    // _ckMemberKeys by the reader) and NOT the safeguarding ring key, so she seals ONLY the ck copy and leaves
+    // `content` empty. The safeguarding ring still reads her record: the ring stewards are KEEPERS of this
+    // session's envelope, so they hold the session key and open her ck copy through it (the console's
+    // encSubscribe falls back to it, gateway serves it). She writes no ring copy because she cannot make one.
+    //
+    // NO ['p'] GUARDIAN TAG. The console names guardians from the church's guardian map; a WORKER's phone does
+    // not hold that map (the relay withholds minors:/guardians: from ordinary members, on purpose), so a
+    // worker-written record carries no guardian link. That is honest — she names the child at the desk — and it
+    // is why the parent-readable copy is the DEFERRED parent surface's concern, not this writer's.
+    //
+    // IT FAILS LOUD, NEVER OPTIMISTICALLY (design §8). No session key held → her turn is not on, or no envelope
+    // has reached this phone: she is not a writer the relay would admit, so this returns { ok:false } at once
+    // rather than pretending. And _publishAny THROWS unless a relay actually accepted the write — a relay
+    // refusal (not a helper, out of window) and a mid-session outage both land here as { ok:false }, so the
+    // screen tells her it did not work and to see the desk, rather than showing a child as checked in when the
+    // room does not. This is NOT "blocking a check-in": a worker with a live key is never refused by us; a
+    // phone with no key has no cryptographic means to write a readable record in the first place.
+    //
+    // Returns { ok:true, id } or { ok:false, reason }.
+    async writeCheckin(churchNpub, rec) {
+      const cp = toPub(churchNpub);
+      if (!cp || !sk || !pub) return { ok: false, reason: "no-identity" };
+      const o = rec || {};
+      const sid = String(o.session || "").trim();
+      if (!sid) return { ok: false, reason: "no-session" };
+      const keyHex = _ckMemKeyGet(cp, sid);
+      if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: "no-key" };
+      const childName = String(o.childName || "").replace(/\s+/g, " ").trim().slice(0, 80);
+      if (!childName) return { ok: false, reason: "no-name" };
+      const id = "ci" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const body = {
+        id,
+        child: "",
+        childName,
+        date: String(o.date || "") || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        in: Math.floor(Date.now() / 1e3),
+        out: null,
+        code: String(o.code || "").trim(),
+        room: String(o.room || "").trim(),
+        note: String(o.note || "").trim(),
+        session: sid,
+        guardians: []
+      };
+      let ck, sentinel;
+      try {
+        ck = encrypt(JSON.stringify(body), _unhex(keyHex));
+        sentinel = encrypt(JSON.stringify({ enc: 2 }), _unhex(keyHex));
+      } catch (e) {
+        return { ok: false, reason: "seal-failed" };
+      }
+      const evt = finalizeEvent2({
+        kind: 30078,
+        created_at: Math.floor(Date.now() / 1e3),
+        tags: [["d", CHECKIN_D + id], ["t", NET], ["church", cp], ["session", sid], ["enc", "2"], ["ck", ck]],
+        content: sentinel
+      }, sk);
+      try {
+        await _publishAny(relaysForChurch(cp), evt);
+      } catch (e) {
+        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+      }
+      return { ok: true, id };
     },
     // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a
     // need present on the church's relay was written by an authorised pubkey. cb([{ id, displayLabel, type,

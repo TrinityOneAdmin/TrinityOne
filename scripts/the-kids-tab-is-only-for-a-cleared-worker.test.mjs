@@ -134,12 +134,33 @@ function serving(register) {
     // article list.
     openHelp: (id) => opened.push(id),
     toast() {},
+    // slice B: capture what the check-in form hands the transport, and let a test choose the verdict.
+    checkinAdd: async (rec) => { checkinCalls.push(rec); return checkinResult.v; },
   };
+  const checkinCalls = [];
+  const checkinResult = { v: { ok: true, id: 'ci-new' } };
   const render = () => draw(mod.ServingScreen, { open: true, onClose() {}, ctx });
   render();                                  // the first draw queues the tab-strip effects…
   let tree = render();                       // …the second sees what they settled on
   return {
     mod, ctx, opened,
+    checkinCalls,
+    setCheckinResult(v) { checkinResult.v = v; },
+    // Type into an input on the rendered tree, found by its aria-label, and redraw.
+    type(label, value) {
+      const inputs = shown(tree, n => n.type === 'input' && n.props && n.props['aria-label'] === label);
+      assert.equal(inputs.length, 1, 'expected one input labelled ' + JSON.stringify(label) + ', found ' + inputs.length);
+      inputs[0].props.onChange({ target: { value } });
+      return this.redraw();
+    },
+    // Click a button by label, then flush microtasks (the submit is async) and redraw.
+    async click(label) {
+      const b = shownButton(tree, label);
+      assert.equal(b.length, 1, 'expected one control reading ' + JSON.stringify(label) + ', found ' + b.length);
+      b[0].props.onClick();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      return this.redraw();
+    },
     tree: () => tree,
     redraw() { tree = render(); return tree; },
     press(label) {
@@ -201,6 +222,49 @@ test('POINT OF USE: the room code is shown OPENLY on the session card — it nam
   // code's alone. The two "Show code" buttons are the two children's pickup codes, not the room code.
   assert.equal(s.has('Show code'), 2, 'the room code grew a reveal control, or a pickup code lost one');
   assert.deepEqual(s.glued(), [], 'copy runs together on the card: ' + JSON.stringify(s.glued()));
+});
+
+test('POINT OF USE: a live worker can CHECK A CHILD IN, and it hands the record to the transport', async () => {
+  // Slice B, the write half. The button, the name, and the call are all on the SCREEN — a well-tested
+  // writer nobody is required to consult is not a feature (rule 1).
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession([]) });
+  s.press('Kids');
+  assert.equal(s.has('Check a child in'), 1,
+    'THERE IS NO WAY TO CHECK A CHILD IN. A live worker holding this session\'s key has the register and no ' +
+    'door — the whole write half deleted from the screen.');
+  s.type('Child’s name', 'Ada Okonkwo');
+  await s.click('Check a child in');
+  assert.equal(s.checkinCalls.length, 1, 'pressing the button wrote nothing to the transport');
+  assert.equal(s.checkinCalls[0].session, 'svc-am', 'the check-in was not tied to THIS session — a record with the wrong session opens for the wrong room');
+  assert.equal(s.checkinCalls[0].childName, 'Ada Okonkwo', 'the child\'s name did not reach the writer');
+  assert.match(String(s.checkinCalls[0].code || ''), /^\d{4}$/, 'no pickup code was carried — the door has nothing to match at collection');
+});
+
+test('…and a check-in that the relay REFUSES fails LOUD — the child is not shown as checked in', async () => {
+  // Design §8: fail LOUDLY at the moment of check-in rather than accept it optimistically. A parent who
+  // believes their child is registered when the room does not is worse than an honest refusal.
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession([]) });
+  s.press('Kids');
+  s.setCheckinResult({ ok: false, reason: 'publish-failed' });
+  s.type('Child’s name', 'Ada Okonkwo');
+  await s.click('Check a child in');
+  const out = s.reads();
+  assert.match(out, /did not save|see the desk/i,
+    'A CHECK-IN THAT DID NOT SAVE SAID NOTHING. The worker walks away believing the child is registered ' +
+    'when the room does not hold them. As rendered: ' + out);
+  // The name is NOT cleared on failure, so she can retry without retyping.
+  const nameInput = shown(s.tree(), n => n.type === 'input' && n.props && n.props['aria-label'] === 'Child’s name');
+  assert.equal(nameInput[0].props.value, 'Ada Okonkwo', 'the form cleared on a FAILED save, so she must retype to retry');
+});
+
+test('…and the check-in form is NOT offered on a clearance that has ended — the register still shows', () => {
+  // DOMAIN.md: say a key has expired, do not lock someone out mid-session. The register stays visible on a
+  // lapsed key, but a new write would be refused by the relay, so the door is not offered.
+  const s = serving({ ...NONE, cleared: false, lapsed: true, keysHeld: 1, until: AM_FROM + 10800, sessions: oneSession(twoKids) });
+  s.press('Kids');
+  assert.equal(s.pane().length, 1, 'the register vanished on a lapsed clearance');
+  assert.equal(s.has('Check a child in'), 0,
+    'a check-in form was offered on a clearance that has ended — every write would be refused LOUD, which is a worse experience than not offering it');
 });
 
 test('…and a pickup code is COVERED until it is asked for, one at a time', () => {

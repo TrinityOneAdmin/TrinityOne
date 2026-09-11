@@ -1185,6 +1185,15 @@ function App() {
     if (!np || !F || !F.subscribeCheckinRegister) { setCheckinRegister(CK_NONE); return; }
     return F.subscribeCheckinRegister(np, setCheckinRegister);
   }, [activeChurch, churches, connTick, lazyReady]);
+  // A WORKER CHECKS A CHILD IN — slice B. The raw session key never enters React; this hands the record to
+  // Fellowship.writeCheckin, which seals it under the key the reader unwrapped and publishes it. Returns the
+  // { ok, reason } the screen shows LOUDLY on failure (§8), or { ok:false } when the app is not ready.
+  const checkinAdd = async (rec) => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.writeCheckin) return { ok: false, reason: 'unavailable' };
+    return F.writeCheckin(np, rec);
+  };
   // safeguarding: is THIS member a child for the active church, and who's cleared to contact youth.
   // Used to show a child only child-safe groups and to gate DMs (the relay enforces both regardless).
   // minorsKnown starts FALSE, and that is the whole point: an empty minors list is not the same answer as
@@ -1903,6 +1912,7 @@ function App() {
     // other is the likeliest mistake in this whole feature. This one is trinityone/checkinperm: plus a session
     // key, and the relay requires BOTH.
     checkinRegister,
+    checkinAdd,   // slice B: a worker checks a child in — Fellowship.writeCheckin, returns { ok, reason }
     joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed } for the active church
     // How far this phone's clock is from the relay's, in whole minutes, when we have actually MEASURED it.
     // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date
