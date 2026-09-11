@@ -230,9 +230,13 @@ test('A BY-HAND RELEASE IS MARKED AS ONE ON THE CONSOLE — the fallback must le
   // fallback, it is a hole." Measured on the Oppo 2026-09-11: the worker's phone said "Collected · 11:54 am
   // · by hand" and this console said only "out 11:54 AM" for the same release, so the one screen a
   // safeguarding lead reads could not tell a code-matched collection from a by-hand one.
+  // `ts` is the event's created_at, which every record from encSubscribe carries and which the register now
+  // selects on (who is still in the room, inside one MAX_SESSION_SECONDS window) rather than the stamped
+  // `date`. A record without one models nothing this console can be handed.
+  const NOW = Math.floor(Date.now() / 1000);
   const s = await desk({ services: [SVC], recs: [
-    { id: 'ci-1', child: KID, childName: 'Ada Fenn', date: TODAY, in: 1000, out: 2000, manual: true, session: SVC.id },
-    { id: 'ci-2', child: KID2, childName: 'Bem Okafor', date: TODAY, in: 1000, out: 2000, manual: false, session: SVC.id },
+    { id: 'ci-1', child: KID, childName: 'Ada Fenn', date: TODAY, ts: NOW - 3600, in: 1000, out: 2000, manual: true, session: SVC.id },
+    { id: 'ci-2', child: KID2, childName: 'Bem Okafor', date: TODAY, ts: NOW - 3600, in: 1000, out: 2000, manual: false, session: SVC.id },
   ] });
   const t = reads(s.tree());
   assert.match(t, /Ada Fenn/, 'fixture: the collected child is not on the screen at all');

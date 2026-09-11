@@ -20992,6 +20992,22 @@ zoo`.split("\n");
         pubs: eligibleHelpers(policy.source, { rota: o.rota, childrenTeams: o.childrenTeams, rosters: o.rosters, teamId: o.teamId, people: o.people })
       };
     },
+    // ── HOW LONG A RECORD STAYS ON THE REGISTER, read from the one place that defines it ────────────────────
+    // The console's register (DashCheckin in app/stew-dashboard.jsx) shows WHO IS IN THE ROOM, not who was
+    // stamped with today's date — owner's decision 2026-09-11, asked as "should the register show 'checked in
+    // today' or 'still in the room'?": *"still in the room — that's what a worker at a door actually needs"*.
+    // A record with no release must still not sit there for ever, so the desk ages one out on exactly the
+    // measure the PARENT's screen already uses: MYKIDS_WINDOW in src/fellowship.src.js is MAX_SESSION_SECONDS,
+    // and so is this. The two sides of the same record now agree about when it stops being live, which they
+    // could not while one was a calendar day and the other a window.
+    //
+    // Exposed rather than restated on the screen, for the same reason as checkinPermissionLifetimes() below: a
+    // screen holding its own figure is free to disagree with the rest of the product about it. ONE CALLER:
+    // DashCheckin. It is a function, not a field, because every other shape-of-the-rules reader on this object
+    // is one and a mixed surface invites a screen to read the wrong kind.
+    checkinRegisterWindow() {
+      return MAX_SESSION_SECONDS;
+    },
     // THE SHAPES A STEWARD MAY PICK FOR A CLEARANCE, read from the one place that defines them rather than
     // restated on a screen — same reason as checkinLifetimes() below.
     checkinPermissionLifetimes() {

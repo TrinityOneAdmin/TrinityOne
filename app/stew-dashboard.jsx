@@ -6231,9 +6231,46 @@ function DashCheckin() {
   const [sessionPick, setSessionPick] = React.useState('');
   const session = (todaysServices.length === 1) ? todaysServices[0].id
     : (todaysServices.some(sv => sv.id === sessionPick) ? sessionPick : '');
-  const todays = recs.filter(r => r.date === today);
-  const present = todays.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
-  const out = todays.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
+  // ── WHO IS IN THE ROOM, NOT WHO WAS STAMPED WITH TODAY'S DATE ─────────────────────────────────────────
+  //
+  // Owner's decision 2026-09-11, asked as "should the register show *checked in today* or *still in the
+  // room*?": *"still in the room — that's what a worker at a door actually needs."*
+  //
+  // This was `recs.filter(r => r.date === today)`, and `r.date` is stamped ONCE when the child is checked
+  // in while `today` is recomputed on every render. So a child checked in at 23:58 fell off the desk's own
+  // register at 00:00 WHILE THEY WERE STILL IN THE ROOM — a watchnight service or an overnight lock-in is
+  // the ordinary case, not a contrived one — and with them went their pickup code and their Check out
+  // button, on the one screen a safeguarding lead reads.
+  //
+  // ⚠ IT MUST STILL NOT BE UNBOUNDED. Nothing ever arrives to say "that session was abandoned", so a record
+  // with no release would otherwise sit here for ever. It ages out on THE SAME MEASURE THE PARENT'S SCREEN
+  // ALREADY USES — `MYKIDS_WINDOW` in src/fellowship.src.js is MAX_SESSION_SECONDS, and
+  // Steward.checkinRegisterWindow() is the same constant — so the two sides of one record now agree about
+  // when it stops being live. That is a second thing this fixes: they did not agree before, because one was
+  // a calendar day and the other a 26-hour window.
+  //
+  // OFF THE RECORD'S OWN `ts` (the event's created_at), NEVER the sealed body's `in`, and SYMMETRIC —
+  // the three properties the parent reader is commented at length for, each of them measured: `in` is a
+  // field a helper writes and is unbounded in the future, and a console clock drift silently emptied the
+  // screen. Same expression here so neither can drift into the other's faults.
+  //
+  // NOTHING ABOUT WHAT IS WRITTEN CHANGES. `date` is still stamped on every record by checkIn below and by
+  // publishCheckin in the bundle; this screen has simply stopped selecting on it, and now only READS it, to
+  // say which day an arrival was (fmtDay). The relay is untouched.
+  //
+  // A COLLECTED CHILD STILL LEAVES THIS LIST exactly as before: the release is folded upstream in
+  // subscribeCheckins (a `rel`-tagged record is never a row of its own; it sets `out` and `manual` on the
+  // child's row, matched on session|checkinId), so `!r.out` is unchanged and the fold is untouched.
+  const at = Math.floor(Date.now() / 1000);
+  // ONE SOURCE FOR THE WINDOW: the bundle's, read rather than restated — the mistake StewBackupModal below
+  // is commented for ("READ the floor, do not restate it"). The literal is the fallback for a console whose
+  // bundle is older than this screen, because an empty children's register is the worse failure of the two;
+  // scripts/the-register-shows-who-is-in-the-room.test.mjs renders BOTH paths against MAX_SESSION_SECONDS
+  // itself, so the fallback cannot quietly drift away from it.
+  const ckWindow = (window.Steward && typeof window.Steward.checkinRegisterWindow === 'function' && window.Steward.checkinRegisterWindow()) || (26 * 3600);
+  const live = recs.filter(r => Math.abs(at - (r.ts || 0)) <= ckWindow);
+  const present = live.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
+  const out = live.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
   const inIds = new Set(present.map(r => r.child));
   const available = minors.filter(c => !inIds.has(c));
   const [picking, setPicking] = React.useState(false);
@@ -6251,6 +6288,15 @@ function DashCheckin() {
     return S.subscribeCapKey('checkin', (ring) => setSgKey(!!(ring && ring.length)));
   }, [_ckIdv, _ckConn]);
   const fmtT = (ts) => { try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } };
+  // WHICH DAY, BUT ONLY WHEN IT IS NOT TODAY'S. Now that the register can outlive a midnight, a row reading
+  // "In 11:58 PM" beside one reading "In 9:15 AM" would put an overnight arrival and this morning's on the
+  // same page with nothing to tell them apart, and the older one would read as the LATER of the two. So a
+  // row whose stamped day is not the viewer's day says which day it was, in three words, and every ordinary
+  // Sunday row is untouched — the copy cull's rule, said once where it is useful (reference/DOMAIN.md).
+  // It reads `r.date`, which is exactly the field this screen stopped SELECTING on: it is still written, and
+  // it is still the writer's own local day, which is the day the child actually walked in.
+  const fmtDay = (iso) => { try { return new Date(iso + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }); } catch { return String(iso || ''); } };
+  const notToday = (r) => (r && typeof r.date === 'string' && r.date && r.date !== today ? fmtDay(r.date) : '');
   // AWAITED, AND ANSWERED. This was fire-and-forget: publishCheckin's promise was dropped on the floor, so a
   // refused write left the child on screen as "in" and nothing on the relay. On the day the register got its
   // own key that stopped being theoretical — a console without the safeguarding key returns null from
@@ -6335,13 +6381,13 @@ function DashCheckin() {
       ) : (
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={{ fontSize: 11.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 8 }}>Checked in · {present.length}</div>
-          {present.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 18 }}>Nobody checked in yet today.</div> : (
+          {present.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 18 }}>Nobody is checked in.</div> : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
               {present.map(r => { const gs = guardiansOf(r.child); return (
                 <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.childName || nameFor(r.child)}</div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>In {fmtT(r.in)}{gs.length ? ' · pickup: ' + gs.join(', ') : ' · no adult guardian linked'}</div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{'In ' + fmtT(r.in) + (notToday(r) ? ' · ' + notToday(r) : '') + (gs.length ? ' · pickup: ' + gs.join(', ') : ' · no adult guardian linked')}</div>
                   </div>
                   {/* LABELLED WHERE IT CAN BE READ. The only label was a `title` tooltip — invisible on a
                       touch screen and to a screen reader. Round 7: a safeguarding lead looking at this row saw
@@ -6369,7 +6415,7 @@ function DashCheckin() {
                         says "by hand"; on the Oppo, 2026-09-11, this console said only "out 11:54 AM" for the same
                         release, so the one screen a safeguarding lead reads could not tell the two apart. Not an
                         accusation — §10: the gates keep strangers out, they do not police the church's own team. */}
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>In {fmtT(r.in)} · out {fmtT(r.out)}{r.manual ? ' · by hand' : ''}</div></div>
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{'In ' + fmtT(r.in) + (notToday(r) ? ' · ' + notToday(r) : '') + ' · out ' + fmtT(r.out) + (r.manual ? ' · by hand' : '')}</div></div>
                     <Icon name="check" size={16} stroke={2.4} color="var(--sage)" />
                   </div>
                 ))}

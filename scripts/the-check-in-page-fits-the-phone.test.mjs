@@ -160,6 +160,7 @@ const NAMES = { [CHILD_A]: 'Amelia Fenn', [CHILD_B]: 'Noah Kettleborough-Reid',
   [MUM]: 'Ruth Fenn', [DAD]: 'Sam Fenn', [HELPER]: 'Margaret Ashby', [STEWARD]: 'Tom Vane' };
 const iso = (d) => new Date(Date.parse(TODAY + 'T10:00:00Z') + d * 86400000).toISOString().slice(0, 10);
 const secs = (d) => Math.floor(Date.parse(iso(d) + 'T10:00:00Z') / 1000);
+const REALNOW = Math.floor(Date.now() / 1000);   // only for `ts` — see the note on useStewardCheckins below
 
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
@@ -182,9 +183,15 @@ function checkinPage({ width = 360, longNote = false } = {}) {
     { React, window: helpWin, Icon, useStewDialog, document: doc, history: { pushState() {} } });
   const win = {
     innerWidth: width, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true, localStorage,
+    // ⚠ `ts` IS THE ONE CLOCK-RELATIVE FIELD ON THIS PAGE, and it has to be. The register selects on who is
+    // still in the room — a record inside one MAX_SESSION_SECONDS window of NOW, off the event's own
+    // created_at — rather than on the stamped `date`, so a fixture with no `ts` is filtered out and this
+    // test would measure an EMPTY register while still passing. The dates stay fixed (`date`, `in`, `out`,
+    // the services, todayISO) so nothing about the LAYOUT depends on the clock; only membership of the list
+    // does. See scripts/the-register-shows-who-is-in-the-room.test.mjs.
     useStewardCheckins: () => [
-      { id: 'r1', child: CHILD_A, childName: NAMES[CHILD_A], date: TODAY, in: secs(0), code: '4182' },
-      { id: 'r2', child: CHILD_B, childName: NAMES[CHILD_B], date: TODAY, in: secs(0) - 3600, out: secs(0) - 600, code: '9079' },
+      { id: 'r1', child: CHILD_A, childName: NAMES[CHILD_A], date: TODAY, ts: REALNOW - 600, in: secs(0), code: '4182' },
+      { id: 'r2', child: CHILD_B, childName: NAMES[CHILD_B], date: TODAY, ts: REALNOW - 3600, in: secs(0) - 3600, out: secs(0) - 600, code: '9079' },
     ],
     useStewardSafeguard: () => ({ minors: [CHILD_A, CHILD_B], minorsKnown: true }),
     useStewardGuardians: () => ({ [CHILD_A]: [MUM, DAD], [CHILD_B]: [MUM] }),

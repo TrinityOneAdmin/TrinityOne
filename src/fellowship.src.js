@@ -123,13 +123,20 @@ const CHECKINARRIVAL_D = 'trinityone/checkinarrival:';
 // CHILD WAS STILL IN THE ROOM and the worker's key was still live — and the release, when it came, then had
 // no row to fold onto. The parent's view must not expire before the session that produced it can.
 const MYKIDS_WINDOW = MAX_SESSION_SECONDS;
-// TODAY, IN THE ROOM THE CHILD IS STANDING IN — never the UTC day. The console's register filters
-// `recs.filter(r => r.date === today)` against ITS local day (app/stew-dashboard.jsx), and src/steward.src.js
-// has stamped records with a local `_todayISO()` since it was written. This phone was the odd one out: it
-// stamped `new Date().toISOString().slice(0, 10)`, so a worker checking a child in on a Sunday MORNING in
-// Auckland wrote the previous day's date and the child never appeared on the desk's own register — the
-// 2026-07-24 kids-roll bug, back in the one writer that post-dates the guard. Caught by
-// scripts/calendar-day.test.mjs, which scans this file for exactly that idiom.
+// TODAY, IN THE ROOM THE CHILD IS STANDING IN — never the UTC day. src/steward.src.js has stamped records
+// with a local `_todayISO()` since it was written. This phone was the odd one out: it stamped
+// `new Date().toISOString().slice(0, 10)`, so a worker checking a child in on a Sunday MORNING in Auckland
+// wrote the previous day's date — the 2026-07-24 kids-roll bug, back in the one writer that post-dates the
+// guard. Caught by scripts/calendar-day.test.mjs, which scans this file for exactly that idiom.
+//
+// ⚠ CORRECTED 2026-09-11: this said the stamped date was what the CONSOLE'S REGISTER FILTERS ON
+// (`recs.filter(r => r.date === today)` in app/stew-dashboard.jsx), and therefore that an Auckland morning
+// stamped as Saturday put the child on no register at all. IT NO LONGER SELECTS ON IT. The desk shows who is
+// still in the room — not checked out, and inside one MAX_SESSION_SECONDS window of the record's own `ts`,
+// which is the SAME measure MYKIDS_WINDOW applies above — so the two sides of a record now agree, and a
+// mis-stamped day costs a wrong DAY LABEL on the row rather than the whole row. Still worth getting right:
+// the console prints this field beside the arrival time whenever it is not the viewer's own day, so a wrong
+// one tells a worker at a door that a child arrived yesterday when they walked in this morning.
 // ONE CALLER: writeCheckin. Mirrors steward.src.js:_todayISO deliberately — the two bundles must agree on
 // what day it is or a record written on a phone and a record written at the desk sort differently.
 const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
