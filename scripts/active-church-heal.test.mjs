@@ -107,8 +107,13 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // the safeguarding subscription immediately below it, and it BENEFITS FROM THE HEAL for the same reason and
   // then some: with a stale id it resolves to no npub, the effect falls back to the all-false default, and a
   // cleared worker's Kids tab simply is not there — silent, and exactly the blank this heal exists for.
-  assert.equal(sites.length, 37,
-    `the active-church resolution sites changed (${sites.length} vs 37) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 37 → 39 on 2026-09-11: ctx.checkinAdd (slice B, a worker checks a child in) and ctx.checkinRelease
+  // (slice C, a worker checks a child out) each resolve the active church to its npub to call
+  // Fellowship.writeCheckin / releaseCheckin. Ordinary active-church reads, identical in shape, and they
+  // benefit from the heal: with a stale id np is undefined and the action returns { ok:false } — a LOUD
+  // no-op the screen reports as "see the desk", never a silent write to the wrong church.
+  assert.equal(sites.length, 39,
+    `the active-church resolution sites changed (${sites.length} vs 39) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {
