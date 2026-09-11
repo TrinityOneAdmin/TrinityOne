@@ -20463,7 +20463,8 @@ zoo`.split("\n");
         held.delete(id);
         const prev = byId.get(id);
         if (prev && (prev.ts || 0) > (ts || 0)) return true;
-        byId.set(id, { id, ...obj, ts });
+        const _tag = (k) => ((tags || []).find((t) => t[0] === k) || [])[1] || "";
+        byId.set(id, { id, ...obj, ts, _sid: _tag("session"), _rel: _tag("rel") });
         return true;
       };
       const retry = () => {
@@ -21635,8 +21636,38 @@ zoo`.split("\n");
       }
       return { scanned: stale.size, moved, failed, complete: sawEose && !failed };
     },
+    // A RELEASE IS FOLDED ONTO THE CHILD IT COLLECTS, never rendered as a row of its own.
+    //
+    // Slice C writes a worker's checkout as a SEPARATE `checkin:<newId>` document carrying a cleartext
+    // ['rel', <checkinId>] tag, because F-B refuses a helper writing over the church's own record. The member
+    // app folded it from the start; this console did not — measured on the Oppo 2026-09-11, and the consequence
+    // is the one thing this feature must never do: the worker's phone read "0 checked in · 1 collected" while
+    // the safeguarding lead's console still listed that child as CHECKED IN, with a Check out button, after she
+    // had gone home. The two screens disagreed about whether a child was still in the building.
+    //
+    // The rule is the member reader's, structurally identical so the two cannot drift: match on
+    // session|checkinId, both CLEARTEXT and both relay-enforced, so a release scoped to one session can never
+    // collect a child in another (the F1 shape, one level up). Newest release wins. The collected child KEEPS
+    // their row — a register that erased them would stop being a record of who was in the room.
     subscribeCheckins(cb) {
-      return window.Steward.encSubscribe("trinityone/checkin:", cb, "checkin");
+      return window.Steward.encSubscribe("trinityone/checkin:", (rows) => {
+        const releases = /* @__PURE__ */ new Map();
+        const kids = [];
+        for (const r of rows || []) {
+          if (r && r._rel) {
+            const key = String(r._sid || "") + "|" + String(r._rel);
+            const prev = releases.get(key);
+            if (!prev || (r.ts || 0) >= (prev.ts || 0)) releases.set(key, r);
+            continue;
+          }
+          kids.push(r);
+        }
+        cb(kids.map((r) => {
+          const rel = releases.get(String(r._sid || "") + "|" + String(r.id));
+          if (!rel) return r;
+          return { ...r, out: rel.out != null ? rel.out : r.out, manual: rel.manual === true, releasedBy: rel._by || rel.by || "" };
+        }));
+      }, "checkin");
     },
     // ---- rooms & bookings: a shared room calendar (steward-booked) ----
     // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }

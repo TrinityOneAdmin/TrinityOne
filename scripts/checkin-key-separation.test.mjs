@@ -291,8 +291,17 @@ test('publishCheckin and subscribeCheckins actually NAME the checkin capability'
   assert.match(src, /publishCheckin\(rec\)[\s\S]*?encPublish\([\s\S]*?['"]checkin['"]\s*\)/,
     'publishCheckin does not pass the checkin capability, so it falls to the default and seals the ' +
     'children\'s register with the books\' key');
-  assert.match(src, /subscribeCheckins\(cb\)\s*\{\s*return[^\n]*encSubscribe\([^\n]*['"]checkin['"]\)/,
+  // RE-ANCHORED 2026-09-11, the same trap the test below this one already carries a note about: this matched
+  // `[^\n]*` — the rest of ONE LINE — which was right while subscribeCheckins was a one-liner and went wrong
+  // the moment it grew a body (folding a worker's release onto the child it collects). Slice the whole
+  // FUNCTION instead, so the assertion survives the reader growing without passing or failing by accident.
+  const subFn = src.match(/subscribeCheckins\(cb\)\s*\{[\s\S]*?\n  \},/);
+  assert.ok(subFn, 're-anchor: subscribeCheckins is no longer a method on the Steward object');
+  const capArgs = [...subFn[0].matchAll(/encSubscribe\(([\s\S]*?)\)/g)];
+  assert.equal(capArgs.length, 1, 'subscribeCheckins now calls encSubscribe ' + capArgs.length + ' times — re-anchor this test');
+  assert.match(subFn[0], /['"]checkin['"]\s*\)\s*;?\s*$|['"]checkin['"]\s*\)/,
     'subscribeCheckins reads with the books\' ring');
+  assert.doesNotMatch(subFn[0], /encSubscribe\([^)]*['"]finance['"]/, 'the register is read with the FINANCE ring');
 });
 
 test('the relay refuses a check-in write from anyone but the church or a SAFEGUARDING steward', () => {
