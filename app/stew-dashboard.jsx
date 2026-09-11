@@ -5622,6 +5622,12 @@ function CheckoutModal({ rec, onConfirm, onClose }) {
 function CheckinClearances() {
   const perms = window.useStewardCheckinPermissions ? window.useStewardCheckinPermissions() : [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  // THE CHURCH'S OWN CHILDREN ARE NOT OFFERED AS CHILDREN'S WORKERS. Device finding D4, 2026-09-11: a person
+  // marked as a child a minute earlier was listed under "Clear someone for children's check-in". The relay now
+  // refuses the clearance too (checkinPermitted / accept in scripts/gateway.mjs) — this is the half a steward
+  // sees, so the list does not offer what the church has just said is a child.
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [] };
+  const minorsSet = new Set(sg.minors || []);
   const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
@@ -5740,7 +5746,7 @@ function CheckinClearances() {
           <p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}><b>Nobody is cleared yet.</b> You and your safeguarding stewards can already run the register — clearing somebody is how a children’s worker who is <i>not</i> a steward gets in.</p>
         </div>
       ) : list}
-      {clearing ? <ClearPersonModal members={members} rosters={rosters} groups={groups} nameFor={nameFor}
+      {clearing ? <ClearPersonModal members={members} rosters={rosters} groups={groups} nameFor={nameFor} minors={minorsSet}
         already={rows.filter(r => r.live).map(r => r.person)} onClose={() => setClearing(false)} /> : null}
     </Panel>
   );
@@ -6019,7 +6025,7 @@ window.CheckinSessionKeys = CheckinSessionKeys;
 // claim that naming somebody by hand IS a declared source and says so in the enforced record. The screen
 // knows which it was; pass it." So this passes 'team' when the list came from a team and 'steward' when a
 // steward picked from the whole membership — and never 'rota', because this screen never asks a rota.
-function ClearPersonModal({ members, rosters, groups, nameFor, already, onClose }) {
+function ClearPersonModal({ members, rosters, groups, nameFor, already, minors, onClose }) {
   const S = window.Steward;
   // THE SHAPES, FROM THE ONE PLACE THAT DEFINES THEM. A hand-written list here would be free to offer a
   // fourth nothing enforces, or to disagree with the relay about what 'day' means — the reason
@@ -6042,8 +6048,11 @@ function ClearPersonModal({ members, rosters, groups, nameFor, already, onClose 
   const suggested = (teamId && S && S.checkinPermissionSuggestions)
     ? (S.checkinPermissionSuggestions({ source: 'team', rosters, teamId }).pubs || []) : null;
   const already0 = new Set(already || []);
+  // …AND NEVER A MARKED CHILD, from either source: a team roster can carry a young helper the church has since
+  // marked (the ordinary route into safeguarding here — reference/DOMAIN.md), and "everyone" plainly can.
+  const minors0 = (minors && typeof minors.has === 'function') ? minors : new Set();
   const candidates = (suggested !== null ? suggested.map(pub => ({ pubkey: pub })) : members)
-    .filter(m => m && m.pubkey && !already0.has(m.pubkey));
+    .filter(m => m && m.pubkey && !already0.has(m.pubkey) && !minors0.has(m.pubkey));
   // WOULD THIS BE ACCEPTED, AND IF NOT WHY — asked before anything is published, off the same two functions
   // the grant itself uses. reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the audit's fifth item: a
   // 400-day-plus `dated` clearance returns a bare null and the reason is discarded, "against

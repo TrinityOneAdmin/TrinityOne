@@ -83,10 +83,11 @@ const vid = K();            // per-author slots — a de-capped steward's LATER 
 const vim = K();            // both doors — the subject
 const vale = K();           // both doors — the control imported alongside it
 const vow = K();            // the tie — one stamp, two authors
+const kid = K();            // D4, 2026-09-11 — a person the church later MARKS AS A CHILD
 
 const SESSION = 'svc-now';
 const KEY = '11'.repeat(32);
-const ALL = [vic, val, vex, vera, vin, vane, vola, vid, vim, vale, vow];
+const ALL = [vic, val, vex, vera, vin, vane, vola, vid, vim, vale, vow, kid];
 
 let relay, dataDir, w;
 const conn = () => new Promise((r, j) => { const s = new WebSocket(WS_URL); s.on('open', () => r(s)); s.on('error', j); });
@@ -252,6 +253,39 @@ test('THE FIXTURE GRANTS: an envelope alone clears nobody, and a clearance clear
   assert.deepEqual(await clearance(vic), CLEARED,
     'fixture: the church cleared Vic and the relay did not enforce it — the three observables this file ' +
     'measures (session key, register, write) are not reachable, so every assertion below is vacuous');
+});
+
+// ── D4. A CHILD IS NEVER A CLEARED WORKER ──────────────────────────────────────────────────────────────
+
+test('D4 — MARKING SOMEBODY AS A CHILD ENDS THEIR CLEARANCE AT ONCE, and a new one is refused at the door', async () => {
+  // Device finding D4, 2026-09-11: the console offered a marked child in "Clear someone for children's
+  // check-in". Whatever the console does, the relay must not hand a child the register: not a clearance
+  // already on disk, not a new one, and not after a restart replays the disk through note().
+  const [okG, gMsg] = await publishAs(church, permission(church, church, kid, { at: now() - 60 }));
+  assert.equal(okG, true, 'fixture: the church\'s clearance of an unmarked person was refused: ' + gMsg);
+  await sleep(300);
+  assert.deepEqual(await clearance(kid), CLEARED, 'fixture: an unmarked person the church cleared is not cleared');
+
+  const [okM, mMsg] = await publishAs(church, doc(church, D.MINORS + church.pub, { pubkeys: [kid.pub] }));
+  assert.equal(okM, true, 'fixture: the church\'s minors list was refused: ' + mMsg);
+  await sleep(300);
+  assert.deepEqual(await clearance(kid), REFUSED,
+    'A CHILD HOLDS A CLEARED WORKER\'S ACCESS. The church marked this person as a child and the relay still ' +
+    'serves the session key, serves the register, and accepts their writes — [key, register, write] = ' +
+    JSON.stringify(await clearance(kid)));
+
+  const [okN, nMsg] = await publishAs(church, permission(church, church, kid, { at: now() - 30 }));
+  assert.equal(okN, false, 'a NEW clearance naming a marked child was accepted at the door: ' + nMsg);
+  const [okW] = await publishAs(church, unpermission(church, church, kid));
+  assert.equal(okW, true, 'a withdrawal naming a marked child was refused — a withdrawal must never be');
+
+  await reboot();
+  assert.deepEqual(await clearance(kid), REFUSED, 'the child was cleared again after a restart replayed the disk');
+
+  // the control, in the same breath: the marking touched nobody else
+  await send(w, doc(church, D.MINORS + church.pub, { pubkeys: [] }));
+  await sleep(300);
+  assert.deepEqual(await clearance(vic), CLEARED, 'the minors list changing took an ADULT\'s clearance with it');
 });
 
 // ── F3. A WITHDRAWAL IS NEVER RE-LITIGATED ────────────────────────────────────────────────────────────────

@@ -1675,6 +1675,12 @@ const checkinHelperOf = (pub, cp, sessionId) => {
 // sequence in which the versions arrived, or the order hydrateMaps() replays them in, can change it.
 const checkinPermitted = (pub, cp) => {
   if (!pub || !cp) return false;
+  // A CHILD IS NEVER A CLEARED WORKER. The console offered a marked child in "Clear someone" on 2026-09-11
+  // (device finding D4), and nothing on this box would have refused the clearance, the envelope slot, or the
+  // register that followed. `minors:` is the church's own cleartext list and it is already here for the
+  // child-safety gates, so this is one lookup on the same conjunction every door consults — and it holds for
+  // a clearance already on disk, which the door refusal below cannot reach.
+  if ((MINORS_BY.get(cp) || EMPTY_SET).has(pub)) return false;
   const byP = CHECKIN_PERMITS.get(cp);
   const vers = byP && byP.get(pub);
   if (!vers || !vers.size) return false;
@@ -3389,7 +3395,8 @@ function accept(e) {
     //
     // Nothing trusts a ['church'] tag on its own — see checkinPermGrantor.
     if (d.startsWith(CHECKINPERM_D)) {
-      if (!checkinPermGrantor(e)) return false;
+      const permCp = checkinPermGrantor(e);
+      if (!permCp) return false;
       // ONE SPELLING OF THE D-TAG, AND ONLY ONE. `toHexPub` would have done here — it is what the sibling
       // key-envelope rules use — but it also ACCEPTS AN NPUB and converts it, and this d-tag is what every
       // lookup of a clearance keys on. Two spellings of the same suffix would be two addressable documents
@@ -3409,6 +3416,10 @@ function accept(e) {
       const who = checkinPermWho(d);
       if (!who) return false;
       if ((e.tags || []).some(t => t[0] === 'deleted') || !e.content) return true;   // the church withdraws a clearance
+      // A CLEARANCE NAMING A MARKED CHILD IS REFUSED AT THE DOOR (a withdrawal never is). The same rule
+      // checkinPermitted() applies at use; refusing here as well keeps the document off the disk and off every
+      // console's "cleared" list, where it would read as a fact the church had established.
+      if ((MINORS_BY.get(permCp) || EMPTY_SET).has(who)) return false;
       // AND NOT DATED INTO THE FUTURE — RED TEAM F5, 2026-09-10. created_at is this document's ORDERING KEY
       // across its two authors, and the store accepts +900s of it, so a fast device's clearance outranked
       // every honest withdrawal either author could sign for up to fifteen minutes. Refused here, visibly,

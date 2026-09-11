@@ -53,7 +53,7 @@ const said = (tree) => texts(tree).join(' ').replace(/\s+/g, ' ');
 // modal IS the granting act, so stubbing it would leave this file asserting about a button that opens
 // nothing.
 async function screen({ perms = [], loaded = true, members = Object.keys(NAMES).map(p => ({ pubkey: p, name: NAMES[p] })),
-                        rosters = [], groups = [], grantOk = true, revokeOk = true } = {}) {
+                        rosters = [], groups = [], grantOk = true, revokeOk = true, minors = [] } = {}) {
   const src = fnBody(SRC, 'function CheckinClearances() {', 'CheckinClearances')
             + '\n' + fnBody(SRC, 'function ClearPersonModal({', 'ClearPersonModal');
   const tmp = join(tmpdir(), 'ckclear-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
@@ -76,6 +76,7 @@ async function screen({ perms = [], loaded = true, members = Object.keys(NAMES).
     window: {
       useStewardCheckinPermissions: () => perms,
       useStewardMembers: () => members,
+      useStewardSafeguard: () => ({ minors, approved: [], nophoto: [] }),
       useStewardRosters: () => rosters,
       useStewardGroups: () => groups,
       useStewardIdv: () => 1,
@@ -381,6 +382,25 @@ test('somebody already cleared is not offered again', async () => {
   // Dan's name is on the clearance list behind the modal; what must not happen is a second grant row for him.
   assert.equal(btn(s.tree(), 'Dan Peart').filter(b => texts(b).join(' ').indexOf('Withdraw') < 0).length, 0,
     'a person the church has already cleared was offered for clearing again');
+});
+
+test('A MARKED CHILD IS NOT OFFERED FOR CLEARING — from "everyone" or from a team roster', async () => {
+  // Device finding D4, 2026-09-11: Maureen, marked as a child a minute earlier, was listed under "Clear
+  // someone for children's check-in" with the source on "Everyone in the church".
+  const s = await screen({ minors: [ADA] });
+  s.open();
+  assert.match(said(s.tree()), /Dan Peart/, 'fixture: an adult should be offerable');
+  assert.equal(btn(s.tree(), 'Ada Fenn').length, 0,
+    'A CHILD IS OFFERED AS A CHILDREN\'S WORKER. Ada is on the church\'s minors list and the modal still lists ' +
+    'her under WHO. As rendered: ' + said(s.tree()));
+  // and the same through a team roster that still carries her
+  const t = await screen({ minors: [ADA],
+    groups: [{ id: 'team-kids', kind: 'team', name: 'Sunday Club' }],
+    rosters: [{ id: 'team-kids', team: 'team-kids', people: [{ pub: ADA, name: 'Ada' }, { pub: BEN, name: 'Ben' }] }] });
+  t.open();
+  t.set('ck-clear-team', 'team-kids');
+  assert.match(said(t.tree()), /Ben Roe/, 'fixture: the team roster did not fill the list at all');
+  assert.equal(btn(t.tree(), 'Ada Fenn').length, 0, 'a team roster that still names a marked child offers her for clearing');
 });
 
 // ── THE REFUSAL THAT USED TO BE SILENT ────────────────────────────────────────────────────────────────────
