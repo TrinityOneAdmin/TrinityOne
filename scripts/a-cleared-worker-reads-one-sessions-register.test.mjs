@@ -88,7 +88,7 @@ function envelope(session, sessionKeyHex, helpers) {
 function clearance(who, over = {}) {
   const doc = buildCheckinPermission({ person: who.pub, source: 'steward', lifetime: 'dated',
     from: over.from != null ? over.from : WIN.from, until: over.until != null ? over.until : WIN.until });
-  return { pubkey: church.pub, created_at: NOW - 900, content: JSON.stringify(doc),
+  return { pubkey: (over.by || church).pub, created_at: NOW - 900, content: JSON.stringify(doc),
            tags: [['d', CHECKINPERM_D + who.pub], ['t', 'trinityone'], ['church', church.pub]] };
 }
 // THE CONSOLE'S REAL SEALER, lifted out of vendor/steward.js. `_encSealedCopies` decides whether a record
@@ -361,6 +361,48 @@ test('a clearance whose window has passed is "ended", and the register it alread
   assert.deepEqual(namesOn(v), ['Esther Ncube'],
     'THE REGISTER WAS TAKEN OFF THE SCREEN BECAUSE A CLEARANCE LAPSED. DOMAIN.md forbids exactly that: the ' +
     'app says a key has expired, it does not lock somebody out of a room mid-session.');
+});
+
+test('a clearance the SAFEGUARDING STEWARD wrote counts — the relay admits it, and the phone must not second-guess', () => {
+  // Red team 2026-09-11, F-A. The relay has accepted a safeguarding steward's clearance since 2026-09-10
+  // (checkinPermGrantor) and serves the person everything that follows; the reader dropped it as
+  // "church-key-only", so a steward-cleared helper read `cleared:false` — and with no key minted yet, no
+  // Kids tab at all. Same fixture as the baseline, one field different: who signed the clearance.
+  const sgLead = keypair();
+  const v = phone(morning)
+    .feed(clearance(morning, { by: sgLead }), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY))
+    .settle().last();
+  assert.equal(v.cleared, true,
+    'A STEWARD\'S CLEARANCE IS INVISIBLE TO THE PERSON IT CLEARS. The relay served it (only the church or a ' +
+    'safeguarding steward can write one; only the person can read it) and the phone threw it away — before a ' +
+    'key arrives that is no Kids tab for the commonest way a church clears somebody.');
+  // and before any key has been minted, the tab must exist for her: the rule ServingScreen applies
+  const noKey = phone(morning).feed(clearance(morning, { by: sgLead })).settle().last();
+  assert.equal(!noKey.cleared && !noKey.notYet && !(noKey.keysHeld > 0), false,
+    'with a steward-written clearance and no key yet, the screen\'s nothingKnown rule hides the tab');
+});
+
+test('a helper copy with the WRONG TYPES in it reaches the screen as strings and numbers, never as objects', () => {
+  // Red team 2026-09-11, F-C. The reader vouched for "a JSON object" and nothing inside it; `childName: {…}`
+  // and `out: {…}` reached KidsRow as JSX children, which React refuses by throwing, and the only error
+  // boundary above the row is the app root. A helper in her window can write such a record.
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('good', { childName: 'Real Child', code: '4417', in: 1789080000 }, AM, AM_KEY),
+          record('evil', { childName: { nope: true }, code: { a: 1 }, in: 'soon', out: { when: 2 } }, AM, AM_KEY),
+          record('numeric', { childName: 7, code: 1234, out: '1789084514' }, AM, AM_KEY))
+    .settle().last();
+  const rows = Object.fromEntries(v.sessions.flatMap(s => s.rows).map(r => [r.id, r]));
+  assert.equal(typeof rows.good.childName, 'string'); assert.equal(rows.good.in, 1789080000);
+  assert.equal(typeof rows.evil.childName, 'string',
+    'AN OBJECT REACHED THE SCREEN AS A CHILD\'S NAME. React throws on it and the whole app blanks: ' + JSON.stringify(rows.evil.childName));
+  assert.equal(rows.evil.childName, '', 'a name that is not a string must read as absent, not as "[object Object]"');
+  assert.equal(typeof rows.evil.code, 'string'); assert.equal(rows.evil.code, '');
+  assert.equal(rows.evil.out, undefined, 'an `out` that is not a time was kept: ' + JSON.stringify(rows.evil.out));
+  assert.equal(rows.evil.in, undefined);
+  assert.equal(rows.numeric.childName, '7'); assert.equal(rows.numeric.code, '1234');
+  assert.equal(rows.numeric.out, 1789084514, 'a numeric string `out` (an older writer) was dropped');
 });
 
 test('a WITHDRAWN clearance is reported as withdrawn — not as "never cleared", and not silently', () => {

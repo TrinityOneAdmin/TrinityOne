@@ -11419,7 +11419,19 @@
         if (!keyHex) return "foreign";
         const obj = readCheckinHelperCopy(r.tags, keyHex, (ct, k) => decrypt(ct, _unhex(k)));
         if (!obj) return "unreadable";
-        rows.set(id, { ...obj, id, session: r.sid, ts: r.ts, _by: r.by });
+        const _str = (v) => typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+        const _when = (v) => typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && /^\d{1,12}$/.test(v) ? Number(v) : void 0;
+        rows.set(id, {
+          ...obj,
+          id,
+          session: r.sid,
+          ts: r.ts,
+          _by: r.by,
+          childName: _str(obj.childName),
+          code: _str(obj.code),
+          in: _when(obj.in),
+          out: _when(obj.out)
+        });
         return "ok";
       };
       const emit = _coalesce(() => {
@@ -11488,7 +11500,6 @@
         onevent(e, d) {
           if (d.startsWith(CHECKINPERM_D)) {
             if (String(d.slice(CHECKINPERM_D.length) || "").toLowerCase() !== me) return;
-            if (e.pubkey !== pubk) return;
             if ((e.created_at || 0) < permTs) return;
             permTs = e.created_at || 0;
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) {

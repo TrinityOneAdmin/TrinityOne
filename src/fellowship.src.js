@@ -4867,7 +4867,16 @@ window.Fellowship = {
       // (`byId.set(id, { id, ...obj, ts })`) and the piece-1 notes record what that costs: a body whose id
       // disagrees with its address FORKS the record — the same child present on one row and collected on
       // another. Spread first, then overwrite, so a forked body cannot name a second address here.
-      rows.set(id, { ...obj, id, session: r.sid, ts: r.ts, _by: r.by });
+      // THE FIELDS THE SCREEN PAINTS ARE TYPED HERE, NOT TRUSTED. readCheckinHelperCopy vouches for "a JSON
+      // object", no more; a helper in her window writes records too (F-B), and a body with
+      // `childName: {…}` or `out: {…}` reached KidsRow as a JSX child on 2026-09-11's red team — which React
+      // refuses by throwing, and the only boundary above that row is the app root: one hostile record blanks
+      // the whole member app over a register with children in it. Strings stay strings, numbers become
+      // strings where a name or code is expected, everything else is "not in this copy".
+      const _str = (v) => (typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v) ? String(v) : ''));
+      const _when = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && /^\d{1,12}$/.test(v) ? Number(v) : undefined));
+      rows.set(id, { ...obj, id, session: r.sid, ts: r.ts, _by: r.by,
+        childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out) });
       return 'ok';
     };
 
@@ -4938,7 +4947,19 @@ window.Fellowship = {
         // because a phone must not report somebody else's clearance as its own if a box ever serves one.
         if (d.startsWith(CHECKINPERM_D)) {
           if (String(d.slice(CHECKINPERM_D.length) || '').toLowerCase() !== me) return;
-          if (e.pubkey !== pubk) return;             // church-key-only, as the relay's own write rule is
+          // THE AUTHOR IS NOT CHECKED HERE, and the line that did is gone on purpose. It read
+          //     if (e.pubkey !== pubk) return;   // church-key-only, as the relay's own write rule is
+          // and the relay's write rule has not been church-key-only since 2026-09-10: a steward the church
+          // ticked for safeguarding clears people from her own console (checkinPermGrantor in
+          // scripts/gateway.mjs), the relay serves that clearance to the person, and mints and serves the
+          // keys and records that follow. The red team of 2026-09-11 measured both halves: the relay handing
+          // a steward-cleared helper everything, and this reader answering `cleared:false` — which, before
+          // a key arrives, is NO KIDS TAB AT ALL for the commonest way a church clears somebody.
+          // The relay is the boundary: canRead serves a member exactly one of these, their own, and accept()
+          // refuses any author who is not the church or its safeguarding steward. A phone cannot judge a
+          // steward's authority (it holds no roster) and must not pretend to; what it can do is report what
+          // its church's relay admitted. The worst a rogue relay buys here is a "cleared" line — the envelope
+          // is owner-minted from the permissions the relay itself enforces.
           if ((e.created_at || 0) < permTs) return;  // newest wins, mirroring the relay's guard
           permTs = e.created_at || 0;
           // A WITHDRAWAL IS A TOMBSTONE, and it must land as "no clearance" rather than be ignored.
