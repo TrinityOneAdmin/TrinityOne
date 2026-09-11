@@ -10,8 +10,11 @@
 //     the list of who is in the room EMPTIES mid-service and the pickup codes go with it.
 //
 // The earlier care-dates.test.mjs guarded one specific *parsing* idiom and caught none of the eleven sites
-// that used this one. This is the general guard: it scans the shipped source, so a new occurrence anywhere
-// fails the suite. Use `todayISO()` (app shells, defined in app/recur.jsx) or `_todayISO()` (steward bundle).
+// that used this one. This is the general guard: it scans app/ and src/, so a new occurrence of either
+// idiom below fails the suite. ⚠ IT IS NOT TOTAL, and it claimed to be until an audit proved otherwise on
+// 2026-09-11: it reads only the two patterns defined below, it does not recurse, and it never looks at
+// scripts/ or relay/. Green here means "neither known idiom is present in app/ or src/", NEVER "no UTC day
+// is used as a calendar date anywhere". Use `todayISO()` (app shells, defined in app/recur.jsx) or `_todayISO()` (steward bundle).
 //
 // Timestamps and export FILENAMES are legitimately UTC and are exempted by the allowlist below.
 import { test } from 'node:test';
@@ -20,7 +23,18 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
+// TWO PATTERNS, because one was not enough — audit 2026-09-11.
+//
+// The first is the original: the UTC day taken straight off a fresh Date. It caught the check-in writer.
 const BAD = /new Date\(\)\.toISOString\(\)\.slice\(0,\s*10\)/;
+// The second closes the hole that audit found. The SAME UTC day taken off a VARIABLE — `now.toISOString()
+// .slice(0,10)` — does not match the first pattern at all, and one was live in app/screens-today.jsx's
+// day-streak, where it could break a member's streak on an ordinary evening east of Greenwich. Matching
+// every `.toISOString().slice(0,10)` would be the thorough fix and is NOT what this does: half a dozen
+// legitimate sites build a UTC midnight with `Date.UTC(...)` or `setUTCDate` and read it back, where the
+// round trip is exact and correct. So this pattern is narrow on purpose — it fires only where the result is
+// being CALLED today or yesterday, which is the whole of the bug class and none of the round trips.
+const BAD_NAMED = /\b(today|yest|yesterday|tomorrow)\w*\s*=\s*[^;\n]*\.toISOString\(\)\.slice\(0,\s*10\)/i;
 // A filename is a legitimate UTC use: a backup called …-2026-07-24.json needs no timezone opinion. `date` in an
 // export/backup builder is the same case (it is stamped into the archive's name).
 const FILENAME_USE = /\.json|filename|download|saveFile|backup-|export/i;
@@ -33,7 +47,7 @@ function scan(dir, exts) {
     if (!exts.some(e => name.endsWith(e))) continue;
     const path = join(dir, name);
     readFileSync(path, 'utf8').split('\n').forEach((line, i) => {
-      if (BAD.test(line) && !FILENAME_USE.test(line) && !IS_COMMENT(line)) hits.push(`${name}:${i + 1}  ${line.trim().slice(0, 100)}`);
+      if ((BAD.test(line) || BAD_NAMED.test(line)) && !FILENAME_USE.test(line) && !IS_COMMENT(line)) hits.push(`${name}:${i + 1}  ${line.trim().slice(0, 100)}`);
     });
   }
   return hits;
@@ -47,7 +61,7 @@ test('no UTC-day used as a calendar date in the app shells', () => {
 });
 
 test('no UTC-day used as a calendar date in the engines', () => {
-  const hits = scan(join(ROOT, 'src'), ['.js']);
+  const hits = scan(join(ROOT, 'src'), ['.js', '.mjs']);   // .mjs was unscanned until 2026-09-11: six finance/recovery modules nobody had looked at
   assert.deepEqual(hits, [],
     'Use the module-local _todayISO() instead:\n  ' + hits.join('\n  '));
 });

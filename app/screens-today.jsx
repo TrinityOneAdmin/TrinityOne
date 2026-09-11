@@ -1521,10 +1521,17 @@ function TodayScreen({ ctx }) {
   // day-streak: +1 per consecutive calendar day the app is opened
   const [streak, setStreak] = useStateT(() => (lsGet('trinityone.streak', { count: 0 }).count) || 0);
   useEffectT(() => {
-    const today = now.toISOString().slice(0, 10);
+    // THE LOCAL DAY, not the UTC one. Both lines here read `toISOString()`, which is the UTC calendar day:
+    // east of Greenwich it rolls over during the evening and west of it during the night, so a member could
+    // open the app two evenings running and be told their streak had broken, or open it twice in one local
+    // day and have it counted twice. Found by audit 2026-09-11 alongside the check-in date bug — the same
+    // idiom, a smaller consequence. `todayISO()` is app/recur.jsx's shared helper, already used twice in
+    // this file, and the "yesterday" half has to move with it or the comparison straddles two calendars.
+    const today = todayISO();
     const s = lsGet('trinityone.streak', { count: 0, last: null });
     if (s.last === today) { setStreak(s.count); return; }
-    const yest = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    const y = new Date(Date.now() - 864e5);
+    const yest = y.getFullYear() + '-' + String(y.getMonth() + 1).padStart(2, '0') + '-' + String(y.getDate()).padStart(2, '0');
     const count = s.last === yest ? (s.count || 0) + 1 : 1;
     lsSet('trinityone.streak', { count, last: today });
     setStreak(count);
