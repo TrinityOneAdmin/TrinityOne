@@ -6358,7 +6358,13 @@ function DashCheckin() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {out.map(r => (
                   <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink-2)' }}>{r.childName || nameFor(r.child)}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>In {fmtT(r.in)} · out {fmtT(r.out)}</div></div>
+                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink-2)' }}>{r.childName || nameFor(r.child)}</div>{/* BY HAND IS SAID HERE TOO, or the fallback is a hole. DESIGN §7: a manual release must be "recorded —
+                        who released the child, when, and that it was MANUAL rather than by code. A manual release that
+                        leaves no different trace than a normal one is not a fallback, it is a hole." The worker's phone
+                        says "by hand"; on the Oppo, 2026-09-11, this console said only "out 11:54 AM" for the same
+                        release, so the one screen a safeguarding lead reads could not tell the two apart. Not an
+                        accusation — §10: the gates keep strangers out, they do not police the church's own team. */}
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>In {fmtT(r.in)} · out {fmtT(r.out)}{r.manual ? ' · by hand' : ''}</div></div>
                     <Icon name="check" size={16} stroke={2.4} color="var(--sage)" />
                   </div>
                 ))}

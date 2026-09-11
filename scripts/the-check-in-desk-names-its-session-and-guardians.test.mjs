@@ -23,7 +23,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
-import { miniReact, texts } from './render-jsx-screen.mjs';
+import { miniReact, texts, reads } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const SRC = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
@@ -223,6 +223,26 @@ test('two services today: the leader chooses, and nothing is chosen for them', a
 });
 
 // ── AND THE COPY THAT WOULD OTHERWISE BE FALSE ────────────────────────────────────────────────────────────
+
+test('A BY-HAND RELEASE IS MARKED AS ONE ON THE CONSOLE — the fallback must leave a different trace', async () => {
+  // DESIGN §7: a manual release must be "recorded — who released the child, when, and that it was MANUAL
+  // rather than by code. A manual release that leaves no different trace than a normal one is not a
+  // fallback, it is a hole." Measured on the Oppo 2026-09-11: the worker's phone said "Collected · 11:54 am
+  // · by hand" and this console said only "out 11:54 AM" for the same release, so the one screen a
+  // safeguarding lead reads could not tell a code-matched collection from a by-hand one.
+  const s = await desk({ services: [SVC], recs: [
+    { id: 'ci-1', child: KID, childName: 'Ada Fenn', date: TODAY, in: 1000, out: 2000, manual: true, session: SVC.id },
+    { id: 'ci-2', child: KID2, childName: 'Bem Okafor', date: TODAY, in: 1000, out: 2000, manual: false, session: SVC.id },
+  ] });
+  const t = reads(s.tree());
+  assert.match(t, /Ada Fenn/, 'fixture: the collected child is not on the screen at all');
+  assert.match(t, /by hand/i,
+    'A BY-HAND RELEASE READS EXACTLY LIKE A CODE-MATCHED ONE on the safeguarding console. As rendered: ' + t);
+  // …and a code-matched collection is NOT labelled by hand
+  const bem = t.slice(t.indexOf('Bem Okafor'));
+  assert.doesNotMatch(bem.slice(0, 80), /by hand/i,
+    'a collection released by a matching pickup code is labelled "by hand": ' + bem.slice(0, 80));
+});
 
 test('the intro note no longer claims only stewards can open the register', async () => {
   // Item 2 of the audit hand-off: "the only people who can open them are you and anyone you have given
