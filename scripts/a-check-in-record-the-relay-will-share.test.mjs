@@ -80,8 +80,31 @@ const ben = K();         // CLEARED, and on LAST session's envelope: right key, 
 const gina = K();        // the guardian this record names
 const hank = K();        // a guardian of a different family
 const cara = K();        // an ordinary member, cleared for nothing
+// ── AND THE PEOPLE THE NARROWING OF 2026-09-11 IS ABOUT ───────────────────────────────────────────────────
+// Six more, because "who loses it" and "who must keep it" are the same question asked twice and a narrowing
+// that answers only the first is worse than the bug.
+const tres = K();        // a steward ticked for FINANCE ALONE — the treasurer, and the headline of the defect
+const rotaSt = K();      // a steward ticked for CONTENT alone — "Groups & rotas"
+const memSt = K();       // a steward ticked for MEMBERS alone
+const oldSt = K();       // a steward on the roster with NO `caps` entry — stewardCan()'s compatibility
+                         // branch, and INDISTINGUISHABLE at the relay from the ordinary church whose roster
+                         // has no `caps` key at all (the STEWARDS_D branch builds an empty Map either way).
+                         // Owner 2026-09-12: they are REFUSED. They never held the register key.
+const careBoss = K();    // a care-team ADMIN — on the roster of the church's configured meals admin group
+const netKey = K();      // a key the church itself declared a network of — church-level authority it granted
+const pat = K();         // a parent recorded in `guardians:` as the guardian of…
+const teen = K();        // …an older young person who DOES have an account (the guardianOfIn route)
+// ── AND A SECOND CHURCH, WHOSE ROSTER HAS NO `caps` KEY AT ALL ────────────────────────────────────────────
+// The literal document the shipped console writes (`{ pubkeys: [...] }`) until somebody opens the capability
+// editor — which is the ORDINARY church, not a legacy one, and the shape that made the 2026-09-12 decision
+// necessary. It gets its own church because a church has one stewards: document, and rewriting the first
+// church's would strip the capabilities every other test in this file rests on.
+const plainChurch = K();
+const plainSt = K();     // on that roster, with no capability list anywhere in the document
+const plainMum = K();    // an ordinary member of that church, so an arrival has an author
 
-const S_NOW = 'svc-now', S_LAST = 'svc-last';
+const S_NOW = 'svc-now', S_LAST = 'svc-last', P_SESSION = 'svc-plain';
+const CARE_TEAM = 'care-team-g1';
 const SESSION_KEY = '11'.repeat(32), LAST_KEY = '22'.repeat(32);
 // The key the CONSOLE actually seals a check-in with: the safeguarding capability ring. Named as itself so
 // the "and nobody can open it" note above is visible in the fixture rather than only in prose.
@@ -236,18 +259,78 @@ before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'trin-ckrec-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
-    env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(church.pub) } });
+    // TWO CONFIGURED CHURCHES. The second exists for one purpose: to carry a steward roster with NO `caps`
+    // KEY AT ALL — the literal document src/steward.src.js publishes until somebody opens the capability
+    // editor. It could not be done on the first church, because a church has ONE stewards: document and
+    // replacing it mid-file would strip the capabilities every other test here depends on.
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir,
+           CHURCH_NPUB: `${npubEncode(church.pub)},${npubEncode(plainChurch.pub)}` } });
   const t0 = Date.now();
   while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${PORT}/status`)).ok) break; } catch {} await sleep(150); }
   w = await conn();
-  for (const who of [sgLead, ada, ben, gina, hank, cara]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
-  await send(w, doc(church, D.STEWARDS + church.pub, { pubkeys: [sgLead.pub], caps: { [sgLead.pub]: ['safeguarding'] } }));
-  await send(w, doc(church, D.GUARDIANS + church.pub, { links: {} }));
+  for (const who of [sgLead, ada, ben, gina, hank, cara,
+                     tres, rotaSt, memSt, oldSt, careBoss, pat, teen]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
+  // THE ROSTER THE NARROWING IS MEASURED AGAINST. Four capability-scoped stewards and one legacy steward
+  // with no `caps` entry at all — which is the shape stewardCan()'s compatibility branch exists for, and the
+  // reason checkinReader() asks stewardCan() rather than stewardCanExplicitly().
+  await send(w, doc(church, D.STEWARDS + church.pub, {
+    pubkeys: [sgLead.pub, tres.pub, rotaSt.pub, memSt.pub, oldSt.pub],
+    caps: { [sgLead.pub]: ['safeguarding'], [tres.pub]: ['finance'], [rotaSt.pub]: ['content'], [memSt.pub]: ['members'] } }));
+  // A CARE-TEAM ADMIN, built the way the relay resolves one: the church's meals settings name an admin group,
+  // and that group's roster names the person. careAdmin() is the grant being taken away here, so a fixture
+  // that only *claimed* to make one would be testing nothing.
+  await send(w, doc(church, D.MEALS_SETTINGS, { enabled: true, adminGroupId: CARE_TEAM }));
+  await send(w, doc(church, D.ROSTER + CARE_TEAM, { pubs: [careBoss.pub] }));
+  // A NETWORK KEY, declared BY THE CHURCH OVER ITSELF — the only way one can be declared (note()'s NETWORK_D
+  // branch requires CHURCH_PUBS.has(e.pubkey)).
+  await send(w, doc(church, D.NETWORK + netKey.pub, { joined: now() }));
+  // THE STEWARD CONTROL'S OWN FIXTURE: a rota the church has narrowed to stewards. This is the role-only
+  // document the FIXTURE CONTROL test keys on — see the ⚠ note there for why `stewards:<cp>`, which is
+  // member-readable, could not do the job. It touches nothing else in this file: ROTA_VIS is consulted by
+  // the rota:/runsheet: branch alone.
+  await send(w, doc(church, D.ROTA_SETTINGS, { visibility: 'stewards' }));
+  await send(w, doc(church, D.ROTA + 'r1', { e: 'sealed-rota' }, [['church', church.pub]]));
+  // THE PARENT↔CHILD MAP: pat is recorded as a guardian of teen, and teen is marked a child. That is the
+  // second guardian route — the one for a young person who has an account of their own.
+  await send(w, doc(church, D.GUARDIANS + church.pub, { links: { [teen.pub]: [pat.pub] } }));
+  await send(w, doc(church, D.MINORS + church.pub, { pubkeys: [teen.pub] }));
   for (const who of [ada, ben]) await send(w, permission(who));
   await sleep(150);
   const t = now();
   await send(w, grant(S_NOW, [ada.pub], t - 600, t + 3600, SESSION_KEY));
   await send(w, grant(S_LAST, [ben.pub], t - 8 * 3600, t - 5 * 3600, LAST_KEY));
+
+  // ── THE SECOND CHURCH: A ROSTER WITH NO `caps` KEY AT ALL ───────────────────────────────────────────────
+  // Note what is NOT written below: no `caps`. That is the document src/steward.src.js actually publishes
+  // until somebody opens the capability editor, so this is the shape of the ordinary church.
+  for (const who of [plainSt, plainMum]) await send(w, doc(who, D.MEMBER + plainChurch.pub, { joined: now() }));
+  await send(w, doc(plainChurch, D.STEWARDS + plainChurch.pub, { pubkeys: [plainSt.pub] }));
+  await send(w, doc(plainChurch, D.ROTA_SETTINGS, { visibility: 'stewards' }));
+  await send(w, doc(plainChurch, D.ROTA + 'pr1', { e: 'sealed-rota' }, [['church', plainChurch.pub]]));
+  // THE CLEARANCE AND THE ENVELOPE NAME plainMum, NOT plainSt, AND THAT IS THE POINT. Both documents have a
+  // route in of their own — "the person a clearance names" and "a pubkey the envelope names" — and those
+  // routes are NOT the steward grant and are not what changed. If they named plainSt he would be admitted by
+  // them whatever checkinReader() said, and the refusals asserted below would be unmeasurable.
+  await send(w, doc(plainChurch, D.CHECKINPERM + plainMum.pub,
+    buildCheckinPermission({ person: plainMum.pub, source: 'steward', lifetime: 'open', from: t - 86400, until: null }),
+    [['church', plainChurch.pub], ['person', plainMum.pub]]));
+  await sleep(150);
+  await send(w, finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', D.CHECKINHELPER + P_SESSION], ['t', NET], ['church', plainChurch.pub], ['session', P_SESSION]],
+    content: JSON.stringify(buildHelperGrant({ session: P_SESSION, source: GRANT_SOURCE, lifetime: 'session',
+      from: t - 600, until: t + 3600, helpers: [plainMum.pub], keepers: [plainChurch.pub],
+      sessionKeyHex: SESSION_KEY,
+      wrap: (p, pl) => nip44.encrypt(pl, nip44.utils.getConversationKey(plainChurch.sk, p)) }).doc) },
+    plainChurch.sk));
+  await sleep(150);
+  await send(w, finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', D.CHECKIN + 'plain-1'], ['t', NET], ['church', plainChurch.pub], ['session', P_SESSION],
+           ['p', plainMum.pub], ['enc', '1']],
+    content: nip44.encrypt(JSON.stringify({ id: 'plain-1', childName: 'A Child', code: '6006' }), unhex(SESSION_KEY)) },
+    plainChurch.sk));
+  await send(w, finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', D.CHECKINARRIVAL + P_SESSION + ':' + plainMum.pub], ['t', NET], ['church', plainChurch.pub],
+           ['session', P_SESSION]], content: JSON.stringify({ at: now() }) }, plainMum.sk));
   await sleep(250);
 });
 after(() => { try { w && w.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
@@ -477,4 +560,298 @@ test('A CHURCH WITH NO SERVICE DOCUMENT still hands its parents the pickup code'
   assert.equal(opensAs(gina, served)?.code, '2280',
     'A CHURCH WITH NO SERVICE DOCUMENT LOST ITS PARENTS\' PICKUP CODES — the guardian copy was derived ' +
     'inside the session\'s early return.');
+});
+
+// ══ A TREASURER IS NOT SERVED THE CHILDREN'S REGISTER ══════════════════════════════════════════════════════
+//
+// THE DEFECT, in one sentence: canRead's kind-30078 section short-circuits on
+// `stewardCan(authed, cp, 'any') || careAdmin(authed, cp)` BEFORE it reaches any check-in rule, so every
+// branch below that line was dead code for anyone it admitted. A steward holding ANY ONE capability — a
+// treasurer ticked for Finance, a volunteer ticked for Groups & rotas, a Members steward — and every
+// care-team admin were served every `trinityone/checkin:` and `trinityone/checkinarrival:` the church has
+// ever written.
+//
+// WHY "THEY CANNOT OPEN IT" IS NOT AN ANSWER, and this is the whole reason the fix is worth making. The body
+// is sealed three ways over (the safeguarding ring in `content`, the session key in ['ck'], the parent's own
+// key in ['gk']) and none of them yields. But the TAGS ARE CLEARTEXT and always must be, because the relay
+// routes on them: ['p', <guardian pubkey>] and ['session', <sessionId>]. `roster:` maps a pubkey to a name
+// and a session maps to a dated service, so the whole history of "this named parent had a child at church on
+// this date" came out of the tags with no key at all. That is a family-composition and attendance record for
+// the congregation's children, derived by somebody the church gave the books to.
+//
+// AND THE PRODUCT SAID THE OPPOSITE. The console's own copy: a record opens to "you, anyone you have given
+// Safeguarding to, a cleared helper holding that session's key, and the child's own guardians". A treasurer
+// is in none of those four categories.
+//
+// EVERY ASSERTION BELOW GOES OVER A REAL WEBSOCKET TO THE GATEWAY THIS FILE ALREADY SPAWNS, as the person
+// named, after a real NIP-42 AUTH. Nothing here asks canRead() a question directly.
+//
+// ── THE ARRIVAL, built here because no other fixture in this file writes one ───────────────────────────────
+// d = checkinarrival:<sessionId>:<authorpubhex>, authored by the parent, ['session'] agreeing with the
+// address. It carries a parent's pubkey in its own ADDRESS and the session in a cleartext tag, so it leaks
+// the same inference as the register by a shorter route.
+const arrival = (who, sid) => finalizeEvent({ kind: 30078, created_at: now(),
+  tags: [['d', D.CHECKINARRIVAL + sid + ':' + who.pub], ['t', NET], ['church', church.pub], ['session', sid]],
+  content: JSON.stringify({ at: now() }) }, who.sk);
+
+const one = (got, d) => got.filter(e => (e.tags.find(t => t[0] === 'd') || [])[1] === d).length;
+
+test('FIXTURE CONTROL: the roster, the care team, the network and the parent map all really took', async () => {
+  // A BASELINE ROW FOR THE WHOLE SECTION. Every "X is refused" assertion below is satisfied by a fixture that
+  // silently failed to make X anything at all — a steward doc the relay rejected makes a treasurer into an
+  // ordinary member, and "an ordinary member is refused" is a different and much weaker claim. So prove each
+  // role EXISTS by a grant ONLY THAT ROLE HAS, before asserting what it no longer reaches.
+  //
+  // ⚠ THE FIRST VERSION OF THIS CONTROL USED `stewards:<cp>` AND DID NOT WORK, and it is worth saying why
+  // rather than quietly swapping the document. Its comment claimed that doc is "served to the church, its
+  // network and its stewards, and to nobody else." That is false: scripts/trinity-doc-types.mjs declares it
+  // `read: 'members'` and an independent persona matrix measured all sixteen members reading it. So it caught
+  // a stewards: write the relay REJECTED, and missed the failure that actually matters — a document that
+  // LANDED and failed to make the person a steward (a typo'd pubkey, a caps shape the STEWARDS_D branch
+  // parses differently). In that case the control stayed green and every refusal below silently became
+  // "an ordinary member is refused".
+  //
+  //   • A STEWARD — any capability — is proved by `rota:` under `rota-settings` visibility 'stewards', which
+  //     is role-only by construction: canRead returns false for an ordinary member and the church, its
+  //     network, ANY steward and a care admin have already returned true. That is the general steward grant
+  //     this fix deliberately does NOT touch, so it answers exactly "is this person a steward of this church"
+  //     and nothing else.
+  //     AND IT IS NOT BLIND TO AN OVER-GRANT EITHER, which is the other way a caps map can go wrong: if the
+  //     caps failed to parse, stewardCan()'s compatibility branch makes the treasurer a FULL steward, he
+  //     satisfies stewardCan(…,'safeguarding') and the register tests below go red rather than green. Both
+  //     directions of a mis-parsed roster are therefore caught, one here and one there.
+  //   • a care admin — `minors:`, whose read rule names careAdmin() explicitly and which this fix does NOT
+  //     touch: if the care admin can read it, careAdmin() resolved.
+  //   • the network key — the same `minors:` rule, which names networkOf() explicitly.
+  const rotaDoc = D.ROTA + 'r1', minorsDoc = D.MINORS + church.pub;
+  for (const [who, name] of [[tres, 'the treasurer'], [rotaSt, 'the rota steward'], [memSt, 'the members steward'], [oldSt, 'the legacy steward']])
+    assert.equal(one(await asks(who, { kinds: [30078], '#d': [rotaDoc] }), rotaDoc), 1,
+      name + ' is not a steward on this relay at all — every refusal below would pass for the wrong reason, ' +
+      'because "an ordinary member is refused the register" is a far weaker claim than the one being made');
+  assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [rotaDoc] }), [],
+    're-anchor: an ordinary member reads a stewards-only rota, so the steward control above proves nothing');
+  assert.equal(one(await asks(careBoss, { kinds: [30078], '#d': [minorsDoc] }), minorsDoc), 1,
+    'careBoss is not a care-team admin on this relay — careAdmin() needs meals-settings AND the named ' +
+    'group\'s roster, and one of the two did not take');
+  assert.equal(one(await asks(netKey, { kinds: [30078], '#d': [minorsDoc] }), minorsDoc), 1,
+    'the network key was not recorded — networkOf() is false, so "the network still reads it" below would ' +
+    'be measuring nothing');
+  assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [minorsDoc] }), [],
+    're-anchor: an ordinary member reads `minors:`, so the two controls above prove nothing');
+});
+
+test('A TREASURER IS REFUSED THE REGISTER — and so is a rota steward, a members steward and a care admin', async () => {
+  await putShipped({ id: 'narrow-1', childName: 'A Child', code: '1001', session: S_NOW, guardians: [gina.pub] });
+  await sleep(200);
+  const dtag = D.CHECKIN + 'narrow-1';
+  for (const [who, name] of [[tres, 'A STEWARD TICKED FOR FINANCE ALONE'], [rotaSt, 'A STEWARD TICKED FOR GROUPS & ROTAS ALONE'],
+                             [memSt, 'A STEWARD TICKED FOR MEMBERS ALONE'], [careBoss, 'A CARE-TEAM ADMIN']])
+    assert.deepEqual(await asks(who, { kinds: [30078], '#d': [dtag] }), [],
+      name + ' WAS SERVED A CHILD\'S CHECK-IN RECORD. The body is sealed to them, but [\'p\'] and ' +
+      '[\'session\'] are cleartext and the roster turns that pubkey into a name — so this is "the Hendersons ' +
+      'had a child at church on 13 September", for the whole history, to somebody the church gave the books to.');
+});
+
+test('…AND THE SAME PEOPLE ARE REFUSED AN ARRIVAL, which names a household in its own address', async () => {
+  const ev = arrival(gina, S_NOW);
+  const [ok, msg] = await send(w, ev);
+  assert.equal(ok, true, 'fixture: the relay refused the arrival this test is about: ' + msg);
+  await sleep(200);
+  const dtag = (ev.tags.find(t => t[0] === 'd') || [])[1];
+  for (const [who, name] of [[tres, 'the treasurer'], [rotaSt, 'the rota steward'], [memSt, 'the members steward'], [careBoss, 'the care admin']])
+    assert.deepEqual(await asks(who, { kinds: [30078], '#d': [dtag] }), [],
+      name + ' was served an arrival. The address IS `<session>:<parent pubkey>`, so serving it needs no ' +
+      'tags read and no keys at all — it is "this family was at the creche door this morning" in the d-tag.');
+  // …and the people it is for still get it: the parent who wrote it, and the worker on that session.
+  assert.equal(one(await asks(gina, { kinds: [30078], '#d': [dtag] }), dtag), 1, 'the parent lost her own arrival');
+  assert.equal(one(await asks(ada, { kinds: [30078], '#d': [dtag] }), dtag), 1,
+    'the in-window helper of that session lost the arrival she is meant to work from');
+  assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [dtag] }), [], 're-anchor: an ordinary member reads arrivals');
+});
+
+test('…AND A TREASURER IS REFUSED THE HELPER ENVELOPE AND THE CLEARANCE', async () => {
+  // Both are cleartext documents naming the church's children's-work team — `checkinhelper:` in its `pubs`
+  // array, `checkinperm:` by being addressed at the person's own pubkey. Neither is a register record, and
+  // both were served to the same people for the same reason: the short-circuit ran first.
+  const env = D.CHECKINHELPER + S_NOW, perm = D.CHECKINPERM + ada.pub;
+  for (const [who, name] of [[tres, 'the treasurer'], [rotaSt, 'the rota steward'], [memSt, 'the members steward'], [careBoss, 'the care admin']]) {
+    assert.deepEqual(await asks(who, { kinds: [30078], '#d': [env] }), [],
+      name + ' was served the session envelope, whose cleartext `pubs` names everyone rostered to children\'s ' +
+      'work that morning');
+    assert.deepEqual(await asks(who, { kinds: [30078], '#d': [perm] }), [],
+      name + ' was served a clearance, which is the church\'s cleared safeguarding team one person at a time');
+  }
+  // AND THE PEOPLE THEY ARE FOR STILL HAVE THEM.
+  assert.equal(one(await asks(ada, { kinds: [30078], '#d': [env] }), env), 1,
+    'the in-window helper lost her own session envelope — she is then granted the register and refused the key');
+  assert.equal(one(await asks(ada, { kinds: [30078], '#d': [perm] }), perm), 1,
+    'the person the clearance names lost it — her own screen can no longer say when it ends');
+  assert.equal(one(await asks(sgLead, { kinds: [30078], '#d': [env] }), env), 1, 'the safeguarding lead lost the envelope');
+  assert.equal(one(await asks(church, { kinds: [30078], '#d': [perm] }), perm), 1, 'the church lost its own clearance document');
+});
+
+test('WHO MUST KEEP IT, EVERY ONE: church, network, safeguarding steward, legacy steward, helper, guardian', async () => {
+  // The other half of the narrowing, and the half that makes it safe. A gate that closed on the treasurer and
+  // also on the crèche is a worse outcome than the bug — the register is what a church runs its Sunday from.
+  await putShipped({ id: 'narrow-2', childName: 'A Child', code: '2002', session: S_NOW, guardians: [gina.pub] });
+  await sleep(200);
+  const dtag = D.CHECKIN + 'narrow-2';
+  for (const [who, name] of [[church, 'THE CHURCH KEY'], [netKey, 'THE NETWORK KEY THE CHURCH DECLARED'],
+                             [sgLead, 'THE SAFEGUARDING STEWARD'],
+                             [ada, 'THE IN-WINDOW CLEARED HELPER'], [gina, 'THE GUARDIAN THE RECORD NAMES']])
+    assert.equal(one(await asks(who, { kinds: [30078], '#d': [dtag] }), dtag), 1,
+      name + ' LOST THE CHILDREN\'S REGISTER. A narrowing that takes it from any of these is worse than the ' +
+      'defect it closes: this is the document a creche is run from, and a register that goes blank ' +
+      'mid-session is not a safeguarding record.');
+  // `oldSt` WAS IN THIS LIST UNTIL 2026-09-12 and was moved out by the owner's decision, not by an edit that
+  // tidied it away — see the test immediately below, which asserts the refusal in its own right.
+});
+
+// FLIPPED 2026-09-12 BY THE OWNER'S DECISION, and the old title and claim are kept here rather than deleted
+// (CLAUDE.md rules 4 and 8). It was
+//   'THE LEGACY STEWARD IS THE stewardCan-vs-stewardCanExplicitly DECISION, asserted rather than assumed'
+// and it asserted that an UNSCOPED steward KEEPS the register, on this reasoning:
+//
+//     "THIS TEST IS WHY THE CHOICE IS stewardCan(). Swap checkinReader() to stewardCanExplicitly() and this
+//      fails — the measurement of what the stricter rule would cost… Every church that exists today
+//      appointed its stewards that way, so this is a relay update stripping working churches of their
+//      children's register — an availability failure dressed as a security improvement."
+//
+// THAT WAS REASONING ABOUT A MIGRATION THAT DOES NOT EXIST. Owner, 2026-09-12: "There are no live churches.
+// This isn't an issue I dont think. U need to remember that we are pre pilot still." reference/DOMAIN.md now
+// carries the standing rule — stop pricing migrations until the pilot starts.
+test('AN UNSCOPED STEWARD IS REFUSED ALL FOUR CHECK-IN DOCUMENTS — the church shape that made this necessary', async () => {
+  // THE TWO GATES DISAGREED, AND THAT DISAGREEMENT WAS THE LEAK.
+  //   • the KEY gate is strict: `_capAllows` returns `!spec.explicit` and CAP_KEYS.checkin is explicit,
+  //     so this steward is NEVER wrapped into `checkinkey:` and never could open one record. The console
+  //     already tells them: "Safeguarding has to be given on purpose — it isn't included in 'everything'".
+  //   • the READ gate was loose: stewardCan()'s `if (!caps) return true` served them every record anyway.
+  // So what they got was ciphertext they could not open — and the TAGS ARE CLEARTEXT, which is the whole
+  // disclosure this commit exists to close. The strict predicate makes the read gate agree with the key gate.
+  //
+  // AND THIS IS THE ORDINARY CHURCH, NOT A LEGACY ONE: src/steward.src.js publishes `{ pubkeys: [...] }`
+  // with no `caps` key at all unless somebody opens the capability editor, and at the relay that is
+  // INDISTINGUISHABLE from oldSt's shape here (the STEWARDS_D branch builds an empty Map for both, so
+  // `byPub.get(pub)` is undefined either way). The caps-free roster is driven literally, against its own
+  // church, by the test after this one.
+  await putShipped({ id: 'narrow-3', childName: 'A Child', code: '3003', session: S_NOW, guardians: [gina.pub] });
+  const av = arrival(hank, S_NOW);
+  assert.equal((await send(w, av))[0], true, 'fixture: the relay refused the arrival this test needs');
+  await sleep(200);
+  const four = [[D.CHECKIN + 'narrow-3', 'the register record'],
+                [(av.tags.find(t => t[0] === 'd') || [])[1], 'the arrival'],
+                [D.CHECKINHELPER + S_NOW, 'the session envelope'],
+                [D.CHECKINPERM + ada.pub, 'the clearance']];
+  for (const [dtag, what] of four) {
+    assert.deepEqual(await asks(oldSt, { kinds: [30078], '#d': [dtag] }), [],
+      'AN UNSCOPED STEWARD WAS SERVED ' + what.toUpperCase() + '. They hold no capability list, so they ' +
+      'have never been given the register key and could never open a record — serving it to them hands ' +
+      'over the cleartext-tag inference and nothing else.');
+    // AND THE CHURCH KEY HOLDER KEEPS ALL FOUR, in the same breath.
+    assert.equal(one(await asks(church, { kinds: [30078], '#d': [dtag] }), dtag), 1,
+      'THE CHURCH LOST ' + what.toUpperCase() + ' — the narrowing reached past the person it was aimed at');
+  }
+  // …AND oldSt REALLY IS A STEWARD, proved by the same role-only document the FIXTURE CONTROL uses. Without
+  // this the four refusals above are satisfied by a roster that never made him one, which is the failure
+  // mode that control exists for.
+  const rotaDoc = D.ROTA + 'r1';
+  assert.equal(one(await asks(oldSt, { kinds: [30078], '#d': [rotaDoc] }), rotaDoc), 1,
+    're-anchor: oldSt is not a steward of this church at all, so every refusal above proves nothing');
+});
+
+test('THE OTHER GUARDIAN ROUTE — the church\'s own parent-child map — survives the narrowing', async () => {
+  // For an older young person who DOES have an account, the record names THEM in ['p'] and the parent is
+  // found through `guardians:`. That is guardianOfIn(), directional, with minorOf() as a second refusal.
+  await putShipped({ id: 'narrow-4', childName: 'A Teenager', code: '4004', session: S_NOW, guardians: [teen.pub] });
+  await sleep(200);
+  const dtag = D.CHECKIN + 'narrow-4';
+  assert.equal(one(await asks(pat, { kinds: [30078], '#d': [dtag] }), dtag), 1,
+    'A PARENT RECORDED IN THE CHURCH\'S OWN `guardians:` MAP LOST THEIR CHILD\'S RECORD. This route is the ' +
+    'only one for a young person with an account of their own, and it lives at the FOOT of the moved block — ' +
+    'so a narrowing that returned early would have cut it silently.');
+  assert.equal(one(await asks(teen, { kinds: [30078], '#d': [dtag] }), dtag), 1,
+    're-anchor: the person the record NAMES reads it by the p-tag rule, independent of the map');
+  assert.deepEqual(await asks(hank, { kinds: [30078], '#d': [dtag] }), [],
+    'another family\'s guardian was served this record through the map');
+  assert.deepEqual(await asks(tres, { kinds: [30078], '#d': [dtag] }), [],
+    're-anchor: the treasurer reads it, so nothing above is evidence of anything');
+});
+
+test('A RECORD THE CHURCH DID NOT WRITE — the one that proves checkinReader and not the author rule', async () => {
+  // ⚠ WHY THIS TEST EXISTS, and it is a sabotage finding rather than a hunch. Every other record in this file
+  // is signed by the CHURCH, and canRead returns true for `authed === e.pubkey` long before any check-in rule
+  // runs — so "the church still reads its own register" was being satisfied by the AUTHOR rule, and deleting
+  // `authed === cp` from checkinReader() left all 18 tests green. A grant nothing can redden is a grant
+  // nobody can rely on.
+  //
+  // A HELPER-AUTHORED RECORD IS THE ORDINARY CASE THIS COVERS, not a contrivance: accept()'s CHECKIN_D branch
+  // has admitted an in-window helper's write since 2026-09-09, because the people who actually do this job are
+  // rota volunteers and must not have to be made safeguarding stewards to check a child in. So the register a
+  // church opens on a Sunday contains rows it did not sign.
+  const rec = finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', D.CHECKIN + 'byhelper-1'], ['t', NET], ['church', church.pub], ['session', S_NOW], ['p', gina.pub], ['enc', '1']],
+    content: nip44.encrypt(JSON.stringify({ id: 'byhelper-1', childName: 'A Child', code: '5005' }), unhex(SESSION_KEY)) }, ada.sk);
+  const [ok, msg] = await send(w, rec);
+  assert.equal(ok, true, 'fixture: the relay refused the in-window helper\'s own check-in record: ' + msg);
+  await sleep(200);
+  const dtag = D.CHECKIN + 'byhelper-1';
+  for (const [who, name] of [[church, 'THE CHURCH KEY'], [netKey, 'THE NETWORK KEY'], [sgLead, 'THE SAFEGUARDING STEWARD'],
+                             [gina, 'THE GUARDIAN THE RECORD NAMES']])
+    assert.equal(one(await asks(who, { kinds: [30078], '#d': [dtag] }), dtag), 1,
+      name + ' CANNOT READ A ROW ITS OWN CRECHE VOLUNTEER WROTE. The register is one document per child and ' +
+      'the church did not sign most of them — a gate that serves only what the church authored hands it a ' +
+      'register with the morning missing from it.');
+  // oldSt MOVED FROM THE LIST ABOVE TO THE ONE BELOW on 2026-09-12, by the owner's decision.
+  for (const [who, name] of [[tres, 'the treasurer'], [rotaSt, 'the rota steward'], [careBoss, 'the care admin'],
+                             [oldSt, 'an UNSCOPED steward'], [cara, 'an ordinary member']])
+    assert.deepEqual(await asks(who, { kinds: [30078], '#d': [dtag] }), [],
+      name + ' was served a helper-authored check-in record');
+});
+
+test('THE CAPS-FREE ROSTER, LITERALLY — the document the shipped console writes, against its own church', async () => {
+  // THE TEST THE 2026-09-12 DECISION IS ABOUT. Everything above uses `oldSt`, who sits on a roster that HAS a
+  // caps map and simply has no entry in it. That is indistinguishable from this at the relay — the STEWARDS_D
+  // branch builds an empty Map whichever way the document is shaped, so `byPub.get(pub)` is undefined for
+  // both — but "indistinguishable" is an argument, and this is the measurement. `plainChurch`'s roster is
+  // written with NO `caps` KEY AT ALL, which is what src/steward.src.js publishes until somebody opens the
+  // capability editor. It is the ORDINARY church, and it was the one leaking.
+  //
+  // ALL FOUR DOCUMENTS, because the short-circuit that caused this widened all four at once and a fix
+  // measured on the register alone would leave the other three open.
+  //
+  // ⚠ THE CLEARANCE AND THE ENVELOPE DELIBERATELY NAME plainMum. Each has a route in of its own — "the person
+  // a clearance names", "a pubkey the envelope names" — which is NOT the steward grant and is not what
+  // changed. Naming plainSt in either would admit him by that route whatever checkinReader() decided, and the
+  // refusal would be unmeasurable. The controls at the foot prove those routes still work.
+  const four = [[D.CHECKIN + 'plain-1', 'the register record'],
+                [D.CHECKINARRIVAL + P_SESSION + ':' + plainMum.pub, 'the arrival'],
+                [D.CHECKINHELPER + P_SESSION, 'the session envelope'],
+                [D.CHECKINPERM + plainMum.pub, 'the clearance']];
+  // FIRST, THAT HE REALLY IS A STEWARD OF THAT CHURCH — the role-only rota document, the same control the
+  // FIXTURE CONTROL test uses and for the same reason: without it, a roster the relay quietly rejected turns
+  // every refusal below into the much weaker "an ordinary member is refused".
+  const rotaDoc = D.ROTA + 'pr1';
+  assert.equal(one(await asks(plainSt, { kinds: [30078], '#d': [rotaDoc] }), rotaDoc), 1,
+    'the caps-free roster did not take at all — plainSt is not a steward, so nothing below is evidence');
+  assert.deepEqual(await asks(plainMum, { kinds: [30078], '#d': [rotaDoc] }), [],
+    're-anchor: an ordinary member of that church reads a stewards-only rota, so the control proves nothing');
+
+  for (const [dtag, what] of four) {
+    assert.deepEqual(await asks(plainSt, { kinds: [30078], '#d': [dtag] }), [],
+      'A STEWARD ON A ROSTER WITH NO `caps` KEY WAS SERVED ' + what.toUpperCase() + '. This is the document ' +
+      'the shipped console writes for every church nobody has configured, so it is the common case and not ' +
+      'the edge one. CAP_KEYS.checkin is explicit, so this person has never held the register key and could ' +
+      'never open a record — what they were being handed was the cleartext tags and nothing else.');
+    assert.equal(one(await asks(plainChurch, { kinds: [30078], '#d': [dtag] }), dtag), 1,
+      'THE CHURCH KEY LOST ' + what.toUpperCase() + ' IN ITS OWN CHURCH. Nothing functional may be lost ' +
+      'here: the owner keeps everything, and only the delegate who could never open it stops being served.');
+  }
+  // AND THE TWO ROUTES THAT ARE NOT THE STEWARD GRANT STILL WORK, or the four refusals above would be
+  // satisfied by a gate that had closed on everybody.
+  assert.equal(one(await asks(plainMum, { kinds: [30078], '#d': [D.CHECKINPERM + plainMum.pub] }),
+    D.CHECKINPERM + plainMum.pub), 1,
+    'the person a clearance NAMES cannot read their own — her screen has no way to say when it ends');
+  assert.equal(one(await asks(plainMum, { kinds: [30078], '#d': [D.CHECKINHELPER + P_SESSION] }),
+    D.CHECKINHELPER + P_SESSION), 1,
+    'the pubkey the envelope NAMES cannot fetch it — she is granted the register and refused the key');
 });
