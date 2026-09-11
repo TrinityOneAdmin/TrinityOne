@@ -686,9 +686,16 @@ function KidsRow({ rec, ctx, open, onToggle }) {
           </button>
         )}
       </div>
-      {/* THE CHECKOUT PANEL. The worker enters the code the PARENT shows — it is not revealed here — and the
-          screen compares it. A mismatch is loud and writes nothing; "Release by hand" records a manual
-          collection when a parent's phone is dead. */}
+      {/* THE CHECKOUT PANEL. The worker enters the code the PARENT shows and the screen compares it. A
+          mismatch is loud and writes nothing; "By hand" records a manual collection when a parent's phone is
+          dead.
+          ⚠ SAID EXACTLY: the code is not pre-filled or echoed INTO THIS PANEL — but the row's own "Show code"
+          toggle above is still one tap away while the panel is open, so this is NOT a claim that a worker
+          cannot see the code. It is not meant to be: reference/DOMAIN.md and design §10 — every gate here
+          exists to keep OTHER people out of the register, never to police the church's own team. The match is
+          a soft check that makes the ordinary pickup hard to get wrong, and "By hand" is the explicit,
+          recorded way past it. An earlier version of this comment claimed the code "is not revealed here",
+          which was true only of this panel and read as a boundary it is not (CLAUDE.md rule 4). */}
       {mode === 'collect' && !rec.out ? (
         <div style={{ padding: '0 13px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
