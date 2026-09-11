@@ -289,6 +289,60 @@ test('POINT OF USE: a matching pickup code RELEASES the child — a separate rel
   assert.equal(s.releaseCalls[0].manual, false, 'a code-matched release was recorded as by-hand');
 });
 
+// ── POINT OF USE FOR THE ONE LINE OF APP CODE STEP 2 ADDED TO THIS SCREEN ────────────────────────────────
+// An audit found it untested on 2026-09-11: removing `guardians: rec.guardians` from KidsRow's call to
+// ctx.checkinRelease reddened NOTHING across eight test files, and the only mention of KidsRow anywhere in
+// scripts/ was a comment. That argument is worth more than the line: without those guardians the release
+// carries no ['p'] tag and no ['gk'] copy, the relay serves it to nobody in the family, and A PARENT'S
+// SCREEN SHOWS THEIR CHILD PRESENT FOR EVER — a guardian is never served a tombstone, and a worker's
+// checkout is a separate document rather than an edit of the check-in (F-B), so a release they can read is
+// the ONLY thing that can ever change that row.
+//
+// ⚠ RULE 3: this asserts on the OBJECT THE SCREEN HANDED ctx.checkinRelease, off a rendered tree and a real
+// click — never on the text of app/screens-serving.jsx, which ships unbundled.
+const ONE_GUARDIAN = 'a1'.repeat(32), TWO_GUARDIAN = 'b2'.repeat(32);
+const guardedKid = [{ id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am',
+                      guardians: [ONE_GUARDIAN, TWO_GUARDIAN] }];
+
+test('POINT OF USE: a checkout carries the child\'s GUARDIANS, or no parent ever learns they were collected', async () => {
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(guardedKid) });
+  s.press('Kids');
+  await s.click('Check out');
+  s.type('Enter the pickup code for Esther Ncube', '4417');
+  await s.click('Confirm');
+  assert.equal(s.releaseCalls.length, 1, 're-anchor: the matching code released nobody, so the assertion below is vacuous');
+  assert.deepEqual(s.releaseCalls[0].guardians, [ONE_GUARDIAN, TWO_GUARDIAN],
+    'THE CHECKOUT CARRIES NO GUARDIANS. releaseCheckin derives both the [\'p\'] tag the relay serves this ' +
+    'release on and the [\'gk\'] copy the parent opens from exactly this field; dropped here, a collected ' +
+    'child reads as present on their own parent\'s phone for the rest of the day and for ever after.');
+});
+
+test('…and a BY-HAND release carries them too — §7: visible to the guardian afterwards', async () => {
+  // The one release a parent most needs to see, because it is the one that happened WITHOUT their code.
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(guardedKid) });
+  s.press('Kids');
+  await s.click('Check out');
+  await s.click('By hand');
+  assert.equal(s.releaseCalls.length, 1, 're-anchor: the by-hand control recorded nothing');
+  assert.deepEqual(s.releaseCalls[0].guardians, [ONE_GUARDIAN, TWO_GUARDIAN],
+    'A BY-HAND RELEASE REACHED NO GUARDIAN. Design §7 requires a manual release to be "visible to the ' +
+    'guardian afterwards, so a parent can see their child was collected without their code" — which needs ' +
+    'this field and nothing else.');
+});
+
+test('…and a child whose copy names no guardian is still checked out, never blocked', async () => {
+  // reference/DOMAIN.md and design §10: the family with no app is the ordinary Sunday, and nothing in this
+  // feature may stand between a child and going home.
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
+  s.press('Kids');
+  await s.click('Check out');
+  await s.click('By hand');
+  assert.equal(s.releaseCalls.length, 1,
+    'A CHILD WITH NO GUARDIAN ON THEIR RECORD COULD NOT BE CHECKED OUT. Most families have no app; this is ' +
+    'the ordinary case, not an edge one.');
+  assert.equal(s.releaseCalls[0].rel, 'ci-1');
+});
+
 test('…and a WRONG code is LOUD and releases NOBODY (§6 rule 5)', async () => {
   const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
   s.press('Kids');

@@ -6293,14 +6293,19 @@ function DashCheckin() {
 
           ⚠ TWO CLAIMS DID NOT MOVE, and both are here because their absence would leave a steward with a
           WRONG conclusion rather than merely less detail (CLAUDE.md rule 4 applied to copy):
-            · PARENTS SEE NOTHING OF CHECK-IN IN THEIR OWN APP. Verified 2026-09-10 rather than assumed:
-              `grep -c checkin src/fellowship.src.js src/mydata.src.js` is 1 and 1, and neither is a read of
-              the register — there is no member surface at all. A leader who does not say this at the
-              announcement sends the whole church hunting for a button that does not exist.
+            · WHAT A PARENT SEES. This said "PARENTS SEE NOTHING OF CHECK-IN IN THEIR OWN APP", on evidence
+              measured on 2026-09-10 — `grep -c checkin src/fellowship.src.js src/mydata.src.js` was 1 and 1,
+              and neither was a read of the register. BOTH HALVES ARE NOW FALSE: that grep is 102 and 1, and
+              STEP 2 of the parent surface (2026-09-11) gives a parent their OWN children and their pickup
+              codes, sealed to their own key in a ['gk'] tag. The line is corrected rather than deleted,
+              because a leader who announces the wrong one of these sends a whole church either hunting for a
+              button that does not exist or believing a code is on a phone that has never been given one.
             · WHO CAN OPEN A RECORD. Saying nothing would be safe; saying "you and your safeguarding
               stewards" was the audit finding of 2026-09-09, because a cleared helper holding the session key
-              can open one too. The short form keeps all three and no more. */}
-      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>A door operation, done by a leader at this device — <b>parents see nothing of check-in in their own app</b>, so say so when you announce it. Records are sealed to your <b>safeguarding key</b>: you, anyone you have given <b>Safeguarding</b> to, and a <b>cleared</b> helper holding that session’s key can open them. <StewHelpLink id="console-checkin" label="How check-in works" /></DismissibleNote>
+              can open one too — and as of 2026-09-11 so can the child's own guardians. The short form keeps
+              all FOUR and no more. A disclosure a church reads out at an announcement is the one piece of
+              copy in this product that must not lag the code. */}
+      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>A door operation, done by a leader at this device — a parent with the app sees <b>their own children and the pickup code</b>, and nothing else. Records are sealed to your <b>safeguarding key</b>: you, anyone you have given <b>Safeguarding</b> to, a <b>cleared</b> helper holding that session’s key, and the child’s own <b>guardians</b> can open them. <StewHelpLink id="console-checkin" label="How check-in works" /></DismissibleNote>
       {/* WHICH SESSION, SHOWN RATHER THAN ASSUMED — and never as a refusal. A record's ['session'] tag is
           the only thing that lets a cleared helper open it, so a leader is entitled to know whether the
           records they are writing carry one. This says so in a line, and offers the choice only where there

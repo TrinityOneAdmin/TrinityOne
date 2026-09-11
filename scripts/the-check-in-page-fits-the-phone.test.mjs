@@ -446,18 +446,32 @@ function note(id) {
   return reads(found[0]);
 }
 
-test('COPY: the register still says parents see nothing of check-in in their own app', () => {
-  // ⚠ THIS IS NOT INSTRUCTIONAL COPY AND MUST NOT BE MOVED TO HELP. A leader who does not say it at the
-  // announcement sends the whole church looking for a screen that does not exist — and the reason nobody
-  // finds one is verifiable rather than assumed: `grep -c checkin src/fellowship.src.js src/mydata.src.js`
-  // is 1 and 1 on 2026-09-10, and neither is a read of the register. There is no member surface at all.
+test('COPY: the register says what a parent DOES see — and it is their own children, not nothing', () => {
+  // ⚠ THIS IS NOT INSTRUCTIONAL COPY AND MUST NOT BE MOVED TO HELP. It is the sentence a leader says out
+  // loud at the announcement, and it has to be the TRUE one.
+  //
+  // IT SAID THE OPPOSITE UNTIL 2026-09-11, on evidence measured the day before: "parents see nothing of
+  // check-in in their own app", because `grep -c checkin src/fellowship.src.js src/mydata.src.js` was 1 and 1
+  // and neither was a read of the register. STEP 2 of the parent surface ended that — a parent now opens
+  // their OWN children and their pickup codes, sealed to their own key in a ['gk'] tag — and this test moved
+  // with the code rather than pinning a sentence that had become false. A disclosure a church reads out is
+  // the one piece of copy in this product that must never lag the code (CLAUDE.md rule 4 applied to copy).
   const said = note('kids-checkin-intro');
-  assert.match(said, /parents see nothing of check-in in their own app/i,
-    'the console no longer tells a steward that check-in is invisible to parents, which is the one thing ' +
-    'they have to say out loud when they announce it. As rendered: ' + said.slice(0, 300));
+  assert.match(said, /their own children/i,
+    'THE CONSOLE NO LONGER TELLS A STEWARD WHAT A PARENT SEES. Announcing the wrong one of these sends a ' +
+    'church either hunting for a button that does not exist or believing a code is on a phone that has never ' +
+    'been given one. As rendered: ' + said.slice(0, 300));
+  assert.match(said, /pickup code/i, 'the note no longer says a parent can see the pickup code, which is the whole parent surface');
+  assert.match(said, /and nothing else/i,
+    'the note no longer says a parent sees NOTHING BEYOND their own children. Without that half a steward ' +
+    'reads "parents can see check-in" as "parents can see the register".');
+  assert.doesNotMatch(said, /parents see nothing of check-in/i,
+    'THE CONSOLE IS BACK TO TELLING A STEWARD THAT PARENTS SEE NOTHING. That was true until 2026-09-11 and ' +
+    'is now false; a church that announces it leaves every family with the app hunting for a code the app ' +
+    'is already showing them.');
 });
 
-test('COPY: the register still names all three people who can open a record, and no fewer', () => {
+test('COPY: the register still names all FOUR people who can open a record, and no fewer', () => {
   // The audit finding of 2026-09-09 was the note saying "you and anyone you have given Safeguarding to" —
   // true until a helper could be cleared, false from the day clearing shipped. Understating the audience of
   // a child's record is the worst direction for this screen to be wrong in.
@@ -466,8 +480,12 @@ test('COPY: the register still names all three people who can open a record, and
   // for it. "Anyone you have given Safeguarding to" rather than "safeguarding stewards": naming the GRANT is
   // what scripts/encryption-claims-honest.test.mjs exists to require, because the grant is the thing an owner
   // ticks and therefore the thing they have to connect to this consequence.
+  // ⚠ FOUR SINCE 2026-09-11, NOT THREE. STEP 2 sealed a third copy of every record to each guardian the
+  // record names, so a child's own parents open it too. Understating the audience of a child's record is the
+  // worst direction for this screen to be wrong in, and it had understated it for the whole of that day.
   for (const [who, re] of [['you', /\byou\b/], ['anyone granted Safeguarding', /given Safeguarding to/i],
-                           ['a cleared helper', /cleared helper/i]]) {
+                           ['a cleared helper', /cleared helper/i],
+                           ["the child's own guardians", /guardians/i]]) {
     assert.match(said, re, `the register card no longer says ${who} can open a check-in record: ` + said.slice(0, 300));
   }
   assert.match(said, /safeguarding key/i,

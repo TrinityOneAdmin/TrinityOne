@@ -824,6 +824,22 @@ export function readCheckinHelperCopy(tags, keyHex, unseal) {
 // WHAT THE TAG DISCLOSES, stated rather than glossed: a relay operator already sees the `['p']` tag naming
 // this guardian. A `['gk']` beside it adds one opaque ciphertext per guardian — so the marginal disclosure is
 // the COUNT of guardians on a record, which the `['p']` tags already state exactly.
+//
+// ── ⚠ AND THE ONE THING A CHURCH CANNOT TAKE BACK, WRITTEN DOWN BECAUSE IT IS NOT DERIVABLE FROM THE CODE ──
+// A GUARDIAN COPY, ONCE PUBLISHED, CANNOT BE WITHDRAWN FROM THAT GUARDIAN. Unlinking a parent in Members
+// stops FUTURE records naming them — the console reads the live `guardians:` map at check-in time — and does
+// nothing at all about the records they were already `['p']`-tagged on: the relay serves those on the
+// record's OWN tag, not on the live map, and their `gk` opens with a key only they hold. `migrateCheckinKeys`
+// re-publishes the stored body, so an old guardian list survives a re-key with it. The client-side window in
+// `subscribeMyChildrenCheckins` is a DISPLAY filter on a phone, never a gate, and a copy already on a device
+// is already on it. The only remedy is `removeCheckin`, which is address-wide and destroys the record for
+// everyone.
+//
+// Before this tag existed that population held ciphertext they could not open; now it holds the child's name,
+// room, times and PICKUP CODE for the records in question. This is the price of the parent surface and it is
+// the right price — a family reading their own child's code is the feature — but a safeguarding lead removing
+// a parent for cause is entitled to know that the past does not move. It is on the console's own note and in
+// the `console-checkin` guide for exactly that reason.
 export function checkinGuardianPubs(rec) {
   // BYTE-FOR-BYTE THE NORMALISATION `_encCleartextTags` APPLIES TO THE SAME FIELD — trim, lower-case,
   // 64-hex only, de-duplicated, order preserved. Written once here and asserted equal to the console's own

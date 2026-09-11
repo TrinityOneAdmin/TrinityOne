@@ -370,6 +370,50 @@ test('a worker\'s CHECKOUT carries the parent\'s tag and copy, so "collected" ca
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════
+// 7b. A SEAL THAT FAILS COSTS THAT GUARDIAN THEIR COPY — AND NEVER COSTS THE CHILD THEIR CHECK-IN.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════
+test('a guardian whose key will not seal loses THEIR copy and nothing else', async () => {
+  // reference/DOMAIN.md and design §10: nothing in this feature may stand between a child and the desk. A
+  // guardian pubkey that is 64 hex characters and NOT a point on the curve — a corrupted map entry, a typo
+  // that survived the regex — makes nip44's conversation key throw. checkinGuardianCopies catches per
+  // guardian, and both writers compute it OUTSIDE their own try/catch so a throw could not be mistaken for
+  // a seal-failed refusal.
+  //
+  // UNTESTED UNTIL AN AUDIT SAID SO, 2026-09-11: removing that try/catch left every check-in test green.
+  const BAD = 'ff'.repeat(32);
+  assert.throws(() => ck(mother.sk, BAD), 'fixture: this pubkey seals fine, so nothing below is about a failure');
+
+  // ── THE CONSOLE. Two guardians, one of them unsealable.
+  const evt = consoleRecord({ id: 'ci-badkey', childName: 'Ivy Henderson', code: '4417',
+    guardians: [BAD, mother.pub] }, { expectGk: 1 });
+  assert.equal(opensFor(mother, evt)?.code, '4417',
+    'A BROKEN GUARDIAN ENTRY TOOK THE GOOD ONE WITH IT. One family member\'s key failing must never cost ' +
+    'the other their pickup code.');
+  assert.equal(evt.tags.filter(t => t[0] === 'p').length, 2,
+    're-anchor: the bad pubkey never became a [\'p\'] tag either, so the record is not the shape this tests');
+  assert.equal(JSON.parse(nip44.v2.decrypt(evt.content, unhex(SG_RING_KEY))).code, '4417',
+    'THE RECORD ITSELF WAS LOST TO A GUARDIAN\'S BROKEN KEY. The church could not read its own register ' +
+    'because one parent\'s pubkey was corrupt — which is the shape "nothing blocks a check-in" forbids.');
+
+  // ── AND THE WORKER'S WRITER, where a refusal would be a child not checked in at a door.
+  const w = workerWriter(worker, { [SESSION]: SESSION_KEY }, 'writeCheckin');
+  const res = await w.fn(church.pub, { session: SESSION, childName: 'Ivy Henderson', code: '3312', guardian: BAD });
+  assert.equal(res.ok, true,
+    'THE WORKER WAS REFUSED THE WHOLE CHECK-IN because one guardian pubkey would not seal: ' +
+    JSON.stringify(res) + '. A parent\'s copy failing must cost that parent their copy, never the child ' +
+    'their place in the room.');
+  assert.equal(w.captured[0].tags.filter(t => t[0] === 'gk').length, 0, 'a copy was sealed to a key that cannot hold one');
+  assert.ok(readCheckinHelperCopy(w.captured[0].tags, SESSION_KEY, (c, k) => nip44.v2.decrypt(c, unhex(k))),
+    'the WORKER lost her own copy of the record over a guardian\'s broken key');
+
+  // ── AND THE RELEASE, where a refusal would be a child who cannot be signed out of a room.
+  const r = workerWriter(worker, { [SESSION]: SESSION_KEY }, 'releaseCheckin');
+  const rr = await r.fn(church.pub, { session: SESSION, rel: 'ci-badkey', guardians: [BAD, mother.pub] });
+  assert.equal(rr.ok, true, 'a child could not be CHECKED OUT because a guardian pubkey would not seal: ' + JSON.stringify(rr));
+  assert.equal(opensFor(mother, r.captured[0]).rel, 'ci-badkey', 'the good guardian lost their copy of the release too');
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════
 // 8. THE SHAPE IS ADDITIVE. A record without the copy is byte-identical to yesterday's.
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════
 test('a record with NO guardians is exactly the record this writer produced yesterday', () => {
