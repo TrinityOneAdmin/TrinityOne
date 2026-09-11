@@ -112,8 +112,14 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // Fellowship.writeCheckin / releaseCheckin. Ordinary active-church reads, identical in shape, and they
   // benefit from the heal: with a stale id np is undefined and the action returns { ok:false } — a LOUD
   // no-op the screen reports as "see the desk", never a silent write to the wrong church.
-  assert.equal(sites.length, 39,
-    `the active-church resolution sites changed (${sites.length} vs 39) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 39 → 40 on 2026-09-11: the PARENT's own children subscription (STEP 2 of the parent surface), which
+  // resolves the active church to its npub to open Fellowship.subscribeMyChildrenCheckins. Identical in
+  // shape to the worker's register subscription five lines above it, and it benefits from the heal for the
+  // same reason: with a stale id it resolves to no npub, the effect falls back to the empty default, and the
+  // parent's card simply is not there — which is indistinguishable, on a phone, from having no children
+  // checked in.
+  assert.equal(sites.length, 40,
+    `the active-church resolution sites changed (${sites.length} vs 40) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

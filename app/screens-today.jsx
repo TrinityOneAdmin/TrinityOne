@@ -1365,6 +1365,90 @@ window.RecoveryNudge = RecoveryNudge;
 // EDITING an event republishes it with a newer ts and it counts again — "or a change to one". Occurrences of
 // a recurring event are expanded from one document and share its id, so they are counted once.
 const SERV_NEW_CAP = 9;
+// ════════════════ MY OWN CHILDREN, AT TODAY'S SESSION — THE PARENT'S WHOLE SURFACE ══════════════
+// STEP 2 of reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md. §4: "the parent shows the code from
+// their phone; the worker checks it matches before releasing the child." Data comes from
+// Fellowship.subscribeMyChildrenCheckins via ctx.myChildren — see that function for the whole chain and what
+// each field is allowed to mean.
+//
+// ── IT DOES NOT EXIST FOR ANYBODY ELSE, AND THAT IS THE DESIGN ────────────────────────────────────────────
+// Renders NULL unless this phone either opened a record of its own or was served one naming it. A parent
+// persona hunted this whole app on 2026-09-10 and found no check-in anywhere, and the finding was that the
+// absence is CORRECT and, critically, that there were no dead ends: no menu item leading nowhere, no empty
+// "No check-ins today" state, nothing implying check-in should be there. A card that greeted the whole
+// congregation with "no children checked in" would be exactly that dead end.
+//
+// ── IT IS NOT A REGISTER ──────────────────────────────────────────────────────────────────────────────────
+// The owner, 2026-09-11: *"parents don't have any records surfaced to them… the code must still be shown as
+// we designed."* So: their own children, their own codes, and nothing else — no room list, no other family,
+// no roll. Every row here came out of a ciphertext sealed to THIS PHONE'S key; there is no list to widen.
+//
+// ── AND THERE IS NO WAY TO CHECK A CHILD OUT FROM HERE, EVER ──────────────────────────────────────────────
+// Not an omission — the point. The pickup code exists so that the person handing a child over is the person
+// who brought them; a control on the parent's own phone that released a child would route straight round it.
+// The parent SHOWS; the worker MATCHES and writes. Asserted as an absence at the point of use in
+// scripts/a-parent-sees-their-own-childs-pickup-code.test.mjs, because an absence is exactly the kind of
+// thing a later "helpful" addition undoes.
+//
+// ── THE CODE IS SHOWN OPENLY, UNLIKE THE WORKER'S SCREEN ──────────────────────────────────────────────────
+// KidsRegister covers each code until it is asked for: a worker holds a whole room's codes and her phone can
+// be read over a shoulder. A parent holds their OWN child's code and has to hold it up to a volunteer at a
+// door. Covering it there would be ceremony that costs a tap at the one moment it is needed.
+//
+// ⚠ AND IT IS LABELLED IN VISIBLE TEXT, not by `title`. Device finding, 2026-09-11: a pickup code labelled
+// by a tooltip alone read as "I couldn't tell which one is 'the' pickup code — I'd have read 9079 to a
+// parent, but I was guessing." A `title` is invisible on a touch screen and to a screen reader.
+function tdyClock(ts) {
+  if (!Number.isFinite(ts)) return '';
+  try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; }
+}
+function MyChildrenCard({ ctx }) {
+  const mine = (ctx && ctx.myChildren) || {};
+  const kids = Array.isArray(mine.children) ? mine.children : [];
+  const askAtDesk = Number(mine.askAtDesk) || 0;
+  // NOTHING TO SAY, SO NOTHING IS SAID. Not "no children checked in" — see the dead-end note above. This is
+  // also the state of every member of the congregation who has nothing to do with check-in, which is most of
+  // them, on every Sunday.
+  if (!kids.length && !askAtDesk) return null;
+  return (
+    <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden', marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px' }}>
+        <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="child" size={18} /></div>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1 }}>Your children at church</div>
+      </div>
+      {kids.map(k => (
+        <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 15px', borderTop: '1px solid var(--line)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.childName || 'Name not in this copy'}</div>
+            {/* COLLECTED — and it arrives as a document a parent can read, never as a record going away. A
+                guardian is never served a tombstone, so without the release this row could never change. */}
+            {k.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Checked out{tdyClock(k.out) ? ' · ' + tdyClock(k.out) : ''}{k.manual ? ' · by hand' : ''}</div> : null}
+          </div>
+          {k.out ? null : k.code ? (
+            <div style={{ flexShrink: 0, textAlign: 'right' }}>
+              <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>Pickup code</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, letterSpacing: '2px', color: 'var(--ink)' }}>{k.code}</div>
+            </div>
+          ) : (
+            /* A COPY WITH NO CODE IN IT IS NOT A CHILD WITH NO CODE. The same words the worker's row uses. */
+            <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>No pickup code for this child</span>
+          )}
+        </div>
+      ))}
+      {/* SERVED, AND THIS PHONE HOLDS NO COPY OF IT. The walk-up at the desk, the dead phone, the record
+          written before the guardian copy shipped. It says so AT ONCE — subscribeMyChildrenCheckins counts
+          this from the first event rather than at EOSE — because a parent standing at a door is the person
+          least able to wait on a spinner that never resolves, and a blank screen is the worst of the three
+          things this card can be. */}
+      {askAtDesk > 0 ? (
+        <div style={{ borderTop: '1px solid var(--line)', padding: '12px 15px', fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+          Checked in at the desk? Ask the worker for the pickup code.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function servingNewCount(ctx, seenTs) {
   const seen = Number(seenTs) || 0;
   if (!seen) return 0;   // no mark yet -> nothing is new. A member who joined a church with fifty events on
@@ -1577,6 +1661,10 @@ function TodayScreen({ ctx }) {
           }}><Icon name="flame" size={18} stroke={2} />{streak}</button>
         </div>
       </div>
+
+      {/* MY OWN CHILDREN AT TODAY'S SESSION, FIRST AMONG THE CARDS — a pickup code is needed at a door, now,
+          and renders NOTHING for everybody else (see MyChildrenCard). */}
+      <MyChildrenCard ctx={ctx} />
 
       {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}
       {beingCaredFor && !careBannerDismissed ? (
@@ -1851,4 +1939,4 @@ function TodayScreen({ ctx }) {
   );
 }
 
-Object.assign(window, { TodayScreen, ScreenScroll, ProgressRing, SafetyDock });
+Object.assign(window, { TodayScreen, ScreenScroll, ProgressRing, SafetyDock, MyChildrenCard });

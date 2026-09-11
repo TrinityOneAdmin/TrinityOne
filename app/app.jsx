@@ -1177,6 +1177,9 @@ function App() {
   // `defaults` MATTERS: cleared:false with no keys is what makes the tab absent, so a church switch or a
   // signed-out phone must land back on it rather than keep the last church's answer.
   const CK_NONE = { cleared: false, lapsed: false, notYet: false, withdrawn: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
+  // THE PARENT'S HALF, at rest. `settled:false` so the card can tell "nothing has arrived yet" from "nothing
+  // is there", exactly as CK_NONE above does for the worker's.
+  const MYKIDS_NONE = { children: [], askAtDesk: 0, settled: false };
   const [checkinRegister, setCheckinRegister] = useA(CK_NONE);
   useAE(() => {
     if (!lazyReady) return;
@@ -1184,6 +1187,19 @@ function App() {
     const F = window.Fellowship;
     if (!np || !F || !F.subscribeCheckinRegister) { setCheckinRegister(CK_NONE); return; }
     return F.subscribeCheckinRegister(np, setCheckinRegister);
+  }, [activeChurch, churches, connTick, lazyReady]);
+  // MY OWN CHILDREN AT TODAY'S SESSION — STEP 2 of the parent surface, and the other half of check-in in
+  // this app. `checkinRegister` above is the WORKER's view and needs a clearance and a session key;
+  // THIS ONE NEEDS NEITHER AND IS FOR EVERY PARENT. It emits { children, askAtDesk, settled }, where
+  // `children` are only ever the records whose guardian copy THIS PHONE'S OWN KEY opened — see
+  // Fellowship.subscribeMyChildrenCheckins for the two conditions and why both are required.
+  const [myChildren, setMyChildren] = useA(MYKIDS_NONE);
+  useAE(() => {
+    if (!lazyReady) return;
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.subscribeMyChildrenCheckins) { setMyChildren(MYKIDS_NONE); return; }
+    return F.subscribeMyChildrenCheckins(np, setMyChildren);
   }, [activeChurch, churches, connTick, lazyReady]);
   // A WORKER CHECKS A CHILD IN — slice B. The raw session key never enters React; this hands the record to
   // Fellowship.writeCheckin, which seals it under the key the reader unwrapped and publishes it. Returns the
@@ -1922,6 +1938,10 @@ function App() {
     checkinRegister,
     checkinAdd,   // slice B: a worker checks a child in — Fellowship.writeCheckin, returns { ok, reason }
     checkinRelease,   // slice C: a worker releases a child (code match on screen) — Fellowship.releaseCheckin
+    // …AND THE PARENT'S HALF. Their own children at today's session, with the pickup code the worker will
+    // ask for — { children, askAtDesk, settled }. There is deliberately NO parent release control anywhere
+    // beside it: a parent checking their own child out routes straight round the pickup code.
+    myChildren,
     joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed } for the active church
     // How far this phone's clock is from the relay's, in whole minutes, when we have actually MEASURED it.
     // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date
