@@ -32,7 +32,8 @@ import { webcrypto } from 'node:crypto';
 import * as nip44 from 'nostr-tools/nip44';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { fnBody, stmt } from './test-slice.mjs';
-import { checkinGuardianCopies, readCheckinGuardianCopy, checkinSessionOf, checkinGuardianPubs } from './checkin-role-source.mjs';
+import { checkinGuardianCopies, readCheckinGuardianCopy, checkinSessionOf, checkinGuardianPubs,
+         MAX_SESSION_SECONDS } from './checkin-role-source.mjs';
 import { D } from './trinity-doc-types.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
@@ -53,12 +54,22 @@ const NOW = 1788600000;                              // 2026-09-06T12:00:00Z
 const SG_RING_KEY = hex(webcrypto.getRandomValues(new Uint8Array(32)));
 const SESSION_KEY = hex(webcrypto.getRandomValues(new Uint8Array(32)));
 
-// THE SHIPPED WINDOW, read out of the bundle rather than restated here — a test that hard-coded 16 hours
-// would go on passing if the product's own constant changed underneath it.
-const MYKIDS_WINDOW = Number((stmt(FELLOWSHIP, 'var MYKIDS_WINDOW =', 'MYKIDS_WINDOW').match(/=\s*(.+);/) || [])[1]
-  .split('*').map(Number).reduce((a, b) => a * b, 1));
-assert.ok(MYKIDS_WINDOW > 3600 && MYKIDS_WINDOW < 86400 * 2,
-  'the shipped MYKIDS_WINDOW read as ' + MYKIDS_WINDOW + ' seconds, which is not a plausible window — re-anchor');
+// THE SHIPPED WINDOW, not a number restated here — a test that hard-coded a figure would go on passing if
+// the product's own constant changed underneath it. It is BOUND TO MAX_SESSION_SECONDS in the bundle, which
+// is the point: a session may legitimately run 26 hours (an all-day event, a residential), and a parent's
+// view that expired first would drop the row WHILE THE CHILD WAS STILL IN THE ROOM.
+// ⚠ EVALUATED OUT OF THE BUNDLE, NOT IMPORTED FROM THE SHARED MODULE, AND THE DIFFERENCE IS THE WHOLE
+// POINT. The lifted reader reads `MYKIDS_WINDOW` as a FREE VARIABLE resolved through this file's scope stub.
+// A stub taking its value from `MAX_SESSION_SECONDS` here would be this test answering its own question: a
+// sabotage that rewrote the shipped constant to 16 hours changed nothing the reader saw, and the matrix row
+// measuring it reported a clean pass. (Found by that row, 2026-09-11 — "a stub answers the question".)
+// So both statements are evaluated out of vendor/fellowship.js, and what the reader is handed below is
+// literally the number the product ships, however it is spelled.
+const MYKIDS_WINDOW = new Function(
+  stmt(FELLOWSHIP, 'var MAX_SESSION_SECONDS =', 'MAX_SESSION_SECONDS') + '\n' +
+  stmt(FELLOWSHIP, 'var MYKIDS_WINDOW =', 'MYKIDS_WINDOW') + '\nreturn MYKIDS_WINDOW;')();
+assert.ok(Number.isFinite(MYKIDS_WINDOW) && MYKIDS_WINDOW > 3600,
+  'the shipped MYKIDS_WINDOW evaluated to ' + MYKIDS_WINDOW + ', which is not a window — re-anchor this test');
 
 // ── THE CONSOLE'S WRITER, LIFTED OUT OF vendor/steward.js ─────────────────────────────────────────────────
 function consoleWriter(actor, sessionKeys) {
@@ -399,4 +410,123 @@ test('a hostile sealed body reaches the screen as strings, never as objects', ()
   assert.equal(row.in, undefined, 'an object reached a row as a check-in time');
   assert.equal(row.out, undefined, 'an unparseable string reached a row as a collection time');
   p.stop();
+});
+
+// ── THE WINDOW IS MEASURED ON THE EVENT, NEVER ON THE SEALED BODY ────────────────────────────────────────
+// Both faults below were found by an audit on 2026-09-11, in a `fresh()` that read the body's `in` where the
+// copy opened and `created_at` where it did not. Everything else in this reader routes on cleartext the
+// relay enforces; the window was the exception, and it was the one thing between a stale record and "a child
+// is in a room for ever".
+test('a body dated in the FUTURE does not keep a child on the screen for ever', () => {
+  // Measured before the fix: `in: NOW + 400 days` sat on the parent's screen at +0, +30, +200 and +399 days.
+  const far = NOW + 400 * 86400;
+  const rec = record('ci-future', { childName: 'Ivy Henderson', code: '4417', in: far },
+    { at: NOW, guardians: [mother.pub], expectGk: 1 });
+  assert.deepEqual(namesOn(phone(mother).feed(rec).settle().last()), ['Ivy Henderson'],
+    're-anchor: the record is not shown even on the day it was published, so the ageing below proves nothing');
+  for (const days of [2, 30, 399]) {
+    const later = phone(mother, { now: NOW + days * 86400 }).feed(rec).settle().last();
+    assert.deepEqual(namesOn(later), [],
+      'A RECORD DATED IN THE FUTURE WAS STILL ON THE PARENT\'S SCREEN ' + days + ' DAYS LATER. No tombstone ' +
+      'will ever arrive to remove it, so the only thing that can is the window — and a window a writer can ' +
+      'push past is not one.');
+  }
+
+  // AND THE SAME FOR THE EVENT ITSELF. `created_at` is the writer's to choose too, so the window is
+  // SYMMETRIC: a record dated a year ahead is shown for one window from now and then ages out, rather than
+  // sitting on a parent's screen until the clock catches up with it.
+  const ahead = record('ci-ahead', { childName: 'Milo Henderson', code: '9081' },
+    { at: NOW + 365 * 86400, guardians: [mother.pub], expectGk: 1 });
+  assert.deepEqual(namesOn(phone(mother).feed(ahead).settle().last()), [],
+    'AN EVENT DATED A YEAR AHEAD IS ON THE PARENT\'S SCREEN TODAY, and will be every day until then. A ' +
+    'one-sided window (`at - ts <= W`) never ages a future record out at all.');
+});
+
+test('the window is BOUND to the longest session a church may run, not to a figure of its own', () => {
+  assert.match(stmt(FELLOWSHIP, 'var MYKIDS_WINDOW =', 'MYKIDS_WINDOW'), /=\s*MAX_SESSION_SECONDS\s*;/,
+    'THE SHIPPED WINDOW IS NO LONGER BOUND TO MAX_SESSION_SECONDS. A figure of its own drifts apart from the ' +
+    'longest session a church may run, and the parent\'s row then expires before the session that produced ' +
+    'it — which is what 16 hours cost, measured on an all-day event.');
+  assert.equal(MAX_SESSION_SECONDS, 26 * 3600,
+    're-anchor: MAX_SESSION_SECONDS moved, so every window assertion in this file is about a different length');
+});
+
+test('a console clock a day behind does not silently EMPTY a parent\'s screen', () => {
+  // Measured before the fix: a record published NOW whose body said `in` was 17 hours ago vanished, with
+  // askAtDesk at 0 — indistinguishable from "no children here", which is the exact conflation the three
+  // states exist to prevent. Ordinary clock drift, and this product's own positioning is thin pipes and
+  // devices whose clocks are not NTP-perfect.
+  // ⚠ THE SKEW IS BEYOND THE WINDOW, deliberately. At 17 hours against a 26-hour window the old rule hid
+  // nothing and the sabotage row measuring this bit nothing — the figure has to be one the body-reading rule
+  // would actually have thrown away.
+  const skewed = record('ci-skew', { childName: 'Ivy Henderson', code: '4417', in: NOW - MYKIDS_WINDOW - 3600 },
+    { at: NOW, guardians: [mother.pub], expectGk: 1 });
+  const v = phone(mother).feed(skewed).settle().last();
+  assert.deepEqual(codesOn(v), ['4417'],
+    'A RECORD PUBLISHED THIS MINUTE WAS HIDDEN because the body it carried disagreed with the clock. The ' +
+    'parent is told nothing and shown nothing, at the door, with the code in their pocket all along.');
+  assert.equal(v.askAtDesk, 0, 're-anchor: it was counted rather than shown, so the line above is about the wrong branch');
+});
+
+test('AN ALL-DAY SESSION KEEPS ITS ROW — the window is the longest session a church may run', () => {
+  // HELPER_LIFETIMES.day.max, PERMISSION_LIFETIMES.day.max and MAX_SESSION_SECONDS are all 26 hours, exactly
+  // so a church can run "a morning and an afternoon, or an all-day event" off one session. At 16 hours the
+  // parent's row vanished WHILE THE CHILD WAS STILL IN THE ROOM and the worker's key was still live — and
+  // the release, when it came, then had no row to fold onto.
+  const at = NOW - 20 * 3600;
+  const rec = record('ci-lockin', { childName: 'Ivy Henderson', code: '4417', in: at },
+    { at, guardians: [mother.pub], expectGk: 1 });
+  assert.deepEqual(codesOn(phone(mother).feed(rec).settle().last()), ['4417'],
+    'A 20-HOUR-OLD SESSION LOST THE PARENT\'S ROW while a 26-hour session key is still live. A lock-in or a ' +
+    'residential is the sharp case, and the child is still in the room.');
+  // …and it does age out, so this is a window and not its absence.
+  const stale = record('ci-stale', { childName: 'Ivy Henderson', code: '4417' },
+    { at: NOW - MYKIDS_WINDOW - 600, guardians: [mother.pub], expectGk: 1 });
+  assert.deepEqual(namesOn(phone(mother).feed(stale).settle().last()), [],
+    're-anchor: nothing ages out at all, so the window is gone rather than lengthened');
+});
+
+// ── THE ORDINARY DESK CHECKOUT: THE CONSOLE REWRITES THE RECORD AT THE SAME ADDRESS ──────────────────────
+test('a CONSOLE checkout reaches the parent — the row is re-opened, never inherited', () => {
+  // app/stew-dashboard.jsx CheckoutModal → writeCheckin({...r, out}) → publishCheckin → encPublish. It does
+  // not write a release document at all; it republishes the record with `out` set, so the parent learns of it
+  // from their own gk copy of the REWRITE. That only works because the reader drops its memo for an address
+  // whose newer version arrives — an audit's sabotage of that one line reddened nothing, and the line is
+  // what the whole ordinary desk path rests on.
+  const before = record('ci-ivy', { childName: 'Ivy Henderson', code: '4417', in: NOW - 3600 },
+    { guardians: [mother.pub], expectGk: 1 });
+  const after  = record('ci-ivy', { childName: 'Ivy Henderson', code: '4417', in: NOW - 3600, out: NOW + 900 },
+    { at: NOW + 900, guardians: [mother.pub], expectGk: 1 });
+  const p = phone(mother).feed(before);
+  assert.equal(p.last().children[0].out, undefined, 're-anchor: the child reads as collected before the checkout');
+  const v = p.feed(after).settle().last();
+  assert.equal(v.children.length, 1, 'the rewrite produced a SECOND row for one child — the record forked');
+  assert.equal(v.children[0].out, NOW + 900,
+    'THE ORDINARY DESK CHECKOUT NEVER REACHES THE PARENT. The console rewrites the record rather than ' +
+    'writing a release, so a reader that kept its first opening of that address shows the child as present ' +
+    'for the rest of the day — and no tombstone will ever say otherwise.');
+  p.stop();
+});
+
+// ── WHAT THIS READER IS NOT, SAID IN A TEST SO NOBODY HAS TO TAKE THE COMMENT ON FAITH ───────────────────
+test('the reader does NOT filter by author — the known relay gap, carried honestly with `_by`', () => {
+  // AN AUDIT REFUTED THE CLAIM THAT USED TO STAND HERE. It said requiring the cleartext ['p'] tag defeated a
+  // hostile in-window helper (red-team F1) because "she has to name me there too". SHE CAN: she writes both
+  // the tag and the copy. So this is written down as what it is — the SAME unfixed relay defect
+  // subscribeCheckinRegister records, inherited, not new, and not fixable on a phone that holds no envelope
+  // and no roster and therefore cannot tell a cleared helper from any other member. Filtering to the church's
+  // voice would hide every WORKER-WRITTEN record, which is the ordinary path.
+  //
+  // WHAT IT IS WORTH: a spurious line on a parent's screen — a child who does not exist, with a code that
+  // releases nobody, because the code is compared at the door against the WORKER's register.
+  const forged = record('ci-forged', { childName: 'A Child Who Is Not Hers', code: '0000', in: NOW - 60 },
+    { by: stranger, guardians: [mother.pub], expectGk: 1 });
+  const v = phone(mother).feed(forged).settle().last();
+  assert.deepEqual(namesOn(v), ['A Child Who Is Not Hers'],
+    'THIS TEST HAS GONE GREEN THE OTHER WAY, which is good news that must not pass silently: an author ' +
+    'filter has appeared. Check it does not hide WORKER-WRITTEN records — a worker is an ordinary member and ' +
+    'her records are the ordinary path — then rewrite this test to assert the refusal.');
+  assert.equal(v.children[0]._by, stranger.pub,
+    '`_by` IS NOT ON THE ROW. It is carried precisely because this reader cannot filter by author today; ' +
+    'drop it and the fix, when the relay gets one, has nowhere to land.');
 });

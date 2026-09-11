@@ -31,7 +31,7 @@ import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-r
 import { readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
          readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide,
          checkinGuardianPubs, checkinGuardianCopies,
-         readCheckinGuardianCopy } from '../scripts/checkin-role-source.mjs';
+         readCheckinGuardianCopy, MAX_SESSION_SECONDS } from '../scripts/checkin-role-source.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -112,11 +112,17 @@ const CHECKINARRIVAL_D = 'trinityone/checkinarrival:';
 // and clears it on church switch for exactly this reason); keying by cp isolates them, and a withdrawal or a
 // church switch clears only that church's submap. It is fed by the ONE subscription the Kids screen runs and
 // read by writeCheckin; the raw key never crosses into React state, only into a signed, sealed event.
-// HOW FAR BACK A PARENT'S OWN SCREEN LOOKS — see subscribeMyChildrenCheckins for why this is load-bearing
-// rather than tidiness. A GUARDIAN IS NEVER SERVED A TOMBSTONE, so a record with no release to fold onto it
-// would say a child is in a room for ever. 16 hours is a morning service still readable at bedtime and is
-// never last Sunday's.
-const MYKIDS_WINDOW = 16 * 3600;
+// HOW FAR BACK — AND FORWARD — A PARENT'S OWN SCREEN LOOKS. See subscribeMyChildrenCheckins for why this is
+// load-bearing rather than tidiness: A GUARDIAN IS NEVER SERVED A TOMBSTONE, so a record with no release to
+// fold onto it would say a child is in a room for ever.
+//
+// ⚠ IT IS MAX_SESSION_SECONDS, NOT A ROUND NUMBER SOMEBODY LIKED. 16 hours was the first figure here and an
+// audit measured what it cost: `HELPER_LIFETIMES.day.max`, `PERMISSION_LIFETIMES.day.max` and
+// MAX_SESSION_SECONDS are all 26 hours, precisely so a church can run "a morning and an afternoon, or an
+// all-day event" off one session. At 16 hours a lock-in or a residential lost the parent's row WHILE THE
+// CHILD WAS STILL IN THE ROOM and the worker's key was still live — and the release, when it came, then had
+// no row to fold onto. The parent's view must not expire before the session that produced it can.
+const MYKIDS_WINDOW = MAX_SESSION_SECONDS;
 const _ckMemberKeys = new Map();                 // cp -> Map(sid -> 32 bytes of hex)
 const _ckMemKeySet = (cp, sid, k) => { let m = _ckMemberKeys.get(cp); if (!m) { m = new Map(); _ckMemberKeys.set(cp, m); } m.set(sid, k); };
 const _ckMemKeyDel = (cp, sid) => { const m = _ckMemberKeys.get(cp); if (m) m.delete(sid); };
@@ -5429,11 +5435,30 @@ window.Fellowship = {
   //   1. the record ['p']-tags ME — read from the CLEARTEXT tag, so it costs no key and it is the same field
   //      the relay's own read rule keys on; and
   //   2. one of its ['gk'] copies opens with MY OWN secret against the record's AUTHOR.
-  // Either alone would be wrong in a different direction. The p-tag alone is the writer's claim about who I
-  // am. The gk alone would let a hostile in-window helper (red-team F1 — the relay binds a helper's write to
-  // the ['session'] tag she chooses, not to the record she addresses) seal a fabricated child to my key and
-  // have my own phone render it; requiring the tag the relay gates on means she has to name me there too, and
-  // costs nothing legitimate — the writers derive the gk list FROM the p list.
+  // The p-tag makes the phone agree with the box about which records are about my family, so a record reaching
+  // me down canRead's OTHER two routes — an in-window helper of the session, or a `guardianOfIn` parent of a
+  // pubkey the record names — is never rendered here as one of mine. The gk is the cryptographic half: only a
+  // ciphertext sealed to my key opens at all.
+  //
+  // ⚠ AND HERE IS WHAT THE CONJUNCTION DOES NOT BUY, corrected 2026-09-11 after an audit refuted the claim
+  // that stood here. It said requiring the p-tag defeated a hostile in-window helper (red-team F1), on the
+  // reasoning that "she has to name me there too". SHE CAN: she writes both fields. A helper the relay admits
+  // under accept()'s CHECKIN_D branch can write a record at a fresh address, ['p']-tag any member, and seal a
+  // ['gk'] to them — and that member's phone renders a child who does not exist, with a code that releases
+  // nobody.
+  //
+  // THIS READER DOES NOT FILTER BY AUTHOR, and that is the SAME known relay defect subscribeCheckinRegister
+  // records above, not a new one and not a choice made here. Filtering to `_churchVoice` would hide every
+  // WORKER-WRITTEN record — which is the ordinary path, since a worker's phone is what turns an arrival into
+  // a row — and this phone cannot tell a cleared helper from any other member, because it holds no envelope
+  // and no roster. `_by` is carried on every row so the fix, when the relay gets one, has somewhere to land.
+  //
+  // WHAT IT IS WORTH, stated rather than glossed: forging one buys a spurious line on a parent's screen —
+  // the same data-quality nuisance the printed room code and the arrival queue already knowingly accept. It
+  // does not buy a child: the code is compared at the door against the WORKER's copy of the register, and a
+  // child who was never checked in has no row there. And a false "collected" needs the release's ['session']
+  // tag to equal the check-in's, which means an in-window helper OF THAT SESSION — who can check that child
+  // out for real, so it is not an escalation.
   //
   // ── EVERY `gk`, NOT THE FIRST ──────────────────────────────────────────────────────────────────────────
   // `readCheckinGuardianCopy` iterates. A child with two parents carries two copies, and taking the first
@@ -5452,10 +5477,22 @@ window.Fellowship = {
   //
   // ── AND A WINDOW, WHICH IS LOAD-BEARING RATHER THAN TIDINESS ───────────────────────────────────────────
   // Because no tombstone ever arrives, a record with nothing to fold onto it would sit on a parent's screen
-  // saying a child is in a room, for ever — three Sundays later included. So only TODAY'S records are shown:
-  // MYKIDS_WINDOW seconds back from now, measured on the record's own check-in time where its copy opened
-  // and on the event's created_at where it did not. 16 hours is a morning service still readable at bedtime
-  // and never last Sunday's. It hides nothing a parent needs: the code they need is today's.
+  // saying a child is in a room, for ever — three Sundays later included. So only TODAY'S records are shown.
+  //
+  // ⚠ ONE MEASURE, AND IT IS THE EVENT'S OWN created_at — NEVER THE SEALED BODY'S `in`. Corrected 2026-09-11
+  // after an audit measured two faults in reading `in`:
+  //   • IT IS UNBOUNDED IN THE FUTURE. A body carrying `in: now + 400 days` sat on a parent's screen at +0,
+  //     +30, +200 and +399 days. The one thing between a stale record and "a child is in a room for ever" was
+  //     itself a field a helper writes.
+  //   • AND IT SILENTLY EMPTIED THE SCREEN. A record published NOW whose body said `in` was 17 hours ago —
+  //     an ordinary console clock drift — vanished entirely, with `askAtDesk` at 0: indistinguishable from
+  //     "no children here", which is the exact conflation the three states below exist to prevent.
+  // `created_at` is the timestamp every reader in this app already routes by (newest-wins, the hub's cursor),
+  // it is present whether or not the copy opened — so the shown and the counted branches now use the SAME
+  // measure, which they did not — and it is the one thing about a record this reader was already trusting.
+  //
+  // AND IT IS SYMMETRIC. A record dated in the FUTURE is shown for one window from now and then ages out,
+  // rather than for ever. It hides nothing a parent needs: the code they need is today's.
   //
   // ── AND THE STATE THAT HAS NO COPY AT ALL ──────────────────────────────────────────────────────────────
   // A walk-up at the desk, a dead phone, a record written before this shipped, a console that could not seal
@@ -5488,7 +5525,11 @@ window.Fellowship = {
       // Today card is the app root. One hostile record would blank the whole member app.
       const _str = (v) => (typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v) ? String(v) : ''));
       const _when = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && /^\d{1,12}$/.test(v) ? Number(v) : undefined));
-      rows.set(id, { id, session: r.sid, ts: r.ts,
+      // `_by` IS CARRIED AND NOT USED, exactly as subscribeCheckinRegister carries it and for the same
+      // reason: this reader does not filter by author (see the note above on what that costs and why a
+      // client-side filter would hide the ordinary worker-written record), so the author travels with the
+      // row and the fix has somewhere to land the day the relay gets one.
+      rows.set(id, { id, session: r.sid, ts: r.ts, _by: r.by,
         childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out),
         rel: _str(obj.rel), manual: obj.manual === true });
       return 'ok';
@@ -5496,7 +5537,10 @@ window.Fellowship = {
 
     const emit = _coalesce(() => {
       const at = Math.floor(Date.now() / 1000);
-      const fresh = (r, row) => (at - ((row && row.in) != null ? row.in : (r.ts || 0))) <= MYKIDS_WINDOW;
+      // ONE MEASURE FOR BOTH BRANCHES, off the event's own created_at, and symmetric — see the note above
+      // for the two faults reading the sealed body's `in` had. `row` is still taken so a caller cannot
+      // reintroduce the split by passing it.
+      const fresh = (r, _row) => Math.abs(at - (r.ts || 0)) <= MYKIDS_WINDOW;
       let askAtDesk = 0;
       const kids = [];
       // Keyed session|checkinId, structurally, so a release admitted under one session can never fold onto
