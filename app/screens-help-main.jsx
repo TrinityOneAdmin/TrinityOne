@@ -219,7 +219,7 @@ function HelpCenter({ open, onClose, initial, ctx }) {
 }
 
 // ── index ──
-// THE CONSOLE'S OWN ARTICLES ARE NOT LISTED HERE. help-data.jsx carries six written for a steward, ids
+// THE CONSOLE'S OWN ARTICLES ARE NOT LISTED HERE. help-data.jsx carries seven written for a steward, ids
 // `console-*`, addressed to the person running the church ("you ask for the code, match it against the one on
 // screen"). This index listed every article, so a parent — and a child's own account — could open "Children's
 // check-in at the door" from their Help tab, read the sentence promising that nothing about check-in appears

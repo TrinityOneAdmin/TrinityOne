@@ -3967,7 +3967,13 @@ function canRead(e, authed) {
     // exist ("unknown account a1", "sequence gap: expected 1, got 2"). The church still opens its books to
     // find the months missing, by a different route. Every finance/ document is church-or-finance-steward
     // writable at the door, so retaining them is the same judgement in every case.
-    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith('finance/') || d.startsWith(CHECKIN_D);
+    // …AND A CHECK-IN WITHDRAWAL, from an author who has since LEFT THE ROSTER. checkinPermitted() honours a
+    // withdrawal for ever (F3: it can only refuse), so the person's phone must be handed it too — otherwise a
+    // lead who moved on leaves the church's older clearance as the newest document that phone can see, and it
+    // says "cleared" while the desk refuses (audit of 9f17160, 2026-09-11). Tombstones only; the CLEARANCE half
+    // is decided below, in the CHECKINPERM_D branch, and a removed steward's clearance is rightly withheld.
+    const checkinWithdrawal = d.startsWith(CHECKINPERM_D) && ((e.tags || []).some(t => t[0] === 'deleted') || !e.content);
+    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith('finance/') || d.startsWith(CHECKIN_D) || checkinWithdrawal;
     // 'any', deliberately, and NOT this document's own capability. This asks whether the author still acts
     // for the church at all, so that narrowing a delegate to Finance does not make every group they ever
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is

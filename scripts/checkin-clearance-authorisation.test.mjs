@@ -164,6 +164,12 @@ const checkinRec = (id, guardianPub) => doc(church, D.CHECKIN + id,
 // thing to the map and another to the corpus. All three of these go through checkinPermitted().
 const holdsKey = async (who) => (await asks(who, { kinds: [30078], '#d': [D.CHECKINHELPER + SESSION] })).length;
 const holdsRec = async (who) => (await asks(who, { kinds: [30078], '#d': [D.CHECKIN + 'r1'] })).length;
+// What the PERSON is served of their own clearance documents: live clearances, and withdrawals, counted apart.
+// A phone folds these newest-wins with no author check (18da387), so what the box serves is what the phone says.
+const servedPerm = async (who) => { const all = await asks(who, { kinds: [30078], '#d': [D.CHECKINPERM + who.pub] });
+  const isTomb = (e) => !e.content || (e.tags || []).some(t => t[0] === 'deleted');
+  return { live: all.filter(e => !isTomb(e)).length, tombs: all.filter(isTomb).length }; };
+const servedLive = async (who) => (await servedPerm(who)).live;
 // A FRESH ADDRESS EVERY TIME. Re-using one made this observable lie: a second write to the same
 // (author, kind, d-tag) inside the same second is refused by the STORE as `have-newer` — a tie broken by
 // lowest event id — so a cleared volunteer read as unable to write and the row looked like a working refusal.
@@ -336,6 +342,13 @@ test('F3 — …and when she is REMOVED FROM THE ROSTER ALTOGETHER, which is wha
 
   await removeLead();
   assert.deepEqual(await clearance(vex), REFUSED, 'removing the steward from the roster reinstated the clearance she withdrew');
+  // …AND HER WITHDRAWAL IS STILL HANDED TO VEX'S PHONE. Audit of 9f17160: the general retraction withheld a
+  // removed steward's tombstone, so the phone's newest document was the church's older clearance — "cleared"
+  // on the phone, refused at the desk.
+  const seen = await servedPerm(vex);
+  assert.equal(seen.tombs, 1,
+    'A DEPARTED STEWARD\'S WITHDRAWAL IS WITHHELD FROM THE PERSON IT NAMES — her phone sees only the church\'s older ' +
+    'clearance and says cleared while every use is refused. served: ' + JSON.stringify(seen));
   await reboot();
   assert.deepEqual(await clearance(vex), REFUSED,
     'the withdrawing steward is off the roster entirely and her withdrawal was dropped on the rehydrate. A ' +
@@ -363,8 +376,6 @@ test('F4 — a clearance GRANTED by a steward stops granting the moment that ste
   // …AND THE PHONE IS NOT HANDED THE DOCUMENT THIS BOX HAS STOPPED HONOURING. Audit of 18da387, 2026-09-11:
   // the general retraction kept serving the re-scoped steward's clearance (she is still on the roster), so a
   // phone that trusts what its relay serves said "cleared — nothing is wrong" while the desk refused her.
-  const servedLive = async (who) => (await asks(who, { kinds: [30078], '#d': [D.CHECKINPERM + who.pub] }))
-    .filter(e => e.content && !(e.tags || []).some(t => t[0] === 'deleted')).length;
   assert.equal(await servedLive(vera), 0,
     'A DE-CAPPED STEWARD\'S CLEARANCE IS STILL SERVED to the person it names, while every use of it is refused — ' +
     'her phone says cleared and the desk says no');
