@@ -851,6 +851,35 @@ test('A WITHDRAWN CLEARANCE DROPS OFF THE NEXT ENVELOPE, and the key is still pr
   assert.equal(raw.keys[ADA], key1, 'the remaining helper\'s key changed, so what they already wrote is orphaned');
 });
 
+test('A SERVICE THAT MOVES GETS ITS ENVELOPE RE-ISSUED FOR THE NEW TIME — and keeps its key', async () => {
+  // Device finding D1, 2026-09-11: the 10:00 club was moved to 01:33 and the envelope on the relay stayed at
+  // 09:15-13:00 through a page reopen and an explicit Re-issue. The relay admits a helper by the ENVELOPE's
+  // window (checkinHelperOf), so the helpers of a moved service were keyless until the old time.
+  const h = harness();
+  await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', SERVICE)],
+    permissions: [perm(ADA)], stewards: [SGLEAD] });
+  const held = { session: 'svc-a', ...JSON.parse(h.published[0].content) };
+  const key1 = JSON.parse(h.published[0].content).keys[ADA];
+  h.published.length = 0;
+  const moved = { ...SERVICE, time: '16:30' };   // same Sunday, six hours later
+  const out = await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', moved)],
+    permissions: [perm(ADA)], stewards: [SGLEAD], existing: [held] });
+  assert.equal(out.issued.length, 1,
+    'the service moved and the issuer skipped it as unchanged — the envelope on the relay still opens at the ' +
+    'OLD time, and the panel says the session is staffed. skipped: ' + JSON.stringify(out.skipped));
+  const g = readHelperGrant(h.published[0].content);
+  assert.ok(g.from > held.from, 'the re-issued envelope does not carry the moved window (from ' + g.from + ' vs ' + held.from + ')');
+  assert.ok(g.until > held.until, 'the re-issued envelope does not carry the moved window (until)');
+  assert.equal(JSON.parse(h.published[0].content).keys[ADA], key1,
+    'moving a service ROTATED its key — every record already sealed under it is orphaned');
+  // and a second pass at the new time is idempotent again
+  const held2 = { session: 'svc-a', ...JSON.parse(h.published[0].content) };
+  h.published.length = 0;
+  const again = await h.issueCheckinSessionKeys({ at: AT, services: [svc('svc-a', moved)],
+    permissions: [perm(ADA)], stewards: [SGLEAD], existing: [held2] });
+  assert.deepEqual(again.skipped, [{ session: 'svc-a', why: 'unchanged' }], 'the moved service is re-issued on every pass');
+});
+
 test('NOTHING IS RE-PUBLISHED WHEN NOTHING CHANGED — the issuer is idempotent', async () => {
   // It runs whenever a console opens. A re-publish that changed nothing would still mint a new event, and — if
   // the key were not preserved — would rotate a live session's key for no reason. Skipping is the correct

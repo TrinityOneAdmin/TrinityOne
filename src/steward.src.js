@@ -7458,7 +7458,16 @@ window.Steward = {
       // session's key and orphans anything already sealed under it. Which way that trade should go once real
       // registers exist is recorded for slice 2 in reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md; it is not
       // something to flip quietly here.
-      if (have && keyHex && same(have.pubs, want) && same(Object.keys(have.keys || {}), [...want, ...keepers])) {
+      //
+      // AND THE WINDOW IS PART OF "UNCHANGED". The envelope carries the session's from/until, and the relay admits
+      // a helper by THAT window, not by the calendar (checkinHelperOf in scripts/gateway.mjs reads the grant).
+      // This test used to compare only who holds a slot, so moving a service left its envelope at the old
+      // time: measured on 2026-09-11, a 10:00 club rewritten to 01:33 kept an envelope of 09:15-13:00 through
+      // a page reopen AND an explicit Re-issue, while the panel said "1 helper holds this session's key". A
+      // service moved earlier leaves its helpers keyless until the old time; moved later, their key opens
+      // before the room does. The re-issue below reuses keyHex, so this rotates nothing.
+      if (have && keyHex && same(have.pubs, want) && same(Object.keys(have.keys || {}), [...want, ...keepers])
+          && have.from === win.from && have.until === win.until) {
         out.skipped.push({ session, why: 'unchanged' }); continue;
       }
       // AND SAY WHEN THIS PASS REPLACED A LIVE KEY. `have && !keyHex` is the case the long note above

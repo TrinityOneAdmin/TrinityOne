@@ -21536,7 +21536,7 @@ zoo`.split("\n");
           }
         }
         if (!/^[0-9a-f]{64}$/.test(keyHex)) keyHex = "";
-        if (have && keyHex && same(have.pubs, want) && same(Object.keys(have.keys || {}), [...want, ...keepers])) {
+        if (have && keyHex && same(have.pubs, want) && same(Object.keys(have.keys || {}), [...want, ...keepers]) && have.from === win.from && have.until === win.until) {
           out.skipped.push({ session, why: "unchanged" });
           continue;
         }
