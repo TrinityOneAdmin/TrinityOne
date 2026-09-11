@@ -2669,6 +2669,19 @@ const PUBLISH_TIMEOUT_MS = 12000;
 // This is a drop-in for `_publishAny(a, b)` that REJECTS unless at least one relay genuinely
 // accepted, so every existing try/catch keeps its meaning instead of 29 call sites needing new logic.
 const _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
+// THE RELAY ACTUALLY ANSWERED "NO" — a strict subset of _PUB_FAILED, and the difference decides what a member
+// is told. These are NIP-01's OK=false reasons: a box read the event and refused it. `connection failure` is
+// deliberately NOT here — the socket never opened, so nobody refused anything and nobody accepted anything.
+// Neither is a rejected promise: that is the vendored library giving up waiting, never a relay's verdict.
+//
+// WHY THIS EXISTS. Measured on the Pixel, 2026-09-11 (F1, reference/DEVICE-VERIFICATION-two-phone-2026-09-11
+// .md): writeArrival reported `{ok:false}` TWICE on writes that had SUCCEEDED. _publishAny throws whenever no
+// relay acknowledged inside WEDGE_ACK_MS, and every caller flattened that into "failed" — so a slow ack over
+// the Funnel, or a socket that closed after the event was already on the wire, read as a refusal. A parent
+// would be told their arrival did not send, walk to the desk and say so, while the arrival was sitting on the
+// relay and about to appear on the worker's screen. A wrong failure message is worse than no message: it
+// sends a person to undo something that already worked.
+const _PUB_REFUSED = /^(error|blocked|invalid|restricted|rate-limited|auth-required)/i;
 // ── a socket that hears but will not speak ───────────────────────────────────────────────────────────────
 // SIMULATION ROUND 6: six phones in a congregation of twenty reached a moment after which nothing they
 // published ever arrived, while everything sent TO them kept arriving. Measured on the relay's own store —
@@ -2802,7 +2815,19 @@ function _publishAny(relays, evt) {
     if (!good) {
       const why = (rs.find(r => r.status === 'fulfilled') || {}).value
         || ((rs.find(r => r.status === 'rejected') || {}).reason || {}).message || 'no relay accepted this';
-      throw new Error(String(why));
+      const err = new Error(String(why));
+      // ADDITIVE, AND DELIBERATELY SO. Every existing caller reads `.message` or ignores the error entirely
+      // (33 call sites of _publishAny, 10 of _publishBounded, checked), so attaching a property changes
+      // nothing for any of them. A caller that wants to tell "the relay said no" from "nobody answered" can
+      // now ask, instead of guessing from a string that was never designed to be parsed.
+      //
+      // `refused` IS TRUE ONLY IF SOME BOX READ THIS EVENT AND SAID NO — a settled answer, worth telling a
+      // member about. False means we do not know: every relay timed out, closed, or was never reached, and
+      // THE EVENT MAY WELL HAVE LANDED. On the pilot's own default of two addresses to one box, the mixed
+      // case is ordinary rather than exotic, so this asks "did ANY relay refuse", never "what did the first
+      // one say" — the trap the old single `why` string fell into.
+      err.refused = rs.some(r => r.status === 'fulfilled' && _PUB_REFUSED.test(String(r.value == null ? '' : r.value)));
+      throw err;
     }
     return true;
   });
@@ -5263,7 +5288,17 @@ window.Fellowship = {
     catch (e) { return { ok: false, reason: 'seal-failed' }; }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', d], ['t', NET], ['church', cp], ['session', sid]], content: body }, sk);
-    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    // THREE ANSWERS, NOT TWO — and the third is the one this writer got wrong on a real phone. See _PUB_REFUSED
+    // for the measurement. `refused` means a relay read the arrival and said no: settled, tell them plainly.
+    // Anything else means NOBODY ANSWERED, which is not the same as "it did not send" — the event is signed and
+    // on the wire and may already be on the worker's screen. A parent must not be sent to the desk to report a
+    // failure that did not happen, so the caller gets a distinct reason and the screen says "we could not
+    // confirm", never "that did not send".
+    try { await _publishAny(relaysForChurch(cp), evt); }
+    catch (e) {
+      return { ok: false, reason: (e && e.refused) ? 'refused' : 'unconfirmed',
+               message: String((e && e.message) || e), id: d };
+    }
     return { ok: true, id: d };
   },
 

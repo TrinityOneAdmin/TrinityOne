@@ -501,3 +501,146 @@ test('the record is stamped with the LOCAL calendar day, or a morning check-in v
       're-anchor: the local day and the UTC day agree in ' + tz + ', so this assertion proved nothing');
   } finally { if (was === undefined) delete process.env.TZ; else process.env.TZ = was; }
 });
+
+// ── "THAT DIDN'T SEND" MUST NOT BE SAID ABOUT A WRITE THAT SENT ───────────────────────────────────────────
+//
+// Device finding F1, reference/DEVICE-VERIFICATION-two-phone-2026-09-11.md: writeArrival reported
+// `{ok:false}` TWICE on the Pixel over writes that had SUCCEEDED. `_publishAny` throws whenever no relay
+// acknowledges inside WEDGE_ACK_MS, and this writer flattened every throw into one "publish-failed" — so a
+// slow ack over the Funnel, or a socket closing after the event was already on the wire, read as a refusal.
+//
+// That is worse than a silent failure. A parent is told their arrival did not send, walks to the desk and
+// says so, and the arrival is already on the relay and about to appear on the worker's screen. The member is
+// sent to undo something that worked.
+//
+// So there are THREE answers now, and these tests pin all three. The classification itself is tested one
+// level down, against the SHIPPED `_publishAny` and the SHIPPED regexes, so nothing here rests on a test's
+// own opinion of what a refusal looks like.
+function liftArrivalWithPublish(actor, publishImpl) {
+  const scope = {
+    toPub: (x) => x, sk: actor.sk, pub: actor.pub,
+    encrypt: (pt, k) => nip44.encrypt(pt, k),
+    getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
+    finalizeEvent2: (t, sec) => finalizeEvent(t, sec),
+    CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => ['wss://one.example/relay'],
+    _publishAny: publishImpl,
+    String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped writeArrival needs a stub for ' + String(k)); },
+  });
+  return new Function('scope', 'with (scope) { return ({ ' +
+    fnBody(FELLOWSHIP, 'async writeArrival(churchNpub, rec) {', 'writeArrival') + ' }); }')(proxy).writeArrival;
+}
+
+test('a relay that READ the arrival and said no is reported as a refusal', async () => {
+  const w = liftArrivalWithPublish(gina, async () => { const e = new Error('blocked: not a member'); e.refused = true; throw e; });
+  const res = await w(church.pub, { session: SESSION });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'refused',
+    'a settled refusal was not reported as one, so a parent cannot be told the difference between "the church ' +
+    'will not take this" and "we could not reach anyone"');
+});
+
+test('AN ACK THAT NEVER CAME IS "UNCONFIRMED", NEVER "it did not send" — the defect measured on the Pixel', async () => {
+  const w = liftArrivalWithPublish(gina, async () => { throw new Error('publish timed out'); });
+  const res = await w(church.pub, { session: SESSION });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'unconfirmed',
+    'A TIMED-OUT ACKNOWLEDGEMENT IS REPORTED AS A FAILED WRITE. The event is signed and on the wire and may ' +
+    'already be on the worker\'s screen. Measured twice on the Pixel, 2026-09-11: the parent is sent to the ' +
+    'desk to report a failure that did not happen.');
+  assert.ok(res.id, 'the unconfirmed answer carries no address, so a caller cannot even say which arrival it was');
+});
+
+test('a socket that closed mid-publish is unconfirmed too — it is not a verdict', async () => {
+  // The device's SECOND message. It is a rejected promise, so no relay ever spoke: nobody refused and nobody
+  // accepted. The event may well have landed.
+  const w = liftArrivalWithPublish(gina, async () => { throw new Error('relay connection closed'); });
+  assert.equal((await w(church.pub, { session: SESSION })).reason, 'unconfirmed',
+    'a closed socket is being read as the church refusing a family');
+});
+
+test('and a write that landed still says so', async () => {
+  const w = liftArrivalWithPublish(gina, async () => true);
+  const res = await w(church.pub, { session: SESSION });
+  assert.equal(res.ok, true);
+});
+
+// ── THE CLASSIFICATION ITSELF, ON THE SHIPPED FUNCTION ────────────────────────────────────────────────────
+// `_publishAny` decides `refused`, and it is the half a test could most easily fake. So this lifts the REAL
+// one out of vendor/fellowship.js together with the REAL _classify and the REAL regexes, and stubs only the
+// world — the pool, the relay filter, the wedge detector.
+function liftPublishAny(settle /* array of {status,value|reason} */) {
+  const noted = [];
+  const scope = {
+    _dedupeRelays: (l) => l,
+    _netRelays: (l) => l,
+    churchRelaysRaw: () => [],
+    NO_NETWORK_RELAY: 'no-network-relay',
+    WEDGE_ACK_MS: 8000,
+    _wedgeKey: (u) => u,
+    _noteSendResult: (u, o) => noted.push(o),
+    pool: { relays: new Map(), publish: () => settle.map(s => (s.status === 'fulfilled' ? Promise.resolve(s.value) : Promise.reject(new Error(s.reason)))) },
+    Promise, Error, String, Array, Object, Boolean, Number, Math, JSON, console,
+  };
+  // THE REAL REGEXES AND THE REAL CLASSIFIER. A test's own copy of "what counts as a refusal" would be
+  // exactly the stub that answers the question it was written to ask, so all four are lifted out of the
+  // shipped bundle. `_classify` is built with the regexes as plain PARAMETERS rather than through the scope
+  // Proxy below: fnBody returns a whole `function` declaration, and a declaration inside a `with` block is
+  // shadowed by the Proxy (whose `has` claims every name not already global), so the function could never
+  // see itself.
+  const rx = (name, anchor) => new Function('return ' + stmt(FELLOWSHIP, anchor, name).replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, ''))();
+  scope._PUB_FAILED = rx('_PUB_FAILED', 'var _PUB_FAILED =');
+  scope._PUB_REFUSED = rx('_PUB_REFUSED', 'var _PUB_REFUSED =');
+  const _PUB_SILENT = rx('_PUB_SILENT', 'var _PUB_SILENT =');
+  scope._classify = new Function('_PUB_FAILED', '_PUB_SILENT',
+    fnBody(FELLOWSHIP, 'function _classify(r) {', '_classify') + ' return _classify;')(scope._PUB_FAILED, _PUB_SILENT);
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped _publishAny needs a stub for ' + String(k)); },
+  });
+  const api = new Function('scope', 'with (scope) { ' +
+    fnBody(FELLOWSHIP, 'function _publishAny(relays, evt) {', '_publishAny') + ' return _publishAny; }')(proxy);
+  return { publishAny: api, noted };
+}
+
+test('SHIPPED: `refused` is set only when a relay actually answered no', async () => {
+  const { publishAny } = liftPublishAny([{ status: 'fulfilled', value: 'blocked: not a member' }]);
+  const err = await publishAny(['wss://a/relay'], {}).then(() => null, (e) => e);
+  assert.ok(err, 're-anchor: a refusal resolved successfully');
+  assert.equal(err.refused, true, 'a relay said "blocked:" and the caller is not told it was a settled refusal');
+});
+
+test('SHIPPED: a timeout is NOT a refusal', async () => {
+  const { publishAny } = liftPublishAny([{ status: 'rejected', reason: 'publish timed out' }]);
+  const err = await publishAny(['wss://a/relay'], {}).then(() => null, (e) => e);
+  assert.equal(err.refused, false,
+    'a timed-out acknowledgement is being reported as the relay refusing the event — the Pixel defect, one ' +
+    'level down from writeArrival');
+});
+
+test('SHIPPED: "connection failure" is NOT a refusal — the socket never opened, so nobody refused anything', async () => {
+  // It matches _PUB_FAILED and must NOT match _PUB_REFUSED. That one-word difference is the whole reason
+  // _PUB_REFUSED exists as a separate pattern rather than reusing _PUB_FAILED.
+  const { publishAny } = liftPublishAny([{ status: 'fulfilled', value: 'connection failure' }]);
+  const err = await publishAny(['wss://a/relay'], {}).then(() => null, (e) => e);
+  assert.equal(err.refused, false,
+    'an unreachable relay is being reported to a member as the church refusing them');
+});
+
+test('SHIPPED: ONE relay refusing among several silent ones still counts as refused', async () => {
+  // The pilot ships two addresses to one box, so a mixed outcome is the ordinary case, not an exotic one.
+  // The old code took the FIRST message it found; this asks whether ANY relay refused.
+  const { publishAny } = liftPublishAny([
+    { status: 'rejected', reason: 'publish timed out' },
+    { status: 'fulfilled', value: 'invalid: bad address' },
+  ]);
+  const err = await publishAny(['wss://a/relay', 'wss://b/relay'], {}).then(() => null, (e) => e);
+  assert.equal(err.refused, true,
+    'a relay refused this event and the caller was told nobody answered, because the first relay in the list ' +
+    'happened to be the silent one');
+});

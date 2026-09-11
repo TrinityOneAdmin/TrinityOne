@@ -8946,6 +8946,7 @@
   _joinIntentLoad();
   var PUBLISH_TIMEOUT_MS = 12e3;
   var _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
+  var _PUB_REFUSED = /^(error|blocked|invalid|restricted|rate-limited|auth-required)/i;
   var _wedge = /* @__PURE__ */ new Map();
   var WEDGE_SILENCES = 3;
   var WEDGE_WINDOW_MS = 6e4;
@@ -9056,7 +9057,9 @@
       });
       if (!good) {
         const why = (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
-        throw new Error(String(why));
+        const err = new Error(String(why));
+        err.refused = rs.some((r) => r.status === "fulfilled" && _PUB_REFUSED.test(String(r.value == null ? "" : r.value)));
+        throw err;
       }
       return true;
     });
@@ -11846,7 +11849,12 @@
       try {
         await _publishAny(relaysForChurch(cp), evt);
       } catch (e) {
-        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+        return {
+          ok: false,
+          reason: e && e.refused ? "refused" : "unconfirmed",
+          message: String(e && e.message || e),
+          id: d
+        };
       }
       return { ok: true, id: d };
     },
