@@ -29,12 +29,28 @@
 //                                    reachable in catOf() and empty in practice (see the last test)
 //   · service-worker caches          NOT involved: sw.js caches the app shell, never a module
 //
+// AND THE SECOND DEFECT, FOUND BY AUDIT ON TOP OF THE FIRST: there were TWO NAMES for one module. The
+// installed record stored the CATALOGUE abbr while the engine registered a DEDUPED one (addSource,
+// addCommentary and now addDict all turn a second "NT" into "NT2"), so two modules sharing a catalogue abbr
+// produced two records saying the same thing, one of them naming a module that is not there. That is not
+// exotic: 260 of the 1,290 entries in ebible-catalog.json are abbr "NT". T12-T15 below are that case, from
+// the screen. The record now carries what was registered, and a record written by an older build is
+// repaired on the next launch by restoreInstalled.
+//
 // WHY THE ENGINE RUNS FOR REAL HERE. "Removed" is a claim about bytes, so a stubbed cache would answer the
-// question the test is named after (memory/stub-answers-the-question). The real cacheGet/cachePut/
-// cacheDelete/cacheKeys, the real getInstalled/setInstalled/recordInstalled, the real addDict/addCommentary/
-// addSource and the real removeModule are lifted out of engine.js with fnBody/stmt and run over a plain
-// in-memory IndexedDB and localStorage. Those two are stores, not deciders: every decision in these tests is
-// made by engine.js's own code, and the assertions read the store afterwards.
+// question the test is named after (memory/stub-answers-the-question). engine.js's own installModule,
+// restoreInstalled, removeModule, addSource/addCommentary/addDict/applyMeta, recordInstalled/getInstalled/
+// setInstalled/noteRegisteredAbbr, cacheGet/cachePut/cacheDelete/cacheHas/cacheKeys, lex/searchDict/
+// getCommentary and notify/subscribe are lifted with fnBody/stmt and RUN, over an in-memory IndexedDB and
+// localStorage. Those two are stores, not deciders, and the assertions read them afterwards.
+//
+// TWO STUBS, BOTH NAMED. `publishedPins()` returns {} (what the catalogue publishes is
+// a-republished-module-reaches-a-phone-that-has-the-old-one's subject), and the download-and-parse half —
+// fetchAsset/loadModuleBytes/fetchAndCacheModule — serves fixture bytes and builds a plain source object
+// instead of unzipping a real module and reading its SQLite (proved in a real browser by
+// a-tampered-module-is-refused and aquifer-study-notes-reach-the-study-panel). Everything they hand over
+// goes through the engine's own addSource/addCommentary/addDict/applyMeta, which is where the name that
+// ends up in the installed record is decided — the thing under test.
 //
 // WHAT THIS DOES NOT PROVE, stated rather than papered over:
 //   · NOT A DEVICE (CLAUDE.md rule 6). IndexedDB here is an in-memory Map, not the WebView's store, and
@@ -47,14 +63,29 @@
 //     does come back at the moment of removal, and every other module stays removed. Giving a member a way
 //     to say "and do not fetch it again" is a product decision, not this fix.
 //   · AN IMPORTED DICTIONARY IS NOT REMOVABLE HERE BECAUSE IT IS NEVER INSTALLED: the file-import path
-//     records a module only `if(r && r.abbr)`, and loadModuleBytes returns `{kind:"dict"}` with no abbr for
-//     a dictionary, so an imported dict is neither cached nor listed and does not survive a restart. That is
-//     a defect in IMPORT, upstream of removal, and it is left alone on this branch.
+//     passes no meta, so addDict registers it under "" and loadModuleBytes hands back an empty abbr, and
+//     that path records a module only `if(r && r.abbr)`. An imported dict is therefore neither cached nor
+//     listed and does not survive a restart. A defect in IMPORT, upstream of removal, left alone here.
+//     It is also why removeDict keeps its `if(!abbr) return;` guard: an anonymous dictionary cannot be
+//     told apart from any other anonymous dictionary, and no path records one, so there is nothing that
+//     reaches it. If import ever starts naming them, that guard must be revisited with this note.
+//   · ONE NARROW WINDOW SURVIVES THE COLLISION FIX, and it is worth writing down: between boot and the
+//     idle parse of a deferred JSON dictionary, two colliding dictionaries whose records were written by an
+//     older build both sit in _pendingDicts under the same abbr, so removing either drops both from memory
+//     until the next launch. The record and the bytes of the kept one are untouched and the repair lands
+//     when the parse runs, and no screen removes a dictionary by abbr (the Library passes the url), so
+//     nothing in the product reaches it — but a future caller passing an abbr would.
+//   · A MODULE LOADED BUT NEVER RECORDED still leaves memory and still reports success, and any bytes it
+//     cached under a url nothing wrote down stay where they are. The one shipped path that landed there —
+//     autoLoad's `?module=<url>`, which cached bytes and recorded nothing — now records what it caches, so
+//     what is left is a localStorage write that failed (setInstalled swallows it), where nothing could
+//     have been listed in the first place.
 //
-// AND IT IS DRIVEN FROM THE SCREEN (CLAUDE.md rule 1). The removals below are performed by tapping the real
-// Remove button on the real InstalledBrowser, compiled out of app/screens-library.jsx by esbuild and
-// rendered through scripts/render-jsx-screen.mjs. Delete the button, or stop it calling removeModule, and
-// T2/T3/T5/T7/T8 fail. Nothing here matches text in app/*.jsx (rule 3).
+// AND IT IS DRIVEN FROM THE SCREENS (CLAUDE.md rule 1). The removals below are performed by tapping the real
+// Remove button on the real InstalledBrowser and the real VersionSheet, with the real CommentaryPanel and
+// SearchScreen watching — all four compiled out of app/*.jsx by esbuild and rendered through
+// scripts/render-jsx-screen.mjs. Delete the Remove button and nine of these fail. Nothing here matches text
+// in app/*.jsx (rule 3).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -69,7 +100,7 @@ const ENGINE = readFileSync(ROOT + 'engine.js', 'utf8');
 // objectStore + get/put/delete/getAllKeys, each an async request object). `breakDeleteOf` makes one key
 // undeletable, which is how the honest-failure path is exercised — that is a broken store, not a broken
 // engine, and the engine must notice and say so.
-function fakeIndexedDB({ breakDeleteOf = null } = {}) {
+function fakeIndexedDB({ breakDeleteOf = null, unavailable = false } = {}) {
   const stores = new Map();
   let upgraded = false;
   const req = () => ({ onsuccess: null, onerror: null, onupgradeneeded: null, result: undefined, error: null });
@@ -80,6 +111,7 @@ function fakeIndexedDB({ breakDeleteOf = null } = {}) {
       const m = stores.get(name) || stores.set(name, new Map()).get(name);
       return { objectStore: () => ({
         get: (k) => settle(req(), m.has(k) ? m.get(k) : undefined),
+        count: (k) => settle(req(), m.has(k) ? 1 : 0),
         put: (v, k) => { m.set(k, v); return settle(req(), k); },
         delete: (k) => { if (k !== breakDeleteOf) m.delete(k); return settle(req(), undefined); },
         getAllKeys: () => settle(req(), [...m.keys()]),
@@ -90,11 +122,16 @@ function fakeIndexedDB({ breakDeleteOf = null } = {}) {
     open(name) {
       const r = req();
       r.result = db;
+      // `unavailable` is a store that will not open — private browsing, a corrupt database, a quota
+      // refusal. engine.js's idb() rejects, so cacheDelete does nothing AND cacheGet answers null: the
+      // two failures a removal must never read as "the bytes are gone".
+      if (unavailable) { r.error = new Error('IndexedDB is unavailable'); setTimeout(() => { if (r.onerror) r.onerror(); }, 0); return r; }
       setTimeout(() => { if (!upgraded) { upgraded = true; if (r.onupgradeneeded) r.onupgradeneeded(); } if (r.onsuccess) r.onsuccess(); }, 0);
       return r;
     },
   };
   // what is on disk, as the test sees it
+  api._breakOpen = (v) => { unavailable = !!v; };
   api._keys = () => [...(stores.get('modules') || new Map()).keys()];
   api._bytes = () => [...(stores.get('modules') || new Map()).values()].reduce((n, v) => n + (v.byteLength || v.length || 0), 0);
   return api;
@@ -108,8 +145,14 @@ function fakeLocalStorage() {
 // ── the engine, lifted and run ────────────────────────────────────────────────────────────────────────────
 // Declarations first (taken from engine.js as source text, not retyped), then the functions that close over
 // them. `notify` is counted so a harness that never reaches engine.js cannot pass vacuously.
-function engine({ breakDeleteOf = null } = {}) {
-  const idb = fakeIndexedDB({ breakDeleteOf });
+function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {}) {
+  const idb = fakeIndexedDB({ breakDeleteOf, unavailable });
+  // what each url serves, by basename — see FIXTURE below
+  const fixture = (nameOrUrl) => {
+    const f = FIXTURE.get(String(nameOrUrl).split('/').pop());
+    assert.ok(f, 'no fixture for ' + nameOrUrl + ' — re-anchor this test');
+    return f;
+  };
   const parts = [
     stmt(ENGINE, 'const modules = {};'),
     stmt(ENGINE, 'let order = [];'),
@@ -132,16 +175,52 @@ function engine({ breakDeleteOf = null } = {}) {
     fnBody(ENGINE, 'function loadDictJSON(obj, abbr){'),
     fnBody(ENGINE, 'function addCommentary(src){'),
     fnBody(ENGINE, 'function addSource(src){'),
+    fnBody(ENGINE, 'function applyMeta(src, meta){'),
+    stmt(ENGINE, 'const KNOWN_HASHES = {'),
+    fnBody(ENGINE, 'async function sha256hex(u8){'),
+    fnBody(ENGINE, 'async function verifyIntegrity(url, u8, declaredHash){'),
+    fnBody(ENGINE, 'async function cachedCopyIsCurrent(url, u8, declaredHash){'),
+    // THE ONE STUB IN THE INSTALL PATH, and it is the download-and-parse half ONLY: unzipping a real
+    // module and reading its SQLite is proved in a real browser by a-tampered-module-is-refused and
+    // aquifer-study-notes-reach-the-study-panel. Everything this hands to the engine goes through the
+    // engine's own addSource / addCommentary / addDict / applyMeta, which is where the abbr that ends up
+    // in the installed record is decided — the thing under test. Shaped like the real pair so installModule
+    // and restoreInstalled call exactly what they call in the app.
+    `const fetchAsset = async (url) => ({ headers: { get: () => String(FIXTURE(url).bytes.length) },
+        arrayBuffer: async () => FIXTURE(url).bytes.buffer.slice(0) });
+     async function loadModuleBytes(u8, srcName, meta){
+       const f = FIXTURE(srcName);
+       if(f.kind === "comment") return { kind: "comment", abbr: addCommentary(applyMeta({ abbr: f.declares, name: (meta && meta.name) || srcName, getComment: () => [] }, meta)) };
+       if(f.kind === "dict")    return { kind: "dict",    abbr: addDict(JSON.parse(new TextDecoder().decode(u8)).entries, meta && meta.abbr) };
+       return { kind: "bible", abbr: addSource(applyMeta({ abbr: f.declares, name: (meta && meta.name) || srcName, books: [], maxChap: {} }, meta)) };
+     }
+     async function fetchAndCacheModule(url, meta){
+       const cached = await cacheGet(url);
+       if(cached && await cachedCopyIsCurrent(url, cached, meta && meta.sha256)) return loadModuleBytes(cached, url.split("/").pop(), meta);
+       const res = await fetchAsset(url);
+       const u8 = new Uint8Array(await res.arrayBuffer());
+       await verifyIntegrity(url, u8, meta && meta.sha256);
+       await cachePut(url, u8);
+       return loadModuleBytes(u8, url.split("/").pop(), meta);
+     }
+     const publishedPins = async () => ({});`,
+    fnBody(ENGINE, 'async function installModule(item){'),
+    fnBody(ENGINE, 'async function restoreInstalled(){'),
+    stmt(ENGINE, 'const DEFAULT_MODULE = {'),
+    'let loadingFlag = false;',
+    fnBody(ENGINE, 'async function autoLoad(){'),
     fnBody(ENGINE, 'function idb(){'),
     fnBody(ENGINE, 'function idbStore(db, mode){'),
     fnBody(ENGINE, 'async function cacheGet(key){'),
     fnBody(ENGINE, 'async function cachePut(key, u8){'),
     fnBody(ENGINE, 'async function cacheKeys(){'),
     fnBody(ENGINE, 'async function cacheDelete(key){'),
+    fnBody(ENGINE, 'async function cacheHas(key){'),
     fnBody(ENGINE, 'function getInstalled(){'),
     fnBody(ENGINE, 'function setInstalled(map){'),
     fnBody(ENGINE, 'function catOf(item){'),
-    fnBody(ENGINE, 'function recordInstalled(item){'),
+    fnBody(ENGINE, 'function recordInstalled(item, registered){'),
+    fnBody(ENGINE, 'function noteRegisteredAbbr(url, abbr){'),
     fnBody(ENGINE, 'function isInstalled(url){'),
     fnBody(ENGINE, 'async function removeModule(id){'),
     fnBody(ENGINE, 'function getCommentary(b, c, version){'),
@@ -152,14 +231,17 @@ function engine({ breakDeleteOf = null } = {}) {
     fnBody(ENGINE, 'function _stripTags(s){'),
     'function _ensureFullLexicon(){}',
     fnBody(ENGINE, 'function lex(id){'),
+    fnBody(ENGINE, 'function searchDict(query, cap){'),
   ];
-  const api = new Function('indexedDB', 'localStorage', 'console',
+  const win = { Bible: {}, addEventListener() {}, removeEventListener() {} };
+  const api = new Function('indexedDB', 'localStorage', 'console', 'FIXTURE', 'window', 'requestIdleCallback', 'location',
     parts.join('\n') +
     '\nreturn { modules, dicts, _pendingDicts, commentaries, installing, addDict, _ensureDicts, loadDictJSON,' +
     ' addCommentary, addSource, cacheGet, cachePut, cacheKeys, cacheDelete, getInstalled, recordInstalled,' +
-    ' isInstalled, removeModule, getCommentary, lex, subscribe: _sub.subscribe,' +
+    ' isInstalled, removeModule, getCommentary, lex, searchDict, cacheHas, noteRegisteredAbbr, installModule,' +
+    ' restoreInstalled, autoLoad, subscribe: _sub.subscribe,' +
     ' order: () => order, active: () => active, setActive: (a) => { active = a; } };'
-  )(idb, fakeLocalStorage(), console);
+  )(idb, fakeLocalStorage(), console, fixture, win, undefined, { search });
   // The vacuity counter goes through the engine's OWN notify/subscribe, so it also proves the harness is
   // running engine.js's pub/sub rather than a stand-in.
   let notified = 0;
@@ -167,32 +249,35 @@ function engine({ breakDeleteOf = null } = {}) {
   return { ...api, idb, notified: () => notified };
 }
 
-// ── a phone with four modules on it ───────────────────────────────────────────────────────────────────────
-const BIBLE = { id: 'engbsb', abbr: 'BSB', name: 'Berean Standard Bible', kind: 'bible', format: 'USFM', category: 'bibles', url: 'modules/engbsb.zip' };
-const SECOND = { id: 'eng-kjv', abbr: 'KJV', name: 'King James Version', kind: 'bible', format: 'USFM', category: 'bibles', url: 'modules/eng-kjv.zip' };
+// ── the modules on the phone ──────────────────────────────────────────────────────────────────────────────
+// Catalogue entries in the shape catalog.json / ebible-catalog.json really use. NT_A and NT_B are the case
+// that blocks everything else: TWO MODULES, ONE CATALOGUE ABBR. 260 of the 1,290 entries in
+// ebible-catalog.json carry abbr "NT" (9 more are "NTPO", 7 "BL"), so two minority-language New Testaments
+// on one phone is the ordinary case for this product's stated first audience, not a corner.
+const BIBLE = { id: 'engbsb', abbr: 'BSB', name: 'Berean Standard Bible', kind: 'bible', format: 'USFM', category: 'bibles', url: 'modules/engbsb-fixture.zip' };
+const SECOND = { id: 'eng-kjv', abbr: 'KJV', name: 'King James Version', kind: 'bible', format: 'USFM', category: 'bibles', url: 'modules/eng-kjv-fixture.zip' };
 const CMT = { id: 'matthew-henry', abbr: 'MHC', name: "Matthew Henry's Commentary", kind: 'comment', format: 'MySword', category: 'commentaries', url: 'modules/matthew-henry.cmt.mybible.zip' };
-const DICT = { id: 'strongs', abbr: "Strong's", name: "Strong's Greek & Hebrew Dictionary", kind: 'dict', format: 'JSON', category: 'dictionaries', url: 'modules/strongs-dict.json' };
+const DICT = { id: 'bdb', abbr: 'BDB', name: 'Brown-Driver-Briggs', kind: 'dict', format: 'JSON', category: 'dictionaries', url: 'modules/lex-bdb.json' };
+const NT_A = { id: 'ahi-nt', abbr: 'NT', name: 'Ahirani New Testament', kind: 'bible', format: 'USFM', category: 'bibles', url: 'modules/ahi-nt.zip' };
+const NT_B = { id: 'bhi-nt', abbr: 'NT', name: 'Bhili New Testament', kind: 'bible', format: 'USFM', category: 'bibles', url: 'modules/bhi-nt.zip' };
 
-const bytes = (n) => new Uint8Array(n);
+// The bytes each url serves, keyed by BASENAME because that is what loadModuleBytes is given. The dictionary
+// is real JSON because the engine parses it; the rest are opaque blobs of a plausible size, since what this
+// file measures about them is how many bytes leave the store.
+const DICT_JSON = JSON.stringify({ entries: { G26: { lemma: 'ἀγάπη', short: 'love' } } });
+const FIXTURE = new Map([
+  [BIBLE, 3_000_000], [SECOND, 2_600_000], [CMT, 25_000_000], [NT_A, 1_100_000], [NT_B, 1_200_000],
+].map(([m, n]) => [m.url.split('/').pop(), { kind: m.kind, bytes: new Uint8Array(n), declares: m.abbr }]));
+FIXTURE.set(DICT.url.split('/').pop(), { kind: DICT.kind, bytes: new TextEncoder().encode(DICT_JSON) });
+const SIZE = (m) => FIXTURE.get(m.url.split('/').pop()).bytes.length;
+const rawOf = (m) => FIXTURE.get(m.url.split('/').pop()).bytes;
 
-// Install the four the way engine.js does: cache the bytes, load the thing into its own store, record it.
-async function phone(opts) {
+// Install through the engine's OWN installModule, so the line that decides what goes in the installed
+// record — `recordInstalled(item, loaded && loaded.abbr)` — is the shipped one and the abbr it records is
+// whatever addSource/addCommentary/addDict really registered.
+async function phone(opts = {}) {
   const e = engine(opts);
-  await e.cachePut(BIBLE.url, bytes(3_000_000));
-  e.addSource({ abbr: BIBLE.abbr, name: BIBLE.name, books: [], maxChap: {} });
-  e.recordInstalled(BIBLE);
-
-  await e.cachePut(SECOND.url, bytes(2_600_000));
-  e.addSource({ abbr: SECOND.abbr, name: SECOND.name, books: [], maxChap: {} });
-  e.recordInstalled(SECOND);
-
-  await e.cachePut(CMT.url, bytes(25_000_000));
-  e.addCommentary({ abbr: CMT.abbr, name: CMT.name, getComment: () => [] });
-  e.recordInstalled(CMT);
-
-  await e.cachePut(DICT.url, bytes(4_010_000));
-  e.loadDictJSON({ entries: { G26: { lemma: 'ἀγάπη', short: 'love' } } }, DICT.abbr);
-  e.recordInstalled(DICT);
+  for (const m of opts.modules || [BIBLE, SECOND, CMT, DICT]) await e.installModule(m);
   return e;
 }
 
@@ -248,7 +333,8 @@ test('CONTROL — the Installed tier lists all four modules with a Remove on eac
     assert.match(texts(s.removeBtn(m.name)).join(' '), /Remove/, `${m.name}'s row has no Remove control`);
   }
   assert.deepEqual(e.idb._keys().sort(), [BIBLE.url, SECOND.url, CMT.url, DICT.url].sort());
-  assert.equal(e.idb._bytes(), 34_610_000, 'the harness is not holding the module bytes it thinks it is');
+  assert.equal(e.idb._bytes(), [BIBLE, SECOND, CMT, DICT].reduce((n, m) => n + SIZE(m), 0),
+    'the harness is not holding the module bytes it thinks it is');
   assert.ok(e.notified() > 0, 'the harness never reached engine.js notify() — every assertion here would be vacuous');
 });
 
@@ -266,7 +352,7 @@ test('A COMMENTARY IS REMOVED BY THE BUTTON ON THE LIBRARY SCREEN, and its 25 MB
     'the commentary is still in the installed map: it is still listed as installed and restoreInstalled() ' +
     'will load it again at the next boot');
   assert.equal(e.idb._keys().includes(CMT.url), false, 'the commentary bytes are still in IndexedDB');
-  assert.equal(e.idb._bytes(), 34_610_000 - 25_000_000, 'the space did not come back');
+  assert.equal(e.idb._bytes(), [BIBLE, SECOND, DICT].reduce((n, m) => n + SIZE(m), 0), 'the space did not come back');
   assert.deepEqual(s.toasts, [`Removed ${CMT.abbr}`], `the screen said ${JSON.stringify(s.toasts)}`);
   assert.equal(s.words().includes(CMT.name), false, 'the removed commentary is still listed on the screen');
 });
@@ -286,7 +372,7 @@ test('A DICTIONARY IS REMOVED THE SAME WAY, and stops answering lookups', async 
   assert.equal(e.lex('G26').short, undefined, 'the removed dictionary is still answering lookups');
   assert.equal(e.getInstalled()[DICT.url], undefined, 'the dictionary is still recorded as installed');
   assert.equal(e.idb._keys().includes(DICT.url), false, 'the dictionary bytes are still in IndexedDB');
-  assert.equal(e.idb._bytes(), 34_610_000 - 4_010_000, 'the space did not come back');
+  assert.equal(e.idb._bytes(), [BIBLE, SECOND, CMT].reduce((n, m) => n + SIZE(m), 0), 'the space did not come back');
   assert.deepEqual(s.toasts, [`Removed ${DICT.abbr}`]);
 });
 
@@ -487,6 +573,224 @@ test('THE READER\'S TRANSLATIONS SHEET REPORTS WHAT REALLY HAPPENED', async () =
   assert.ok(b.words().includes(SECOND.name), 'the translation vanished from the list over a removal that failed');
 });
 
+// ── T12: two modules, one catalogue abbr ──────────────────────────────────────────────────────────────────
+// THE CASE THAT BLOCKED THIS BRANCH AT AUDIT, and it is reachable from the shipped Library today: 260 of the
+// 1,290 entries in ebible-catalog.json are abbr "NT". `addSource` has always deduped a colliding name in
+// memory (NT -> NT2) while `recordInstalled` stored the CATALOGUE abbr, so both records said "NT" and:
+//   (a) the Library disabled Remove on BOTH rows whenever either was the Bible being read, because the
+//       guard is `r.abbr === active` — the exact "you cannot remove it" defect this branch exists to end;
+//   (b) removing either ran `delete modules["NT"]` and evicted the one the member KEPT from the reader,
+//       while the one they removed stayed readable with its bytes already deleted;
+//   (c) the reader's Translations sheet passes the REGISTERED abbr ("NT2"), which matched no record at all,
+//       so nothing was deleted, nothing was freed, and it said "Removed NT2".
+// All three are one root cause — two names for one module — and the fix is that the record carries the name
+// the engine registered. Everything below is driven through the screens.
+test('TWO MODULES SHARING A CATALOGUE ABBR ARE TWO MODULES, on the screen and in the store', async () => {
+  const e = await phone({ modules: [NT_A, NT_B] });
+  assert.equal(e.active(), 'NT', 'the first-loaded Bible should be active — re-anchor this test');
+  assert.deepEqual(Object.values(e.getInstalled()).map(r => r.abbr), ['NT', 'NT2'],
+    'the installed records do not carry the names the engine registered, so one of them names a module ' +
+    'that is not there');
+  const s = screen(e);
+
+  // (a) the one being read is refused; THE OTHER ONE IS OFFERED.
+  assert.equal(s.removeBtn(NT_A.name).props.disabled, true, 'the Bible being read can be removed');
+  assert.equal(s.removeBtn(NT_B.name).props.disabled, false,
+    'the second New Testament cannot be removed while the first is being read — both rows say "NT", so ' +
+    'the active-Bible guard disables a module that is not active');
+
+  // (b) removing it leaves the other one readable.
+  await s.tapRemove(NT_B.name);
+  assert.deepEqual(s.toasts, ['Removed NT2']);
+  assert.ok(e.modules.NT, 'removing the second New Testament evicted the FIRST from the reader');
+  assert.deepEqual(e.order(), ['NT'], 'the reader\'s version order lost the module the member kept');
+  assert.equal(e.modules.NT2, undefined, 'the removed module is still loaded');
+  assert.ok(e.idb._keys().includes(NT_A.url), 'the kept module\'s bytes were deleted');
+  assert.equal(e.idb._keys().includes(NT_B.url), false, 'the removed module\'s bytes are still on the phone');
+  assert.equal(e.idb._bytes(), SIZE(NT_A), 'the wrong module\'s space came back');
+});
+
+test('…AND THE READER\'S TRANSLATIONS SHEET REMOVES THE ONE IT NAMES', async () => {
+  // (c). The sheet lists `Bible.versions()`, which is the REGISTERED abbr — "NT2" — and that has to reach a
+  // record, or the removal frees nothing and says it did.
+  const e = await phone({ modules: [NT_A, NT_B] });
+  const v = versionSheet(e);
+  await v.byLabel(new RegExp('Remove ' + NT_B.name))[0].props.onClick({ stopPropagation() {} });
+  v.redraw();
+  assert.deepEqual(v.toasts, ['Removed NT2']);
+  assert.equal(e.getInstalled()[NT_B.url], undefined, 'the record is still there, so it is still "installed"');
+  assert.equal(e.idb._keys().includes(NT_B.url), false,
+    'the sheet reported a removal that freed nothing: the bytes are still on the phone and the module is ' +
+    'back at the next launch');
+  assert.ok(e.modules.NT && e.idb._keys().includes(NT_A.url), 'the other New Testament went with it');
+});
+
+test('A RECORD WRITTEN BY AN OLDER BUILD IS REPAIRED AT THE NEXT LAUNCH', async () => {
+  // A phone that already has both New Testaments has two records saying "NT" written by a build before this
+  // branch. Nothing can repair that until the modules are loaded and the collision is visible, which is
+  // exactly what restoreInstalled does on every launch — so the repair lives there, and this runs the real
+  // one (only `publishedPins` is stubbed: what the catalogue publishes is another file's subject).
+  const e = engine();
+  await e.cachePut(NT_A.url, rawOf(NT_A));
+  await e.cachePut(NT_B.url, rawOf(NT_B));
+  e.recordInstalled(NT_A);                    // the old call shape: the CATALOGUE abbr, for both
+  e.recordInstalled(NT_B);
+  assert.deepEqual(Object.values(e.getInstalled()).map(r => r.abbr), ['NT', 'NT'], 'fixture is not the old shape');
+
+  await e.restoreInstalled();
+
+  assert.deepEqual(Object.values(e.getInstalled()).map(r => r.abbr), ['NT', 'NT2'],
+    'the launch did not repair the records, so the collision defects survive the update');
+  const s = screen(e);
+  assert.equal(s.removeBtn(NT_B.name).props.disabled, false, 'the repaired record still cannot be removed');
+  await s.tapRemove(NT_B.name);
+  assert.equal(e.idb._keys().includes(NT_B.url), false, 'the repaired record removed the wrong bytes, or none');
+  assert.ok(e.modules.NT, 'the module the member kept was evicted');
+});
+
+test('TWO COMMENTARIES SHARING AN ABBR DO NOT REMOVE EACH OTHER', async () => {
+  // The same shape one shelf along: `delete commentaries[abbr]`. addCommentary dedupes exactly as addSource
+  // does, so recording what it returned closes this at the same root. Latent in the shipped catalogue
+  // (its four commentaries have distinct abbrs) and not latent at all for a church publishing its own.
+  const A = { ...CMT, id: 'cmt-a', url: 'modules/matthew-henry.cmt.mybible.zip' };
+  const B = { ...CMT, id: 'cmt-b', name: 'Gill on the Whole Bible', url: 'modules/gill.cmt.mybible.zip' };
+  FIXTURE.set('gill.cmt.mybible.zip', { kind: 'comment', bytes: new Uint8Array(9_000_000) });
+  const e = await phone({ modules: [A, B] });
+  assert.deepEqual(Object.keys(e.commentaries), ['MHC', 'MHC2'], 'addCommentary no longer dedupes — re-anchor');
+  assert.deepEqual(Object.values(e.getInstalled()).map(r => r.abbr), ['MHC', 'MHC2']);
+
+  await screen(e).tapRemove(B.name);
+  assert.ok(e.commentaries.MHC, 'removing one commentary evicted the other from the notes panel');
+  assert.equal(e.commentaries.MHC2, undefined, 'the removed commentary is still loaded');
+  assert.equal(e.idb._bytes(), SIZE(A), 'the wrong commentary\'s bytes were freed');
+});
+
+// ── T16: a store that cannot be opened is not a proof ──────────────────────────────────────────────────────
+test('A STORE THAT CANNOT BE OPENED IS NOT "PROVED GONE" — the removal is refused, and nothing is orphaned', async () => {
+  // Every other cache helper in engine.js swallows its errors and answers null, which is right for reading a
+  // module and fatal for the read-back after a delete: cacheGet() returns null when the bytes are GONE and
+  // when indexedDB.open() FAILED, and the delete that just ran swallowed the identical failure. Believing it
+  // deletes the record over 25 MB that stay on the phone — and once no record lists them, nothing in the app
+  // can ever offer to remove them again (cacheKeys() is exported and has no caller; there is no sweeper).
+  const e = await phone();
+  const before = e.idb._bytes();
+  e.idb._breakOpen(true);                      // private browsing, a corrupt database, a quota refusal
+  const s = screen(e);
+
+  await s.tapRemove(CMT.name);
+
+  assert.deepEqual(s.toasts, [`Couldn't remove ${CMT.name}`],
+    `the screen said ${JSON.stringify(s.toasts)} over a store it could not even open`);
+  assert.equal(e.idb._bytes(), before, 'the harness did not really block the store — re-anchor this test');
+  assert.ok(e.getInstalled()[CMT.url],
+    'the record was dropped while the bytes stayed: those megabytes are now unlisted and unreachable');
+  assert.ok(s.words().includes(CMT.name), 'the module vanished from the screen over a removal that failed');
+  // …and when the store comes back, the same tap works.
+  e.idb._breakOpen(false);
+  const s2 = screen(e);
+  await s2.tapRemove(CMT.name);
+  assert.deepEqual(s2.toasts, [`Removed ${CMT.abbr}`]);
+  assert.equal(e.idb._keys().includes(CMT.url), false);
+});
+
+// ── T17: the search screen, holding a copy of a removed dictionary's definitions ───────────────────────────
+// The reader's notes panel was not the only screen keeping a copy: SearchScreen's `dictHits` is a useMemo
+// over searchDict(), and its deps were [active] alone. A dictionary uninstalled from the Library went on
+// showing its definitions — read out of bytes that had just been deleted — until the member typed again.
+test('A DICTIONARY REMOVED WHILE ITS DEFINITIONS ARE ON THE SEARCH SCREEN LEAVES THE SCREEN', async () => {
+  const e = await phone();
+  const { React, draw } = miniReact();
+  const g = {
+    React,
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    IconBtn: ({ name, onClick }) => React.createElement('button', { title: name, onClick }),
+    Chip: (p) => React.createElement('button', { onClick: p.onClick }, p.children),
+    ScreenScroll: (p) => p.children,
+    Spinner: () => React.createElement('i', {}),
+    safeCssColor: (c) => c || 'var(--clay)',
+    location: { search: '' },
+    window: {
+      Bible: {
+        versions: () => e.order().map(a => ({ abbr: a, name: e.modules[a].name })),
+        get activeVersion() { return e.active(); },
+        search: () => [], books: () => [], searchDict: e.searchDict, lex: e.lex, subscribe: e.subscribe,
+      },
+      TrinityData: {}, addEventListener() {}, removeEventListener() {},
+    },
+    document: { addEventListener() {}, removeEventListener() {} },
+  };
+  const { SearchScreen } = loadScreen('app/screens-search.jsx', ['SearchScreen'], g);
+  const props = { ctx: { toast() {}, go() {} }, onBack: null };
+  let tree = draw(SearchScreen, props);
+  const redraw = () => (tree = draw(SearchScreen, props));
+  redraw();
+  // type the query, then press Enter on the REDRAWN box — the handler closes over the value it was drawn
+  // with, exactly as React does, so searching from a stale closure would search for the empty string.
+  find(tree, n => n.type === 'input')[0].props.onChange({ target: { value: 'love' } });
+  redraw();
+  find(tree, n => n.type === 'input')[0].props.onKeyDown({ key: 'Enter' });
+  redraw();
+  assert.ok(texts(tree).join(' ').includes('DICTIONARY'),
+    'the search screen has no dictionary section at all — re-anchor this test');
+  assert.ok(texts(tree).join(' ').includes('ἀγάπη'),
+    'the installed dictionary is not answering the search — re-anchor this test');
+
+  await screen(e).tapRemove(DICT.name);        // the member removes it from the Library
+  redraw();
+
+  assert.equal(texts(tree).join(' ').includes('ἀγάπη'), false,
+    'the search screen is still showing definitions from a dictionary that has been removed and whose ' +
+    'bytes are deleted');
+});
+
+test('TWO DICTIONARIES SHARING AN ABBR DO NOT REMOVE EACH OTHER', async () => {
+  // The third shelf, and the one with no dedupe of its own until this branch: `dicts` had no identity at
+  // all, and giving every entry the CATALOGUE abbr would have meant one name for two dictionaries — so
+  // removing either emptied both from lex() while freeing one module's bytes. addDict now dedupes exactly
+  // as addSource and addCommentary do, and the record carries what it returned.
+  const B = { ...DICT, id: 'lex-2', name: 'Abbott-Smith', url: 'modules/lex-abbott.json' };   // same abbr, BDB
+  FIXTURE.set('lex-abbott.json', { kind: 'dict', bytes: new TextEncoder().encode(
+    JSON.stringify({ entries: { H1: { lemma: 'אָב', short: 'father' } } })) });
+  const e = await phone({ modules: [DICT, B] });
+  assert.deepEqual(e.dicts.map(d => d.abbr), ['BDB', 'BDB2'], 'addDict did not dedupe the second dictionary');
+  assert.deepEqual(Object.values(e.getInstalled()).map(r => r.abbr), ['BDB', 'BDB2'],
+    'the records do not carry what addDict registered, so one of them names a dictionary that is not there');
+  assert.equal(e.lex('H1').short, 'father', 'the second dictionary is not answering — re-anchor this test');
+
+  await screen(e).tapRemove(B.name);
+
+  assert.equal(e.lex('H1').missing, true, 'the removed dictionary is still answering lookups');
+  assert.equal(e.lex('G26').short, 'love', 'removing one dictionary emptied the other one too');
+  assert.deepEqual(e.dicts.map(d => d.abbr), ['BDB']);
+  assert.ok(e.idb._keys().includes(DICT.url), 'the kept dictionary\'s bytes were deleted');
+  assert.equal(e.idb._keys().includes(B.url), false, 'the removed dictionary\'s bytes are still on the phone');
+});
+
+test('A MODULE OPENED WITH ?module=<url> IS LISTED, AND CAN THEREFORE BE REMOVED', async () => {
+  // autoLoad's query-parameter path cached the bytes through fetchAndCacheModule and wrote no record, so
+  // the module never appeared on the Installed tier: downloaded once, kept for ever, and nothing in the app
+  // could offer to remove it. It records what it caches now, like the file-import path beside it.
+  const e = engine({ search: '?module=' + NT_A.url });
+  await e.autoLoad();
+  assert.ok(e.idb._keys().includes(NT_A.url), 'autoLoad did not cache the module — re-anchor this test');
+  assert.ok(e.getInstalled()[NT_A.url],
+    'the module is on the phone and not in the installed map: its bytes are unreachable for ever');
+
+  // No catalogue entry came with it, so the engine names it from the file — which is what the reader shows
+  // for a module opened this way, and is enough to list it and remove it.
+  const FILE = NT_A.url.split('/').pop();
+  assert.equal(e.getInstalled()[NT_A.url].name, FILE);
+  const s = screen(e);
+  assert.ok(s.words().includes(FILE), 'it is not listed on the Installed tier');
+  // it is the only Bible, so it is the active one and rightly refused; another one makes it removable
+  await e.installModule(BIBLE);
+  e.setActive('BSB');
+  const s2 = screen(e);
+  await s2.tapRemove(FILE);
+  assert.deepEqual(s2.toasts, ['Removed NT']);
+  assert.equal(e.idb._keys().includes(NT_A.url), false, 'the bytes stayed');
+});
+
 // ── T9: what is NOT claimed ───────────────────────────────────────────────────────────────────────────────
 test('NO DEVOTIONAL CAN BE INSTALLED, so there is none to remove — stated, not papered over', async () => {
   // catOf() knows the category and the Library has a Devotionals section, but nothing can put a module in
@@ -503,8 +807,8 @@ test('NO DEVOTIONAL CAN BE INSTALLED, so there is none to remove — stated, not
     'loadModuleBytes has a devotional branch now — the same applies');
   // And a record in a category with nothing in memory is still removable: the record and the bytes go.
   const e = await phone();
-  e.recordInstalled({ url: 'modules/a-devotional.zip', id: 'dv', abbr: 'DVT', name: 'A devotional', kind: 'devotional' });
-  await e.cachePut('modules/a-devotional.zip', bytes(1000));
+  e.recordInstalled({ url: 'modules/a-devotional.zip', id: 'dv', abbr: 'DVT', name: 'A devotional', kind: 'devotional' }, 'DVT');
+  await e.cachePut('modules/a-devotional.zip', new Uint8Array(1000));
   assert.equal(await e.removeModule('modules/a-devotional.zip'), true);
   assert.equal(e.idb._keys().includes('modules/a-devotional.zip'), false, 'the bytes stayed');
 });

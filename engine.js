@@ -113,7 +113,18 @@ window.safeImgUrl = function (v) {
   // a product whose first audience is phones with very little storage (see removeModule below). The two
   // readers (lex, searchDict) take `d.entries`; nothing outside engine.js touches this list.
   const dicts = [];
-  function addDict(entries, abbr){ if(entries) dicts.push({ abbr: abbr || "", entries }); notify(); }
+  // RETURNS THE ABBR IT REGISTERED, which is not always the one asked for — the same dedupe addSource and
+  // addCommentary have always done, for the same reason. Two modules can carry one catalogue abbr (260 of
+  // the 1,290 entries in ebible-catalog.json are "NT"), and two dictionaries filed under one name would be
+  // one name that removes both. The caller records what comes back, never what it asked for.
+  function addDict(entries, abbr){
+    if(!entries) return null;
+    let a = abbr || "", i = 2;
+    while(a && hasDict(a)) a = abbr + i++;
+    dicts.push({ abbr: a, entries });
+    notify();
+    return a;
+  }
   // Lexicon dicts (Strong's ≈ 14k entries) aren't needed until a word is tapped — defer their parse off the
   // boot path. They load on idle after boot, or on the first lex()/dict access, whichever comes first.
   // A pending one carries its abbr too: a dictionary removed BEFORE its deferred parse ran would otherwise
@@ -139,7 +150,7 @@ window.safeImgUrl = function (v) {
   function loadDictJSON(obj, abbr){
     // The security strip (raw HTML out of third-party dict fields) now happens lazily per-entry in lex() on
     // lookup, so we skip the O(14k) walk here — it was a measurable boot cost for zero benefit before a tap.
-    addDict((obj && obj.entries) || obj || {}, abbr);
+    return addDict((obj && obj.entries) || obj || {}, abbr);
   }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
@@ -381,7 +392,7 @@ window.safeImgUrl = function (v) {
       const cmt = buildCommentaryFromDb(db, srcName);
       if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
       const dict = buildDictFromDb(db);
-      if(dict){ addDict(dict, meta && meta.abbr); return { kind: "dict" }; }
+      if(dict){ return { kind: "dict", abbr: addDict(dict, meta && meta.abbr) }; }
       throw new Error("unsupported MySword module — no Bible, commentary or dictionary table");
     }
     if(isZip(u8)){
@@ -394,7 +405,7 @@ window.safeImgUrl = function (v) {
         const cmt = buildCommentaryFromDb(db, srcName);
         if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
         const dict = buildDictFromDb(db);
-        if(dict){ addDict(dict, meta && meta.abbr); return { kind: "dict" }; }
+        if(dict){ return { kind: "dict", abbr: addDict(dict, meta && meta.abbr) }; }
         throw new Error("unsupported module inside " + (srcName || "the archive"));
       }
       const src = buildFromUSFM(files, srcName);
@@ -416,6 +427,24 @@ window.safeImgUrl = function (v) {
   async function cachePut(key, u8){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").put(u8, key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
   async function cacheKeys(){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); }); }catch(e){ return []; } }
   async function cacheDelete(key){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").delete(key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
+  // "IS IT STILL THERE?" — AND IT THROWS WHEN IT CANNOT LOOK. Every other helper above swallows its errors
+  // and answers null/[]/nothing, which is right for reading a module (a cache miss and a broken store both
+  // mean "fetch it") and WRONG for the one question removeModule asks after deleting: cacheGet() returns
+  // null when the bytes are gone AND when indexedDB.open() failed, and the delete that just ran swallowed
+  // the identical failure — so the same broken store made the delete a no-op and the read-back say "proved
+  // gone". Measured: 25 MB left in the store with the record deleted, and since nothing then lists the
+  // module, nothing could ever offer to remove it again. That is the exact outcome the delete-before-forget
+  // ordering exists to prevent, so this one deliberately does NOT catch: "I could not look" must reach the
+  // caller as an error and never as "no".
+  //
+  // It reads with get() rather than count() deliberately: get() is the call cacheGet already makes on every
+  // launch of every phone this ships to, so nothing here rests on an IndexedDB method this app has never
+  // used on a device. The cost of reading the blob instead of counting it is only ever paid when the answer
+  // is YES — i.e. when the delete failed — because a deleted key returns undefined with nothing to read.
+  async function cacheHas(key){
+    const db = await idb();
+    return await new Promise((res, rej) => { const q = idbStore(db, "readonly").get(key); q.onsuccess = () => res(q.result != null); q.onerror = () => rej(q.error); });
+  }
 
   // Modules (Bibles + the Strong's lexicon) are NOT embedded in the app — they download on demand.
   // The web build serves them same-origin. On native, MOST modules are not in the APK, so a relative url
@@ -602,7 +631,34 @@ window.safeImgUrl = function (v) {
   function getInstalled(){ try{ return JSON.parse(localStorage.getItem(INSTALLED_KEY) || "{}"); }catch(e){ return {}; } }
   function setInstalled(map){ try{ localStorage.setItem(INSTALLED_KEY, JSON.stringify(map)); }catch(e){} }
   function catOf(item){ return item.category || (item.kind === "dict" ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
-  function recordInstalled(item){ const m = getInstalled(); m[item.url] = { url: item.url, id: item.id, abbr: item.abbr, name: item.name, kind: item.kind, format: item.format, category: catOf(item) }; setInstalled(m); }
+  // RECORD THE ABBR THE ENGINE REGISTERED, NOT THE ONE THE CATALOGUE ASKED FOR. `registered` comes from
+  // addSource/addCommentary/addDict, which have always deduped a colliding name (NT -> NT2); this used to
+  // store `item.abbr` regardless, so two modules sharing one catalogue abbr produced two records saying the
+  // same thing and one of them named a module that is not there.
+  //
+  // It is not a corner case: 260 of the 1,290 entries in ebible-catalog.json carry abbr "NT" (9 "NTPO",
+  // 7 "BL"), and two minority-language New Testaments is the ordinary case for this product's first
+  // audience. Three things broke, all measured: the Library disabled Remove on BOTH rows whenever either
+  // was the Bible being read (`r.abbr === active`); removing one ran `delete modules["NT"]` and evicted the
+  // one the member KEPT; and the reader's Translations sheet, which passes the REGISTERED abbr, matched no
+  // record at all, so it deleted nothing, freed nothing and said "Removed NT2".
+  //
+  // The installed map is what every screen lists and what removal keys off, so there is one identity here
+  // now, not two. restoreInstalled() repairs a record written by an older build on the next launch.
+  function recordInstalled(item, registered){
+    const m = getInstalled();
+    m[item.url] = { url: item.url, id: item.id, abbr: registered || item.abbr, name: item.name, kind: item.kind, format: item.format, category: catOf(item) };
+    setInstalled(m);
+  }
+  // Repair one record in place when the engine turns out to have registered a different name — an older
+  // build's record, or a collision that only appears once the second module is installed.
+  function noteRegisteredAbbr(url, abbr){
+    if(!url || !abbr) return;
+    const m = getInstalled();
+    if(!m[url] || m[url].abbr === abbr) return;
+    m[url].abbr = abbr;
+    setInstalled(m);
+  }
   function isInstalled(url){ return !!getInstalled()[url]; }
   function isInstalling(url){ return installing.has(url); }
 
@@ -654,7 +710,7 @@ window.safeImgUrl = function (v) {
           if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + bytes.byteLength + " bytes — refusing)");
           await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes);
         }   // M3: verify before cache/parse
-        loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)), item.abbr);
+        loaded = { kind: "dict", abbr: loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)), item.abbr) };
       }else{
         // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
         // standing between a compromised gateway or mirror and a module whose HTML goes into the reader
@@ -671,7 +727,7 @@ window.safeImgUrl = function (v) {
         // common one. applyMeta() reads only abbr/name/category, so the extra key is inert downstream.
         loaded = await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item), sha256: item.sha256 });
       }
-      recordInstalled(item);
+      recordInstalled(item, loaded && loaded.abbr);
       return loaded || true;   // {kind:'bible',abbr} for a translation (the real registered abbr) — lets callers switch to it
     }catch(err){ console.error(err); window.Bible._error = "Couldn't install " + (item.name || item.url) + " — " + err.message; throw err; }
     finally{ installing.delete(item.url); notify(); }
@@ -716,8 +772,19 @@ window.safeImgUrl = function (v) {
             try{ window.Bible._error = null; }catch(e2){}
           }
         }
-        if((meta.format || "").toUpperCase() === "JSON") { const raw = bytes; _pendingDicts.push({ abbr: meta.abbr, run: () => loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr) }); }
-        else await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
+        // WHAT THE ENGINE REGISTERS IS WHAT THE RECORD MUST SAY. A record written by a build before
+        // 2026-09-11 carries the CATALOGUE abbr, and two modules sharing one (260 entries in
+        // ebible-catalog.json are "NT") then have two records naming one module — the Library disables
+        // Remove on both, and removing either evicts the wrong one from the reader. The registered name is
+        // only knowable once the module is loaded, which is here, so the repair happens on the next launch
+        // and costs a localStorage write only when the two actually differ.
+        if((meta.format || "").toUpperCase() === "JSON") {
+          const raw = bytes, u = url;
+          _pendingDicts.push({ abbr: meta.abbr, run: () => noteRegisteredAbbr(u, loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr)) });
+        } else {
+          const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
+          noteRegisteredAbbr(url, r && r.abbr);
+        }
       }catch(e){ console.error("restore failed for", url, e); }
     }
     // parse any deferred lexicon dicts during idle — ready before the reader's tapped, but not blocking boot
@@ -799,12 +866,20 @@ window.safeImgUrl = function (v) {
     if(url && installing.has(url)) return false;
     if(url){
       await cacheDelete(url);
-      // PROVE THE SPACE CAME BACK. cacheDelete swallows its own errors (a blocked or broken IndexedDB
-      // resolves exactly as a successful delete does), so without this read-back "removed" would be a
-      // claim about a call having been made, not about the bytes being gone.
-      if(await cacheGet(url)) return false;
+      // PROVE THE SPACE CAME BACK, and refuse when it cannot be proved. cacheDelete swallows its own
+      // errors, so the call having been made says nothing; cacheHas() answers the question and THROWS
+      // rather than saying "no" when the store cannot be opened — which is the case where the delete was
+      // a silent no-op, and where believing it would forget the record over bytes nobody can reach again.
+      let stillThere = true;
+      try{ stillThere = await cacheHas(url); }catch(e){ console.warn("could not confirm the module was deleted", url, e); }
+      if(stillThere) return false;
       const m = getInstalled(); delete m[url]; setInstalled(m);
     }
+    // With no `url` there is no record and no bytes we can name: the module was loaded into memory and
+    // never written down (localStorage full or blocked, so setInstalled's catch swallowed it). Dropping it
+    // from memory is then the whole of what "removed" can mean here — it leaves the reader and the list —
+    // and any bytes cached under a url we cannot learn stay where they are. The one shipped path that used
+    // to land here, `?module=<url>`, now records what it caches (see autoLoad).
     if(cat === "commentaries") delete commentaries[abbr];
     else if(cat === "dictionaries") removeDict(abbr);
     else if(modules[abbr]){ delete modules[abbr]; order = order.filter(a => a !== abbr); }
@@ -924,7 +999,16 @@ window.safeImgUrl = function (v) {
     try{ await restoreInstalled(); }catch(e){ console.error(e); }
     const url = new URLSearchParams(location.search).get("module");
     if(url){
-      try{ await fetchAndCacheModule(url); }
+      // RECORD IT, as the file-import path already does. fetchAndCacheModule() writes the bytes into the
+      // same IndexedDB every other module lives in, and this path used to leave no record of them: the
+      // module was absent from the Library's Installed tier, so nothing could ever offer to remove it, and
+      // it was reloaded from nowhere at the next launch — downloaded once, kept for ever, unreachable.
+      // A record makes it an ordinary installed module: listed, restored, removable.
+      try{
+        const r = await fetchAndCacheModule(url);
+        if(r && r.abbr) recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr,
+                                          kind: r.kind || "bible", category: r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles" }, r.abbr);
+      }
       catch(err){ console.error(err); window.Bible._error = err.message; }
     }
     // first run: nothing installed and nothing requested — install the bundled default Bible so a

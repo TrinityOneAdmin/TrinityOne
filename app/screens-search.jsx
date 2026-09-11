@@ -14,9 +14,17 @@ function SearchScreen({ ctx, onBack }) {
   const lexEntry = isStrong ? Bible.lex(active) : null;
   // perf #7: memoize the full-corpus LIKE scan (~31k verses) — it re-ran on every keystroke of the box AND every
   // background App re-render once a term was active. Now it runs only when the term or version changes.
-  const hits = React.useMemo(() => active && !isStrong ? Bible.search(active, 250, ver) : [], [active, ver]);
+  // A MODULE UNINSTALLED WHILE RESULTS ARE ON SCREEN HAS TO TAKE ITS RESULTS WITH IT. Both memos below hold
+  // a COPY of what the engine returned, and neither dependency list mentions the module store — so a
+  // dictionary removed from the Library went on showing definitions read out of bytes that had just been
+  // deleted, and verses kept coming from a translation that is no longer on the phone. Same stale-copy shape
+  // as the reader's notes panel. engine.js notify()s on every install and every removal; a tick in the deps
+  // is what makes these two recompute then, and only then.
+  const [modTick, setModTick] = useSrch(0);
+  React.useEffect(() => Bible.subscribe(() => setModTick(t => t + 1)), []);
+  const hits = React.useMemo(() => active && !isStrong ? Bible.search(active, 250, ver) : [], [active, ver, modTick]);
   // free-text search also scans installed dictionary/lexicon DEFINITIONS (guard in case an older cached engine has no searchDict)
-  const dictHits = React.useMemo(() => active && !isStrong && Bible.searchDict ? Bible.searchDict(active, 24) : [], [active]);
+  const dictHits = React.useMemo(() => active && !isStrong && Bible.searchDict ? Bible.searchDict(active, 24) : [], [active, modTick]);
   const seeds = ['light', 'love', 'God', 'beginning', 'life'];
 
   const hl = (text) => {
