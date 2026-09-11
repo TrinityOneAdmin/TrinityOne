@@ -5607,7 +5607,7 @@ function CheckoutModal({ rec, onConfirm, onClose }) {
       {code && !ok ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8 }}>That code doesn’t match — don’t release the child if it’s wrong.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
-        <button onClick={onConfirm} disabled={!ok} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: ok ? 1 : 0.5 }}>Confirm collection</button>
+        <button onClick={onConfirm} disabled={!ok} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: ok ? 1 : 0.5 }}>Check out</button>
       </div>
     </CkModal>
   );

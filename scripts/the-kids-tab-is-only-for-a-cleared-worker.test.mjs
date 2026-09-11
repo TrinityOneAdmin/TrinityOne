@@ -273,16 +273,16 @@ test('…and the check-in form is NOT offered on a clearance that has ended — 
     'a check-in form was offered on a clearance that has ended — every write would be refused LOUD, which is a worse experience than not offering it');
 });
 
-// One child, so there is exactly one "Collect" control to drive.
+// One child, so there is exactly one "Check out" control to drive.
 const oneKid = [{ id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am' }];
 
 test('POINT OF USE: a matching pickup code RELEASES the child — a separate release document, not a rewrite', async () => {
   const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
   s.press('Kids');
-  assert.equal(s.has('Collect'), 1, 'THERE IS NO WAY TO COLLECT A CHILD — the checkout half is gone from the screen');
-  await s.click('Collect');
+  assert.equal(s.has('Check out'), 1, 'THERE IS NO WAY TO COLLECT A CHILD — the checkout half is gone from the screen');
+  await s.click('Check out');
   s.type('Enter the pickup code for Esther Ncube', '4417');
-  await s.click('Release');
+  await s.click('Confirm');
   assert.equal(s.releaseCalls.length, 1, 'a matching code did not release the child');
   assert.equal(s.releaseCalls[0].rel, 'ci-1', 'the release does not name the check-in it collects — the reader cannot fold it');
   assert.equal(s.releaseCalls[0].session, 'svc-am', 'the release is not tied to the child\'s session');
@@ -292,9 +292,9 @@ test('POINT OF USE: a matching pickup code RELEASES the child — a separate rel
 test('…and a WRONG code is LOUD and releases NOBODY (§6 rule 5)', async () => {
   const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
   s.press('Kids');
-  await s.click('Collect');
+  await s.click('Check out');
   s.type('Enter the pickup code for Esther Ncube', '0000');
-  await s.click('Release');
+  await s.click('Confirm');
   assert.equal(s.releaseCalls.length, 0,
     'A CHILD WAS RELEASED ON A CODE THAT DID NOT MATCH. This is the wrong-adult case the pickup code exists to prevent.');
   assert.match(s.reads(), /does not match|not released/i, 'a failed match said nothing — §6 rule 5: a failed match must be LOUD. As rendered: ' + s.reads());
@@ -303,7 +303,7 @@ test('…and a WRONG code is LOUD and releases NOBODY (§6 rule 5)', async () =>
 test('…and RELEASE BY HAND records a manual collection distinctly, with no code', async () => {
   const s = serving({ ...NONE, cleared: true, keysHeld: 1, from: AM_FROM, until: AM_FROM + 10800, sessions: oneSession(oneKid) });
   s.press('Kids');
-  await s.click('Collect');
+  await s.click('Check out');
   await s.click('By hand');
   assert.equal(s.releaseCalls.length, 1, 'a dead-phone / grandparent collection could not be recorded — the fallback §7 requires is missing');
   assert.equal(s.releaseCalls[0].manual, true,
@@ -314,7 +314,7 @@ test('…and RELEASE BY HAND records a manual collection distinctly, with no cod
 test('…and an already-collected child offers no Collect control', () => {
   const s = serving({ ...NONE, cleared: true, keysHeld: 1, sessions: oneSession([{ id: 'ci-1', childName: 'Esther Ncube', code: '4417', session: 'svc-am', out: AM_FROM + 5400 }]) });
   s.press('Kids');
-  assert.equal(s.has('Collect'), 0, 'a child already collected still offered a Collect button — a double release');
+  assert.equal(s.has('Check out'), 0, 'a child already collected still offered a Collect button — a double release');
   assert.match(s.reads(), /Collected/, 'the collected child is not shown as collected');
 });
 

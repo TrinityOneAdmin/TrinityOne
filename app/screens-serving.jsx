@@ -658,7 +658,7 @@ function KidsRow({ rec, ctx, open, onToggle }) {
   const confirmCode = () => {
     // COMPARED, never displayed to the wrong party; a failed match is LOUD (§6 rule 5).
     if (entry.trim() === code && code) release(false);
-    else setErr('That code does not match. The child was NOT released.');
+    else setErr('That code does not match. The child was NOT checked out.');
   };
   return (
     <div style={{ borderTop: '1px solid var(--line)' }}>
@@ -682,7 +682,7 @@ function KidsRow({ rec, ctx, open, onToggle }) {
         {rec.out ? null : (
           <button onClick={() => { setMode(m => (m === 'collect' ? '' : 'collect')); setErr(''); setEntry(''); }} aria-pressed={mode === 'collect'}
             style={{ flexShrink: 0, padding: '7px 11px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer', background: mode === 'collect' ? 'var(--surface-2)' : 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
-            Collect
+            Check out
           </button>
         )}
       </div>
@@ -705,11 +705,12 @@ function KidsRow({ rec, ctx, open, onToggle }) {
             ) : null}
             {code ? (
               <button onClick={confirmCode} disabled={busy || !entry.trim()}
+                aria-label={'Check ' + (rec.childName || 'this child') + ' out with this pickup code'}
                 style={{ padding: '9px 13px', borderRadius: 11, border: 'none', cursor: (busy || !entry.trim()) ? 'default' : 'pointer', opacity: (busy || !entry.trim()) ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
-                Release
+                Confirm
               </button>
             ) : null}
-            <button onClick={() => release(true)} disabled={busy} aria-label={'Collect ' + (rec.childName || 'this child') + ' by hand, without a code'}
+            <button onClick={() => release(true)} disabled={busy} aria-label={'Check ' + (rec.childName || 'this child') + ' out by hand, without a code'}
               style={{ padding: '9px 13px', borderRadius: 11, border: '1px solid var(--line)', cursor: busy ? 'default' : 'pointer', background: 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
               By hand
             </button>
