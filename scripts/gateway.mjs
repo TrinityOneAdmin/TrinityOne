@@ -1825,11 +1825,20 @@ const checkinSessionConflict = (d, cp, sid) => {
 // store, may it sit at the address it names? True for everything that is not a check-in record, for a record
 // naming no session, and for the church's own copy. False only for a NON-church author whose record would join
 // an address this box already holds a DIFFERENT session at.
+// A HELPER NEVER TOMBSTONES A RECORD — not even one in her own session. Red team 2026-09-11, F-D: a
+// hand-crafted `deleted` event carrying her session tag passed the session test (nothing about it
+// disagreed with the stored session) and was STORED, on a tip whose own notes said a helper cannot
+// tombstone. Both readers happened to ignore a non-church tombstone, so no child vanished — but a relay
+// gate that is looser than the written invariant is one reader change from hiding a present child. The
+// church and a safeguarding steward keep the tombstone (removeCheckin); a helper's record write must carry
+// a body. Applied at the websocket door and on ingest alike, as the session rule is.
+const checkinTombstone = (e) => !!(e && ((e.tags || []).some(t => t[0] === 'deleted') || !e.content));
 const checkinSessionOkOnIngest = (e, d) => {
   if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKIN_D)) return true;
   if (CHURCH_PUBS.has(e.pubkey)) return true;
   const cp = namedChurch(e) || '';
   if (!cp) return true;                       // ownership unproven — owningChurch()/canRead() deny it anyway
+  if (checkinTombstone(e) && !stewardCan(e.pubkey, cp, 'safeguarding')) return false;
   const sid = ((e.tags || []).find(t => t[0] === 'session') || [])[1] || '';
   if (!sid) return true;
   return !checkinSessionConflict(d, cp, sid);
@@ -3634,6 +3643,7 @@ function accept(e) {
       const cp = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
       if (!cp) return false;
       if (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding')) return true;
+      if (checkinTombstone(e)) return false;      // F-D: a helper writes records, never removes them
       const sid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
       if (!sid || !checkinHelperOf(e.pubkey, cp, sid)) return false;
       //      d. AND THE RECORD AT THAT ADDRESS MUST BE THEIR SESSION'S. Everything above this line asks about

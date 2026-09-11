@@ -234,6 +234,29 @@ test('…and she cannot reach it by tagging the session she does NOT hold either
   assert.equal(ok, false, 'a helper wrote into a session she holds no clearance for by naming it honestly');
 });
 
+test('a helper cannot TOMBSTONE a record — not even one in her own session — at either door', async () => {
+  // Red team 2026-09-11, F-D: a hand-crafted `deleted` event carrying her session tag passed the session
+  // test (nothing disagreed) and was stored, on a tip whose notes said a helper cannot tombstone. The
+  // readers ignored it, so nothing vanished; the gate was still looser than the invariant.
+  const tomb = (who, id, extra = []) => doc(who, D.CHECKIN + id, '', [['church', church.pub], ['session', MORNING], ['deleted', '1'], ...extra]);
+  const [okHer, msg] = await publishAs(ada, tomb(ada, 'am1'));
+  assert.equal(okHer, false, 'A HELPER\'S TOMBSTONE OF A RECORD IN HER OWN SESSION WAS ACCEPTED: ' + msg);
+  const [okEmpty] = await publishAs(ada, doc(ada, D.CHECKIN + 'am1', '', [['church', church.pub], ['session', MORNING]]));
+  assert.equal(okEmpty, false, 'an empty-content record from a helper (a tombstone without the tag) was accepted');
+  const [status, body] = await importAs(church, [tomb(ada, 'am1')]);
+  assert.equal(status, 200, '/import refused the church key — the import door is not being exercised');
+  assert.equal(body.invalid, 1, '/import installed a helper\'s tombstone: imported=' + body.imported + ' invalid=' + body.invalid);
+  await sleep(300);
+  assert.equal((await copiesOf(D.CHECKIN + 'am1')).filter(e => e.pubkey === ada.pub && !e.content).length, 0, 'the helper\'s tombstone is on the box');
+  // the controls: the church and a safeguarding steward still remove records, and the helper still writes
+  const [okSg] = await publishAs(sgLead, tomb(sgLead, 'sg-gone'));
+  assert.equal(okSg, true, 'a safeguarding steward\'s tombstone was refused — removeCheckin from a steward console is dead');
+  const [okCh] = await publishAs(church, tomb(church, 'ch-gone'));
+  assert.equal(okCh, true, 'the church\'s own tombstone was refused');
+  const [okWrite] = await publishAs(ada, forgery('am-still-writes', MORNING, { out: null }));
+  assert.equal(okWrite, true, 'the helper can no longer write a record at all — the refusal above is measuring a dead writer');
+});
+
 test('an ordinary member is refused the register outright, cleared or not', async () => {
   const [ok] = await publishAs(cara, doc(cara, D.CHECKIN + 'cara1', 'zz', [['church', church.pub], ['session', MORNING]]));
   assert.equal(ok, false, 'an uncleared member wrote into the children\'s register');
