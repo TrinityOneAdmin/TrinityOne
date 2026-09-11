@@ -749,13 +749,19 @@ function InstalledBrowser({ ctx, category, force }) {
 
   const CAT_LABEL = { bibles: 'Bible', dictionaries: 'Dictionary', commentaries: 'Commentary', devotionals: 'Devotional' };
   // AWAIT IT. removeModule is `async`, so this tested a PROMISE — always truthy — and the success toast
-  // fired even when the removal returned false. A commentary that is not in `modules` cannot be removed at
-  // all, and the app said "Removed" anyway. Same family as every other control in this programme that
+  // fired even when the removal returned false. A commentary that is not in `modules` could not be removed
+  // at all, and the app said "Removed" anyway. Same family as every other control in this programme that
   // reported success over nothing happening.
+  //
+  // THE REMOVAL ITSELF is fixed on this branch — removeModule now handles every category — and this call
+  // passes `r.url`, which is the key of both the installed map and the byte cache, rather than `r.abbr`,
+  // which several rows can share and an imported module may not have at all. The honest-failure path is
+  // unchanged and still load-bearing: a removal that cannot happen (the active Bible, a download still
+  // running, bytes that would not delete) says so instead of claiming success.
   const remove = async (r) => {
     if (r.abbr === active) { ctx.toast('Switch to another Bible before removing this one'); return; }
     let ok = false;
-    try { ok = await window.Bible.removeModule(r.abbr); } catch (e) { ok = false; }
+    try { ok = await window.Bible.removeModule(r.url || r.abbr); } catch (e) { ok = false; }
     if (ok) { ctx.toast(`Removed ${r.abbr || r.name}`); force(x => x + 1); }
     else ctx.toast(`Couldn't remove ${r.name}`);
   };

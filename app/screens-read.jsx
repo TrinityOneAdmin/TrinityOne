@@ -307,7 +307,17 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
   const bibles = cat ? (((cat.categories || []).find(c => c.id === 'bibles') || {}).items || []) : [];
   const available = bibles.filter(b => !owned.has(b.abbr) && !window.Bible.isInstalled(b.url));
 
-  const remove = (e, abbr) => { e.stopPropagation(); ctx.removeTranslation(abbr); ctx.toast('Removed ' + abbr); };
+  // AWAIT IT, AND BELIEVE THE ANSWER. This toasted "Removed BSB" the instant it was tapped, over a call it
+  // never waited for — the same defect the Library's Installed tier had (small-fixes-round4 V2). A removal
+  // can genuinely fail: the bytes may refuse to delete, or the module may still be downloading, and in both
+  // cases it is still on the phone and still in the list. ctx.removeTranslation returns removeModule's
+  // promise (app.jsx), so the honest answer is one await away.
+  const remove = async (e, abbr) => {
+    e.stopPropagation();
+    let ok = false;
+    try { ok = await ctx.removeTranslation(abbr); } catch (err) { ok = false; }
+    ctx.toast(ok ? 'Removed ' + abbr : "Couldn't remove " + abbr);
+  };
   const add = (item) => {
     ctx.toast('Adding ' + item.abbr + '…');
     window.Bible.installModule(item).then((res) => {
@@ -617,7 +627,18 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
   const saveNewNote = () => { const v = Math.max(1, parseInt(cVerse, 10) || 1); if (cText.trim()) ctx.setNote(label + ':' + v, cText.trim()); setComposing(false); setCText(''); };
-  useE(() => { if (!open) return; try { setComm(window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : []); } catch (e) { setComm([]); } }, [open, loc.book, loc.chap, ctx.version]);
+  // A COMMENTARY REMOVED WHILE THIS PANEL IS OPEN HAS TO LEAVE IT. getCommentary() reads the engine's live
+  // `commentaries` map, but the rows were copied into state by an effect that only re-ran on a new chapter
+  // or a new translation — so a module uninstalled from the Library went on being read here, out of a copy,
+  // until the reader happened to turn the page. engine.js notify()s on every install and every removal
+  // (VersionSheet listens the same way), so re-read on that too. Returning the unsubscriber matters: this
+  // effect re-runs on every chapter change.
+  useE(() => {
+    if (!open) return;
+    const read = () => { try { setComm(window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : []); } catch (e) { setComm([]); } };
+    read();
+    return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
+  }, [open, loc.book, loc.chap, ctx.version]);
   const sx = useR(0);
   // the reader's own notes for this chapter (keys look like "John 1:4")
   const prefix = label + ':';

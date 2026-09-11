@@ -105,13 +105,29 @@ window.safeImgUrl = function (v) {
     H430:{lemma:"אֱלֹהִים",translit:"ʾĕlōhîm",pos:"noun, masculine plural",short:"God, gods",gloss:"God; the supreme God (a plural of majesty), also gods or judges.",occ:2606},
     H7225:{lemma:"רֵאשִׁית",translit:"rēʾšît",pos:"noun, feminine",short:"beginning; first, chief",gloss:"Beginning, chief, first, the choicest or first fruits.",occ:51}
   };
-  // installed dictionary modules are consulted before the small built-in set
+  // installed dictionary modules are consulted before the small built-in set.
+  //
+  // EACH ONE CARRIES THE ABBR IT WAS INSTALLED UNDER, and that is the whole reason this is a list of
+  // records rather than a list of entry maps. A dictionary used to go in as a bare object with no identity
+  // of any kind, so nothing could ever find it again — which is why removeModule could not remove one, on
+  // a product whose first audience is phones with very little storage (see removeModule below). The two
+  // readers (lex, searchDict) take `d.entries`; nothing outside engine.js touches this list.
   const dicts = [];
-  function addDict(entries){ if(entries) dicts.push(entries); notify(); }
+  function addDict(entries, abbr){ if(entries) dicts.push({ abbr: abbr || "", entries }); notify(); }
   // Lexicon dicts (Strong's ≈ 14k entries) aren't needed until a word is tapped — defer their parse off the
   // boot path. They load on idle after boot, or on the first lex()/dict access, whichever comes first.
+  // A pending one carries its abbr too: a dictionary removed BEFORE its deferred parse ran would otherwise
+  // be put straight back by _ensureDicts a second later, with its bytes already deleted.
   const _pendingDicts = []; let _dictsLoaded = false;
-  function _ensureDicts(){ if(_dictsLoaded) return; _dictsLoaded = true; for(const fn of _pendingDicts.splice(0)){ try{ fn(); }catch(e){ console.error("lazy dict", e); } } }
+  function _ensureDicts(){ if(_dictsLoaded) return; _dictsLoaded = true; for(const d of _pendingDicts.splice(0)){ try{ d.run(); }catch(e){ console.error("lazy dict", e); } } }
+  function hasDict(abbr){ return !!abbr && (dicts.some(d => d.abbr === abbr) || _pendingDicts.some(d => d.abbr === abbr)); }
+  // Drop a dictionary from memory — both the parsed entries and any deferred parse still holding its raw
+  // bytes. Splicing the record is what actually frees the memory: nothing else references it.
+  function removeDict(abbr){
+    if(!abbr) return;
+    for(let i = dicts.length - 1; i >= 0; i--) if(dicts[i].abbr === abbr) dicts.splice(i, 1);
+    for(let i = _pendingDicts.length - 1; i >= 0; i--) if(_pendingDicts[i].abbr === abbr) _pendingDicts.splice(i, 1);
+  }
   // SECURITY-AUDIT-2026-06-24 N4: strip raw HTML from third-party dictionary string fields. Today
   // every lexicon value reaches the DOM as a React text child (auto-escaped, no XSS), so this is
   // defence in depth — but if a future change ever wraps lex output in dangerouslySetInnerHTML
@@ -120,10 +136,10 @@ window.safeImgUrl = function (v) {
   // tag removal is enough; we don't try to preserve formatting.
   const _LEX_FIELDS = ['lemma','translit','pos','short','gloss','def','deriv','kjv'];
   function _stripTags(s){ return (typeof s === 'string' && s.indexOf('<') !== -1) ? s.replace(/<[^>]*>/g, '') : s; }
-  function loadDictJSON(obj){
+  function loadDictJSON(obj, abbr){
     // The security strip (raw HTML out of third-party dict fields) now happens lazily per-entry in lex() on
     // lookup, so we skip the O(14k) walk here — it was a measurable boot cost for zero benefit before a tap.
-    addDict((obj && obj.entries) || obj || {});
+    addDict((obj && obj.entries) || obj || {}, abbr);
   }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
@@ -148,7 +164,8 @@ window.safeImgUrl = function (v) {
     _ensureDicts();
     _ensureFullLexicon();   // first tap pays for it, not first launch
     id = id.toUpperCase();
-    for(const d of dicts){
+    for(const rec of dicts){
+      const d = rec.entries;
       if(d[id]){ const e = d[id]; return { id, lang: id[0] === "H" ? "HEBREW" : "GREEK", lemma: _stripTags(e.lemma || ""), translit: _stripTags(e.translit || ""), pos: _stripTags(e.pos || ""), short: _stripTags(e.short || ""), gloss: _stripTags(e.gloss || ""), def: _stripTags(e.def || ""), deriv: _stripTags(e.deriv || ""), kjv: _stripTags(e.kjv), occ: e.occ }; }
     }
     const e = LEX[id];
@@ -364,7 +381,7 @@ window.safeImgUrl = function (v) {
       const cmt = buildCommentaryFromDb(db, srcName);
       if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
       const dict = buildDictFromDb(db);
-      if(dict){ addDict(dict); return { kind: "dict" }; }
+      if(dict){ addDict(dict, meta && meta.abbr); return { kind: "dict" }; }
       throw new Error("unsupported MySword module — no Bible, commentary or dictionary table");
     }
     if(isZip(u8)){
@@ -377,7 +394,7 @@ window.safeImgUrl = function (v) {
         const cmt = buildCommentaryFromDb(db, srcName);
         if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
         const dict = buildDictFromDb(db);
-        if(dict){ addDict(dict); return { kind: "dict" }; }
+        if(dict){ addDict(dict, meta && meta.abbr); return { kind: "dict" }; }
         throw new Error("unsupported module inside " + (srcName || "the archive"));
       }
       const src = buildFromUSFM(files, srcName);
@@ -637,7 +654,7 @@ window.safeImgUrl = function (v) {
           if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + bytes.byteLength + " bytes — refusing)");
           await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes);
         }   // M3: verify before cache/parse
-        loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
+        loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)), item.abbr);
       }else{
         // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
         // standing between a compromised gateway or mirror and a module whose HTML goes into the reader
@@ -699,7 +716,7 @@ window.safeImgUrl = function (v) {
             try{ window.Bible._error = null; }catch(e2){}
           }
         }
-        if((meta.format || "").toUpperCase() === "JSON") { const raw = bytes; _pendingDicts.push(() => loadDictJSON(JSON.parse(new TextDecoder().decode(raw)))); }
+        if((meta.format || "").toUpperCase() === "JSON") { const raw = bytes; _pendingDicts.push({ abbr: meta.abbr, run: () => loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr) }); }
         else await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
       }catch(e){ console.error("restore failed for", url, e); }
     }
@@ -742,15 +759,55 @@ window.safeImgUrl = function (v) {
     return { bytes, filename: (String(url).split("/").pop() || "bible.module") };
   }
 
-  // remove an installed module by its version abbr: drop it from memory, forget it, clear its cache.
-  // Refuses to remove the active version (you'd have nothing to read) — the UI hides remove for it.
-  async function removeModule(abbr){
-    if(!modules[abbr] || abbr === active) return false;
+  // REMOVE AN INSTALLED MODULE OF ANY CATEGORY — a Bible, a commentary, a dictionary or lexicon — and
+  // actually give the space back. Takes the module's url, or the abbr it was recorded under.
+  //
+  // WHAT WAS WRONG. The first line used to be `if(!modules[abbr] || abbr === active) return false;`, and
+  // `modules` holds BIBLES ONLY: a commentary lives in `commentaries`, a dictionary in `dicts`. So every
+  // non-Bible module on the Library's Installed tier offered a Remove that returned false at the first
+  // line and freed nothing — the member could download a 25 MB commentary and never get the space back.
+  // That matters most where it is least visible: the first audience for this app is phones with very
+  // little storage on thin, expensive connections.
+  //
+  // THREE THINGS HAVE TO HAPPEN or the removal is not real, and they happen IN THIS ORDER:
+  //   1. the cached bytes go (IndexedDB "bible-modules" — the only place a module's megabytes live);
+  //   2. the installed map forgets it, so it stops being listed and restoreInstalled stops reloading it;
+  //   3. the loaded copy leaves memory, so the reader / lexicon / notes panel stops consulting it.
+  // The cache goes FIRST and is proved gone with a read-back. Forgetting the record first and failing to
+  // delete afterwards would orphan those megabytes for ever: nothing would list the module, so nothing
+  // could ever offer to remove it again. Failing at step 1 returns false, and the app says so rather than
+  // claiming a removal that did not happen.
+  //
+  // TWO REFUSALS, both returning false so the caller reports honestly:
+  //   · the ACTIVE Bible — you would have nothing to read (unchanged, and deliberately NOT widened to
+  //     other categories: a commentary open on screen is not a reason to keep it on the phone for ever.
+  //     CommentaryPanel re-reads getCommentary() through Bible.subscribe(), so it empties instead);
+  //   · a module whose download is STILL RUNNING — installModule would recordInstalled() and re-cache it
+  //     the moment it finished, putting back exactly what was just removed.
+  async function removeModule(id){
     const inst = getInstalled();
-    const url = Object.keys(inst).find(u => inst[u].abbr === abbr);
-    delete modules[abbr];
-    order = order.filter(a => a !== abbr);
-    if(url){ const m = getInstalled(); delete m[url]; setInstalled(m); cacheDelete(url); }
+    // Identity is the URL: it keys both the installed map and the byte cache. The abbr is accepted too,
+    // because that is what the reader's translation sheet has to hand (ctx.removeTranslation).
+    const url = inst[id] ? id : Object.keys(inst).find(u => inst[u].abbr === id);
+    const meta = url ? inst[url] : null;
+    const abbr = (meta && meta.abbr) || id;
+    const cat = meta ? catOf(meta)
+      : modules[abbr] ? "bibles" : commentaries[abbr] ? "commentaries" : hasDict(abbr) ? "dictionaries" : "";
+    // nothing of this name is installed or loaded — there is nothing here to remove
+    if(!url && !cat) return false;
+    if(modules[abbr] && abbr === active) return false;
+    if(url && installing.has(url)) return false;
+    if(url){
+      await cacheDelete(url);
+      // PROVE THE SPACE CAME BACK. cacheDelete swallows its own errors (a blocked or broken IndexedDB
+      // resolves exactly as a successful delete does), so without this read-back "removed" would be a
+      // claim about a call having been made, not about the bytes being gone.
+      if(await cacheGet(url)) return false;
+      const m = getInstalled(); delete m[url]; setInstalled(m);
+    }
+    if(cat === "commentaries") delete commentaries[abbr];
+    else if(cat === "dictionaries") removeDict(abbr);
+    else if(modules[abbr]){ delete modules[abbr]; order = order.filter(a => a !== abbr); }
     notify();
     return true;
   }
@@ -849,7 +906,7 @@ window.safeImgUrl = function (v) {
         if(rank){ seen.add(id); hits.push({ id, e, rank }); }
       }
     };
-    for(const d of dicts) scan(d);
+    for(const d of dicts) scan(d.entries);
     scan(LEX);
     hits.sort((a, b) => b.rank - a.rank || (b.e.occ || 0) - (a.e.occ || 0));
     const strong = id => /^[GH]\d+$/i.test(id);
