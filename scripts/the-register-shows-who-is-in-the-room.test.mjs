@@ -51,6 +51,23 @@ const LAST_NIGHT = startOfToday - 3600;
 
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
+// THE SHIPPED CheckinPicker, compiled from the same file by brace-match. It is what actually paints the
+// "Already checked in · 11:58 PM" label, and a claim about that label read off anything else is rule 3.
+let _pickerMod = null;
+async function loadPicker(React) {
+  const src = fnBody(SRC, 'function CheckinPicker(', 'CheckinPicker') + '\n' + fnBody(SRC, 'function CkModal(', 'CkModal');
+  const tmp = join(tmpdir(), 'ckpick-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
+  let js;
+  try {
+    writeFileSync(tmp, src + '\nexport { CheckinPicker };\n');
+    js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
+  } finally { rmSync(tmp, { force: true }); }
+  const key = '__ckpick_' + Math.random().toString(36).slice(2);
+  globalThis[key] = { React, Icon: Stub('Icon'), useStewDialog: () => ({ current: null }), document: { addEventListener() {}, removeEventListener() {} } };
+  const preamble = Object.keys(globalThis[key]).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
+  return await import('data:text/javascript;base64,' + Buffer.from(preamble + '\n' + js).toString('base64'));
+}
+
 // ONE NODE, ONCE. find()/button() in render-jsx-screen.mjs walk both `kids` AND any prop that looks like a
 // tree, so an element handed to a component as a PROP (Panel's `action`) and rendered as that component's
 // child is reached twice. This walks the RENDERED tree only: what a leader can see.
@@ -142,6 +159,10 @@ const rec = (o) => ({ id: o.id, child: o.child || KID, childName: o.childName ||
 
 // WHAT THE PICKER WOULD BE OFFERED — read off the real `available` prop, by pressing the real button.
 async function offered(d) {
+  // IT STARTS CLOSED. This assertion came off the test removed in ed1f40c and was not covered anywhere
+  // else — a picker that is open before anybody pressed anything would make every claim below vacuous.
+  assert.equal(shown(d.tree(), n => n.type && n.type.name === 'CheckinPicker').length, 0,
+    'the picker was open before anybody pressed anything');
   const open = shown(d.tree(), n => n.type === 'button' && texts(n).join(' ').includes('Check a child in'));
   assert.equal(open.length, 1, 're-anchor: the "Check a child in" button is gone');
   open[0].props.onClick();
@@ -150,6 +171,19 @@ async function offered(d) {
   assert.equal(p.length, 1, 'pressing the button did not open the picker');
   assert.ok(Array.isArray(p[0].props.available), 're-anchor: the picker is no longer handed an `available` list');
   return p[0].props.available;
+}
+
+// THE PICKER AS A LEADER READS IT — the REAL CheckinPicker, compiled and rendered, not its props. `desk()`
+// stubs it so the other tests can read `available`; this renders the shipped one over the same props.
+async function pickerWords(d) {
+  const open = shown(d.tree(), n => n.type === 'button' && texts(n).join(' ').includes('Check a child in'));
+  open[0].props.onClick();
+  d.redraw();
+  const p = shown(d.tree(), n => n.type && n.type.name === 'CheckinPicker')[0];
+  const { React, draw } = miniReact();
+  const mod = await loadPicker(React);
+  const tree = draw(mod.CheckinPicker, p.props);
+  return reads(tree).replace(/\s+/g, ' ');
 }
 
 // ══════════════════════════ BASELINE ══════════════════════════
@@ -358,15 +392,40 @@ test('a FORGED FUTURE `in` removes the row rather than pinning it for ever', asy
     'shape sat on screen at +0, +30, +200 and +399 days.');
 });
 
-test('a non-numeric `in` bounds nothing — it must not be treated as a measure', async () => {
-  // `in` is untyped sealed-body content. Anything that is not a number is not a bound, and removing a row on
-  // the strength of one would hide a live child because a body was malformed.
+test('a non-numeric `in` bounds nothing — AND IS NOT PAINTED EITHER', async () => {
+  // `in` is untyped sealed-body content. Anything that is not a finite number is not a bound, and removing a
+  // row on the strength of one would hide a live child because a body was malformed.
+  //
+  // ⚠ AND THEN THE ROW MUST NOT PRINT IT. The first version of this test drove exactly these values through
+  // the rendered screen and asserted only that the child's name was there, walking past five "In Invalid
+  // Date" rows and four "In 1:00 AM" ones — 1 January 1970 — which is the "confidently wrong value beside a
+  // child's name" fmtDay is commented at length about, one symbol away in the same function.
+  //
   // NaN IS IN THIS LIST ON PURPOSE: `typeof NaN === 'number'`, so a `typeof` gate would let it through and
   // `Math.abs(at - NaN) <= w` is false, which DELETES a live child from the register.
-  for (const bad of ['1789084514', { at: 1 }, null, undefined, NaN, true, []]) {
+  for (const bad of ['1789084514', { at: 1 }, null, undefined, NaN, true, [], Infinity, 'abc', false]) {
     const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600, in: bad, code: '4182' }] });
     assert.match(d.checkedIn(), /Alice Fenn/,
       'a child in the room was hidden because `in` was ' + JSON.stringify(bad) + ' rather than a number');
+    assert.doesNotMatch(d.words(), /Invalid Date/,
+      'the row painted "Invalid Date" as the arrival time for `in` = ' + JSON.stringify(bad));
+    assert.doesNotMatch(d.words(), /In 1:00 AM|In 12:00 AM|1970/,
+      'the row painted 1 January 1970 as the arrival time for `in` = ' + JSON.stringify(bad) + ': ' + d.checkedIn());
+    assert.doesNotMatch(d.checkedIn(), /\bIn\b\s*·/,
+      'the row printed a dangling "In ·" with no time after it for `in` = ' + JSON.stringify(bad));
+    assert.match(d.checkedIn(), /no adult guardian linked/,
+      'the pickup clause — the one a leader reads a name off — was displaced by the unusable time');
+  }
+});
+
+test('…and the same for `out` on a collected row', async () => {
+  // `out` has the identical shape, and ANY truthy `out` moves the child into Collected.
+  for (const bad of [true, [], 'abc', Infinity, { t: 1 }]) {
+    const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600, in: NOW - 600, out: bad, code: '4182' }] });
+    assert.match(d.words(), /Alice Fenn/, 'the child vanished entirely for `out` = ' + JSON.stringify(bad));
+    assert.doesNotMatch(d.words(), /Invalid Date/, 'the collected row painted "Invalid Date" as the collection time for `out` = ' + JSON.stringify(bad));
+    assert.doesNotMatch(d.words(), /1:00 AM|1970/, 'the collected row painted 1 January 1970 as the collection time for `out` = ' + JSON.stringify(bad));
+    assert.doesNotMatch(d.words(), /out\s*·/, 'the collected row printed a dangling "out ·" for `out` = ' + JSON.stringify(bad));
   }
 });
 
@@ -418,7 +477,12 @@ test('A MALFORMED `date` PAINTS NO DAY MARKER — never "Invalid Date", and neve
   //
   // ASSERTED AS "IDENTICAL TO A TODAY ROW", which is locale-free and is the whole claim: no marker at all.
   const plain = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600, in: NOW - 600, code: '4182' }] });
-  for (const bad of ['not-a-date', '2026-13-45', '13/09/2026', '', '2026-09-13T10:00:00Z', '2026-02-30', '2026-9-3', 42, null, undefined, { d: 1 }]) {
+  // ⚠ 'NaN-NaN-NaN' IS THE ONE THAT CAUGHT ME OUT, and it is why the isFinite read-back is back in fmtDay.
+  // 'NaN-NaN-NaNT00:00' parses to an Invalid Date, every getter is NaN, so the round-trip writes back the
+  // literal string 'NaN-NaN-NaN' — which EQUALS the input. The round-trip PASSES and toLocaleDateString
+  // returns its own name. ed1f40c deleted the read-back on the claim that the round-trip subsumed it, and
+  // the sabotage row that "could not make it bite" was mis-aimed because this list did not contain it.
+  for (const bad of ['not-a-date', '2026-13-45', '13/09/2026', '', '2026-09-13T10:00:00Z', '2026-02-30', '2026-9-3', 'NaN-NaN-NaN', 42, null, undefined, { d: 1 }]) {
     const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: bad, ts: NOW - 600, in: NOW - 600, code: '4182' }] });
     assert.doesNotMatch(d.words(), /Invalid Date/,
       'the register painted "Invalid Date" beside a child\'s name for date ' + JSON.stringify(bad));
@@ -433,4 +497,122 @@ test('CONTROL: a WELL-FORMED previous day still paints its marker', async () => 
   const d = await desk({ recs: [rec({ id: 'r1', date: YESTERDAY, ts: NOW - 240 })] });
   const dom = String(new Date(YESTERDAY + 'T00:00').getDate());
   assert.ok(d.checkedIn().includes(dom), 'the day marker has gone altogether — the typing above threw out the good case with the bad');
+});
+
+
+// ══════════════════════ A COLLECTION AGES FROM THE COLLECTION, NOT FROM THE ARRIVAL ═════════════════════
+//
+// subscribeCheckins: "The collected child KEEPS their row — a register that erased them would stop being a
+// record of who was in the room." ed1f40c bounded collected rows on `in`, so a lock-in that ran past 26
+// hours lost its Collected row minutes after the child actually left.
+
+test('A LOCK-IN COLLECTED AT 25.5 HOURS STAYS ON THE COLLECTED LIST — console checkout', async () => {
+  // A console checkout REWRITES the record, so `ts` becomes the collection and `in` stays the arrival.
+  // ⚠ THE ARRIVAL MUST BE OUTSIDE THE WINDOW AND THE COLLECTION INSIDE IT, or this test passes against the
+  // arrival-bounded code it exists to refute. A 25.5-hour lock-in seen an hour after it ended is exactly
+  // that: the child left 60 minutes ago and arrived 26.5 hours ago.
+  const arrived = NOW - 26 * 3600 - 1800;       // 26.5h ago — past the window on its own
+  const collected = NOW - 60 * 60;              // an hour ago — well inside it
+  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(arrived),
+    ts: collected, in: arrived, out: collected, code: '4182' }] });
+  assert.match(d.collected(), /Alice Fenn/,
+    'A CHILD COLLECTED FORTY MINUTES AGO IS ON NEITHER LIST. She left a lock-in at 19:30 and by 20:10 the ' +
+    'safeguarding lead can see neither that she was in the room nor that she was collected. As rendered: ' + d.words());
+  assert.doesNotMatch(d.checkedIn(), /Alice Fenn/, 'a collected child is back on the live register');
+});
+
+test('…AND THE SAME WHEN A WORKER RELEASED HER — the release document carries its own clock', async () => {
+  // A WORKER's release is a separate document folded on by subscribeCheckins, so the row's own `ts` stays
+  // the ARRIVAL and only `releasedTs` knows when she left. Without it carried through the fold, the primary
+  // bound kills this row 26h after she arrived, whatever the body says.
+  const arrived = NOW - 26 * 3600 - 1800;       // 26.5h ago — beyond the window on its own
+  const collected = NOW - 40 * 60;
+  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(arrived),
+    ts: arrived, releasedTs: collected, in: arrived, out: collected, manual: true, code: '4182' }] });
+  assert.match(d.collected(), /Alice Fenn/,
+    'A WORKER-RELEASED COLLECTION VANISHED. The row\'s own created_at is the arrival on that path, so only ' +
+    'the release document knows when the child left — and the register aged her out on the wrong clock.');
+  assert.match(d.collected(), /by hand/i, 're-anchor: the manual trace went with it');
+});
+
+test('…and a collection that is itself past the window DOES age out', async () => {
+  const arrived = NOW - 60 * 3600;
+  const collected = NOW - 30 * 3600;            // beyond 26h
+  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(arrived),
+    ts: collected, in: arrived, out: collected, code: '4182' }] });
+  assert.doesNotMatch(d.words(), /Alice Fenn/,
+    're-anchor: collected rows no longer age out at all, so the Collected list is unbounded');
+});
+
+test('a MIGRATED collected record does not come back either', async () => {
+  // The migration re-stamps a release document too, so `ts` and `releasedTs` are both this minute. The body
+  // clock — `out` for a collected row — is what still refuses it.
+  const threeWeeks = NOW - 21 * DAY;
+  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(threeWeeks),
+    ts: NOW - 5, releasedTs: NOW - 5, in: threeWeeks, out: threeWeeks + 7200, code: '4182' }] });
+  assert.doesNotMatch(d.words(), /Alice Fenn/,
+    'a three-week-old COLLECTED record came back onto the Collected list because the migration re-stamped it');
+});
+
+// ══════════════════════ OFFERED, AND SAID SO ════════════════════════════════════════════════════════════
+
+test('A CHILD ALREADY ON THE REGISTER IS OFFERED — AND THE PICKER SAYS SHE IS ALREADY IN', async () => {
+  // Watchnight: children in at 23:30-23:58, and at 00:05 the leader opens the picker for a latecomer.
+  // Nothing may stop her being checked in (DOMAIN.md), but the screen must not hide that she is on the
+  // register — one silent mis-tap gives one child two live rows, two codes and two Check out buttons.
+  const d = await desk({ recs: [rec({ id: 'r1', child: KID, childName: 'Alice Fenn', date: YESTERDAY, ts: NOW - 600 })] });
+  const av = await offered(d);
+  assert.ok(av.includes(KID), 're-anchor: the door is shut again — that is the blocker, not this test');
+  const words = await pickerWords(d);
+  assert.match(words, /Already checked in/,
+    'THE PICKER IS SILENT ABOUT A CHILD IT IS OFFERING WHO IS ALREADY IN THE ROOM. Non-blocking is not the ' +
+    'same as non-telling. As rendered: ' + words);
+  // …and it says WHEN, because "already" without a time is not something a leader can act on
+  assert.match(words.slice(words.indexOf('Already checked in')), /\d/,
+    'the picker says a child is already checked in but not when: ' + words.slice(words.indexOf('Already checked in'), 120));
+});
+
+test('CONTROL: a child who is NOT on the register carries no such label', async () => {
+  const d = await desk({ recs: [] });
+  const words = await pickerWords(d);
+  assert.doesNotMatch(words, /Already checked in/,
+    'every child is labelled as already checked in, so the label says nothing');
+  assert.match(words, /Alice Fenn/, 're-anchor: the picker lists nobody at all');
+});
+
+
+// ══════════════════════ "CHECKED IN · N" IS A HEADCOUNT ═════════════════════════════════════════════════
+
+test('TWO LIVE ROWS FOR ONE CHILD COUNT AS ONE CHILD, and both rows stay on the list', async () => {
+  // The ordinary consequence of the picker no longer shutting the door: a forgotten check-out from an
+  // earlier day, plus today's. A leader counting heads in the room against "Checked in · 2" would be
+  // counting against a figure the software made up.
+  const d = await desk({ recs: [
+    rec({ id: 'r1', child: KID, childName: 'Alice Fenn', date: YESTERDAY, ts: NOW - 20 * 3600, code: '4182' }),
+    rec({ id: 'r2', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600, code: '9079' }),
+  ] });
+  assert.match(d.checkedIn(), /Checked in · 1\b/,
+    'the register counted ROWS, not children: one child with a stale row and a live one reads as two ' +
+    'children in the room. As rendered: ' + d.checkedIn());
+  // …and nothing is hidden to make the number work
+  assert.match(d.checkedIn(), /4182/, 'the stale row was deleted to make the count tidy — it is a real record');
+  assert.match(d.checkedIn(), /9079/, "today's row is missing");
+});
+
+test('CONTROL: two DIFFERENT children still count as two', async () => {
+  const d = await desk({ recs: [
+    rec({ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 600 }),
+    rec({ id: 'r2', child: KID2, childName: 'Bobby Okafor', date: TODAY, ts: NOW - 900 }),
+  ] });
+  assert.match(d.checkedIn(), /Checked in · 2\b/, 'the headcount collapses different children — it is deduping on the wrong thing');
+});
+
+test('COLLECTED counts records, not children — a second collection is a second safeguarding record', async () => {
+  const d = await desk({ recs: [
+    rec({ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 7200, in: NOW - 7200, out: NOW - 5400 }),
+    rec({ id: 'r2', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 1800, in: NOW - 3600, out: NOW - 1800 }),
+  ] });
+  assert.match(d.collected(), /Collected · 2\b/,
+    'two real collections of one child — a morning session and an evening one — were reported as one. ' +
+    'That list is a log of collections, not a count of people anywhere.');
 });

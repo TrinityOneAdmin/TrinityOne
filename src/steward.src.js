@@ -7668,7 +7668,14 @@ window.Steward = {
       cb(kids.map((r) => {
         const rel = releases.get(String(r._sid || '') + '|' + String(r.id));
         if (!rel) return r;
-        return { ...r, out: (rel.out != null ? rel.out : r.out), manual: rel.manual === true, releasedBy: rel._by || rel.by || '' };
+        // `releasedTs` IS THE RELEASE DOCUMENT'S OWN created_at, and it is carried because the two release
+        // paths otherwise disagree about when a collection happened. A CONSOLE checkout rewrites the record
+        // itself, so the row's own `ts` becomes the collection; a WORKER's release is a SEPARATE document,
+        // so the row's `ts` stays the arrival and the collection instant is only here. The register ages a
+        // collected row from the collection (DashCheckin), and without this a worker-released lock-in
+        // dropped off 26 hours after the child ARRIVED rather than after she left. Relay-attested, like
+        // `ts`: it is an event's created_at, not anything the body claims.
+        return { ...r, out: (rel.out != null ? rel.out : r.out), manual: rel.manual === true, releasedBy: rel._by || rel.by || '', releasedTs: rel.ts };
       }));
     }, 'checkin');
   },

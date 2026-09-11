@@ -147,12 +147,22 @@ const MYKIDS_WINDOW = MAX_SESSION_SECONDS;
 // `created_at` and runs automatically when an owner opens the console — which hands every never-released
 // record in a church's history a `ts` of that minute.
 //
-// THIS READER HAS NO SUCH BOUND AND IS THEREFORE EXPOSED TO THE SAME MIGRATION: a re-published record
-// carries its guardian copies, so a parent's screen can show a three-week-old check-in as live for one
-// window. Not fixed here, because the opposite decision is deliberate and test-locked below ("A RECORD
-// PUBLISHED THIS MINUTE WAS HIDDEN because the body it carried disagreed with the clock"), and overturning
-// it is a decision about what a parent at a door is shown, not a tidy-up. Recorded so the next reader knows
-// it is open rather than handled.
+// THIS READER HAS NO SUCH BOUND. That is STRUCTURALLY OPEN AND HAS ZERO INSTANCES IN THE CURRENT CORPUS,
+// and the first version of this note overclaimed it as "a parent's screen can show a three-week-old
+// check-in as live" — corrected 2026-09-12 after the re-audit measured the reachability:
+//
+//   migrateCheckinKeys() re-publishes ONLY records that fail to open with the safeguarding ring and DO open
+//   with the legacy church self-key — i.e. records written before the capability split (7d698ad,
+//   2026-08-20). `guardians` did not enter the check-in body until 3a61f01 (2026-09-10), three weeks later.
+//   So every record the migration can touch carries no guardians, mints no ['p'] tag and no ['gk'] copy,
+//   and openRec below returns 'not-mine' — the row is dropped before `fresh` is ever consulted, and it
+//   cannot reach askAtDesk either (that branch also requires r.mine).
+//
+// So the hole is real and currently unreachable. IT BECOMES REACHABLE AT THE NEXT KEY MIGRATION, whenever
+// one re-publishes records that DO carry guardians — which is why this stays written down. Closing it means
+// overturning a deliberate, test-locked decision ("A RECORD PUBLISHED THIS MINUTE WAS HIDDEN because the
+// body it carried disagreed with the clock"), which is a decision about what a parent at a door is shown
+// rather than a tidy-up.
 // ONE CALLER: writeCheckin. Mirrors steward.src.js:_todayISO deliberately — the two bundles must agree on
 // what day it is or a record written on a phone and a record written at the desk sort differently.
 const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };

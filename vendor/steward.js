@@ -21716,7 +21716,7 @@ zoo`.split("\n");
         cb(kids.map((r) => {
           const rel = releases.get(String(r._sid || "") + "|" + String(r.id));
           if (!rel) return r;
-          return { ...r, out: rel.out != null ? rel.out : r.out, manual: rel.manual === true, releasedBy: rel._by || rel.by || "" };
+          return { ...r, out: rel.out != null ? rel.out : r.out, manual: rel.manual === true, releasedBy: rel._by || rel.by || "", releasedTs: rel.ts };
         }));
       }, "checkin");
     },

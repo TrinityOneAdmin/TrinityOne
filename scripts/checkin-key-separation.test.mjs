@@ -452,8 +452,15 @@ test('the pickup code is labelled where it can actually be read', () => {
   // The hex he saw was a different bug (a PIN unlock left his console reading its own empty documents, so
   // names fell back to 'Child <hex>'). But the code itself carried no visible label either way: its only one
   // was a `title` tooltip, which does not exist on a touch screen and is not read aloud.
+  // ⚠ ANCHORED ON "'pickup: '", NOT "' · pickup: '" — re-anchored 2026-09-12. The row stopped being a
+  // concatenation and became a `.filter(Boolean).join(' · ')` of its parts, so that an unusable arrival time
+  // contributes nothing instead of painting "Invalid Date" or a dangling "In ·". The separator therefore
+  // moved out of the copy and into the join, and the old anchor matched nothing — which this assertion
+  // caught, as it is there to. Nothing about what this test CLAIMS has changed.
   const src = stripComments(DASH);
-  const row = src.slice(src.indexOf("' · pickup: '"), src.indexOf("' · pickup: '") + 1400);
+  const at = src.indexOf("'pickup: '");
+  assert.notEqual(at, -1, 're-anchor: the checked-in row no longer names the pickup list');
+  const row = src.slice(at, at + 1400);
   assert.ok(row.length > 100, 're-anchor: the checked-in row changed shape');
   assert.match(row, />CODE</,
     'the pickup code has no visible label, so the only way to know which number to read to a parent is to guess');
