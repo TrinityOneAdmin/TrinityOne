@@ -5618,6 +5618,18 @@ window.Fellowship = {
       // ONE MEASURE FOR BOTH BRANCHES, off the event's own created_at, and symmetric — see the note above
       // for the two faults reading the sealed body's `in` had. `row` is still taken so a caller cannot
       // reintroduce the split by passing it.
+      //
+      // ⚠ OPEN, 2026-09-12, and recorded here because both sides' comments insist these two screens use ONE
+      // rule and right now they do not. The CONSOLE's register was given two corrections this reader has
+      // not had:
+      //   1. a COLLECTED row ages from the COLLECTION, not from the arrival. On the worker-release path the
+      //      release is a separate document, so a row's own created_at is the ARRIVAL — which means a
+      //      lock-in collected at 25.5 hours loses the parent's collected row minutes after the child
+      //      actually left. subscribeCheckins now carries the release's own `ts` for exactly this; the fold
+      //      below carries `out`/`manual` and not that.
+      //   2. the sealed body's clock as a second UPPER bound, which is what makes a re-stamped record safe.
+      // Neither is applied here. (2) is deliberate and test-locked — see the note above. (1) is not a
+      // decision, it is a gap.
       const fresh = (r, _row) => Math.abs(at - (r.ts || 0)) <= MYKIDS_WINDOW;
       let askAtDesk = 0;
       const kids = [];

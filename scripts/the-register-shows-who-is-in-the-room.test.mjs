@@ -616,3 +616,94 @@ test('COLLECTED counts records, not children — a second collection is a second
     'two real collections of one child — a morning session and an evening one — were reported as one. ' +
     'That list is a log of collections, not a count of people anywhere.');
 });
+
+
+// ══════════════════ A FALSY `out` IS NOT A COLLECTION — ONE QUESTION, ONE ANSWER ════════════════════════
+//
+// `present` splits the list on truthiness (`!r.out`). The body-clock selector asked with `!= null`, and on
+// `out: 0` the two disagreed: the selector called the row collected and handed back 0 — a finite number
+// fifty-six years outside the window — so the row was dropped from the register entirely while `present`
+// still called it live. Number.isFinite cannot catch it, because 0 IS finite.
+
+test('A CHILD WITH `out: 0` IS STILL IN THE ROOM — the two predicates must ask one question', async () => {
+  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY,
+    ts: NOW - 600, in: NOW - 600, out: 0, code: '4182' }] });
+  assert.match(d.checkedIn(), /Alice Fenn/,
+    'THE SCREEN READ "Checked in · 0 · Nobody is checked in" WITH THE CHILD IN THE ROOM. The row is not ' +
+    'collected — `present` says so — but the body-clock selector called it collected, took 0 as the ' +
+    'collection instant, and aged the row out fifty-six years. As rendered: ' + d.words());
+  assert.match(d.checkedIn(), /4182/, 'her pickup code went with her');
+  assert.match(d.checkedIn(), /Checked in · 1\b/, 'the headcount does not include her');
+  assert.doesNotMatch(d.collected(), /Alice Fenn/, 'a falsy `out` moved her to Collected');
+});
+
+test('…and the milder falsy mirrors keep her too', async () => {
+  // These switch the body bound OFF rather than inverting it, so they can only ever KEEP a row. Asserted so
+  // that a future "tidy-up" back to `!= null` fails on all of them at once rather than only on 0.
+  for (const bad of [false, '', NaN, 0]) {
+    const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY,
+      ts: NOW - 600, in: NOW - 600, out: bad, code: '4182' }] });
+    assert.match(d.checkedIn(), /Alice Fenn/, 'a child in the room vanished for `out` = ' + JSON.stringify(bad));
+    assert.doesNotMatch(d.collected(), /Alice Fenn/, 'a falsy `out` = ' + JSON.stringify(bad) + ' reported her as collected');
+  }
+});
+
+// ══════════════════ A COLLECTION WE CANNOT READ THE TIME OF SAYS SO ════════════════════════════════════
+
+test('A COLLECTED ROW WITH NO READABLE TIME SAYS SO RATHER THAN GOING QUIET', async () => {
+  // Typing fmtT traded a LOUD wrong answer ("out Invalid Date") for silence, and on the permanent record of
+  // a child leaving, silence is harder for a safeguarding lead to notice than an obvious error.
+  for (const bad of [true, [], 'abc', Infinity, { t: 1 }]) {
+    const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY,
+      ts: NOW - 600, in: NOW - 600, out: bad, code: '4182' }] });
+    assert.match(d.collected(), /Alice Fenn/, 'the collected child vanished for `out` = ' + JSON.stringify(bad));
+    assert.match(d.collected(), /time not recorded/,
+      'a Collected row with an unreadable collection time said NOTHING about it for `out` = ' +
+      JSON.stringify(bad) + ': ' + d.collected());
+    assert.doesNotMatch(d.collected(), /Invalid Date|1970/, 'and it must still not paint a wrong one');
+  }
+});
+
+test('CONTROL: an ordinary collection says the time and not the apology', async () => {
+  const d = await desk({ recs: [rec({ id: 'r1', date: TODAY, ts: NOW - 600, in: NOW - 3600, out: NOW - 600 })] });
+  assert.doesNotMatch(d.collected(), /time not recorded/, 'every collection now carries the apology, so it says nothing');
+  assert.match(d.collected(), /out \d/, 're-anchor: an ordinary collection no longer prints its time');
+});
+
+// ══════════════════ `releasedTs` IS ATTESTED, NOT CLAIMED ══════════════════════════════════════════════
+
+test('A `releasedTs` IN THE SEALED BODY CANNOT EXTEND A ROW — the fold overwrites it on every row', async () => {
+  // encSubscribe builds `{ id, ...obj, ts, _sid, _rel }` — body first, attested last — so `ts` overrides the
+  // body. `releasedTs` is added by subscribeCheckins' fold instead, and until 2026-09-12 the no-release path
+  // returned the row untouched, so a body-carried `releasedTs` flowed straight into the window.
+  //
+  // ⚠ THIS IS THE SCREEN'S HALF ONLY. A row reaching DashCheckin with a `releasedTs` and no release is
+  // exactly what the bundle now prevents; the bundle's half is asserted in the sibling test below.
+  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(NOW - 21 * DAY),
+    ts: NOW - 21 * DAY, releasedTs: NOW - 5, in: NOW - 21 * DAY, code: '4182' }] });
+  assert.doesNotMatch(d.words(), /Alice Fenn/,
+    'a three-week-old record was rendered live because its own body claimed a release five seconds ago');
+});
+
+test('the BUNDLE strips a body `releasedTs` off a row with no release — run, not read', async () => {
+  // Lifted and executed, so a comment promising this cannot pass for the code doing it.
+  const body = fnBody(STEWARD_SRC, '  subscribeCheckins(cb) {', 'subscribeCheckins');
+  const rows = [
+    { id: 'a', child: KID, ts: 100, releasedTs: 999999 },                       // no release, body lies
+    { id: 'b', child: KID2, ts: 200, _sid: 's1' },                              // no release, no claim
+    { id: 'rel1', _rel: 'c', _sid: 's1', ts: 555, out: 550, manual: true },     // a real release for 'c'
+    { id: 'c', child: KID, ts: 300, _sid: 's1' },                               // the child it releases
+  ];
+  let got = null;
+  const fakeWindow = { Steward: { encSubscribe: (_pfx, cb) => { cb(rows); return () => {}; } } };
+  new Function('window', 'return ({ ' + body + ' });')(fakeWindow).subscribeCheckins((out) => { got = out; });
+  assert.ok(Array.isArray(got) && got.length === 3, 're-anchor: the fold no longer emits one row per child (' + JSON.stringify(got) + ')');
+  const a = got.find(r => r.id === 'a');
+  assert.equal(a.releasedTs, null,
+    'A BODY-CARRIED `releasedTs` SURVIVED THE FOLD on a row with no release, so the register would age that ' +
+    'row on a number the sealed body chose. Got: ' + JSON.stringify(a.releasedTs));
+  const c = got.find(r => r.id === 'c');
+  assert.equal(c.releasedTs, 555, "a genuinely released row lost the release document's own created_at");
+  assert.equal(c.out, 550, 're-anchor: the release no longer folds `out` on');
+  assert.equal(c.manual, true, 're-anchor: the release no longer folds `manual` on');
+});

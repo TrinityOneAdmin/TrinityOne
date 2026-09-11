@@ -7667,7 +7667,17 @@ window.Steward = {
       }
       cb(kids.map((r) => {
         const rel = releases.get(String(r._sid || '') + '|' + String(r.id));
-        if (!rel) return r;
+        // ⚠ `releasedTs` IS SET ON EVERY ROW, INCLUDING THE ONES WITH NO RELEASE, and that is the whole of
+        // what makes it attested rather than claimed. encSubscribe builds `{ id, ...obj, ts, _sid, _rel }` —
+        // BODY FIRST, attested fields last — so `ts`, `_sid` and `_rel` override anything the sealed body
+        // says. `releasedTs` is not in that list; it is added here. Until 2026-09-12 this path returned `r`
+        // untouched, so a `releasedTs` sitting in the SEALED BODY flowed straight through to the register's
+        // window: measured, a record whose attested `ts` was three weeks old and whose body claimed
+        // `releasedTs` five seconds ago was rendered as live. No escalation — writing that body needs the
+        // check-in write capability, which already lets you publish a fresh row — but the comment and the
+        // commit message both called this field relay-attested, and a false claim about an invariant is
+        // worse than the weakening it describes. Overwriting unconditionally makes the claim true.
+        if (!rel) return { ...r, releasedTs: null };
         // `releasedTs` IS THE RELEASE DOCUMENT'S OWN created_at, and it is carried because the two release
         // paths otherwise disagree about when a collection happened. A CONSOLE checkout rewrites the record
         // itself, so the row's own `ts` becomes the collection; a WORKER's release is a SEPARATE document,

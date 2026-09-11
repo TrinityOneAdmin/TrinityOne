@@ -6330,7 +6330,20 @@ function DashCheckin() {
   // `typeof NaN === 'number'`, so a typeof gate would delete a live child from a safeguarding register
   // because a body was malformed — and it must not coerce, so the string '1789084514' is not a measure
   // either. The parent's reader types every painted field (`_str`/`_when` in openRec) for the same reason.
-  const bodyClock = (r) => (r.out != null ? r.out : r.in);
+  // ⚠ THE PREDICATE IS `r.out ?` AND NOT `r.out != null ?`, AND THE DIFFERENCE DELETED A CHILD FROM THE
+  // REGISTER. `present` below splits the list on TRUTHINESS (`!r.out`). This asked a different question with
+  // `!= null`, and on `out: 0` the two disagreed: this one called the row collected and handed back 0 — a
+  // finite number fifty-six years outside the window — so the row was dropped from `live` entirely, while
+  // `present` still called it live. Measured on the compiled screen: "Checked in · 0 · Nobody is checked in"
+  // with the child in the room. `Number.isFinite` cannot catch it, because 0 IS finite: the fault was the
+  // selector, not the guard, which is why the comment above — "anything that is not a finite number must
+  // remove nothing" — was true and still let this through.
+  //
+  // Not reachable from either shipped writer (both write `out: null` or a real epoch), but this is the exact
+  // class the block above claims to have closed, so the two now ask one question. `false`, `''` and `NaN`
+  // were the milder mirror of the same disagreement: the body bound switched itself off and the row aged on
+  // the attested clock alone, which can only ever keep a row rather than delete one.
+  const bodyClock = (r) => (r.out ? r.out : r.in);
   const live = recs.filter(r => inWindow(lastTouch(r)) && !(Number.isFinite(bodyClock(r)) && !inWindow(bodyClock(r))));
   const present = live.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
   const out = live.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
@@ -6456,6 +6469,23 @@ function DashCheckin() {
 // Keyed by child; the newest row wins, because `present` is already sorted by arrival, newest first.
 // It falls back to the day, and then to a bare word, so a row with no usable time still SAYS she is on the
 // register rather than silently dropping the whole warning — the one thing this must not do.
+  // ⚠⚠ AND THE LIMIT, WHICH IS NOT SMALL AND WHICH MY OWN COMMIT MESSAGE GOT WRONG. All three of the
+  // de-duplication mechanisms on this screen — this label, `inIds` above and `headcount` below — key on
+  // `r.child`, a member PUBKEY. `src/fellowship.src.js`'s writeCheckin writes `child: ''` ALWAYS, and by
+  // design: *"this writer holds no guardian map"*. That is the WORKER-ON-THE-DOOR path, which is the
+  // ordinary one. So for every row the member app writes:
+  //   · this label never appears, and the child is offered silently — at ANY hour, not only across midnight;
+  //   · `inIds` never withholds her, which it already never did (that part is unchanged);
+  //   · `headcount` counts each row as its own head.
+  // "Checked in · N counts children, not rows" and "her row says when she arrived" are therefore true of
+  // CONSOLE-written rows only. Stated here rather than fixed, because there is no key to fix it with: the
+  // picker's list is `minors`, which is pubkeys, and a name match would be a FALSE "already checked in"
+  // beside a same-named child — a leader who trusts it leaves a child off the register, which is worse than
+  // the duplicate it would prevent, and worse than saying nothing.
+  //
+  // WHAT SAVES IT IS THAT ALL THREE DEGRADE IN THE SAFE DIRECTION: silent-but-offered (never blocked), never
+  // withheld, and counted per row (never UNDER-counted). The real fix is upstream — writeCheckin carrying
+  // the child's pubkey — and belongs with whoever changes that writer, not here.
   const alreadyIn = {};
   for (const r of present) { if (r && r.child && !alreadyIn[r.child]) alreadyIn[r.child] = (fmtT(r.in) || notToday(r) || 'already'); }
 // ── "CHECKED IN · N" IS A HEADCOUNT, SO IT COUNTS CHILDREN, NOT ROWS ──────────────────────────────────
@@ -6469,7 +6499,10 @@ function DashCheckin() {
 // a real record and the stale one carries its own day beside it — so the count and the rows can differ, and
 // that is the honest way round rather than the flattering one.
 //
-// A row with no child id counts as one, because nothing proves it is a duplicate of anything.
+// A row with no child id counts as one, because nothing proves it is a duplicate of anything — and that is
+// EVERY member-app-written row, not a rarity. See the limit written up beside `alreadyIn` above: on the
+// worker path this is a row count, and it over-counts rather than under-counts, which is the direction a
+// headcount on a safeguarding screen should fail in.
 //
 // "COLLECTED · N" IS DELIBERATELY NOT THE SAME. That list is a log of collections, not a count of people
 // anywhere: a child collected from a morning session and again from an evening one really was collected
@@ -6565,7 +6598,14 @@ function DashCheckin() {
                 <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.childName || nameFor(r.child)}</div>
-                    {/* ONE EXPRESSION, AND A JOIN RATHER THAN A CONCATENATION. An unusable `in` or `date`
+                    {/* ⚠ A COLLECTION WHOSE TIME WE CANNOT READ SAYS SO, rather than nothing. Typing fmtT
+                        traded a LOUD wrong answer ("out Invalid Date") for SILENCE, and on this list silence
+                        is harder for a safeguarding lead to notice than an obvious error: a Collected row is
+                        the permanent record of a child leaving, and one with no time in it is a hole. The
+                        live row above is deliberately NOT given the same words — the child is in front of
+                        the leader, her code is on the row, and "In — time not recorded" would be a line of
+                        copy about a field nobody is acting on (reference/DOMAIN.md: do not nag).
+                        ONE EXPRESSION, AND A JOIN RATHER THAN A CONCATENATION. An unusable `in` or `date`
                         now contributes NOTHING instead of "Invalid Date" or a dangling "In ·", and the
                         pickup clause — the one a leader reads a name off — is never displaced. One
                         expression rather than several nodes because `glued()`, the JSX-newline guard in
@@ -6598,7 +6638,7 @@ function DashCheckin() {
                         says "by hand"; on the Oppo, 2026-09-11, this console said only "out 11:54 AM" for the same
                         release, so the one screen a safeguarding lead reads could not tell the two apart. Not an
                         accusation — §10: the gates keep strangers out, they do not police the church's own team. */}
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{[fmtT(r.in) ? 'In ' + fmtT(r.in) : '', notToday(r), fmtT(r.out) ? 'out ' + fmtT(r.out) : '', r.manual ? 'by hand' : ''].filter(Boolean).join(' · ')}</div></div>
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{[fmtT(r.in) ? 'In ' + fmtT(r.in) : '', notToday(r), fmtT(r.out) ? 'out ' + fmtT(r.out) : 'out — time not recorded', r.manual ? 'by hand' : ''].filter(Boolean).join(' · ')}</div></div>
                     <Icon name="check" size={16} stroke={2.4} color="var(--sage)" />
                   </div>
                 ))}
