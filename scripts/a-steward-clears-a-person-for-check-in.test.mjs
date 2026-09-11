@@ -53,7 +53,7 @@ const said = (tree) => texts(tree).join(' ').replace(/\s+/g, ' ');
 // modal IS the granting act, so stubbing it would leave this file asserting about a button that opens
 // nothing.
 async function screen({ perms = [], loaded = true, members = Object.keys(NAMES).map(p => ({ pubkey: p, name: NAMES[p] })),
-                        rosters = [], groups = [], grantOk = true, revokeOk = true, minors = [] } = {}) {
+                        rosters = [], groups = [], grantOk = true, revokeOk = true, minors = [], minorsKnown = true } = {}) {
   const src = fnBody(SRC, 'function CheckinClearances() {', 'CheckinClearances')
             + '\n' + fnBody(SRC, 'function ClearPersonModal({', 'ClearPersonModal');
   const tmp = join(tmpdir(), 'ckclear-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
@@ -76,7 +76,7 @@ async function screen({ perms = [], loaded = true, members = Object.keys(NAMES).
     window: {
       useStewardCheckinPermissions: () => perms,
       useStewardMembers: () => members,
-      useStewardSafeguard: () => ({ minors, approved: [], nophoto: [] }),
+      useStewardSafeguard: () => ({ minors, approved: [], nophoto: [], minorsKnown }),
       useStewardRosters: () => rosters,
       useStewardGroups: () => groups,
       useStewardIdv: () => 1,
@@ -382,6 +382,16 @@ test('somebody already cleared is not offered again', async () => {
   // Dan's name is on the clearance list behind the modal; what must not happen is a second grant row for him.
   assert.equal(btn(s.tree(), 'Dan Peart').filter(b => texts(b).join(' ').indexOf('Withdraw') < 0).length, 0,
     'a person the church has already cleared was offered for clearing again');
+});
+
+test('WHILE THE MINORS LIST IS STILL LOADING, nobody is offered — the list does not fail open for a paint', async () => {
+  // Audit of 77e42c4: the hook's default is minors:[] with minorsKnown:false, so a child was offerable for the
+  // first paint. Same shape the sibling register panel already guards with minorsKnown.
+  const s = await screen({ minors: [], minorsKnown: false });
+  s.open();
+  const t = said(s.tree());
+  assert.equal(btn(s.tree(), 'Ada Fenn').length, 0, 'the WHO list is painted before the church\'s minors list has arrived. As rendered: ' + t);
+  assert.match(t, /safeguarding list/i, 'nothing tells the steward why the list is empty');
 });
 
 test('A MARKED CHILD IS NOT OFFERED FOR CLEARING — from "everyone" or from a team roster', async () => {

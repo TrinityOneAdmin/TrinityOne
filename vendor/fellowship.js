@@ -11407,6 +11407,7 @@
         };
       }
       let perm = null;
+      let permTomb = false;
       let permTs = 0;
       const grants = /* @__PURE__ */ new Map();
       const keys = /* @__PURE__ */ new Map();
@@ -11479,9 +11480,10 @@
           // church withdrew a helper's clearance, the relay refused her everything from that moment — and the
           // phone, which had the register already, went on showing it through a resume AND a cold start with
           // no line saying anything had changed. The tombstone DID arrive (perm went to null); the screen just
-          // had no word for it. `permTs` is only ever stamped by a clearance document for me, so "no clearance
-          // now, and I have seen one" is a withdrawal — not the cold-start race where nothing has arrived yet.
-          withdrawn: !perm && permTs > 0,
+          // had no word for it. A TOMBSTONE for me is a withdrawal; nothing else is — not the cold-start race
+          // where nothing has arrived yet, and not a clearance body this parser refuses (the 2026-09-11 audit
+          // showed relay/app version skew would otherwise read as "your church withdrew your clearance").
+          withdrawn: !perm && permTomb,
           from: perm ? perm.from : null,
           until: perm ? perm.until == null ? null : perm.until : null,
           lifetime: perm ? String(perm.lifetime || "") : "",
@@ -11504,9 +11506,11 @@
             permTs = e.created_at || 0;
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
               perm = null;
+              permTomb = true;
               emit();
               return;
             }
+            permTomb = false;
             perm = readCheckinPermission(e.content);
             emit();
             return;

@@ -1176,7 +1176,7 @@ function App() {
   //
   // `defaults` MATTERS: cleared:false with no keys is what makes the tab absent, so a church switch or a
   // signed-out phone must land back on it rather than keep the last church's answer.
-  const CK_NONE = { cleared: false, lapsed: false, notYet: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
+  const CK_NONE = { cleared: false, lapsed: false, notYet: false, withdrawn: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
   const [checkinRegister, setCheckinRegister] = useA(CK_NONE);
   useAE(() => {
     if (!lazyReady) return;

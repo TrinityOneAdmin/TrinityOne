@@ -425,6 +425,17 @@ test('a WITHDRAWN clearance is reported as withdrawn — not as "never cleared",
   // and never cleared is NOT withdrawn — the cold-start race, where nothing has arrived, must not say "withdrawn"
   const never = phone(morning).feed(envelope(AM, AM_KEY, [morning])).settle().last();
   assert.equal(never.withdrawn, false, 'a phone that has never seen a clearance document reports one as withdrawn');
+  // nor is a clearance body this parser cannot vouch for (relay/app version skew) — audit 2026-09-11
+  const junk = { ...clearance(morning), content: JSON.stringify({ person: morning.pub, lifetime: 'forever' }) };
+  const skew = phone(morning).feed(junk, envelope(AM, AM_KEY, [morning])).settle().last();
+  assert.equal(skew.cleared, false, 're-anchor: an unreadable clearance must not clear');
+  assert.equal(skew.withdrawn, false, 'a clearance this phone cannot read is reported as "withdrawn by the church"');
+  // and a withdrawal the SAFEGUARDING STEWARD signed is a withdrawal — the relay honours it (red team F-A / audit F1)
+  const sgLead = keypair();
+  const sgTomb = { ...tomb, pubkey: sgLead.pub };
+  const byLead = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning]), sgTomb).settle().last();
+  assert.equal(byLead.cleared, false, 'A STEWARD\'S WITHDRAWAL IS IGNORED BY THE PHONE, which goes on saying cleared');
+  assert.equal(byLead.withdrawn, true, 'a steward-signed withdrawal is not reported as one');
 });
 
 // ── THE RACE THE CONSOLE'S HOLDING PEN GOT WRONG. ─────────────────────────────────────────────────────────

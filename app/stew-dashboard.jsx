@@ -5626,8 +5626,13 @@ function CheckinClearances() {
   // marked as a child a minute earlier was listed under "Clear someone for children's check-in". The relay now
   // refuses the clearance too (checkinPermitted / accept in scripts/gateway.mjs) — this is the half a steward
   // sees, so the list does not offer what the church has just said is a child.
-  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [] };
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
   const minorsSet = new Set(sg.minors || []);
+  // AND NOT BEFORE THE LIST HAS ARRIVED. The hook's default is `minors: [], minorsKnown: false`, so for the first
+  // paint a marked child is simply not marked yet — cached-paints-before-authority-arrives, the shape the audit of
+  // 77e42c4 found here. The modal holds its list until the relay has answered (`minorsKnown`, as the register
+  // beside it does; `loaded` never flips in a church that has marked nobody).
+  const minorsKnown = sg.minorsKnown === true;
   const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
@@ -5746,7 +5751,7 @@ function CheckinClearances() {
           <p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}><b>Nobody is cleared yet.</b> You and your safeguarding stewards can already run the register — clearing somebody is how a children’s worker who is <i>not</i> a steward gets in.</p>
         </div>
       ) : list}
-      {clearing ? <ClearPersonModal members={members} rosters={rosters} groups={groups} nameFor={nameFor} minors={minorsSet}
+      {clearing ? <ClearPersonModal members={members} rosters={rosters} groups={groups} nameFor={nameFor} minors={minorsSet} minorsKnown={minorsKnown}
         already={rows.filter(r => r.live).map(r => r.person)} onClose={() => setClearing(false)} /> : null}
     </Panel>
   );
@@ -6025,7 +6030,7 @@ window.CheckinSessionKeys = CheckinSessionKeys;
 // claim that naming somebody by hand IS a declared source and says so in the enforced record. The screen
 // knows which it was; pass it." So this passes 'team' when the list came from a team and 'steward' when a
 // steward picked from the whole membership — and never 'rota', because this screen never asks a rota.
-function ClearPersonModal({ members, rosters, groups, nameFor, already, minors, onClose }) {
+function ClearPersonModal({ members, rosters, groups, nameFor, already, minors, minorsKnown, onClose }) {
   const S = window.Steward;
   // THE SHAPES, FROM THE ONE PLACE THAT DEFINES THEM. A hand-written list here would be free to offer a
   // fourth nothing enforces, or to disagree with the relay about what 'day' means — the reason
@@ -6108,7 +6113,9 @@ function ClearPersonModal({ members, rosters, groups, nameFor, already, minors, 
         </div>
       ) : null}
       <div style={{ fontSize: 11.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 6 }}>Who</div>
-      {candidates.length === 0 ? (
+      {minorsKnown === false ? (
+        <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '10px 0 14px' }}>Reading the church’s safeguarding list…</div>
+      ) : candidates.length === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '10px 0 14px' }}>{teamId ? 'Nobody on that team who isn’t already cleared.' : 'Nobody left to clear.'}</div>
       ) : (
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 190, overflowY: 'auto', marginBottom: 16 }}>
