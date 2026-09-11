@@ -611,6 +611,14 @@ function svWhen(ts) {
     return SV_DOW[d.getDay()] + ' ' + d.getDate() + ' ' + SV_MON[d.getMonth()];
   } catch (e) { return ''; }
 }
+// A TIME OF DAY, for "Collected · 12:55". `in` and `out` on a check-in record are EPOCH SECONDS (the console
+// writes `out: Math.floor(Date.now() / 1000)` at collection), and the first build of this row printed the
+// integer: the Oppo showed "Collected · 1789084514" on 2026-09-11 while the console beside it said
+// "out 12:55 AM". Same format as the console's fmtT, so the two screens agree about one collection.
+function svClock(ts) {
+  if (!Number.isFinite(ts)) return '';
+  try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; }
+}
 // ONE HELP BUTTON, VISIBLE, with real text — the member app's ctx.openHelp deep link, styled as the app's other
 // four help buttons are (screens-extras.jsx, the notifications one). Renders nothing if the host gave us no
 // openHelp, rather than a dead control.
@@ -631,7 +639,7 @@ function KidsRow({ rec, open, onToggle }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderTop: '1px solid var(--line)' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.childName || 'Name not in this copy'}</div>
-        {rec.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Collected · {rec.out}</div> : null}
+        {rec.out ? <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>Collected{svClock(rec.out) ? ' · ' + svClock(rec.out) : ''}</div> : null}
       </div>
       {code ? (
         <button onClick={onToggle} aria-pressed={!!open}
@@ -708,7 +716,9 @@ function KidsRegister({ ctx }) {
             <div style={{ width: 34, height: 34, borderRadius: 10, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="child" size={18} /></div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{svWhen(sn.from) || 'This session'}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{sn.rows.length} checked in</div>
+              {/* COUNT WHO IS IN THE ROOM, NOT WHO HAS BEEN THROUGH IT. "1 checked in" over a row reading
+                  "Collected" was the header the Oppo showed after the only child had gone home. */}
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{sn.rows.filter(r => !r.out).length} checked in{sn.rows.some(r => r.out) ? ' · ' + sn.rows.filter(r => r.out).length + ' collected' : ''}</div>
             </div>
           </div>
           {sn.rows.length

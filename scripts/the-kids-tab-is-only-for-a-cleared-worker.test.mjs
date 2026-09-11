@@ -211,6 +211,23 @@ test('…and a pickup code is COVERED until it is asked for, one at a time', () 
     'BOTH PICKUP CODES ARE NOW ON SCREEN AT ONCE. Revealing one must cover the last. As rendered: ' + two);
 });
 
+test('a collected child reads as a TIME, not an epoch, and is not counted as in the room', () => {
+  // Measured on the Oppo, 2026-09-11: the console said "out 12:55 AM"; the phone said "Collected · 1789084514"
+  // under a header that still read "1 checked in" with nobody in the room.
+  const OUT = 1789084514;
+  const gone = { id: 'ci-3', childName: 'Tomi Adeyemi', code: '2210', session: 'svc-am', in: OUT - 3600, out: OUT };
+  const s = serving({ ...NONE, cleared: true, keysHeld: 1, sessions: oneSession([...twoKids, gone]) });
+  s.press('Kids');
+  const out = s.reads();
+  assert.doesNotMatch(out, /1789084514/, 'the collection time is painted as a raw epoch. As rendered: ' + out);
+  const clock = new Date(OUT * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  assert.match(out, new RegExp('Collected · ' + clock.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    'a collected child must say when, in the same clock the console shows ("' + clock + '"). As rendered: ' + out);
+  assert.match(out, /2 checked in · 1 collected/,
+    'the header counts a collected child as in the room, or does not say a child has gone. As rendered: ' + out);
+  assert.doesNotMatch(out, /3 checked in/, 'three children are counted as present when one has been collected');
+});
+
 // ══════════════ THE NEGATIVES ══════════════
 
 test('NEGATIVE: somebody the church has not cleared has no Kids tab and no register', () => {
