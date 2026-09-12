@@ -5493,7 +5493,7 @@ window.Fellowship = {
   // the child's name at the desk exactly as she does today.
   //
   // ⚠ IT HAS A PRODUCT CALLER FROM 2026-09-12, AND UNTIL THEN IT HAD NONE. `ctx.checkinArrive` in
-  // app/app.jsx, called by WereHereCard in app/screens-today.jsx — §3b of
+  // app/app.jsx, called by WereHereSection in app/screens-today.jsx — §3b of
   // reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md. The comment that stood here said "NOTHING IN app/ CALLS
   // THIS YET" and named the reason: reading a record back needed a guardian-sealed copy that did not exist.
   // That copy shipped, and §3b then removed the rest of the obstacle by carrying the children's names

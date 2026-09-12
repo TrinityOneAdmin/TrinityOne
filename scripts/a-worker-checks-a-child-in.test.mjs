@@ -413,7 +413,7 @@ test('a guardian pubkey is normalised to ONE spelling, the one the relay stores'
 //
 // ⚠ THIS PARAGRAPH SAID "NOTHING IN app/ CALLS writeArrival YET" UNTIL 2026-09-12, AND IT IS NO LONGER TRUE.
 // §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md gave it one: `ctx.checkinArrive` in app/app.jsx,
-// called by WereHereCard in app/screens-today.jsx, driven on the rendered screen in
+// called by WereHereSection in app/screens-today.jsx, driven on the rendered screen in
 // scripts/a-parent-shows-a-code-instead-of-typing.test.mjs. So the rule-1 hole this paragraph declared is
 // closed; what stays true, and is still the reason this file drives the relay end to end, is that the writer
 // grants no authority — any member could sign this event by hand, and the gate that matters is the relay's.

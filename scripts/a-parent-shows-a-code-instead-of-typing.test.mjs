@@ -153,7 +153,7 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
     safeCssColor: (c) => c, todayISO: () => '2026-09-13', lsGet: (k, d) => d, lsSet: () => {},
     Math, Date, JSON, Set, Map, Number, String, Array, Promise, Object, isNaN, Boolean, parseInt, parseFloat,
   };
-  const mod = loadScreen('app/screens-today.jsx', ['TodayScreen', 'WereHereCard'], globals);
+  const mod = loadScreen('app/screens-today.jsx', ['TodayScreen', 'MyChildrenCard', 'WereHereSection'], globals);
   const ctx = {
     church: { id: 'c1', name: "St Chad's", npub: CHURCH },
     churchServices: services,
@@ -170,7 +170,14 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
   const api = {
     ls, F, ctx, qrTexts, arriveCalls, timers, clock,
     setNow(t) { clock.v = t; return api.redraw(); },
-    card: () => draw(mod.WereHereCard, { ctx }),
+    // ⚠ THE CARD DRIVEN HERE IS MyChildrenCard, NOT THE SECTION INSIDE IT, and that is deliberate. Since
+    // 2026-09-12 "We're here" and the QR are a section in this card's fold — the owner's ask, because the
+    // square opened at the door and then stayed open on Today all morning. Driving WereHereSection alone
+    // would leave every assertion below true with the section deleted from the fold: a well-tested component
+    // nobody is required to render, which is CLAUDE.md rule 1 verbatim. The fold is open by default (nothing
+    // in localStorage), so the section is in this tree.
+    card: () => draw(mod.MyChildrenCard, { ctx }),
+    section: () => draw(mod.WereHereSection, { ctx }),
     screen: () => draw(mod.TodayScreen, { ctx }),
   };
   api.tree = api.card();
@@ -435,6 +442,98 @@ function settings({ seed = {}, keyed = true } = {}) {
   };
   return api;
 }
+
+// ── AND THE ROW IN SETTINGS THAT REACHES THAT SHEET ──────────────────────────────────────────────────────
+// The sheet above is unreachable unless there is a row that opens it, and until 2026-09-12 NOTHING drove
+// ProfileSheet at all: the row could have been deleted and all twenty-two tests here stayed green. That is
+// CLAUDE.md rule 1 — an engine, and a sheet, nobody is required to consult. It is written now because the
+// row MOVED (owner: put it in "My family"), and a move is exactly when an untested control goes missing.
+function profile({ church = { id: 'c1', name: "St Chad's", npub: CHURCH }, childAccounts = true } = {}) {
+  const { React, draw } = miniReact();
+  const ls = store({});
+  const F = fellowship(ls, { v: IN_WINDOW });
+  F.relays = ['wss://one.example'];   // the Relays row counts them
+  if (childAccounts) F.createChildAccount = async () => ({ ok: true });
+  const opened = [];
+  const globals = {
+    React,
+    window: { Fellowship: F, TrinityIdentity: { qrSVG: () => '' }, Capacitor: { isNativePlatform: () => false },
+      TrinityData: DATA, TrinityLN: { currency: () => null },
+      addEventListener() {}, removeEventListener() {}, dispatchEvent() {}, localStorage: ls, innerWidth: 390,
+      matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) },
+    document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
+    navigator: { userAgent: '', clipboard: { writeText: async () => {} } },
+    localStorage: ls,
+    setTimeout, clearTimeout, setInterval: () => 0, clearInterval: () => {}, console, fetch: async () => ({ ok: false }),
+    Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), UserAvatar: Stub('UserAvatar'), AvatarPicker: Stub('AvatarPicker'),
+    QRScanner: Stub('QRScanner'), BackupCard: Stub('BackupCard'), ChurchBadge: Stub('ChurchBadge'),
+    Overlay: function Overlay(p) { return React.createElement('div', {}, p.open ? p.children : null); },
+    BottomSheet: ({ open, children }) => (open ? children : null),
+    NotifToggleRow: function NotifToggleRow(p) { return React.createElement('div', {}, String(p.label)); },
+    safeCssColor: (c) => c, lsGet: (k, d) => d, lsSet: () => {},
+    // app/app.jsx's pilot flag, read at the value it SHIPS at. A harness that turned the parked wallet on
+    // would be testing a sheet no member has.
+    WALLET_ENABLED: false,
+    Math, Date, JSON, Set, Map, Number, String, Array, Promise, Object, isNaN, Boolean, parseInt, parseFloat,
+  };
+  const mod = loadScreen('app/identity.jsx', ['ProfileSheet'], globals);
+  const ctx = {
+    church, safeguard: {}, toast() {}, openHelp() {},
+    openChurchSwitcher() {}, openNotifSettings() {}, openCurrency() {}, openShareApp() {}, openWallet() {},
+    openRelays() {}, openBackup() {}, openAbout() {},
+  };
+  const api = { ls, F, ctx, opened };
+  api.redraw = () => { api.tree = draw(mod.ProfileSheet, { open: true, onClose() {}, identity: { name: 'Sarah Okafor', avatar: null, npub: 'npub1' + 'q'.repeat(58) }, onSave() {}, ctx }); return api.tree; };
+  api.redraw();
+  return api;
+}
+
+// The heading a row sits under, read off the RENDERED tree — never by matching text in app/*.jsx (rule 3).
+// Every section heading in this sheet is an uppercase word or two on its own; the nearest one ABOVE a row is
+// the section that row is in.
+function sectionOf(tree, label) {
+  const flat = [];
+  (function walk(n) {
+    if (!n || typeof n !== 'object') return;
+    if (Array.isArray(n)) return n.forEach(walk);
+    const t = texts(n).join(' ').replace(/\s+/g, ' ').trim();
+    if (/^[A-Z][A-Z &’']{2,}$/.test(t)) flat.push({ head: t });
+    else if (n.props && n.props.onClick && t.includes(label)) flat.push({ row: t });
+    (n.kids || []).forEach(walk);
+  })(tree);
+  let head = '';
+  for (const e of flat) { if (e.head) head = e.head; else if (e.row) return head; }
+  return null;
+}
+
+test('"CHILDREN AT CHURCH" IS A ROW IN SETTINGS, AND IT IS UNDER "MY FAMILY"', () => {
+  const p = profile();
+  assert.match(reads(p.tree), /Children at church/,
+    'THERE IS NO WAY INTO THE CHILDREN-AT-CHURCH SHEET. Every other test in this file drives that sheet ' +
+    'directly, so all of them stay green with the only row that opens it deleted — rule 1 verbatim.');
+  assert.equal(sectionOf(p.tree, 'Children at church'), 'MY FAMILY',
+    'the row is not under MY FAMILY (owner, 2026-09-12) — it reads as being under ' +
+    JSON.stringify(sectionOf(p.tree, 'Children at church')));
+  // RE-ANCHOR: sectionOf can find headings at all, so the assertion above is not vacuously matching ''.
+  assert.equal(sectionOf(p.tree, 'Notifications'), 'SETTINGS', 're-anchor: sectionOf cannot read this sheet’s headings');
+});
+
+test('…and it does NOT disappear on a phone with no child-account support', () => {
+  // THE TRAP THE MOVE WALKED INTO. MY FAMILY was gated on `window.Fellowship.createChildAccount` — a name a
+  // shell that has not finished loading does not have yet. Dropping the row inside that gate unchanged would
+  // have taken the whole of check-in off those phones, silently.
+  const p = profile({ childAccounts: false });
+  assert.match(reads(p.tree), /Children at church/,
+    'A SETTING VANISHED WITH A FUNCTION THAT HAS NOTHING TO DO WITH IT. The parent has no way to reach ' +
+    'check-in at all, and nothing on screen says why.');
+  assert.ok(!/Children’s accounts/.test(reads(p.tree)), 're-anchor: the child-account row rendered anyway, so the gate above is not being tested');
+});
+
+test('…and it is absent when the member is in no church, because the answer is per-church', () => {
+  const p = profile({ church: null });
+  assert.ok(!/Children at church/.test(reads(p.tree)),
+    'a member who follows no church was offered a per-church setting with no church to store it against');
+});
 
 test('a member can say they bring children and type the names — and it is stored LOCALLY, under their own key', () => {
   const s = settings();

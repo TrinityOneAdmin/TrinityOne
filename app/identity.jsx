@@ -1634,12 +1634,28 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <DirectoryToggle identity={identity} onSave={onSave} ctx={ctx} />
         </Group>
 
-        {/* My family — a parent sets up & oversees a child's account (safeguarding v2) */}
-        {ctx.church && ctx.church.npub && window.Fellowship && window.Fellowship.createChildAccount ? (
+        {/* My family — a parent sets up & oversees a child's account (safeguarding v2), and says who they bring
+            to church on a Sunday.
+            ⚠ THE SECTION'S OWN CONDITION IS THE CHURCH, NOT `createChildAccount`, AND THAT IS THE WHOLE OF THE
+            CARE NEEDED HERE. "Children at church" moved down from SETTINGS on 2026-09-12 (owner), and the
+            section it moved into was gated on `window.Fellowship.createChildAccount` — a function a shell that
+            has not finished loading does not have yet, and one no child-free build needs at all. Dropping the
+            row inside that gate unchanged would have hidden it on every phone where that name is missing:
+            a setting that silently is not there, which is the silent-blank shape this codebase keeps paying
+            for. So the SECTION asks only what both rows need (a church), and each ROW carries its own
+            condition. */}
+        {ctx.church && ctx.church.npub ? (
           <React.Fragment>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>MY FAMILY</div>
             <Group>
-              <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
+              {/* §3b. PER-CHURCH, because the answer is: a member of two congregations brings children to one
+                  and not the other, and the stored key carries the church for that reason. It sits ABOVE
+                  children's accounts because it is the one most families need — most children checked into a
+                  crèche have no phone and no account at all (design §7). */}
+              <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
+              {window.Fellowship && window.Fellowship.createChildAccount ? (
+                <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
+              ) : null}
             </Group>
           </React.Fragment>
         ) : null}
@@ -1658,13 +1674,6 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SETTINGS</div>
         <Group>
           <Row icon="bell" label="Notifications" sub="Choose what you’re alerted about" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openNotifSettings(); }} />
-          {/* §3b. ONLY INSIDE A CHURCH, because the answer is per-church: a member of two congregations brings
-              children to one and not the other, and the stored key carries the church for that reason. It is
-              in SETTINGS rather than MY FAMILY deliberately — MY FAMILY is about a child's own ACCOUNT, and
-              most children checked into a crèche have no phone at all (design §7). */}
-          {ctx.church && ctx.church.npub ? (
-            <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
-          ) : null}
           <Row icon="bolt" label="Currency" sub={(() => { const c = window.TrinityLN && window.TrinityLN.currency && window.TrinityLN.currency(); return c ? `Show giving amounts in ${c.label} (${c.symbol})` : 'Currency for giving amounts'; })()} accent="var(--gold)" onClick={() => { onClose && onClose(); ctx.openCurrency(); }} />
         </Group>
 

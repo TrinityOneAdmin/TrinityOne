@@ -1409,14 +1409,46 @@ function MyChildrenCard({ ctx }) {
   // placed after that early return would run on some renders and not others and React would throw on the
   // first child checked in. scripts/no-hook-after-an-early-return.test.mjs is the guard.
   const [open, setOpen] = React.useState(() => { try { const v = localStorage.getItem(MYKIDS_OPEN_KEY); return v === null ? true : v === '1'; } catch (e) { return true; } });
+  const [, setTick] = React.useState(0);
   const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(MYKIDS_OPEN_KEY, v ? '1' : '0'); } catch (e) {} };
+  const offers = wereHereOffers(ctx);
+  // TWO REASONS TO LOOK AGAIN, AND ONLY ONE OF THEM COSTS ANYTHING. Both moved up from WereHereSection when
+  // that became a fold inside this card: a timer INSIDE the fold cannot redraw a card that has already
+  // returned null.
+  //
+  // The LISTENER is always armed and is free: the settings sheet and this card are two React trees over one
+  // localStorage, so without it a member could tick "I bring children to church" and find nothing here until
+  // the next cold start — the silent-blank shape this codebase keeps paying for.
+  //
+  // ⚠ THE TIMER IS ARMED ONLY FOR A MEMBER WHO ACTUALLY BRINGS CHILDREN, and that condition is the whole
+  // point. This card is mounted on Today for EVERY member of every church — it returns null for almost all
+  // of them — so an unconditional interval is a sixty-second wakeup, for ever, on the phone of everybody who
+  // has nothing to do with children's work. That is a battery cost for the audience this product is built
+  // for, and it also hangs `node --test`: miniReact runs no cleanups, so one live interval keeps the event
+  // loop alive and every existing test that renders TodayScreen never exits.
+  //
+  // ⚠ AND IT IS ARMED ON THE NAMES, NOT ON `offers` — `offers` is already false out of window, so gating the
+  // timer on it would be a timer that can only ever run once it is no longer needed, and a service coming
+  // into window while the app is open would never appear. `brings` is the honest condition.
+  const brings = wereHereNames(ctx).length > 0;
+  React.useEffect(() => {
+    const h = () => setTick(n => n + 1);
+    window.addEventListener('trinity-mykids', h);
+    const t = brings ? setInterval(h, WEREHERE_WINDOW_TICK) : 0;
+    return () => { window.removeEventListener('trinity-mykids', h); if (t) clearInterval(t); };
+  }, [brings]);
   const mine = (ctx && ctx.myChildren) || {};
   const kids = Array.isArray(mine.children) ? mine.children : [];
   const askAtDesk = Number(mine.askAtDesk) || 0;
   // NOTHING TO SAY, SO NOTHING IS SAID. Not "no children checked in" — see the dead-end note above. This is
   // also the state of every member of the congregation who has nothing to do with check-in, which is most of
   // them, on every Sunday.
-  if (!kids.length && !askAtDesk) return null;
+  //
+  // ⚠ `offers` IS THE THIRD CONDITION AND IT IS NOT OPTIONAL. A parent walking up to a door has no children
+  // checked in yet and nothing at the desk — 0 and 0 — so without it this card is absent at exactly the
+  // moment the arrival button inside it is the only thing they want. That is what it was a separate card for
+  // until 2026-09-12.
+  if (!kids.length && !askAtDesk && !offers) return null;
   return (
     <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden', marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       {/* COLLAPSIBLE, AND IT OPENS BY DEFAULT — owner request 2026-09-11. Same shape as CareSection above:
@@ -1438,9 +1470,19 @@ function MyChildrenCard({ ctx }) {
           {/* Shut, with a child the desk holds no copy of, this is the only thing that would tell a parent to
               go and ask. It says so in the header rather than only inside the fold. */}
           {!open && askAtDesk > 0 ? <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.35 }}>Ask the worker for {askAtDesk === 1 ? 'a pickup code' : askAtDesk + ' pickup codes'}</span> : null}
+          {/* SHUT, WITH A SERVICE IN WINDOW, THIS IS THE ONLY THING ON SCREEN THAT SAYS CHECK-IN IS LIVE — and
+              the code is now BEHIND this fold, so a parent who shut it last Sunday would otherwise stand at a
+              door looking at a title. Same rule as the line above it: what is behind the fold is said in the
+              header, whether the fold is open or not. */}
+          {!open && offers ? <span style={{ display: 'block', fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 2, lineHeight: 1.35 }}>Open this to check {offers.names.join(' and ')} in</span> : null}
         </span>
         <Icon name={open ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
       </button>
+      {/* FIRST IN THE FOLD, AND THAT ORDER IS THE WALK: a parent opens this at the door, with nobody checked
+          in yet, and the arrival button is what they came for. Once the children are in, the rows below it
+          are what they come back to — and by then this section has gone (the arrival window closes) or is
+          showing the square the worker asked for. */}
+      {open ? <WereHereSection ctx={ctx} /> : null}
       {open ? kids.map(k => (
         <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 15px', borderTop: '1px solid var(--line)' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1499,45 +1541,28 @@ function MyChildrenCard({ ctx }) {
 // still refuses an arrival when that session has no envelope, which the card reports in words. That is the
 // honest fallback rather than a button that pretends.
 const WEREHERE_WINDOW_TICK = 60000;   // re-ask "are we in window" once a minute; a service starts while the app is open
-function WereHereCard({ ctx }) {
-  // ⚠ EVERY HOOK ABOVE THE FIRST `return null`, and they must stay there: this card renders nothing for most
-  // of the congregation on most days, so a hook below the early return would run on some draws and not
-  // others and React would throw the moment a service came into window. Same note as MyChildrenCard.
-  const [tick, setTick] = useStateT(0);
+function WereHereSection({ ctx }) {
+  // ⚠ EVERY HOOK ABOVE THE `return null`, and they must stay there: this section renders nothing for most of
+  // the congregation on most days, so a hook below the early return would run on some draws and not others
+  // and React would throw the moment a service came into window. scripts/no-hook-after-an-early-return.
+  // test.mjs is the guard.
+  //
+  // ⚠ THE MINUTE TICK IS NOT HERE ANY MORE — it moved to MyChildrenCard when these two became one card
+  // (owner, 2026-09-12). It has to live in the component that decides whether there is a card on the screen
+  // at all: a timer inside the fold cannot redraw a parent that has already returned null, so a service
+  // coming into window while the app is open would have changed nothing a parent could see.
   const [busy, setBusy] = useStateT(false);
   const [res, setRes] = useStateT(null);        // { ok, reason } from ctx.checkinArrive, or null before the tap
   const [arrivedFor, setArrivedFor] = useStateT('');   // the session the arrival above was written for
   const F = window.Fellowship;
   const np = (ctx && ctx.church && ctx.church.npub) || '';
-  const brings = !!(F && F.bringsChildren && np && F.bringsChildren(np));
-  const names = (brings && F && F.myChildNames) ? F.myChildNames(np) : [];
-  // TWO REASONS TO LOOK AGAIN, AND ONLY ONE OF THEM COSTS ANYTHING.
-  //
-  // The LISTENER is always armed and is free: the settings sheet and this card are two React trees over one
-  // localStorage, so without it a member could tick the box and find the card still absent until the next
-  // cold start — the silent-blank shape this codebase keeps paying for.
-  //
-  // ⚠ THE TIMER IS ARMED ONLY FOR A MEMBER WHO ACTUALLY BRINGS CHILDREN, and that condition is the whole
-  // point of it being here rather than in the line above. This component is mounted on Today for EVERY
-  // member of every church — it returns null for almost all of them — so an unconditional interval is a
-  // sixty-second wakeup, for ever, on the phone of everybody who has nothing to do with children's work.
-  // That is a battery cost for the audience this product is built for, and it also hangs `node --test`:
-  // miniReact runs no cleanups, so one live interval keeps the event loop alive and every existing test
-  // that renders TodayScreen never exits. Both problems have the same fix and it is the correct behaviour.
-  //
-  // What the timer buys for the parent who does opt in: a service coming INTO window while the app is
-  // already open. Without it they would have to close and reopen the app at the door.
-  useEffectT(() => {
-    const h = () => setTick(n => n + 1);
-    window.addEventListener('trinity-mykids', h);
-    const t = (brings && names.length) ? setInterval(h, WEREHERE_WINDOW_TICK) : 0;
-    return () => { window.removeEventListener('trinity-mykids', h); if (t) clearInterval(t); };
-  }, [brings, names.length]);
-  // THE SAME ARITHMETIC THE CONSOLE MINTS THE KEY WITH AND THE RELAY ADMITS ON — imported, not re-derived.
-  // A session id IS a service id, and every member is already served every service, so this is computed on
-  // this phone from documents it already holds. Nothing is published to make the button appear.
-  const now = (ctx && ctx.churchServices) ? arrivalNow(F, ctx.churchServices) : null;
-  if (!brings || !names.length || !now) return null;
+  // THE SAME ARITHMETIC THE CONSOLE MINTS THE KEY WITH AND THE RELAY ADMITS ON — imported, not re-derived,
+  // and asked through the one predicate MyChildrenCard opened the card on. A session id IS a service id, and
+  // every member is already served every service, so this is computed on this phone from documents it
+  // already holds. Nothing is published to make the button appear.
+  const offers = wereHereOffers(ctx);
+  if (!offers) return null;
+  const names = offers.names, now = offers.now;
   const landed = res && res.ok && arrivedFor === now.session;
   // "WE COULD NOT CONFIRM" IS NOT "THAT DID NOT SEND", and the difference is the whole of device finding F1
   // (reference/DEVICE-VERIFICATION-two-phone-2026-09-11.md): writeArrival reported {ok:false} TWICE on writes
@@ -1549,6 +1574,10 @@ function WereHereCard({ ctx }) {
   // arrivals for her session, so a square shown BEFORE the arrival is written is one she can only ever report
   // as unknown — and rendering the QR every draw is a few hundred modules of work for a picture nobody is
   // looking at. Both reasons point the same way: build it when it is wanted.
+  //
+  // ⚠ AND IT IS BUILT ONLY WHEN THE FOLD IS OPEN, because the fold is now the only thing between a parent and
+  // this square: MyChildrenCard renders nothing of this section while it is shut. That is the whole of the
+  // owner's ask — the code no longer sits open on Today for the rest of the morning.
   const qr = (landed || unsure) && F && F.arrivalQR ? F.arrivalQR(np) : '';
   // ⚠ GUARDED, AND NOT BECAUSE IT CAN OVERFLOW TODAY. qrcode-generator throws when a payload will not fit
   // any symbol version, measured at about 2331 bytes at this error-correction level; twelve names of forty
@@ -1572,16 +1601,16 @@ function WereHereCard({ ctx }) {
     setBusy(false); setArrivedFor(now.session); setRes(r || { ok: false, reason: 'unavailable' });
   };
   return (
-    <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden', marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px' }}>
-        <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="child" size={18} /></div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1, color: 'var(--ink)' }}>Bringing {names.join(' and ')} in?</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.35 }}>Tell the children’s room you’re at the door.</div>
-        </div>
+    <div style={{ borderTop: '1px solid var(--line)' }}>
+      {/* THE SECTION STILL NAMES THE CHILDREN, and that is not a duplicate of the header above it. The header
+          counts who is ALREADY IN A ROOM; this line names who this phone is about to bring, and on the walk
+          up to the door those two lists are different — usually 0 and 2. */}
+      <div style={{ padding: '12px 15px 0' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5, lineHeight: 1.2, color: 'var(--ink)' }}>Bringing {names.join(' and ')} in?</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.35 }}>Tell the children’s room you’re at the door.</div>
       </div>
       {!landed && !unsure ? (
-        <div style={{ borderTop: '1px solid var(--line)', padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 11 }}>
+        <div style={{ padding: '11px 15px 13px', display: 'flex', alignItems: 'center', gap: 11 }}>
           <button onClick={say} disabled={busy}
             style={{ padding: '10px 18px', borderRadius: 12, border: 'none', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14 }}>
             {busy ? 'Telling them…' : 'We’re here'}</button>
@@ -1610,10 +1639,10 @@ function WereHereCard({ ctx }) {
         </div>
       ) : null}
       {landed || unsure ? (
-        <div style={{ borderTop: '1px solid var(--line)', padding: '13px 15px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9 }}>
+        <div style={{ padding: '11px 15px 13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9 }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)', lineHeight: 1.4, textAlign: 'center' }}>
             {unsure
-              ? 'We couldn’t confirm that reached your church — it may well have. Show this to the children’s worker; if she can’t see you, the desk will check them in.'
+              ? 'We couldn’t confirm that reached your church — it may well have. Show this to the children’s worker; if they can’t see you, the desk will check them in.'
               : 'Show this to the children’s worker.'}
           </div>
           {svg ? (
@@ -1622,7 +1651,7 @@ function WereHereCard({ ctx }) {
               dangerouslySetInnerHTML={{ __html: svg }} />
           ) : null}
           {/* NO SQUARE IS NOT A DEAD END. A phone with no QR renderer still has a parent standing at a door. */}
-          {!svg ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, textAlign: 'center' }}>This phone can’t draw the code. Give the worker their names and she’ll check them in.</div> : null}
+          {!svg ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, textAlign: 'center' }}>This phone can’t draw the code. Give the worker their names and they’ll check them in.</div> : null}
           <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4, textAlign: 'center' }}>It carries their names and nothing else — no password, and nothing that opens anything.</div>
         </div>
       ) : null}
@@ -1633,6 +1662,32 @@ function WereHereCard({ ctx }) {
 // delete in a sabotage. Returns { session, name, from, until } or null.
 function arrivalNow(F, services) {
   try { return (F && F.arrivalSessionNow) ? F.arrivalSessionNow(services) : null; } catch (e) { return null; }
+}
+
+// ⚠ ONE PREDICATE, TWO CALLERS, AND THAT IS WHY IT EXISTS. MyChildrenCard decides whether to render a card at
+// all, and WereHereSection decides whether to put an arrival button inside it. Before the two were merged
+// (owner, 2026-09-12: the QR "is open, and stays open" — put it inside the fold) they were two cards and
+// could not disagree. Now they can: a fold that opens on a condition the section does not share is a parent
+// tapping a header to find nothing behind it, which is this codebase's silent-blank shape.
+//
+// Three conditions, all of them — see the WereHereSection header for why each one is there.
+// Returns { names, now } or null. Reads localStorage and the clock; writes nothing.
+//
+// Split in two because the MINUTE TIMER needs the first half WITHOUT the clock: a timer gated on "is a
+// service in window" can only ever start once it is no longer needed. `wereHereNames` is the member's own
+// answer — the two conditions they typed — and is what the timer is armed on.
+function wereHereNames(ctx) {
+  const F = window.Fellowship;
+  const np = (ctx && ctx.church && ctx.church.npub) || '';
+  const brings = !!(F && F.bringsChildren && np && F.bringsChildren(np));
+  const names = (brings && F && F.myChildNames) ? F.myChildNames(np) : [];
+  return Array.isArray(names) ? names : [];
+}
+function wereHereOffers(ctx) {
+  const names = wereHereNames(ctx);
+  if (!names.length) return null;
+  const now = (ctx && ctx.churchServices) ? arrivalNow(window.Fellowship, ctx.churchServices) : null;
+  return now ? { names, now } : null;
 }
 
 function servingNewCount(ctx, seenTs) {
@@ -1698,12 +1753,14 @@ function TodayScreen({ ctx }) {
   const [votdMin, setVotdMin] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-min') !== '0'; } catch { return true; } });
   const toggleVotd = () => setVotdMin(v => { const nv = !v; try { localStorage.setItem('trinityone.votd-min', nv ? '1' : '0'); } catch {} return nv; });
 
-  // real date + time-of-day greeting
+  // ⚠ `now` IS STILL HERE FOR THE VERSE OF THE DAY, WHICH PICKS BY DAY-OF-YEAR. Deleting it with the
+  // greeting below blanked the whole Today screen ("now is not defined") — the silent-blank shape, caught by
+  // scripts/todays-header-fits-the-phone.test.mjs.
   const now = new Date();
-  const dateStr = now.toLocaleDateString('en-GB', { weekday: 'long', month: 'long', day: 'numeric' });
-  const hr = now.getHours();
-  const greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
-
+  // ⚠ NO DATE AND NO GREETING. Both were here until 2026-09-12 and the owner asked for them off: a phone
+  // already shows the date and the time on its own status bar, an inch above this line, and "Good morning"
+  // is two lines of the most valuable space on the screen saying nothing a member did not know. What is left
+  // in this column is the one thing only this app can tell them — which church they are looking at.
   // day-streak: +1 per consecutive calendar day the app is opened
   const [streak, setStreak] = useStateT(() => (lsGet('trinityone.streak', { count: 0 }).count) || 0);
   useEffectT(() => {
@@ -1794,9 +1851,14 @@ function TodayScreen({ ctx }) {
           church name collapsed to a bare 14px ellipsis and the row grew from 87px to 169px tall.
 
           So the column now carries a floor instead of a licence to shrink for ever:
-            · flex 1 1 96px  — 96 clears the date line's measured min-content of 90px (the widest unbreakable
-                               word, "WEDNESDAY"/"SEPTEMBER" in Sora 13px), so a word never has to break; the
-                               column still grows into whatever room is left over.
+            · flex 1 1 96px  — 96 cleared the DATE line's measured min-content of 90px (the widest unbreakable
+                               word, "WEDNESDAY"/"SEPTEMBER" in Sora 13px). ⚠ THAT LINE IS GONE (2026-09-12,
+                               owner), and the number is kept rather than re-derived: the column now holds
+                               only the church pill, whose ellipsis makes its own minimum zero, so 96 is no
+                               longer a floor anything NEEDS — it is the basis flexbox decides the wrap from,
+                               and dropping it would let the column collapse and the controls stop wrapping.
+                               scripts/todays-header-fits-the-phone.test.mjs measures the result at 320/360/
+                               390px, so this is guarded by what it draws rather than by the reasoning above.
             · minWidth 0     — without it the column's automatic minimum size is that same 191px. That was the
                                original overflow; with wrapping on it shows up instead as the header dropping
                                to two lines at 360px and 390px, which have the room to stay on one.
@@ -1816,9 +1878,7 @@ function TodayScreen({ ctx }) {
           Trimming the pill's padding instead would have come back at 320px, or at a 365-day streak. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
         <div style={{ flex: '1 1 96px', minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', textTransform: 'uppercase' }}>{dateStr}</div>
-          <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.05 }}>{greet}</h1>
-          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 'min(220px, 100%)', boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
+          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 'min(220px, 100%)', boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
         </div>
         {/* marginLeft auto right-aligns this group on a line of its own (space-between does not);
             flexShrink 0 is MEASURED INERT — the buttons' own automatic minimum size already floors the
@@ -1856,13 +1916,13 @@ function TodayScreen({ ctx }) {
       </div>
 
       {/* MY OWN CHILDREN AT TODAY'S SESSION, FIRST AMONG THE CARDS — a pickup code is needed at a door, now,
-          and renders NOTHING for everybody else (see MyChildrenCard). */}
+          and renders NOTHING for everybody else (see MyChildrenCard).
+          ⚠ ONE CARD, NOT TWO, SINCE 2026-09-12. "We're here" and the QR that saves the worker typing the
+          names (§3b of PLAN-CHECKIN-NO-TYPING-2026-09-11) used to sit here as a second card of their own,
+          which meant the square opened at the door and then stayed open on Today for the rest of the
+          morning. It is a section inside MyChildrenCard's fold now — WereHereSection — so the card's own
+          collapse puts it away, and the whole of a member's children's-work business is in one place. */}
       <MyChildrenCard ctx={ctx} />
-
-      {/* …AND THE STEP BEFORE IT: "we're here", and the QR that saves the worker typing the names. Renders
-          NOTHING unless this member ticked the box, typed a name, and a service of their own church is in
-          window right now — see WereHereCard. §3b of PLAN-CHECKIN-NO-TYPING-2026-09-11. */}
-      <WereHereCard ctx={ctx} />
 
       {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}
       {beingCaredFor && !careBannerDismissed ? (

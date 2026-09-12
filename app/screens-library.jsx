@@ -613,7 +613,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
         {/* prayer add form */}
         {isPrayer && adding ? (
           <div style={{ marginBottom: 14, padding: 14, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', animation: 'trinityFade .2s ease both' }}>
-            <input value={pWho} onChange={e => setPWho(e.target.value)} placeholder="Who or what? (e.g. Mum)" style={{
+            <input value={pWho} onChange={e => setPWho(e.target.value)} placeholder="Who or what? (e.g. a neighbour)" style={{
               width: '100%', boxSizing: 'border-box', height: 42, padding: '0 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 9 }} />
             <textarea value={pText} onChange={e => setPText(e.target.value)} rows={2} placeholder="What are you praying for?" style={{
               width: '100%', boxSizing: 'border-box', resize: 'none', padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink)' }} />
