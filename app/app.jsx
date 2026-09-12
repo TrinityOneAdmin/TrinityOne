@@ -1803,7 +1803,10 @@ function App() {
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
     gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
     addModule: () => Bible.pickFile(),
-    removeTranslation: (abbr) => Bible.removeModule(abbr),
+    // "bibles" scopes the name: a commentary or a dictionary may legitimately be called KJV too, and
+    // this sheet only ever means the translation. Without it, removeModule resolved the name against
+    // whichever record was written first and could delete the commentary instead.
+    removeTranslation: (abbr) => Bible.removeModule(abbr, 'bibles'),
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => { setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(null); setGroup(g); },
     desktop, openGroupId: group && group.id,

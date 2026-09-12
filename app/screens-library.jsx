@@ -692,7 +692,9 @@ function StoreRow({ item, catIcon, ctx }) {
   const onGet = () => {
     if (isImport) { window.Bible.pickFile(); return; }
     window.Bible.installModule(item)
-      .then(() => ctx.toast(`Installed ${item.abbr || item.name}`))
+      // the name the engine REGISTERED, which is not the catalogue's when another module already holds it
+      // (a second "NT" becomes NT2) — the Installed tier shows that name, so this has to agree with it
+      .then((res) => ctx.toast(`Installed ${(res && res.abbr) || item.abbr || item.name}`))
       .catch(() => ctx.toast(`Couldn't install ${item.name}`));
   };
   const onOpen = () => {
@@ -743,19 +745,33 @@ function StoreRow({ item, catIcon, ctx }) {
 function InstalledBrowser({ ctx, category, force }) {
   const map = window.Bible.installedMap();
   const active = window.Bible.activeVersion;
+  // IS THIS ROW THE BIBLE BEING READ? Not "does it share a name with it". Names are unique within a
+  // category, never across the phone, so `r.abbr === active` disabled Remove on a commentary or dictionary
+  // that happened to be called KJV — 27 MB behind "Switch to another Bible before removing this one", with
+  // nothing to switch to if that Bible is the member's only one. And a record written by an older build can
+  // carry a name no loaded module has, which is why the url is asked for first (window.Bible.activeUrl is
+  // where the active module was really loaded from; the name is the fallback when nothing was).
+  const activeUrl = window.Bible.activeUrl;
+  const isActiveRow = (r) => (r.category || 'bibles') === 'bibles' && (activeUrl ? r.url === activeUrl : r.abbr === active);
   let rows = Object.values(map);
   if (category) rows = rows.filter(r => (r.category || 'bibles') === category);
   rows.sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
 
   const CAT_LABEL = { bibles: 'Bible', dictionaries: 'Dictionary', commentaries: 'Commentary', devotionals: 'Devotional' };
   // AWAIT IT. removeModule is `async`, so this tested a PROMISE — always truthy — and the success toast
-  // fired even when the removal returned false. A commentary that is not in `modules` cannot be removed at
-  // all, and the app said "Removed" anyway. Same family as every other control in this programme that
+  // fired even when the removal returned false. A commentary that is not in `modules` could not be removed
+  // at all, and the app said "Removed" anyway. Same family as every other control in this programme that
   // reported success over nothing happening.
+  //
+  // THE REMOVAL ITSELF is fixed on this branch — removeModule now handles every category — and this call
+  // passes `r.url`, which is the key of both the installed map and the byte cache, rather than `r.abbr`,
+  // which several rows can share and an imported module may not have at all. The honest-failure path is
+  // unchanged and still load-bearing: a removal that cannot happen (the active Bible, a download still
+  // running, bytes that would not delete) says so instead of claiming success.
   const remove = async (r) => {
-    if (r.abbr === active) { ctx.toast('Switch to another Bible before removing this one'); return; }
+    if (isActiveRow(r)) { ctx.toast('Switch to another Bible before removing this one'); return; }
     let ok = false;
-    try { ok = await window.Bible.removeModule(r.abbr); } catch (e) { ok = false; }
+    try { ok = await window.Bible.removeModule(r.url || r.abbr); } catch (e) { ok = false; }
     if (ok) { ctx.toast(`Removed ${r.abbr || r.name}`); force(x => x + 1); }
     else ctx.toast(`Couldn't remove ${r.name}`);
   };
@@ -775,7 +791,7 @@ function InstalledBrowser({ ctx, category, force }) {
         {rows.length} module{rows.length === 1 ? '' : 's'} on this device
       </div>
       {rows.map(r => {
-        const isActive = r.abbr === active;
+        const isActive = isActiveRow(r);
         return (
           <div key={r.url} style={{ display: 'flex', gap: 12, padding: '13px 4px', borderBottom: '1px solid var(--line-2)', alignItems: 'center' }}>
             <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0,

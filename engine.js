@@ -105,13 +105,57 @@ window.safeImgUrl = function (v) {
     H430:{lemma:"אֱלֹהִים",translit:"ʾĕlōhîm",pos:"noun, masculine plural",short:"God, gods",gloss:"God; the supreme God (a plural of majesty), also gods or judges.",occ:2606},
     H7225:{lemma:"רֵאשִׁית",translit:"rēʾšît",pos:"noun, feminine",short:"beginning; first, chief",gloss:"Beginning, chief, first, the choicest or first fruits.",occ:51}
   };
-  // installed dictionary modules are consulted before the small built-in set
+  // installed dictionary modules are consulted before the small built-in set.
+  //
+  // EACH ONE CARRIES THE ABBR IT WAS INSTALLED UNDER, and that is the whole reason this is a list of
+  // records rather than a list of entry maps. A dictionary used to go in as a bare object with no identity
+  // of any kind, so nothing could ever find it again — which is why removeModule could not remove one, on
+  // a product whose first audience is phones with very little storage (see removeModule below). The two
+  // readers (lex, searchDict) take `d.entries`; nothing outside engine.js touches this list.
   const dicts = [];
-  function addDict(entries){ if(entries) dicts.push(entries); notify(); }
+  // RETURNS THE ABBR IT REGISTERED, which is not always the one asked for — the same dedupe addSource and
+  // addCommentary have always done, for the same reason. Two modules can carry one catalogue abbr (260 of
+  // the 1,290 entries in ebible-catalog.json are "NT"), and two dictionaries filed under one name would be
+  // one name that removes both. The caller records what comes back, never what it asked for.
+  // A DICTIONARY WITH NO NAME CANNOT BE REMOVED, so it is given one. Nothing hands addDict a name on the
+  // two paths that carry no catalogue entry — a file import, and `?module=<url>` — and an unnamed
+  // dictionary was skipped by the `if(r && r.abbr)` guard in both, so it was never cached, never recorded,
+  // never restored after a restart, and never removable. "Dict" (then Dict2, Dict3…) is the same fallback
+  // addCommentary has used for exactly this since it was written.
+  function addDict(entries, abbr){
+    if(!entries) return null;
+    const want = abbr || "Dict";
+    let a = want, i = 2;
+    while(hasDict(a)) a = want + i++;
+    dicts.push({ abbr: a, entries });
+    notify();
+    return a;
+  }
   // Lexicon dicts (Strong's ≈ 14k entries) aren't needed until a word is tapped — defer their parse off the
   // boot path. They load on idle after boot, or on the first lex()/dict access, whichever comes first.
+  // A pending one carries its abbr too: a dictionary removed BEFORE its deferred parse ran would otherwise
+  // be put straight back by _ensureDicts a second later, with its bytes already deleted.
   const _pendingDicts = []; let _dictsLoaded = false;
-  function _ensureDicts(){ if(_dictsLoaded) return; _dictsLoaded = true; for(const fn of _pendingDicts.splice(0)){ try{ fn(); }catch(e){ console.error("lazy dict", e); } } }
+  function _ensureDicts(){ if(_dictsLoaded) return; _dictsLoaded = true; for(const d of _pendingDicts.splice(0)){ try{ d.run(); }catch(e){ console.error("lazy dict", e); } } }
+  function hasDict(abbr){ return !!abbr && (dicts.some(d => d.abbr === abbr) || _pendingDicts.some(d => d.abbr === abbr)); }
+  // Drop a dictionary from memory — both the parsed entries and any deferred parse still holding its raw
+  // bytes. Splicing the record is what actually frees the memory: nothing else references it.
+  //
+  // The `!abbr` guard is a refusal to match on an empty name, not a gap: addDict gives every dictionary a
+  // name (see above), so nothing in `dicts` carries "" any more, and matching it would mean an unnamed
+  // record sweeping out dictionaries it has nothing to do with.
+  function removeDict(abbr, url){
+    if(!abbr) return;
+    for(let i = dicts.length - 1; i >= 0; i--) if(dicts[i].abbr === abbr) dicts.splice(i, 1);
+    // A PENDING PARSE IS MATCHED BY URL WHERE THERE IS ONE. Until it runs, a deferred dictionary is still
+    // carrying the name its RECORD had — so two records written by an older build under one name (both
+    // "BDB") would have one Remove throw away the other's queued parse too, and the dictionary the member
+    // kept would be missing from lookups until the next launch. The url is not ambiguous.
+    for(let i = _pendingDicts.length - 1; i >= 0; i--){
+      const p = _pendingDicts[i];
+      if(p.abbr === abbr && (!url || !p.url || p.url === url)) _pendingDicts.splice(i, 1);
+    }
+  }
   // SECURITY-AUDIT-2026-06-24 N4: strip raw HTML from third-party dictionary string fields. Today
   // every lexicon value reaches the DOM as a React text child (auto-escaped, no XSS), so this is
   // defence in depth — but if a future change ever wraps lex output in dangerouslySetInnerHTML
@@ -120,10 +164,10 @@ window.safeImgUrl = function (v) {
   // tag removal is enough; we don't try to preserve formatting.
   const _LEX_FIELDS = ['lemma','translit','pos','short','gloss','def','deriv','kjv'];
   function _stripTags(s){ return (typeof s === 'string' && s.indexOf('<') !== -1) ? s.replace(/<[^>]*>/g, '') : s; }
-  function loadDictJSON(obj){
+  function loadDictJSON(obj, abbr){
     // The security strip (raw HTML out of third-party dict fields) now happens lazily per-entry in lex() on
     // lookup, so we skip the O(14k) walk here — it was a measurable boot cost for zero benefit before a tap.
-    addDict((obj && obj.entries) || obj || {});
+    return addDict((obj && obj.entries) || obj || {}, abbr);
   }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
@@ -148,7 +192,8 @@ window.safeImgUrl = function (v) {
     _ensureDicts();
     _ensureFullLexicon();   // first tap pays for it, not first launch
     id = id.toUpperCase();
-    for(const d of dicts){
+    for(const rec of dicts){
+      const d = rec.entries;
       if(d[id]){ const e = d[id]; return { id, lang: id[0] === "H" ? "HEBREW" : "GREEK", lemma: _stripTags(e.lemma || ""), translit: _stripTags(e.translit || ""), pos: _stripTags(e.pos || ""), short: _stripTags(e.short || ""), gloss: _stripTags(e.gloss || ""), def: _stripTags(e.def || ""), deriv: _stripTags(e.deriv || ""), kjv: _stripTags(e.kjv), occ: e.occ }; }
     }
     const e = LEX[id];
@@ -364,7 +409,7 @@ window.safeImgUrl = function (v) {
       const cmt = buildCommentaryFromDb(db, srcName);
       if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
       const dict = buildDictFromDb(db);
-      if(dict){ addDict(dict); return { kind: "dict" }; }
+      if(dict){ return { kind: "dict", abbr: addDict(dict, meta && meta.abbr) }; }
       throw new Error("unsupported MySword module — no Bible, commentary or dictionary table");
     }
     if(isZip(u8)){
@@ -377,7 +422,7 @@ window.safeImgUrl = function (v) {
         const cmt = buildCommentaryFromDb(db, srcName);
         if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
         const dict = buildDictFromDb(db);
-        if(dict){ addDict(dict); return { kind: "dict" }; }
+        if(dict){ return { kind: "dict", abbr: addDict(dict, meta && meta.abbr) }; }
         throw new Error("unsupported module inside " + (srcName || "the archive"));
       }
       const src = buildFromUSFM(files, srcName);
@@ -399,6 +444,45 @@ window.safeImgUrl = function (v) {
   async function cachePut(key, u8){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").put(u8, key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
   async function cacheKeys(){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); }); }catch(e){ return []; } }
   async function cacheDelete(key){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").delete(key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
+  // "IS IT STILL THERE?" — AND IT THROWS WHEN IT CANNOT LOOK. Every other helper above swallows its errors
+  // and answers null/[]/nothing, which is right for reading a module (a cache miss and a broken store both
+  // mean "fetch it") and WRONG for the one question removeModule asks after deleting: cacheGet() returns
+  // null when the bytes are gone AND when indexedDB.open() failed, and the delete that just ran swallowed
+  // the identical failure — so the same broken store made the delete a no-op and the read-back say "proved
+  // gone". Measured: 25 MB left in the store with the record deleted, and since nothing then lists the
+  // module, nothing could ever offer to remove it again. That is the exact outcome the delete-before-forget
+  // ordering exists to prevent, so this one deliberately does NOT catch: "I could not look" must reach the
+  // caller as an error and never as "no".
+  //
+  // It reads with get() rather than count() deliberately: get() is the call cacheGet already makes on every
+  // launch of every phone this ships to, so nothing here rests on an IndexedDB method this app has never
+  // used on a device. The cost of reading the blob instead of counting it is only ever paid when the answer
+  // is YES — i.e. when the delete failed — because a deleted key returns undefined with nothing to read.
+  //
+  // THREE THINGS IT MUST NOT DO, all of them reached by a phone and not by a desk:
+  //   · a MISSING object store is a provable absence, not an unknown — the bytes cannot be in a store that
+  //     is not there, so that answers "no" rather than stranding the record for ever;
+  //   · an ABORTED transaction (the database is being deleted, a version change is pending, the quota is
+  //     revoked mid-read) fires neither onsuccess nor onerror on the request, so without onabort the
+  //     promise never settles and the member's Remove button spins for ever with no toast — a dead
+  //     control, which is the failure this whole programme exists to stop;
+  //   · nor may it hang for ever if IndexedDB simply never answers, which it does on Android when the
+  //     database is locked by another tab or a compaction. 10s then refuse, honestly.
+  async function cacheHas(key){
+    const db = await idb();
+    let store;
+    try{ store = idbStore(db, "readonly"); }
+    catch(e){ if(e && (e.name === "NotFoundError" || e.name === "InvalidStateError")) return false; throw e; }
+    return await new Promise((res, rej) => {
+      let done = false;
+      const settle = (fn, v) => { if(done) return; done = true; clearTimeout(timer); fn(v); };
+      const timer = setTimeout(() => settle(rej, new Error("timed out asking whether " + key + " is still cached")), 10000);
+      const q = store.get(key);
+      q.onsuccess = () => settle(res, q.result != null);
+      q.onerror = () => settle(rej, q.error);
+      store.transaction.onabort = () => settle(rej, store.transaction.error || new Error("the read was aborted"));
+    });
+  }
 
   // Modules (Bibles + the Strong's lexicon) are NOT embedded in the app — they download on demand.
   // The web build serves them same-origin. On native, MOST modules are not in the APK, so a relative url
@@ -585,7 +669,47 @@ window.safeImgUrl = function (v) {
   function getInstalled(){ try{ return JSON.parse(localStorage.getItem(INSTALLED_KEY) || "{}"); }catch(e){ return {}; } }
   function setInstalled(map){ try{ localStorage.setItem(INSTALLED_KEY, JSON.stringify(map)); }catch(e){} }
   function catOf(item){ return item.category || (item.kind === "dict" ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
-  function recordInstalled(item){ const m = getInstalled(); m[item.url] = { url: item.url, id: item.id, abbr: item.abbr, name: item.name, kind: item.kind, format: item.format, category: catOf(item) }; setInstalled(m); }
+  // A RECORD MUST NAME THE MODULE THE ENGINE REGISTERED, NOT THE ONE THE CATALOGUE ASKED FOR.
+  // addSource/addCommentary/addDict have always deduped a colliding name (NT -> NT2), and the record kept
+  // the catalogue's regardless, so two modules sharing one catalogue abbr produced two records saying the
+  // same thing and one of them named a module that is not there.
+  //
+  // It is not a corner case: 260 of the 1,290 entries in ebible-catalog.json carry abbr "NT" (9 "NTPO",
+  // 7 "BL"), and two minority-language New Testaments is the ordinary case for this product's first
+  // audience. Three things broke, all measured: the Library disabled Remove on BOTH rows whenever either
+  // was the Bible being read (`r.abbr === active`); removing one ran `delete modules["NT"]` and evicted the
+  // one the member KEPT; and the reader's Translations sheet, which passes the REGISTERED abbr, matched no
+  // record at all, so it deleted nothing, freed nothing and said "Removed NT2".
+  //
+  // The installed map is what every screen lists and what removal keys off, so there is one identity here
+  // now, not two — and ONE mechanism writes it. This records what it was given; noteLoadedFrom() corrects it
+  // to what the engine actually registered, on the same tick at install time and again on every launch for a
+  // record an older build wrote. A second correction here, from a `registered` parameter, was measured to be
+  // unfalsifiable: sabotaging it changed no test, because the call right after it put the record right.
+  function recordInstalled(item){
+    const m = getInstalled();
+    m[item.url] = { url: item.url, id: item.id, abbr: item.abbr, name: item.name, kind: item.kind, format: item.format, category: catOf(item) };
+    setInstalled(m);
+  }
+  // WHERE EACH LOADED MODULE CAME FROM — registered abbr -> url, in memory only, rebuilt on every launch
+  // because it is only ever true of modules that ARE loaded. That is exactly what makes it worth keeping:
+  // a record whose module failed to load has no entry here, so it cannot be mistaken for the active Bible
+  // and have its Remove disabled for ever over bytes nobody can then reclaim.
+  // Keyed by CATEGORY AND NAME, because a name is only unique inside its own store: a Bible and a
+  // commentary may both be "KJV", and one map keyed by name alone would have the second one loaded
+  // overwrite the first's url — which is the same defect this branch is fixing everywhere else.
+  const urlOf = {};
+  const urlKey = (cat, abbr) => (cat || "bibles") + "|" + abbr;
+  function noteLoadedFrom(url, abbr, cat){ if(!url || !abbr) return; urlOf[urlKey(cat, abbr)] = url; noteRegisteredAbbr(url, abbr); }
+  // Repair one record in place when the engine turns out to have registered a different name — an older
+  // build's record, or a collision that only appears once the second module is installed.
+  function noteRegisteredAbbr(url, abbr){
+    if(!url || !abbr) return;
+    const m = getInstalled();
+    if(!m[url] || m[url].abbr === abbr) return;
+    m[url].abbr = abbr;
+    setInstalled(m);
+  }
   function isInstalled(url){ return !!getInstalled()[url]; }
   function isInstalling(url){ return installing.has(url); }
 
@@ -637,7 +761,7 @@ window.safeImgUrl = function (v) {
           if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + bytes.byteLength + " bytes — refusing)");
           await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes);
         }   // M3: verify before cache/parse
-        loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
+        loaded = { kind: "dict", abbr: loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)), item.abbr) };
       }else{
         // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
         // standing between a compromised gateway or mirror and a module whose HTML goes into the reader
@@ -655,6 +779,7 @@ window.safeImgUrl = function (v) {
         loaded = await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item), sha256: item.sha256 });
       }
       recordInstalled(item);
+      noteLoadedFrom(item.url, loaded && loaded.abbr, catOf(item));
       return loaded || true;   // {kind:'bible',abbr} for a translation (the real registered abbr) — lets callers switch to it
     }catch(err){ console.error(err); window.Bible._error = "Couldn't install " + (item.name || item.url) + " — " + err.message; throw err; }
     finally{ installing.delete(item.url); notify(); }
@@ -699,8 +824,19 @@ window.safeImgUrl = function (v) {
             try{ window.Bible._error = null; }catch(e2){}
           }
         }
-        if((meta.format || "").toUpperCase() === "JSON") { const raw = bytes; _pendingDicts.push(() => loadDictJSON(JSON.parse(new TextDecoder().decode(raw)))); }
-        else await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
+        // WHAT THE ENGINE REGISTERS IS WHAT THE RECORD MUST SAY. A record written by a build before
+        // 2026-09-11 carries the CATALOGUE abbr, and two modules sharing one (260 entries in
+        // ebible-catalog.json are "NT") then have two records naming one module — the Library disables
+        // Remove on both, and removing either evicts the wrong one from the reader. The registered name is
+        // only knowable once the module is loaded, which is here, so the repair happens on the next launch
+        // and costs a localStorage write only when the two actually differ.
+        if((meta.format || "").toUpperCase() === "JSON") {
+          const raw = bytes, u = url;
+          _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u, loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries") });
+        } else {
+          const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
+          noteLoadedFrom(url, r && r.abbr, catOf(meta));
+        }
       }catch(e){ console.error("restore failed for", url, e); }
     }
     // parse any deferred lexicon dicts during idle — ready before the reader's tapped, but not blocking boot
@@ -726,6 +862,7 @@ window.safeImgUrl = function (v) {
           const url = "imported/" + f.name;
           await cachePut(url, u8);
           recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles" });
+          noteLoadedFrom(url, r.abbr, r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles");
         }
       }
       catch(err){ console.error(err); window.Bible._error = err.message; }
@@ -742,15 +879,130 @@ window.safeImgUrl = function (v) {
     return { bytes, filename: (String(url).split("/").pop() || "bible.module") };
   }
 
-  // remove an installed module by its version abbr: drop it from memory, forget it, clear its cache.
-  // Refuses to remove the active version (you'd have nothing to read) — the UI hides remove for it.
-  async function removeModule(abbr){
-    if(!modules[abbr] || abbr === active) return false;
+  // REMOVE AN INSTALLED MODULE OF ANY CATEGORY — a Bible, a commentary, a dictionary or lexicon — and
+  // actually give the space back. Takes the module's url, or the abbr it was recorded under.
+  //
+  // WHAT WAS WRONG. The first line used to be `if(!modules[abbr] || abbr === active) return false;`, and
+  // `modules` holds BIBLES ONLY: a commentary lives in `commentaries`, a dictionary in `dicts`. So every
+  // non-Bible module on the Library's Installed tier offered a Remove that returned false at the first
+  // line and freed nothing — the member could download a 25 MB commentary and never get the space back.
+  // That matters most where it is least visible: the first audience for this app is phones with very
+  // little storage on thin, expensive connections.
+  //
+  // THREE THINGS HAVE TO HAPPEN or the removal is not real, and they happen IN THIS ORDER:
+  //   1. the cached bytes go (IndexedDB "bible-modules" — the only place a module's megabytes live);
+  //   2. the installed map forgets it, so it stops being listed and restoreInstalled stops reloading it;
+  //   3. the loaded copy leaves memory, so the reader / lexicon / notes panel stops consulting it.
+  // The cache goes FIRST and is proved gone with a read-back. Forgetting the record first and failing to
+  // delete afterwards would orphan those megabytes for ever: nothing would list the module, so nothing
+  // could ever offer to remove it again. Failing at step 1 returns false, and the app says so rather than
+  // claiming a removal that did not happen.
+  //
+  // TWO REFUSALS, both returning false so the caller reports honestly:
+  //   · the ACTIVE Bible — you would have nothing to read (unchanged, and deliberately NOT widened to
+  //     other categories: a commentary open on screen is not a reason to keep it on the phone for ever.
+  //     CommentaryPanel re-reads getCommentary() through Bible.subscribe(), so it empties instead);
+  //   · a module whose download is STILL RUNNING — installModule would recordInstalled() and re-cache it
+  //     the moment it finished, putting back exactly what was just removed.
+  // ONE NAME IS NOT ENOUGH TO NAME A MODULE — a CATEGORY AND a name are. addSource, addCommentary and
+  // addDict each dedupe inside their OWN store, which is deliberate and right: a commentary called "KJV"
+  // beside the KJV Bible is how a member reads "notes on the KJV", and forcing one global namespace would
+  // rename modules that are already on phones and make a name depend on install order across categories.
+  // So the fix is to stop pretending the name is global. Everything that maps a name back to a module is
+  // scoped by category here, and an ambiguous name is REFUSED rather than guessed at.
+  //
+  // FOUND BY AUDIT, 2026-09-12, and it pre-dates this branch: this lookup scanned the whole installed map,
+  // so a member who imported a MySword commentary whose own Details table calls it "KJV" (ordinary — the
+  // abbr comes from the module, and Import is offered in the Share sheet) and then tapped Remove beside KJV
+  // in the reader's Translations sheet had the app delete THE COMMENTARY: 25 MB, record and bytes, no undo,
+  // while the Bible they asked to remove stayed on the phone. The Translations sheet asks for a Bible, so
+  // it now says so (app.jsx passes "bibles"), and a caller that names no category gets a refusal instead of
+  // whichever record happened to be written first.
+  async function removeModule(id, category){
     const inst = getInstalled();
-    const url = Object.keys(inst).find(u => inst[u].abbr === abbr);
-    delete modules[abbr];
-    order = order.filter(a => a !== abbr);
-    if(url){ const m = getInstalled(); delete m[url]; setInstalled(m); cacheDelete(url); }
+    // Identity is the URL: it keys both the installed map and the byte cache. A name is accepted too,
+    // because that is what the reader's translation sheet has to hand (ctx.removeTranslation).
+    let url = inst[id] ? id : null;
+    if(!url){
+      const named = Object.keys(inst).filter(u => inst[u].abbr === id && (!category || catOf(inst[u]) === category));
+      if(named.length > 1){
+        // TWO RECORDS, ONE NAME, ONE CATEGORY — and this is not hypothetical. `addSource`'s dedupe is
+        // `while(modules[abbr] && modules[abbr].name !== src.name)`, so an identical NAME skips the rename
+        // and both records are written under one abbr. ebible-catalog.json ships two such groups covering
+        // FIVE translations: "NT | Nuevo Testamento Guaraní Pe" (2 urls) and "NT | Mushog Testamento" (3) —
+        // minority-language New Testaments, which is this product's first audience.
+        //
+        // The reader's Translations sheet has only a name to give us (`versions()` carries abbr/name/kind and
+        // no url), so refusing outright made Remove permanently dead for those five: "Couldn't remove NT",
+        // for ever, with the megabytes unreclaimable. Refusing was still RIGHT compared with what preceded
+        // it — guessing deleted the wrong module's bytes — but it is not the end of the job.
+        //
+        // So: prefer the url the LOADED module of that name came from. That is the copy the member is
+        // actually looking at in the reader, it is recorded by `noteLoadedFrom` at load time rather than
+        // inferred here, and it must still be one of the candidate records. If we cannot establish it we
+        // refuse exactly as before — a guess is never better than a refusal on a destructive action.
+        const loadedFrom = category ? urlOf[urlKey(category, id)] : null;
+        if(!loadedFrom || !named.includes(loadedFrom)) return false;
+        url = loadedFrom;
+      } else url = named[0] || null;
+    }
+    const meta = url ? inst[url] : null;
+    const abbr = (meta && meta.abbr) || id;
+    const cat = meta ? catOf(meta) : (category
+      || (modules[abbr] ? "bibles" : commentaries[abbr] ? "commentaries" : hasDict(abbr) ? "dictionaries" : ""));
+    // nothing of this name is installed or loaded — there is nothing here to remove
+    if(!url && !cat) return false;
+    // THE ACTIVE BIBLE IS REFUSED — you would have nothing to read — AND NOTHING ELSE IS. This compared
+    // any record's name against the active BIBLE's name, so a commentary or dictionary that happened to
+    // share it could not be removed at all: 27 MB stuck behind "Switch to another Bible before removing
+    // this one", with nothing to switch to if that Bible is the member's only one.
+    //
+    // It asks by URL where it can. `urlOf` is what the ACTIVE module was actually loaded from, so a record
+    // whose module never loaded (bytes evicted, or corrupt enough to throw) can no longer borrow the active
+    // module's name and make its own megabytes unreclaimable. The name comparison stays as the fallback for
+    // a module loaded from no url at all — a file import that could not be written down.
+    //
+    // ⚠ THE TERNARY THAT USED TO BE HERE PICKED ITS BRANCH ON THE WRONG THING — on whether the ACTIVE module
+    // had a known url, not on whether THIS CALL had resolved one. With `activeFrom` known and `url` null (a
+    // loaded Bible whose record was never written, because setInstalled swallowed a failure) neither side of
+    // the comparison fired, the refusal was skipped, and `loadedHere = !url` was then true — so
+    // `delete modules[active]` ran with `active` still naming it: a blank reader over a dangling pointer.
+    // Compare urls only when BOTH are known; otherwise fall back to the name, which is what the line did
+    // unconditionally before urls existed here.
+    const activeFrom = active ? urlOf[urlKey("bibles", active)] : null;
+    const isTheActiveBible = (url && activeFrom) ? (url === activeFrom) : (abbr === active);
+    if(cat === "bibles" && active && isTheActiveBible) return false;
+    if(url && installing.has(url)) return false;
+    if(url){
+      await cacheDelete(url);
+      // PROVE THE SPACE CAME BACK, and refuse when it cannot be proved. cacheDelete swallows its own
+      // errors, so the call having been made says nothing; cacheHas() answers the question and THROWS
+      // rather than saying "no" when the store cannot be opened — which is the case where the delete was
+      // a silent no-op, and where believing it would forget the record over bytes nobody can reach again.
+      let stillThere = true;
+      try{ stillThere = await cacheHas(url); }catch(e){ console.warn("could not confirm the module was deleted", url, e); }
+      if(stillThere) return false;
+      const m = getInstalled(); delete m[url]; setInstalled(m);
+    }
+    // With no `url` there is no record and no bytes we can name: the module was loaded into memory and
+    // never written down (localStorage full or blocked, so setInstalled's catch swallowed it). Dropping it
+    // from memory is then the whole of what "removed" can mean here — it leaves the reader and the list —
+    // and any bytes cached under a url we cannot learn stay where they are. The one shipped path that used
+    // to land here, `?module=<url>`, now records what it caches (see autoLoad).
+    //
+    // AND ONLY IF THE LOADED MODULE OF THAT NAME IS THIS ONE. A record whose module never loaded keeps
+    // whatever name was written at install time, so a stale "NT" record pointed `delete modules["NT"]` at
+    // the OTHER New Testament — the one the member is reading — and evicted it from the reader while the
+    // bytes being freed were somebody else's. `urlOf` says where the loaded module of that name really came
+    // from; when it came from somewhere else, nothing of ours is in memory and there is nothing to drop.
+    const here = urlOf[urlKey(cat, abbr)];
+    const loadedHere = !url || !here || here === url;
+    if(loadedHere){
+      if(cat === "commentaries") delete commentaries[abbr];
+      else if(cat === "dictionaries") removeDict(abbr, url);
+      else if(modules[abbr]){ delete modules[abbr]; order = order.filter(a => a !== abbr); }
+      if(here === url) delete urlOf[urlKey(cat, abbr)];
+    }
     notify();
     return true;
   }
@@ -849,7 +1101,7 @@ window.safeImgUrl = function (v) {
         if(rank){ seen.add(id); hits.push({ id, e, rank }); }
       }
     };
-    for(const d of dicts) scan(d);
+    for(const d of dicts) scan(d.entries);
     scan(LEX);
     hits.sort((a, b) => b.rank - a.rank || (b.e.occ || 0) - (a.e.occ || 0));
     const strong = id => /^[GH]\d+$/i.test(id);
@@ -866,13 +1118,48 @@ window.safeImgUrl = function (v) {
     loadingFlag = true; notify();
     try{ await restoreInstalled(); }catch(e){ console.error(e); }
     const url = new URLSearchParams(location.search).get("module");
-    if(url){
-      try{ await fetchAndCacheModule(url); }
+    // RECORD IT, as the file-import path already does. fetchAndCacheModule() writes the bytes into the same
+    // IndexedDB every other module lives in, and this path used to leave no record of them: the module was
+    // absent from the Library's Installed tier, so nothing could ever offer to remove it, and it was
+    // reloaded from nowhere at the next launch — downloaded once, kept for ever, unreachable. A record
+    // makes it an ordinary installed module: listed, restored, removable.
+    //
+    // AND IT DOES NOTHING AT ALL FOR A URL THAT IS ALREADY INSTALLED, which is new on this branch and
+    // deliberate. restoreInstalled() has just loaded that module from the catalogue's metadata; fetching it
+    // again here passes NO metadata, so the source is named from its own file, addSource sees a second name
+    // for one abbr and registers a DUPLICATE (DEEP -> DEEP2) — and the record written over the top of the
+    // good one would name the duplicate. The member would then have one module twice in the reader and a
+    // record pointing at the copy, which Remove would strip of its bytes while the other copy read on.
+    if(url && !isInstalled(url)){
+      try{
+        const r = await fetchAndCacheModule(url);
+        if(r && r.abbr){
+          recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr,
+                            kind: r.kind || "bible", category: r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles" });
+          noteLoadedFrom(url, r.abbr, r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles");
+        }
+      }
       catch(err){ console.error(err); window.Bible._error = err.message; }
     }
-    // first run: nothing installed and nothing requested — install the bundled default Bible so a
-    // fresh open lands on scripture, not the empty state.
-    if(order.length === 0 && !url){
+    // NOTHING TO READ? INSTALL THE DEFAULT BIBLE. The condition is `order.length === 0` and NOTHING ELSE,
+    // and the `&& !url` that used to be here was the bug.
+    //
+    // `order` holds BIBLES only (addSource is its one writer), so this asks exactly "does this phone have a
+    // Bible loaded" — which is the question a member's empty reader is asking.
+    //
+    // ⚠ THE TWO GUARDS HAD DRIFTED APART AND BETWEEN THEM LEFT AN EMPTY READER. The `?module=` branch above
+    // gates on the RECORD (`isInstalled(url)`); this one gated on the QUERY STRING. So for a module whose
+    // record survived but whose BYTES did not, the first branch declined to re-download (a record exists)
+    // and this one declined to self-heal (a url was asked for) — restoreInstalled hit `if(!bytes) continue;`
+    // and the member landed on nothing, with no error. `cachePut` swallows its own failures, so installing
+    // on a full phone produces exactly that state; so does an evicted store, or a module loadModuleBytes
+    // throws on. Before the record was added to this path the link simply re-downloaded and the reader
+    // worked. Found by audit 2026-09-12; it is the silent-blank-app class this codebase keeps paying for.
+    //
+    // It also fixes a second, older face of the same line: a FRESH phone opening `?module=<a dictionary>`
+    // installs the dictionary and, because a dictionary never enters `order`, used to end up with no Bible
+    // at all. Now it gets one.
+    if(order.length === 0){
       try{ await installModule(DEFAULT_MODULE); }
       catch(err){ console.error(err); window.Bible._error = err.message; }
     }
@@ -891,6 +1178,10 @@ window.safeImgUrl = function (v) {
     get loaded(){ return order.length > 0; },
     get loading(){ return loadingFlag; },
     get activeVersion(){ return active; },
+    // The url the ACTIVE Bible was loaded from, or null. A screen that asks "is this row the Bible being
+    // read?" must not answer by comparing names: names are unique per category, not across the phone, and
+    // a record written by an older build can carry a name no loaded module has.
+    get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
     versions, books, maxChapter, getVerses, getCommentary, commentaryList, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
