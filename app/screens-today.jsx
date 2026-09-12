@@ -1418,7 +1418,27 @@ function MyChildrenCard({ ctx }) {
   // "that was turned away, take them to the desk" about an arrival ALREADY ON THE WORKER'S SCREEN. That is
   // device finding F1's harm, reintroduced through a different door; found by audit of 23f7200.
   // This card survives the fold, so the arrival does.
-  const [arr, setArr] = React.useState({ busy: false, res: null, forSession: '' });
+  // ⚠ REHYDRATED FROM DISK, because React state alone does not survive leaving this screen. `app.jsx`
+  // renders ONE screen at a time, so a tab switch unmounts this card and everything it was holding: tap
+  // "We're here", glance at Community, come back, and the square was gone with the button offered again —
+  // over an arrival already on the worker's screen. Tap again on a flaky socket and the card reports "that
+  // was turned away, take them to the desk" about a check-in the worker is looking at. The fold was fixed
+  // earlier the same day; this is the same harm through the tab, and through an app restart.
+  //
+  // ⚠ THE STATE IS STILL THE TRUTH HERE AND THE STORE IS A MIRROR. Reading FROM the store instead would
+  // mean a full or refused localStorage leaves a parent with no square AT THE MOMENT OF THE TAP — strictly
+  // worse than the bug. `setArrivalOutcome` returns false rather than throwing, and this card carries on.
+  const [arr, setArr] = React.useState(() => {
+    try {
+      const F = window.Fellowship, np = (ctx && ctx.church && ctx.church.npub) || '';
+      const o = (F && F.arrivalOutcome && np) ? F.arrivalOutcome(np) : null;
+      // The session is carried back so a stale answer cannot paint over today's door. WereHereSection
+      // already refuses anything whose `forSession` is not the session in window — the same rule `landed`
+      // and `inARoom` apply — so a morning arrival simply does not match the evening service.
+      return o ? { busy: false, res: { ok: o.ok, reason: o.reason }, forSession: o.session }
+               : { busy: false, res: null, forSession: '' };
+    } catch (e) { return { busy: false, res: null, forSession: '' }; }
+  });
   const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(MYKIDS_OPEN_KEY, v ? '1' : '0'); } catch (e) {} };
   const offers = wereHereOffers(ctx);
   // TWO REASONS TO LOOK AGAIN, AND ONLY ONE OF THEM COSTS ANYTHING. Both moved up from WereHereSection when
@@ -1650,7 +1670,12 @@ function WereHereSection({ ctx, arr, setArr }) {
     // label", the other way round. A missing transport is a REFUSAL with a reason, worded like any other.
     try { r = (ctx && ctx.checkinArrive) ? await ctx.checkinArrive({ session: now.session }) : { ok: false, reason: 'unavailable' }; }
     catch (e) { r = { ok: false, reason: 'threw' }; }
-    setArr({ busy: false, forSession: now.session, res: r || { ok: false, reason: 'unavailable' } });
+    const out = r || { ok: false, reason: 'unavailable' };
+    setArr({ busy: false, forSession: now.session, res: out });
+    // WRITTEN ALONGSIDE, NEVER INSTEAD. A refusal is recorded too: "we tried and were turned away" is an
+    // answer a parent coming back to this screen needs as much as a success, and re-tapping after a refusal
+    // is exactly how the duplicate-arrival confusion starts.
+    try { if (F && F.setArrivalOutcome) F.setArrivalOutcome(np, now.session, out); } catch (e) {}
   };
   return (
     <div style={{ borderTop: '1px solid var(--line)' }}>

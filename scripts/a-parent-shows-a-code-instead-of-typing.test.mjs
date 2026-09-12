@@ -70,7 +70,11 @@ const ENGINE_SRC = (() => {
     + fnBody(FELLOWSHIP, 'function parseArrivalQR(text) {', 'parseArrivalQR');
 })();
 const METHODS = ['bringsChildren(churchNpub) {', 'setBringsChildren(churchNpub, on) {',
-  'myChildNames(churchNpub) {', 'setMyChildNames(churchNpub, names) {', 'arrivalQR(churchNpub) {'];
+  'myChildNames(churchNpub) {', 'setMyChildNames(churchNpub, names) {', 'arrivalQR(churchNpub) {',
+  // The persisted arrival outcome — the mirror that survives leaving the Today screen. Lifted like every
+  // other method here, so the tests below drive the SHIPPED reader and writer rather than a stub that
+  // would answer the question they are named after.
+  'arrivalOutcome(churchNpub) {', 'setArrivalOutcome(churchNpub, session, res) {'];
 
 const CHURCH = 'c'.repeat(64);
 const ME = 'a'.repeat(64);
@@ -529,6 +533,74 @@ test('OUT OF WINDOW, A CARD THAT IS THERE FOR THE PICKUP CODES OFFERS NO ARRIVAL
   //   · BOTH removed                                              -> THIS TEST FAILS
   // So the property is real and guarded twice over. Do not "simplify" one of them away on the strength of a
   // green run after deleting the other.
+});
+
+// ══════════════ LEAVING THE SCREEN MUST NOT THROW THE ARRIVAL AWAY ════════════════════════════════════════
+// Audit C-F2. `app.jsx` renders ONE screen at a time, so a tab switch unmounts this card and everything it
+// holds. The fold was fixed on 2026-09-12 and the harm declared closed; it was closed for ONE of at least
+// three doors. This is the tab, and an app restart behaves identically.
+//
+// ⚠ A FRESH CARD OVER THE SAME STORAGE is how both are modelled — that is exactly what a remount is. The
+// state is deliberately NOT shared; only the localStorage the engine writes to.
+
+test('COMING BACK TO TODAY DOES NOT LOSE A LANDED ARRIVAL', async () => {
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no square was drawn');
+
+  const back = today({ seed: t.ls.v });        // ← the tab switch: a new card, the same phone
+  assert.equal(shown(back.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'THE SQUARE IS GONE AFTER LEAVING TODAY. The arrival is written and on the worker’s screen; this phone ' +
+    'has simply forgotten, and offers the button again. Read: ' + reads(back.tree));
+  assert.equal(shownButton(back.tree, 'We’re here').length, 0,
+    'A SECOND "WE’RE HERE" IS OFFERED OVER AN ARRIVAL THAT LANDED — and a flaky second tap then reports ' +
+    '"that was turned away, take them to the desk" about a check-in the worker is looking at.');
+  assert.deepEqual(back.arriveCalls, [], 'the remount published a second arrival by itself');
+});
+
+test('…and a REFUSAL survives it too, so the parent is not told it went fine', async () => {
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' } });
+  await t.click('We’re here');
+  const back = today({ seed: t.ls.v });
+  assert.match(reads(back.tree), /desk/i,
+    'the refusal was forgotten on the way back, so the card now looks untouched — and re-tapping after a ' +
+    'refusal is exactly how a duplicate arrival starts');
+});
+
+test('A STALE ARRIVAL NEVER PAINTS OVER A LATER SERVICE', async () => {
+  // The morning's answer must not sit on the eleven o'clock door. Same rule `landed` and `inARoom` apply.
+  const t = today({ seed: READY });
+  await t.click('We’re here');                           // answered for svc-am
+  const at11 = Math.floor(new Date(2026, 8, 13, 11, 30, 0, 0).getTime() / 1000);
+  const back = today({ seed: t.ls.v, now: at11, services: [SERVICE, LATE] });
+  assert.equal(shownButton(back.tree, 'We’re here').length, 1,
+    'THE MORNING’S ARRIVAL IS STILL ON SCREEN AT THE LATE SERVICE, so this parent cannot announce for the ' +
+    'room they are standing outside.');
+  assert.equal(shown(back.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+    'a square answered for the morning session is being held up at a different door');
+});
+
+test('IT IS A MIRROR, NOT THE STATE: a phone that cannot write still shows the square', async () => {
+  // ⚠ THE WHOLE REASON THIS IS NOT STORED INSTEAD OF HELD. This origin is documented shedding avatars at
+  // the browser's ~5MB limit for a church of ~500 — which is exactly the church that has a children's
+  // ministry. Reading FROM the store would mean a full quota leaves a parent with NO SQUARE AT THE MOMENT
+  // OF THE TAP, which is strictly worse than the bug being fixed.
+  const t = today({ seed: READY });
+  t.ls.setItem = () => { throw new Error('QuotaExceededError'); };
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'A PHONE THAT CANNOT WRITE TO STORAGE LOST ITS SQUARE AT THE DOOR. The mirror must never be able to ' +
+    'cost the tap.');
+  assert.deepEqual(t.arriveCalls, [{ session: 'svc-am' }], 're-anchor: the arrival itself did not publish');
+  // ⚠ TWO LAYERS HOLD THIS UP AND REMOVING EITHER ALONE LEAVES THIS GREEN — written down because the house
+  // rule is that a sabotage row which does not bite means the test is blind, the sabotage never applied, or
+  // ANOTHER GUARD ANSWERED FIRST, and this is the third. Measured:
+  //   · `setArrivalOutcome`'s own catch removed (it rethrows)      -> still green, the card's guard holds
+  //   · the card's `try { … } catch (e) {}` removed                -> still green, the engine's catch holds
+  //   · BOTH removed                                               -> the whole FILE dies, not one test:
+  //     the throw escapes an async handler and takes the run with it, which is precisely what it would do
+  //     to a parent's screen at a door.
+  // Keep both. Neither is redundant with the other; they fail in opposite directions.
 });
 
 // ══════════════ AND IT STOPS ASKING ONCE THEY ARE IN A ROOM ═══════════════════════════════════════════════

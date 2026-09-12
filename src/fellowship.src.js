@@ -2974,6 +2974,7 @@ if (typeof window !== 'undefined') {
 // names, and the desk works regardless. Recorded here so nobody "fixes" it by exempting the prefix.
 const BRINGKIDS_KEY = 'trinityone.bringkids.';   // + churchPubHex + '|' + memberPubHex -> '1' | '0'
 const MYKIDNAMES_KEY = 'trinityone.mykidnames.'; // + churchPubHex + '|' + memberPubHex -> JSON string[]
+const ARRIVEDAT_KEY = 'trinityone.arrivedat.';   // + churchPubHex + '|' + memberPubHex -> {session, ok, reason, at}
 // A family, not a school register. The cap exists so a malformed or hostile QR cannot hand a screen five
 // hundred rows to paint, and it is applied on BOTH sides — when the parent saves and when the worker parses.
 const MYKIDS_MAX = 12;
@@ -5451,6 +5452,51 @@ window.Fellowship = {
     try { localStorage.setItem(slot, on ? '1' : '0'); } catch (e) { return false; }
     _kidsChanged();
     return !!on;
+  },
+  // ── DID I ALREADY SAY WE ARE HERE? ──────────────────────────────────────────────────────────────────────
+  // The outcome of the LAST arrival this phone wrote, so that leaving the Today screen does not throw it
+  // away. It was React state alone, which meant: tap "We're here", look at any other tab, come back — and
+  // the square was gone and the button offered again over an arrival ALREADY ON THE WORKER'S SCREEN. Tap
+  // again on a flaky socket and the card says "that was turned away, take them to the desk" about a
+  // check-in the worker is looking at. `app.jsx` renders one screen at a time, so leaving Today unmounts
+  // everything it was remembering. The fold was fixed on 2026-09-12; this is the same harm through the tab
+  // and through an app restart.
+  //
+  // ⚠ THIS IS A MIRROR, NOT THE STATE ITSELF, AND THE DIFFERENCE IS A DOOR. The first design deleted the
+  // React state and read from here instead — which means a storage that is full or refused leaves the
+  // parent with NO SQUARE AT THE MOMENT OF THE TAP, not merely after a tab switch. This origin is already
+  // documented shedding avatars at the browser's ~5MB limit for a church of ~500, which is exactly the
+  // church that has a children's ministry. So the card keeps its own state and this is written alongside:
+  // if it fails, nothing is worse than before it existed.
+  //
+  // ⚠ ONE RECORD PER (church, member), OVERWRITTEN BY THE NEXT SESSION. Not a key per session — that grows
+  // without bound against the same 5MB, and a parent needs exactly one answer: "the last thing I said, and
+  // which service I said it for". The reader hands back the session so the caller can refuse a stale one,
+  // the same rule `landed` and `inARoom` both apply.
+  //
+  // `_kidSlot` is the same per-member slot `bringsChildren` and `myChildNames` use. A church-only key would
+  // hand one member's landed arrival to the next identity on a shared phone.
+  arrivalOutcome(churchNpub) {
+    const slot = _kidSlot(ARRIVEDAT_KEY, toPub(churchNpub));
+    if (!slot) return null;
+    try {
+      const o = JSON.parse(localStorage.getItem(slot) || 'null');
+      if (!o || typeof o !== 'object' || typeof o.session !== 'string' || !o.session) return null;
+      return { session: o.session, ok: !!o.ok, reason: String(o.reason || ''), at: Number(o.at) || 0 };
+    } catch (e) { return null; }
+  },
+  setArrivalOutcome(churchNpub, session, res) {
+    const slot = _kidSlot(ARRIVEDAT_KEY, toPub(churchNpub));
+    const sid = String(session || '');
+    // `_mayCache()` for the same reason setBringsChildren has it — and here it costs nothing at all:
+    // `writeArrival` refuses with `no-identity` on a locked phone, so there is never an outcome to lose.
+    if (!slot || !sid || !_mayCache()) return false;
+    try {
+      localStorage.setItem(slot, JSON.stringify({
+        session: sid, ok: !!(res && res.ok), reason: String((res && res.reason) || ''), at: Math.floor(Date.now() / 1000),
+      }));
+    } catch (e) { return false; }   // quota, private mode, site data blocked — the card keeps its own state
+    return true;
   },
   // THE NAMES. Returned normalised, so a caller can never be handed something it could not render.
   myChildNames(churchNpub) {
