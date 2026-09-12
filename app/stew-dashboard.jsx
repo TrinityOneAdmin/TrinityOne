@@ -367,6 +367,13 @@ function PublishErrorBanner() {
   // steward ended with silence. The link that produces the safeguarding banner is exactly the link that
   // produces generic publish errors, so the child-safety message was the one most likely to be evicted.
   const [sgMsg, setSgMsg] = React.useState('');
+  // A CONFIRMATION, NOT A FAILURE, AND IT GETS ITS OWN SLOT FOR THE SAME REASON sgMsg does: one shared
+  // string is last-event-wins, and a success must never evict a warning. Chunk 5 of
+  // reference/SCOPE-SUITE-AUTOREGISTER-2026-09-12.md — `_registerOnOwnBox` has dispatched
+  // `steward-box-registered` since 2cb1582 and NOTHING RENDERED IT, so a church quietly became
+  // self-hosted with no word on any screen. That is the same shape as `steward-write-blocked` being fired
+  // by two callers and listened to nowhere, one slot up.
+  const [okMsg, setOkMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
       const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
@@ -385,20 +392,30 @@ function PublishErrorBanner() {
       if (d.what === 'safeguarding clearances') { setSgMsg(text); return; }
       clearTimeout(f._t); setMsg(text);
     };
+    // CONFIRMATIONS ARE MOMENTS: this one says what changed and then goes, because nothing about it is
+    // actionable — unlike the two above, which stay until dismissed.
+    const h = () => {
+      setOkMsg('This computer is now your church\u2019s home. Its records live here, and members reach it through this machine.');
+      clearTimeout(h._t); h._t = setTimeout(() => setOkMsg(''), 8000);
+    };
     window.addEventListener('steward-publish-error', f);
     window.addEventListener('steward-write-blocked', g);
-    return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
+    window.addEventListener('steward-box-registered', h);
+    return () => { clearTimeout(h._t); window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); window.removeEventListener('steward-box-registered', h); };
   }, []);
-  if (!msg && !sgMsg) return null;
+  if (!msg && !sgMsg && !okMsg) return null;
   // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
   // surface in this codebase without it — app/ui.jsx, app/screens-today.jsx and app/stew-meals.jsx all get it
   // right — so a TalkBack user got nothing at all when a child-safeguarding warning appeared. The dismiss
   // button was a bare 15px icon measured at 27x17, below the WCAG 2.5.8 minimum of 24x24 and far below the
   // 44x44 a cheap Android phone needs; padded out with a negative margin so it keeps its visual size.
   const card = (text, key, clear, tone) => (
-    <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
-      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
-      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+    // ⚠ `ok` IS NOT role="alert". A confirmation announced as an alert interrupts a screen-reader user
+    // mid-sentence to tell them something went RIGHT; status/polite is the correct pairing, and it is also
+    // why this one carries no sticky behaviour.
+    <div key={key} role={tone === 'ok' ? 'status' : 'alert'} aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
+      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: tone === 'ok' ? 'color-mix(in oklab, var(--sage) 13%, var(--surface))' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid ' + (tone === 'ok' ? 'color-mix(in oklab, var(--sage) 40%, transparent)' : 'color-mix(in oklab, var(--clay) 40%, transparent)'), boxShadow: 'var(--shadow-lg)' }}>
+      <Icon name={tone === 'sg' ? 'shield' : tone === 'ok' ? 'check' : 'bolt'} size={17} color={tone === 'ok' ? 'var(--sage)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: 1 }} />
       <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
       {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
           accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
@@ -430,6 +447,9 @@ function PublishErrorBanner() {
     <div style={{ flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
       {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
       {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
+      {/* LAST, so a confirmation never sits above a warning it has nothing to do with. Its own slot, so a
+          success cannot evict either of the two above — the last-event-wins failure AUDIT-8 measured. */}
+      {okMsg ? card(okMsg, 'ok', () => setOkMsg(''), 'ok') : null}
     </div>
   );
 }
