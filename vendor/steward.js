@@ -15865,6 +15865,10 @@ zoo`.split("\n");
       if (!nm || !pub || actingChurch) return;
       const origin = _ownOrigin();
       if (!origin) return;
+      try {
+        if (String(lsGet("to_relay_always_on") || "") === "0") return;
+      } catch (e) {
+      }
       if (lsGet(_autoRegKey(origin))) return;
       const tok = await localAdminToken();
       if (!tok) return;

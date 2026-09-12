@@ -1046,7 +1046,7 @@
       + '<div class="rsw-msg" id="rswNpubMsg"></div>'
       + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip">Skip for now</button><button class="btn btn-clay" id="rswAdd">Add &amp; continue</button></div>';
   }
-  function rswDots() { let s = ''; for (let i = 0; i < 4; i++) s += '<span class="' + (i <= rswStep ? 'on' : '') + '"></span>'; return '<div class="rsw-dots">' + s + '</div>'; }
+  function rswDots() { let s = ''; for (let i = 0; i < 5; i++) s += '<span class="' + (i <= rswStep ? 'on' : '') + '"></span>'; return '<div class="rsw-dots">' + s + '</div>'; }
 
   function renderRSW() {
     const card = document.getElementById('rswCard');
@@ -1132,7 +1132,44 @@
       };
       return;
     }
-    // step 3 — done + the one worthwhile next step (the tunnel lives on Settings)
+    // ── STEP 3 — CAN THIS COMPUTER STAY ON? ──────────────────────────────────────────────────────────
+    // Owner, 2026-09-04: "being asked if it's an 'always on' machine is already part of that setup
+    // process" — it was not, and this is it. And 2026-09-12, on what the answer must DO: "if the can't
+    // leave it on, their relay mustn't be the primary one, their church should default to a public relay."
+    //
+    // ⚠ IT IS ASKED HERE, IN THE RELAY'S OWN SETUP, AND NOT AT CHURCH CREATION. Owner, same day, ruling out
+    // my first proposal: "the church naming isn't part of the relay setup, so to me it feels an odd place
+    // to put it." Whether a computer can stay on is a fact about the MACHINE — true for every church on it,
+    // and true for someone running a relay for a church managed elsewhere, whom a church-creation prompt
+    // would miss entirely. Asked once per machine, in the machine's own flow.
+    //
+    // ⚠ IT IS NOT A YES/NO QUIZ ABOUT HABITS. Both answers are a real choice with its cost on screen, so a
+    // steward is choosing a HOME for their church rather than predicting their own behaviour.
+    //
+    // WHAT IT WRITES, AND WHAT STILL HAS TO READ IT: `to_relay_always_on` = '1' | '0'. Chunk 4 of
+    // reference/SCOPE-SUITE-AUTOREGISTER-2026-09-12.md is what must act on a '0' — keeping this box off
+    // primary and leaving the church on the public relays. UNTIL CHUNK 4 LANDS THIS ANSWER CHANGES
+    // NOTHING, which is why the copy promises nothing it cannot yet keep.
+    // ⚠ localStorage is per-origin, which on a Suite box is shared with the console — deliberate, that is
+    // how chunk 4 will read it. But it is also per-browser-profile and clearable. If chunk 4 needs it to be
+    // durable, move it to a relay setting via /config rather than trusting this.
+    if (rswStep === 3) {
+      card.innerHTML = rswDots()
+        + '<div class="rsw-ic">' + RSW_IC.globe + '</div>'
+        + '<h2 class="rsw-h">Can you leave this computer on?</h2>'
+        + '<p class="rsw-sub">Your church is only reachable while this computer is running. A machine that sleeps at night, or a laptop you close, means members can\u2019t open your church until it wakes.</p>'
+        + '<div class="rsw-msg" id="rswOnMsg"></div>'
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswOnNo">No \u2014 it gets switched off</button><button class="btn btn-clay" id="rswOnYes">Yes, it stays on</button></div>';
+      const answer = (on) => {
+        try { localStorage.setItem('to_relay_always_on', on ? '1' : '0'); } catch (e) {}
+        rswStep = 4; renderRSW();
+      };
+      document.getElementById('rswBack').onclick = () => { rswStep = 2; renderRSW(); };
+      document.getElementById('rswOnYes').onclick = () => answer(true);
+      document.getElementById('rswOnNo').onclick = () => answer(false);
+      return;
+    }
+    // step 4 — done + the one worthwhile next step (the tunnel lives on Settings)
     card.innerHTML = rswDots()
       + '<div class="rsw-ic">' + RSW_IC.check + '</div>'
       + '<h2 class="rsw-h">Your relay is ready</h2>'

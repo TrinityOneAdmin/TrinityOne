@@ -19,8 +19,9 @@ const NPUB = 'npub1theonechurch';
 
 // The shipped function, over a scope where every collaborator is named rather than assumed.
 function box({ origin = 'http://127.0.0.1:8795', token = 'tok-123', already = null,
-               acting = null, pub = PUB, ok = true } = {}) {
+               acting = null, pub = PUB, ok = true, alwaysOn = undefined } = {}) {
   const store = {};
+  if (alwaysOn !== undefined) store['to_relay_always_on'] = alwaysOn;
   if (already) store['trinityone.steward.autoreg.' + pub + '|' + origin] = already;
   const sent = [];
   const events = [];
@@ -148,4 +149,27 @@ test('AND publishProfile ACTUALLY CALLS IT — the engine is not left with no ca
   const calls = (SHIP.match(/_registerOnOwnBox\(/g) || []).length;
   assert.equal(calls, 2, 'expected exactly one definition and one call site, found ' + calls +
     ' — a second caller means a screen is registering on its own rather than through publishProfile');
+});
+
+test('A STEWARD WHO SAID THE MACHINE GETS SWITCHED OFF IS NOT OVERRULED', () => {
+  // Owner, 2026-09-12: "if the can't leave it on, their relay mustn't be the primary one, their church
+  // should default to a public relay." Registering their church here anyway is the app contradicting the
+  // answer it just asked for.
+  const b = box({ alwaysOn: '0' });
+  return b.run("St Chad's").then(() => {
+    assert.deepEqual(b.sent, [],
+      'THE CHURCH WAS BOUND TO A BOX ITS OWNER JUST SAID THEY CANNOT KEEP RUNNING.');
+    assert.deepEqual(b.store['trinityone.steward.autoreg.' + b.pub + '|' + b.origin], undefined,
+      'it also recorded a registration that never happened, so a later "yes" could never take effect');
+  });
+});
+
+test('…but SILENCE is not a no — a box that never saw the question still registers', async () => {
+  // A wizard that was skipped, or a relay that predates the question. Treating an absent answer as refusal
+  // would quietly switch self-hosting off for everybody who never saw the screen.
+  for (const v of [undefined, '', '1']) {
+    const b = box({ alwaysOn: v });
+    await b.run("St Chad's");
+    assert.equal(b.sent.length, 1, 'an answer of ' + JSON.stringify(v) + ' was treated as a refusal');
+  }
 });

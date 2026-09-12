@@ -1234,6 +1234,17 @@ async function _registerOnOwnBox(name) {
     const nm = String(name || '').trim();
     if (!nm || !pub || actingChurch) return;
     const origin = _ownOrigin(); if (!origin) return;
+    // ⚠ AN EXPLICIT "NO" TO THE ALWAYS-ON QUESTION STOPS THIS. Owner, 2026-09-12: "if the can't leave it
+    // on, their relay mustn't be the primary one, their church should default to a public relay." The
+    // relay's first-run wizard writes `to_relay_always_on`; on a Suite box the panel and the console share
+    // an origin, so this is the same localStorage.
+    // ONLY AN EXPLICIT '0' REFUSES. An ABSENT answer must still register — a box whose wizard was skipped,
+    // or which predates the question, has not said no, and treating silence as refusal would quietly
+    // switch off self-hosting for everybody who never saw the screen.
+    // ⚠ THIS IS NOT CHUNK 4. Chunk 4 is the relay LIST — making a "no" leave the church on the public
+    // relays, and making a "yes" actually point members here. This is the narrower half: not binding a
+    // church to a box whose owner has just said they cannot keep it running.
+    try { if (String(lsGet('to_relay_always_on') || '') === '0') return; } catch (e) {}
     if (lsGet(_autoRegKey(origin))) return;              // already done for this church on this box
     const tok = await localAdminToken(); if (!tok) return;   // not loopback → not our box to register with
     const r = await fetch('/config', {
