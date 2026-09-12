@@ -1410,6 +1410,15 @@ function MyChildrenCard({ ctx }) {
   // first child checked in. scripts/no-hook-after-an-early-return.test.mjs is the guard.
   const [open, setOpen] = React.useState(() => { try { const v = localStorage.getItem(MYKIDS_OPEN_KEY); return v === null ? true : v === '1'; } catch (e) { return true; } });
   const [, setTick] = React.useState(0);
+  // ⚠ THE ARRIVAL IS HELD HERE, NOT IN THE SECTION THAT DRAWS IT, AND THAT IS NOT TIDINESS.
+  // WereHereSection is rendered as `{open ? <WereHereSection/> : null}`, so collapsing this card UNMOUNTS it
+  // and React throws its state away. Held down there, the tap that puts the code away — which is the entire
+  // point of the fold — was also the tap that erased the record of the arrival. Re-opening then drew the
+  // untouched "We're here" button, and a second tap on a relay that happened to be unreachable told a parent
+  // "that was turned away, take them to the desk" about an arrival ALREADY ON THE WORKER'S SCREEN. That is
+  // device finding F1's harm, reintroduced through a different door; found by audit of 23f7200.
+  // This card survives the fold, so the arrival does.
+  const [arr, setArr] = React.useState({ busy: false, res: null, forSession: '' });
   const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(MYKIDS_OPEN_KEY, v ? '1' : '0'); } catch (e) {} };
   const offers = wereHereOffers(ctx);
   // TWO REASONS TO LOOK AGAIN, AND ONLY ONE OF THEM COSTS ANYTHING. Both moved up from WereHereSection when
@@ -1440,6 +1449,20 @@ function MyChildrenCard({ ctx }) {
   const mine = (ctx && ctx.myChildren) || {};
   const kids = Array.isArray(mine.children) ? mine.children : [];
   const askAtDesk = Number(mine.askAtDesk) || 0;
+  // ⚠ WHAT IS LEFT TO ANNOUNCE. `offers` knows only "this member brings children and a service is in window";
+  // it does not know that those children are already in a room. Shut, that put "Open this to check Milo and
+  // Ivy in" directly under "Your children at church · 2", with both pickup codes behind the fold — one line
+  // contradicting the next. Found by audit of 23f7200.
+  //
+  // MATCHED ON THE NAME, WHICH IS THE ONLY LINK THERE IS: the phone's list is what the member typed and the
+  // record's is what a worker confirmed, and nothing joins them but the word. So it is deliberately the SAFE
+  // direction — a name that does not match leaves the child listed as still to announce, and the worst case
+  // is the offer this already made. A wrongly SUPPRESSED name would be a parent at a door who cannot say
+  // they are there, which is worse, and needs an identical name to happen. Rows written by a worker's own
+  // phone carry no child name at all (a known gap), so they simply do not match, and fall the safe way.
+  // `mine.children` is already time-boxed to MYKIDS_WINDOW around now, so last Sunday cannot suppress this one.
+  const inARoom = new Set(kids.filter(k => k && !k.out).map(k => String(k.childName || '').trim().toLowerCase()).filter(Boolean));
+  const stillToBring = offers ? offers.names.filter(n => !inARoom.has(String(n || '').trim().toLowerCase())) : [];
   // NOTHING TO SAY, SO NOTHING IS SAID. Not "no children checked in" — see the dead-end note above. This is
   // also the state of every member of the congregation who has nothing to do with check-in, which is most of
   // them, on every Sunday.
@@ -1474,7 +1497,7 @@ function MyChildrenCard({ ctx }) {
               the code is now BEHIND this fold, so a parent who shut it last Sunday would otherwise stand at a
               door looking at a title. Same rule as the line above it: what is behind the fold is said in the
               header, whether the fold is open or not. */}
-          {!open && offers ? <span style={{ display: 'block', fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 2, lineHeight: 1.35 }}>Open this to check {offers.names.join(' and ')} in</span> : null}
+          {!open && stillToBring.length ? <span style={{ display: 'block', fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 2, lineHeight: 1.35 }}>Open this to check {stillToBring.join(' and ')} in</span> : null}
         </span>
         <Icon name={open ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
       </button>
@@ -1482,7 +1505,7 @@ function MyChildrenCard({ ctx }) {
           in yet, and the arrival button is what they came for. Once the children are in, the rows below it
           are what they come back to — and by then this section has gone (the arrival window closes) or is
           showing the square the worker asked for. */}
-      {open ? <WereHereSection ctx={ctx} /> : null}
+      {open ? <WereHereSection ctx={ctx} stillToBring={stillToBring} arr={arr} setArr={setArr} /> : null}
       {open ? kids.map(k => (
         <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 15px', borderTop: '1px solid var(--line)' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1541,7 +1564,7 @@ function MyChildrenCard({ ctx }) {
 // still refuses an arrival when that session has no envelope, which the card reports in words. That is the
 // honest fallback rather than a button that pretends.
 const WEREHERE_WINDOW_TICK = 60000;   // re-ask "are we in window" once a minute; a service starts while the app is open
-function WereHereSection({ ctx }) {
+function WereHereSection({ ctx, stillToBring, arr, setArr }) {
   // ⚠ EVERY HOOK ABOVE THE `return null`, and they must stay there: this section renders nothing for most of
   // the congregation on most days, so a hook below the early return would run on some draws and not others
   // and React would throw the moment a service came into window. scripts/no-hook-after-an-early-return.
@@ -1551,9 +1574,11 @@ function WereHereSection({ ctx }) {
   // (owner, 2026-09-12). It has to live in the component that decides whether there is a card on the screen
   // at all: a timer inside the fold cannot redraw a parent that has already returned null, so a service
   // coming into window while the app is open would have changed nothing a parent could see.
-  const [busy, setBusy] = useStateT(false);
-  const [res, setRes] = useStateT(null);        // { ok, reason } from ctx.checkinArrive, or null before the tap
-  const [arrivedFor, setArrivedFor] = useStateT('');   // the session the arrival above was written for
+  // ⚠ NO STATE OF ITS OWN, AND THAT IS THE FIX FOR THE WORST THING THE FOLD DID. See the note on `arr` in
+  // MyChildrenCard: this component is unmounted by the collapse, so anything it held was thrown away, and
+  // a landed arrival came back as an untouched button that could then report itself refused. The card above
+  // holds it and hands it down.
+  const busy = !!(arr && arr.busy), res = (arr && arr.res) || null, arrivedFor = (arr && arr.forSession) || '';
   const F = window.Fellowship;
   const np = (ctx && ctx.church && ctx.church.npub) || '';
   // THE SAME ARITHMETIC THE CONSOLE MINTS THE KEY WITH AND THE RELAY ADMITS ON — imported, not re-derived,
@@ -1562,7 +1587,15 @@ function WereHereSection({ ctx }) {
   // already holds. Nothing is published to make the button appear.
   const offers = wereHereOffers(ctx);
   if (!offers) return null;
-  const names = offers.names, now = offers.now;
+  // ⚠ THE NAMES DRAWN HERE ARE WHAT IS LEFT TO ANNOUNCE, not everyone this phone has ever listed. The card
+  // computes it (see `stillToBring` there) because it needs the same answer for its shut header, and one
+  // predicate with two callers is why `wereHereOffers` exists at all. Falls back to the full list rather
+  // than to nothing: a missing prop must never be able to empty a door control.
+  const names = (Array.isArray(stillToBring) ? stillToBring : offers.names);
+  // EVERY CHILD IS ALREADY IN A ROOM, SO THERE IS NOTHING TO SAY. Their pickup codes are the rows directly
+  // below this, which is the thing a parent actually wants at that point.
+  if (!names.length) return null;
+  const now = offers.now;
   const landed = res && res.ok && arrivedFor === now.session;
   // "WE COULD NOT CONFIRM" IS NOT "THAT DID NOT SEND", and the difference is the whole of device finding F1
   // (reference/DEVICE-VERIFICATION-two-phone-2026-09-11.md): writeArrival reported {ok:false} TWICE on writes
@@ -1590,7 +1623,7 @@ function WereHereSection({ ctx }) {
   catch (e) { svg = ''; }
   const say = async () => {
     if (busy) return;
-    setBusy(true); setRes(null);
+    setArr({ busy: true, res: null, forSession: '' });
     let r;
     // A BUTTON THAT DOES NOTHING AND SAYS NOTHING IS THE WORST OF THE THREE THINGS THIS CARD CAN BE. An
     // earlier version returned early when `ctx.checkinArrive` was missing, which on a shell that had not
@@ -1598,7 +1631,7 @@ function WereHereSection({ ctx }) {
     // label", the other way round. A missing transport is a REFUSAL with a reason, worded like any other.
     try { r = (ctx && ctx.checkinArrive) ? await ctx.checkinArrive({ session: now.session }) : { ok: false, reason: 'unavailable' }; }
     catch (e) { r = { ok: false, reason: 'threw' }; }
-    setBusy(false); setArrivedFor(now.session); setRes(r || { ok: false, reason: 'unavailable' });
+    setArr({ busy: false, forSession: now.session, res: r || { ok: false, reason: 'unavailable' } });
   };
   return (
     <div style={{ borderTop: '1px solid var(--line)' }}>

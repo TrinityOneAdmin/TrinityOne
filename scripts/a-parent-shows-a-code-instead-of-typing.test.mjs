@@ -116,8 +116,11 @@ const DATA = { VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world
 const BIBLE = { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], bookName: () => 'Genesis', bookAbbr: () => 'Gen', maxChapter: () => 50, activeVersion: 'WEB' };
 
 function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult = { ok: true, id: 'x' }, qrRenderer = true,
-                clockIsWrong = false, clockSkewMins, clockSkewAhead = true } = {}) {
-  const { React, draw } = miniReact();
+                clockIsWrong = false, clockSkewMins, clockSkewAhead = true, myChildren = null, unmounts = false } = {}) {
+  // ⚠ `unmounts` IS NOT DECORATION. The default harness keeps a store for ever, so a component rendered as
+  // `{open ? <X/> : null}` survives a close-and-reopen that real React would unmount — and the collapse test
+  // below would pass over the exact bug it is named after. See miniReact in render-jsx-screen.mjs.
+  const { React, draw } = miniReact({ unmounts });
   const ls = store(seed);
   const clock = { v: now };
   const F = fellowship(ls, clock);
@@ -157,7 +160,7 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
   const ctx = {
     church: { id: 'c1', name: "St Chad's", npub: CHURCH },
     churchServices: services,
-    myChildren: { children: [], askAtDesk: 0, settled: true },
+    myChildren: myChildren || { children: [], askAtDesk: 0, settled: true },
     care: { settings: { enabled: false }, needs: [], myPub: 'me' },
     planProgress: {}, loc: null, churchDevos: [], servNext: null, servPending: [], servingSeenTs: 0,
     netUnread: 0, dark: false,
@@ -187,6 +190,17 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
     assert.equal(b.length, 1, 'expected one control reading ' + JSON.stringify(label) + ', found ' + b.length);
     b[0].props.onClick();
     return api.redraw();
+  };
+  // THE FOLD ITSELF — the header button, found by the aria-expanded it carries rather than by its words.
+  api.fold = () => {
+    const b = shown(api.tree, n => n.type === 'button' && n.props && n.props['aria-expanded'] !== undefined);
+    assert.equal(b.length, 1, 'expected one collapsing header, found ' + b.length);
+    b[0].props.onClick();
+    return api.redraw();
+  };
+  api.isOpen = () => {
+    const b = shown(api.tree, n => n.type === 'button' && n.props && n.props['aria-expanded'] !== undefined);
+    return b.length === 1 ? !!b[0].props['aria-expanded'] : null;
   };
   api.click = async (label) => {
     const b = shownButton(api.tree, label);
@@ -442,6 +456,127 @@ function settings({ seed = {}, keyed = true } = {}) {
   };
   return api;
 }
+
+// ══════════════ THE FOLD THE CODE NOW LIVES BEHIND ════════════════════════════════════════════════════════
+// Owner, 2026-09-12: the square "is open, and stays open", so it went inside MyChildrenCard's collapse. That
+// put a one-tap way to UNMOUNT the arrival on the card itself, and the first cut of it did exactly that.
+// ⚠ THESE RUN ON `unmounts: true`. The default harness keeps a component's state after it leaves the tree,
+// so all three below pass over the bug they are named after.
+
+test('PUTTING THE CODE AWAY AND GETTING IT BACK DOES NOT LOSE THE ARRIVAL', async () => {
+  const t = today({ seed: READY, unmounts: true });
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no code was drawn at all');
+  t.fold();
+  assert.equal(t.isOpen(), false, 're-anchor: the card did not actually close');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+    'THE CODE IS STILL ON SCREEN WITH THE CARD SHUT — the fold is what the owner asked to put it away');
+  t.fold();
+  assert.equal(t.isOpen(), true, 're-anchor: the card did not re-open');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'THE CODE DID NOT COME BACK. The arrival is written, the worker can see it, and this parent is now ' +
+    'looking at an untouched "We’re here" button. Screen read: ' + reads(t.tree));
+  assert.equal(shownButton(t.tree, 'We’re here').length, 0,
+    'A SECOND "WE’RE HERE" IS OFFERED OVER AN ARRIVAL THAT LANDED');
+  assert.deepEqual(t.arriveCalls, [{ session: 'svc-am' }], 'the re-open published a second arrival');
+});
+
+test('…so a landed arrival can never be re-reported as refused', async () => {
+  // THE HARM, NOT THE MECHANISM. Fold, re-open, tap again on a relay that is now unreachable, and the card
+  // told a parent "that was turned away, take them to the desk" about an arrival ALREADY ON THE WORKER'S
+  // SCREEN. That is device finding F1's harm — see the `unsure` branch — coming back through the fold.
+  const t = today({ seed: READY, unmounts: true });
+  await t.click('We’re here');
+  t.fold(); t.fold();
+  const c = reads(t.tree);
+  assert.ok(!/desk/i.test(c), 'A LANDED ARRIVAL IS WORDED AS A FAILURE AFTER A FOLD. Screen read: ' + c);
+  assert.match(c, /Show this to the children’s worker/i, 'the re-opened card no longer says what the square is for');
+});
+
+test('a REFUSAL also survives the fold, so it is not silently forgotten', async () => {
+  // The same rule the other way: folding must not launder a refusal into a clean button either.
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' }, unmounts: true });
+  await t.click('We’re here');
+  t.fold(); t.fold();
+  assert.match(reads(t.tree), /desk/i, 'the refusal was forgotten by the fold — the parent is told nothing went wrong');
+});
+
+const IN_A_ROOM = (names) => ({ children: names.map((n, i) => ({ id: 'r' + i, childName: n, code: '400' + i, out: 0 })), askAtDesk: 0, settled: true });
+
+test('OUT OF WINDOW, A CARD THAT IS THERE FOR THE PICKUP CODES OFFERS NO ARRIVAL BUTTON', () => {
+  // ⚠ THE STATE NO OTHER TEST OCCUPIES, and audit of 23f7200 confirmed the gate was untested because of it:
+  // every "there is no card" test above passes NO children, so MyChildrenCard's own `offers` check returns
+  // null first and WereHereSection's `if (!offers) return null` is never the thing being exercised. Here the
+  // card IS on screen for another reason — a child is in a room and the parent is reading the pickup code —
+  // and the question is whether the arrival button inside it knows the window has closed. A button offered
+  // here writes an arrival for a session the relay will refuse, an hour after anyone could act on it.
+  const t = today({ seed: READY, now: WIN.until + 3600, myChildren: IN_A_ROOM(['Milo']) });
+  const c = reads(t.tree);
+  assert.match(c, /Your children at church/, 're-anchor: the card is not on screen, so the absence below is vacuous');
+  assert.match(c, /4000/, 're-anchor: the pickup code is not on screen either');
+  assert.equal(shownButton(t.tree, 'We’re here').length, 0,
+    'AN ARRIVAL BUTTON IS OFFERED AN HOUR AFTER THE WINDOW CLOSED. Read: ' + c);
+  assert.ok(!/Bringing/.test(c), 'the card still asks about bringing children in, out of window. Read: ' + c);
+  // ⚠ TWO GUARDS HOLD THIS UP, AND SABOTAGING EITHER ONE ALONE LEAVES THIS TEST GREEN. Written down because
+  // the house rule is that a sabotage row which does not bite means the test is blind, the sabotage never
+  // applied, or ANOTHER GUARD ANSWERED FIRST — and this is the third, which is the one that looks like the
+  // first. Measured:
+  //   · WereHereSection's own `if (!offers) return null` removed  -> still green (the card's layer holds)
+  //   · the card's `stillToBring` no longer derived from `offers` -> still green (the section's gate holds)
+  //   · BOTH removed                                              -> THIS TEST FAILS
+  // So the property is real and guarded twice over. Do not "simplify" one of them away on the strength of a
+  // green run after deleting the other.
+});
+
+// ══════════════ AND IT STOPS ASKING ONCE THEY ARE IN A ROOM ═══════════════════════════════════════════════
+
+test('SHUT, IT DOES NOT ASK A PARENT TO CHECK IN CHILDREN WHO ARE ALREADY IN A ROOM', () => {
+  // "Your children at church · 2" and, directly under it, "Open this to check Milo and Ivy in" — with both
+  // pickup codes behind the fold. One line contradicting the next. Found by audit of 23f7200.
+  const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo', 'Ivy']) });
+  t.fold();
+  const c = reads(t.tree);
+  assert.equal(t.isOpen(), false, 're-anchor: the card did not close, so this is not reading the shut header');
+  assert.ok(!/Open this to check/i.test(c),
+    'THE SHUT HEADER ASKS A PARENT TO CHECK IN CHILDREN IT IS COUNTING AS ALREADY THERE. Read: ' + c);
+  assert.match(c, /Your children at church/, 're-anchor: the card rendered nothing at all');
+});
+
+test('…and the arrival button goes with them, because there is nothing left to announce', () => {
+  const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo', 'Ivy']) });
+  const c = reads(t.tree);
+  assert.equal(shownButton(t.tree, 'We’re here').length, 0,
+    'A PARENT WITH BOTH CHILDREN IN A ROOM IS STILL BEING OFFERED "WE’RE HERE", over the two pickup codes ' +
+    'this same card is showing them. Read: ' + c);
+  assert.match(c, /400/, 're-anchor: the pickup codes are not on screen, so the absence above is vacuous');
+});
+
+test('ONE CHILD IN, ONE NOT: the other is still offered, and BY NAME', () => {
+  // The load-bearing half. Suppressing a child who is NOT in a room is a parent at a door who cannot say
+  // they are there — worse than the offer this replaces — so only an exact name match suppresses.
+  const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo']) });
+  const c = reads(t.tree);
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1, 'the second child could not be announced at all');
+  assert.match(c, /Bringing Ivy in\?/, 'the card does not name the child still to bring. Read: ' + c);
+  assert.ok(!/Bringing Milo and Ivy in\?/.test(c), 'a child already in a room is still being offered');
+});
+
+test('a name the worker recorded differently is NOT suppressed — the safe direction', () => {
+  // Rows written by a worker's own phone carry no child name at all (a known gap), and a typed name may not
+  // match what the parent typed. Either way the child stays offered: the worst case is the offer that was
+  // always made, where the opposite would be a door a parent cannot get through.
+  const t = today({ seed: READY, myChildren: { children: [{ id: 'r0', childName: '', code: '1162', out: 0 }], askAtDesk: 0, settled: true } });
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+    'A CHILD WAS SUPPRESSED BY A ROW THAT NAMES NOBODY. A parent at a door cannot say they are there.');
+  assert.match(reads(t.tree), /Bringing Milo and Ivy in\?/, 'both children should still be offered');
+});
+
+test('a child already COLLECTED does not suppress the offer either', () => {
+  // `out` is set by a release. A family that came back for the second service must be able to announce again.
+  const t = today({ seed: READY, myChildren: { children: [{ id: 'r0', childName: 'Milo', code: '1162', out: 1757000000 }], askAtDesk: 0, settled: true } });
+  assert.match(reads(t.tree), /Bringing Milo and Ivy in\?/,
+    'a child who has been collected was treated as still in a room, so they could not be brought back');
+});
 
 // ── AND THE ROW IN SETTINGS THAT REACHES THAT SHEET ──────────────────────────────────────────────────────
 // The sheet above is unreachable unless there is a row that opens it, and until 2026-09-12 NOTHING drove

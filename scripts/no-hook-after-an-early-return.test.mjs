@@ -19,7 +19,12 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { stripComments } from './test-slice.mjs';
 
-const HOOK = /\b(?:React\.)?(?:useState|useEffect|useRef|useMemo|useCallback|useLayoutEffect)\s*\(|\buseStew\w*\s*\(|\buseId\w*\s*\(|\buseIx\w*\s*\(/;
+// ⚠ THE `\w*` AFTER THE BASE NAMES IS NOT COSMETIC. Screens alias these at the top of the file —
+// app/screens-today.jsx:2 is `const { useState: useStateT, useEffect: useEffectT } = React;` — and without
+// it the pattern matches `useState` and then wants `\s*\(` where the `T` stands, so EVERY hook in that file
+// is invisible to this guard. Audit of 23f7200: a `useStateT` placed after an early return was not caught.
+// The `useStew*` / `useId*` / `useIx*` alternatives below are the same problem, found one file at a time.
+const HOOK = /\b(?:React\.)?(?:useState|useEffect|useRef|useMemo|useCallback|useLayoutEffect)\w*\s*\(|\buseStew\w*\s*\(|\buseId\w*\s*\(|\buseIx\w*\s*\(/;
 const EARLY_RETURN = /^\s*if\s*\([^)]*\)\s*return\s+null;\s*$/;
 
 function componentsIn(file) {
@@ -39,8 +44,13 @@ function componentsIn(file) {
   return out;
 }
 
+// ⚠ app/screens-today.jsx WAS MISSING FROM THIS LIST while two of its components carried a comment naming
+// this test as their guard (audit of 23f7200). MyChildrenCard and WereHereSection both hold hooks above an
+// early `return null`, and that card is on the Today screen of every member of every church — a hook below
+// the return throws the moment a service comes into window, i.e. at a door on a Sunday morning.
 const FILES = ['app/stew-dashboard.jsx', 'app/identity.jsx', 'app/identity-extras.jsx',
-               'app/stew-meals.jsx', 'app/stew-finance.jsx', 'app/screens-chat.jsx'];
+               'app/stew-meals.jsx', 'app/stew-finance.jsx', 'app/screens-chat.jsx',
+               'app/screens-today.jsx'];
 
 test('no component calls a hook after an early return', () => {
   const bad = [];

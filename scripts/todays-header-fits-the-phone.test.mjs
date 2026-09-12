@@ -281,7 +281,10 @@ async function rects(i) {
       ellipsisW = Math.ceil(p.getBoundingClientRect().width); p.remove(); }
     return JSON.stringify({ vw: document.documentElement.clientWidth,
       row: box(ROW), col: box(COL), church: box(CHURCH), controls: box(CONTROLS), streak: box(el(${P.streakTid})),
-      name: NAME ? { w: Math.round(NAME.getBoundingClientRect().width), full: Math.ceil(NAME.scrollWidth), ellipsisW } : null,
+      name: NAME ? { w: Math.round(NAME.getBoundingClientRect().width), full: Math.ceil(NAME.scrollWidth), ellipsisW,
+        // the property the mid-word check stands down on, and one line of this name in its own font
+        whiteSpace: getComputedStyle(NAME).whiteSpace,
+        oneLineH: Math.ceil(parseFloat(getComputedStyle(NAME).lineHeight) || NAME.getBoundingClientRect().height) } : null,
       date: { ...box(DATE), words: words(DATE) }, greet: { ...box(GREET), words: words(GREET) },
       buttons: [...document.querySelectorAll('[data-tid="${P.controlsTid}"] > button')]
         .map(e => { const b = e.getBoundingClientRect(); return { label: e.getAttribute('aria-label') || e.getAttribute('title') || '',
@@ -361,9 +364,12 @@ for (const [i, c] of CASES.entries()) {
     //    ⚠ THIS USED TO MEASURE THE DATE AND THE GREETING. Both came off the header on 2026-09-12 (owner:
     //    the phone's own status bar already shows the date an inch above, and "Good morning" is two lines
     //    saying nothing a member did not know), so the two lines that produced "Wedne / sday 30 / Septem /
-    //    ber" and "Good / mornin / g" no longer exist to break. The MECHANISM that broke them did not go
-    //    anywhere — `overflow-wrap: anywhere` on this column inherits into whatever text is in it — so the
-    //    check follows the text that is left rather than being deleted with the lines that are gone.
+    //    ber" and "Good / mornin / g" no longer exist to break.
+    //    ⚠ AN EARLIER VERSION OF THIS COMMENT SAID "the MECHANISM that broke them did not go anywhere —
+    //    `overflow-wrap: anywhere` on this column". THAT IS FALSE and was caught in audit: grep the file,
+    //    that property is gone; what is left in the header is the past-tense prose explaining that it was
+    //    REMOVED and replaced by the flex floor. Writing a coverage decision on a mechanism that no longer
+    //    exists is rule 4, so it is corrected here rather than quietly dropped.
     //    A range over one word reports one client rect per line it is drawn on, so a count above 1 IS the
     //    break; no source text is involved.
     assert.ok(m.date.words.length === 0 && m.greet.words.length === 0,
@@ -376,6 +382,17 @@ for (const [i, c] of CASES.entries()) {
     //    drawn on a single line). A check that fires on the clip rather than on a break is a blind check.
     //    What is left of the name IS guarded, by the two assertions below: it must stay wider than a lone
     //    "…", and its pill must not be drawn across the controls.
+    //    THE ONE THING HOLDING THAT UP IS `white-space: nowrap` ON THE NAME, AND IT IS TESTED HERE.
+    //    Audit of 23f7200: deleting that one property left this file 21/21 green while the pill grew from
+    //    76px to 84px at 320px, because the name wrapped to two lines inside it — every geometry bound in
+    //    this file was slack enough to let it through. The computed property is asserted directly because
+    //    it IS the mechanism the check above stands down for; the measured height below is the consequence.
+    assert.equal(m.name && m.name.whiteSpace, 'nowrap',
+      `THE CHURCH NAME CAN WRAP at ${m.vw}px (white-space: ${m.name && m.name.whiteSpace}). It is the only ` +
+      `text left in this column and the mid-word check above stands down on the promise that it cannot.`);
+    assert.ok(m.church.h > 0 && m.church.h <= m.name.oneLineH + 14,
+      `the church pill is ${m.church.h}px tall at ${m.vw}px, more than one line of its own name ` +
+      `(${m.name.oneLineH}px) plus its padding — the name has wrapped inside it`);
     assert.ok(m.church.w > 0 && m.col.w > 0,
       `the church pill or its column measured zero at ${m.vw}px — nothing below is measuring anything`);
     assert.ok(m.church.right <= m.col.right + 1,
