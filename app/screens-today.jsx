@@ -1461,7 +1461,23 @@ function MyChildrenCard({ ctx }) {
   // they are there, which is worse, and needs an identical name to happen. Rows written by a worker's own
   // phone carry no child name at all (a known gap), so they simply do not match, and fall the safe way.
   // `mine.children` is already time-boxed to MYKIDS_WINDOW around now, so last Sunday cannot suppress this one.
-  const inARoom = new Set(kids.filter(k => k && !k.out).map(k => String(k.childName || '').trim().toLowerCase()).filter(Boolean));
+  // ⚠ SCOPED TO THE SESSION IN WINDOW, and the first version was not. `myChildren` spans MYKIDS_WINDOW
+  // (26h, chosen to cover a morning and an afternoon off one session), so an unscoped filter counted the
+  // NINE O'CLOCK check-in at the ELEVEN O'CLOCK door: measured, 0 arrival buttons at the second service,
+  // with the shut-header line gone too, so nothing on screen said check-in was live at all. That is the
+  // "parent at a door who cannot say they are there" direction, which DOMAIN.md forbids outright ("do not
+  // block"). `landed` three lines below is session-pinned for exactly this reason; this now matches it.
+  //
+  // ⚠ A ROW WITH NO SESSION NEVER SUPPRESSES. Unknown is not "present". `checkinSessionOf` returns '' when
+  // the tag is absent, and `_encCleartextTags` deliberately publishes a sessionless record when a church
+  // has more than one service today and the worker picked none.
+  //
+  // ⚠ LATENT TRAP, recorded because this fix now DEPENDS on it: service documents project only
+  // {id,date,time,name}, so the envelope's `svc.session || svc.id` is always `svc.id`, and
+  // `arrivalSessionNow` returns `String(s.id)`. The two id spaces agree TODAY. The day a service gains a
+  // `session` field they diverge silently — and the symptom is this exact defect coming back.
+  const sid = (offers && offers.now && offers.now.session) || '';
+  const inARoom = new Set(kids.filter(k => k && !k.out && k.session && k.session === sid).map(k => String(k.childName || '').trim().toLowerCase()).filter(Boolean));
   const stillToBring = offers ? offers.names.filter(n => !inARoom.has(String(n || '').trim().toLowerCase())) : [];
   // NOTHING TO SAY, SO NOTHING IS SAID. Not "no children checked in" — see the dead-end note above. This is
   // also the state of every member of the congregation who has nothing to do with check-in, which is most of
@@ -1505,7 +1521,13 @@ function MyChildrenCard({ ctx }) {
           in yet, and the arrival button is what they came for. Once the children are in, the rows below it
           are what they come back to — and by then this section has gone (the arrival window closes) or is
           showing the square the worker asked for. */}
-      {open ? <WereHereSection ctx={ctx} stillToBring={stillToBring} arr={arr} setArr={setArr} /> : null}
+      {/* ⚠ `stillToBring` IS NOT PASSED DOWN, AND THAT IS THE FIX. It was, and an empty list then emptied the
+          door control itself — the section returned null and a parent had nothing to tap. The filter exists
+          for ONE thing: the shut header must not say "check them in" over their own pickup codes. That is a
+          WORDING problem, and it must never be traded against a safety one. The section always offers every
+          child this phone knows, so its heading, its aria-label and the square's payload agree by
+          construction rather than by three rules that can drift apart. */}
+      {open ? <WereHereSection ctx={ctx} arr={arr} setArr={setArr} /> : null}
       {open ? kids.map(k => (
         <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 15px', borderTop: '1px solid var(--line)' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1564,7 +1586,7 @@ function MyChildrenCard({ ctx }) {
 // still refuses an arrival when that session has no envelope, which the card reports in words. That is the
 // honest fallback rather than a button that pretends.
 const WEREHERE_WINDOW_TICK = 60000;   // re-ask "are we in window" once a minute; a service starts while the app is open
-function WereHereSection({ ctx, stillToBring, arr, setArr }) {
+function WereHereSection({ ctx, arr, setArr }) {
   // ⚠ EVERY HOOK ABOVE THE `return null`, and they must stay there: this section renders nothing for most of
   // the congregation on most days, so a hook below the early return would run on some draws and not others
   // and React would throw the moment a service came into window. scripts/no-hook-after-an-early-return.
@@ -1591,10 +1613,7 @@ function WereHereSection({ ctx, stillToBring, arr, setArr }) {
   // computes it (see `stillToBring` there) because it needs the same answer for its shut header, and one
   // predicate with two callers is why `wereHereOffers` exists at all. Falls back to the full list rather
   // than to nothing: a missing prop must never be able to empty a door control.
-  const names = (Array.isArray(stillToBring) ? stillToBring : offers.names);
-  // EVERY CHILD IS ALREADY IN A ROOM, SO THERE IS NOTHING TO SAY. Their pickup codes are the rows directly
-  // below this, which is the thing a parent actually wants at that point.
-  if (!names.length) return null;
+  const names = offers.names;
   const now = offers.now;
   const landed = res && res.ok && arrivedFor === now.session;
   // "WE COULD NOT CONFIRM" IS NOT "THAT DID NOT SEND", and the difference is the whole of device finding F1

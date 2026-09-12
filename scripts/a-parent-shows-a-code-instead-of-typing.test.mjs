@@ -501,7 +501,10 @@ test('a REFUSAL also survives the fold, so it is not silently forgotten', async 
   assert.match(reads(t.tree), /desk/i, 'the refusal was forgotten by the fold — the parent is told nothing went wrong');
 });
 
-const IN_A_ROOM = (names) => ({ children: names.map((n, i) => ({ id: 'r' + i, childName: n, code: '400' + i, out: 0 })), askAtDesk: 0, settled: true });
+// ⚠ THE ROWS CARRY A SESSION, and they did not before. Suppression is scoped to the service in window, so a
+// sessionless row never suppresses — which is correct behaviour and which silently made three tests here
+// assert nothing. `SERVICE.id` is the session these children are checked into.
+const IN_A_ROOM = (names, session) => ({ children: names.map((n, i) => ({ id: 'r' + i, childName: n, code: '400' + i, out: 0, session: session || SERVICE.id })), askAtDesk: 0, settled: true });
 
 test('OUT OF WINDOW, A CARD THAT IS THERE FOR THE PICKUP CODES OFFERS NO ARRIVAL BUTTON', () => {
   // ⚠ THE STATE NO OTHER TEST OCCUPIES, and audit of 23f7200 confirmed the gate was untested because of it:
@@ -542,23 +545,73 @@ test('SHUT, IT DOES NOT ASK A PARENT TO CHECK IN CHILDREN WHO ARE ALREADY IN A R
   assert.match(c, /Your children at church/, 're-anchor: the card rendered nothing at all');
 });
 
-test('…and the arrival button goes with them, because there is nothing left to announce', () => {
+test('…BUT THE ARRIVAL BUTTON STAYS. Suppression may never empty a door control', () => {
+  // ⚠ THIS TEST ASSERTED THE OPPOSITE UNTIL 2026-09-12, AND THE OPPOSITE WAS THE DEFECT. It required the
+  // button to disappear once every child was accounted for — which, with the unscoped filter, also removed
+  // it at the SECOND service of the day, leaving a parent at a door with nothing to tap and nothing on
+  // screen saying check-in was live. DOMAIN.md: "do not block."
+  // The contradiction the filter was added for (a shut header saying "check them in" over their own pickup
+  // codes) is a WORDING problem and is fixed in the header alone. The two must never be traded.
   const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo', 'Ivy']) });
   const c = reads(t.tree);
-  assert.equal(shownButton(t.tree, 'We’re here').length, 0,
-    'A PARENT WITH BOTH CHILDREN IN A ROOM IS STILL BEING OFFERED "WE’RE HERE", over the two pickup codes ' +
-    'this same card is showing them. Read: ' + c);
-  assert.match(c, /400/, 're-anchor: the pickup codes are not on screen, so the absence above is vacuous');
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+    'THE DOOR CONTROL WAS REMOVED because the phone believed every child was already in a room. A parent ' +
+    'who needs to announce again — a child collected and brought back, a record this phone cannot read — ' +
+    'has nothing to tap. Read: ' + c);
+  assert.match(c, /Bringing Milo and Zoë in\?|Bringing Milo and Ivy in\?/,
+    'the heading no longer names the family, so it disagrees with the square, which carries them all');
+  assert.match(c, /400/, 're-anchor: the pickup codes are not on screen, so this is not the state it claims');
 });
 
-test('ONE CHILD IN, ONE NOT: the other is still offered, and BY NAME', () => {
-  // The load-bearing half. Suppressing a child who is NOT in a room is a parent at a door who cannot say
-  // they are there — worse than the offer this replaces — so only an exact name match suppresses.
+test('THE SECOND SERVICE OF THE DAY — the one that was broken', () => {
+  // THE CRITICAL DEFECT, audit C F1. Two children checked in at the MORNING service; it is now inside the
+  // LATE service's window. Measured before the fix: 0 arrival buttons, and the shut-header line gone too,
+  // so NOTHING on the screen said check-in was live. `myChildren` spans 26h by design, so the morning
+  // record is still live in the evening — this is the ordinary Sunday, not an edge case.
+  const at11 = Math.floor(new Date(2026, 8, 13, 11, 30, 0, 0).getTime() / 1000);
+  const t = today({ seed: READY, now: at11, services: [SERVICE, LATE], myChildren: IN_A_ROOM(['Milo', 'Ivy']) });
+  const c = reads(t.tree);
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+    'A PARENT AT THE SECOND SERVICE CANNOT SAY THEY ARE THERE. Their children were checked in this ' +
+    'morning, at a different service, and that record removed the button. Read: ' + c);
+  assert.match(c, /Bringing Milo and Ivy in\?/, 'the card does not name the children it is offering to bring in');
+  // ⚠ AND THE SHUT HEADER TOO, WHICH IS WHAT ACTUALLY GUARDS THE SESSION SCOPE. Measured: reverting the
+  // scope alone leaves the assertions above GREEN, because keeping the filter out of the section protects
+  // the button whatever the filter says. Two independent halves, and without this line only one of them is
+  // held in place. Same lesson as the two-guard note in the out-of-window test below.
+  t.fold();
+  assert.match(reads(t.tree), /Open this to check Milo and Ivy in/,
+    'THE SHUT HEADER TREATS THIS MORNING\'S CHECK-IN AS COVERING THE ELEVEN O\'CLOCK SERVICE, so the only ' +
+    'line on a folded card that says check-in is live has gone. Read: ' + reads(t.tree));
+});
+
+test('…and a record with NO session never suppresses, because unknown is not "present"', () => {
+  // `checkinSessionOf` returns '' when the tag is absent, and the console deliberately publishes a
+  // sessionless record when a church has more than one service today and the worker picked none.
+  const t = today({ seed: READY, myChildren: { children: [{ id: 'r0', childName: 'Milo', code: '1162', out: 0, session: '' }], askAtDesk: 0, settled: true } });
+  t.fold();
+  assert.match(reads(t.tree), /Open this to check Milo and Ivy in/,
+    'A SESSIONLESS RECORD SUPPRESSED A CHILD. Nothing established that child is in a room today.');
+});
+
+test('ONE CHILD IN, ONE NOT: the SHUT HEADER names only the one still to bring', () => {
+  // ⚠ THE SUBSET NAMING MOVED. Until 2026-09-12 the open card's heading also named only the child still to
+  // bring ("Bringing Ivy in?"). That required the section to hold the filtered list — and an EMPTY filtered
+  // list then emptied the door control itself. The filter now acts in the one place it was added for: the
+  // shut header, which must not say "check them in" over their own pickup codes.
+  // The open heading names the whole family, which is what the square carries and what the worker sees.
   const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo']) });
+  t.fold();
+  assert.match(reads(t.tree), /Open this to check Ivy in/,
+    'the SHUT header does not name the child still to bring. Read: ' + reads(t.tree));
+  assert.ok(!/Open this to check Milo and Ivy in/.test(reads(t.tree)),
+    'the shut header offers to check in a child it is counting as already there — the contradiction the ' +
+    'filter exists to remove');
+  t.fold();
   const c = reads(t.tree);
   assert.equal(shownButton(t.tree, 'We’re here').length, 1, 'the second child could not be announced at all');
-  assert.match(c, /Bringing Ivy in\?/, 'the card does not name the child still to bring. Read: ' + c);
-  assert.ok(!/Bringing Milo and Ivy in\?/.test(c), 'a child already in a room is still being offered');
+  assert.match(c, /Bringing Milo and Ivy in\?/,
+    'the OPEN heading should name the whole family — it must agree with the square, which carries them all');
 });
 
 test('a name the worker recorded differently is NOT suppressed — the safe direction', () => {
