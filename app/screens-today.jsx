@@ -1474,6 +1474,167 @@ function MyChildrenCard({ ctx }) {
   );
 }
 
+// ════════ "WE'RE HERE" — THE PARENT'S HALF OF THE NO-TYPING DESIGN ═════════════════════════════════════
+// §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md, the accepted design. Two taps at a door: say you
+// are here, then hold up the square. The square carries `{ v:1, g:<your pubkey>, c:[names] }` — NO KEY
+// MATERIAL AND NO SECRET — and the worker's phone matches `g` against the SIGNED arrivals for her own
+// session, so the name she confirms the pairing against is rendered from that signature and never from this
+// QR. That is the one rule that makes a photographed or forged square safe, and it lives on HER screen.
+//
+// ── IT IS NEVER REQUIRED, AND THAT IS DOMAIN.md, NOT A HEDGE ─────────────────────────────────────────────
+// "Do not block." A family with no app, a flat battery, a grandparent, a refused arrival, a phone with no
+// camera at the other end — every one of those still reaches a worker who types a name, exactly as she did
+// yesterday. Nothing on this card is a gate on a child getting into a room.
+//
+// ── WHY IT IS ABSENT FOR ALMOST EVERYBODY, ALMOST ALWAYS ─────────────────────────────────────────────────
+// THREE conditions, all of them: the member ticked "I bring children to church" on their own phone, they
+// typed at least one name, and `now` is inside the window of one of their church's own services. On six days
+// out of seven, and for most of a congregation on the seventh, this renders NOTHING — the "no dead ends"
+// finding from the parent persona of 2026-09-10, which established that the ABSENCE of check-in for people
+// with nothing to do with it is correct.
+//
+// ⚠ WHAT IS DELIBERATELY NOT HERE: the steward's "children's work runs at this service" tick. It would
+// decide WHEN this card appears, and it needs a console service editor that DOES NOT EXIST (services can be
+// created and deleted, not edited). Without it the card shows for any service in window — and the relay
+// still refuses an arrival when that session has no envelope, which the card reports in words. That is the
+// honest fallback rather than a button that pretends.
+const WEREHERE_WINDOW_TICK = 60000;   // re-ask "are we in window" once a minute; a service starts while the app is open
+function WereHereCard({ ctx }) {
+  // ⚠ EVERY HOOK ABOVE THE FIRST `return null`, and they must stay there: this card renders nothing for most
+  // of the congregation on most days, so a hook below the early return would run on some draws and not
+  // others and React would throw the moment a service came into window. Same note as MyChildrenCard.
+  const [tick, setTick] = useStateT(0);
+  const [busy, setBusy] = useStateT(false);
+  const [res, setRes] = useStateT(null);        // { ok, reason } from ctx.checkinArrive, or null before the tap
+  const [arrivedFor, setArrivedFor] = useStateT('');   // the session the arrival above was written for
+  const F = window.Fellowship;
+  const np = (ctx && ctx.church && ctx.church.npub) || '';
+  const brings = !!(F && F.bringsChildren && np && F.bringsChildren(np));
+  const names = (brings && F && F.myChildNames) ? F.myChildNames(np) : [];
+  // TWO REASONS TO LOOK AGAIN, AND ONLY ONE OF THEM COSTS ANYTHING.
+  //
+  // The LISTENER is always armed and is free: the settings sheet and this card are two React trees over one
+  // localStorage, so without it a member could tick the box and find the card still absent until the next
+  // cold start — the silent-blank shape this codebase keeps paying for.
+  //
+  // ⚠ THE TIMER IS ARMED ONLY FOR A MEMBER WHO ACTUALLY BRINGS CHILDREN, and that condition is the whole
+  // point of it being here rather than in the line above. This component is mounted on Today for EVERY
+  // member of every church — it returns null for almost all of them — so an unconditional interval is a
+  // sixty-second wakeup, for ever, on the phone of everybody who has nothing to do with children's work.
+  // That is a battery cost for the audience this product is built for, and it also hangs `node --test`:
+  // miniReact runs no cleanups, so one live interval keeps the event loop alive and every existing test
+  // that renders TodayScreen never exits. Both problems have the same fix and it is the correct behaviour.
+  //
+  // What the timer buys for the parent who does opt in: a service coming INTO window while the app is
+  // already open. Without it they would have to close and reopen the app at the door.
+  useEffectT(() => {
+    const h = () => setTick(n => n + 1);
+    window.addEventListener('trinity-mykids', h);
+    const t = (brings && names.length) ? setInterval(h, WEREHERE_WINDOW_TICK) : 0;
+    return () => { window.removeEventListener('trinity-mykids', h); if (t) clearInterval(t); };
+  }, [brings, names.length]);
+  // THE SAME ARITHMETIC THE CONSOLE MINTS THE KEY WITH AND THE RELAY ADMITS ON — imported, not re-derived.
+  // A session id IS a service id, and every member is already served every service, so this is computed on
+  // this phone from documents it already holds. Nothing is published to make the button appear.
+  const now = (ctx && ctx.churchServices) ? arrivalNow(F, ctx.churchServices) : null;
+  if (!brings || !names.length || !now) return null;
+  const landed = res && res.ok && arrivedFor === now.session;
+  // "WE COULD NOT CONFIRM" IS NOT "THAT DID NOT SEND", and the difference is the whole of device finding F1
+  // (reference/DEVICE-VERIFICATION-two-phone-2026-09-11.md): writeArrival reported {ok:false} TWICE on writes
+  // that had SUCCEEDED, because _publishAny throws when nobody answers as well as when a relay refuses. So
+  // `unconfirmed` keeps the square on screen and says it may well have arrived. Sending a parent to the desk
+  // to report a failure that did not happen is its own harm.
+  const unsure = res && !res.ok && res.reason === 'unconfirmed' && arrivedFor === now.session;
+  // DRAWN ONLY ONCE THERE IS SOMETHING FOR IT TO MATCH. The worker's phone looks this code up among the live
+  // arrivals for her session, so a square shown BEFORE the arrival is written is one she can only ever report
+  // as unknown — and rendering the QR every draw is a few hundred modules of work for a picture nobody is
+  // looking at. Both reasons point the same way: build it when it is wanted.
+  const qr = (landed || unsure) && F && F.arrivalQR ? F.arrivalQR(np) : '';
+  // ⚠ GUARDED, AND NOT BECAUSE IT CAN OVERFLOW TODAY. qrcode-generator throws when a payload will not fit
+  // any symbol version, measured at about 2331 bytes at this error-correction level; twelve names of forty
+  // characters caps this payload at roughly 1118 even at four bytes a character, so it cannot reach that
+  // now. The try/catch makes the safety independent of those two caps rather than conditional on them —
+  // the app root is the only error boundary above Today, so a throw here blanks the whole screen, and a cap
+  // somebody widens later must not be able to do that. No square is already a state this card words.
+  let svg = '';
+  try { svg = (qr && window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(qr) : ''; }
+  catch (e) { svg = ''; }
+  const say = async () => {
+    if (busy) return;
+    setBusy(true); setRes(null);
+    let r;
+    // A BUTTON THAT DOES NOTHING AND SAYS NOTHING IS THE WORST OF THE THREE THINGS THIS CARD CAN BE. An
+    // earlier version returned early when `ctx.checkinArrive` was missing, which on a shell that had not
+    // finished loading is a parent tapping at a door with no response at all — "fix the control, not the
+    // label", the other way round. A missing transport is a REFUSAL with a reason, worded like any other.
+    try { r = (ctx && ctx.checkinArrive) ? await ctx.checkinArrive({ session: now.session }) : { ok: false, reason: 'unavailable' }; }
+    catch (e) { r = { ok: false, reason: 'threw' }; }
+    setBusy(false); setArrivedFor(now.session); setRes(r || { ok: false, reason: 'unavailable' });
+  };
+  return (
+    <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden', marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px' }}>
+        <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="child" size={18} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1, color: 'var(--ink)' }}>Bringing {names.join(' and ')} in?</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.35 }}>Tell the children’s room you’re at the door.</div>
+        </div>
+      </div>
+      {!landed && !unsure ? (
+        <div style={{ borderTop: '1px solid var(--line)', padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 11 }}>
+          <button onClick={say} disabled={busy}
+            style={{ padding: '10px 18px', borderRadius: 12, border: 'none', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14 }}>
+            {busy ? 'Telling them…' : 'We’re here'}</button>
+          {/* …AND IT IS ABOUT THE ROOM IN FRONT OF THEM. `arrivedFor` pins every one of these three states to
+              the session they were answered for, so a refusal at nine o'clock is not still on screen over the
+              eleven o'clock button. A church with two services is the case that makes it visible.
+              ⚠ THE THIRD OUTCOME NAMES NO CAUSE IT HAS NOT MEASURED, and this sentence used to. It read
+              "Your church hasn't opened a children's room for this service", which is only ONE of at least
+              four things `refused` covers: _PUB_REFUSED matches /^(error|blocked|invalid|restricted|
+              rate-limited|auth-required)/, so a phone whose clock is more than ten minutes out fails NIP-42
+              and gets `auth-required`, an unauthenticated or PIN-locked socket gets `restricted`, and a
+              member the church has BLOCKED gets `blocked`. All three rendered as the church's fault.
+              That is the mistake scripts/a-refused-proof-does-not-accuse-the-clock-or-the-member.test.mjs
+              exists for, one document over: the relay's refusals are byte-identical from here, so the
+              MEASURED skew is the only honest discriminator the client has. Same rule, same shape — name
+              the clock when it is measured wrong, and otherwise name no cause and point at a person. */}
+          {res && !res.ok && arrivedFor === now.session ? (
+            <span style={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.35, color: 'var(--ink-2)' }}>
+              {res.reason !== 'refused'
+                ? 'That didn’t reach your church. Take them to the desk — they’ll be checked in there.'
+                : ctx && ctx.clockIsWrong
+                  ? 'This phone’s clock is about ' + (ctx.clockSkewMins || 'a few') + ' minutes ' + (ctx.clockSkewAhead ? 'ahead of' : 'behind') + ' your church’s, which is why that was turned away. Take them to the desk — they’ll be checked in there.'
+                  : 'That was turned away and we can’t tell why. Take them to the desk — they’ll be checked in there, and whoever runs the room can look into it afterwards.'}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {landed || unsure ? (
+        <div style={{ borderTop: '1px solid var(--line)', padding: '13px 15px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)', lineHeight: 1.4, textAlign: 'center' }}>
+            {unsure
+              ? 'We couldn’t confirm that reached your church — it may well have. Show this to the children’s worker; if she can’t see you, the desk will check them in.'
+              : 'Show this to the children’s worker.'}
+          </div>
+          {svg ? (
+            <div role="img" aria-label={'Check-in code for ' + names.join(' and ')}
+              style={{ width: 196, height: 196, background: '#fff', borderRadius: 14, padding: 9, boxSizing: 'border-box' }}
+              dangerouslySetInnerHTML={{ __html: svg }} />
+          ) : null}
+          {/* NO SQUARE IS NOT A DEAD END. A phone with no QR renderer still has a parent standing at a door. */}
+          {!svg ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, textAlign: 'center' }}>This phone can’t draw the code. Give the worker their names and she’ll check them in.</div> : null}
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4, textAlign: 'center' }}>It carries their names and nothing else — no password, and nothing that opens anything.</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+// The engine's answer, asked through one helper so the card has one thing to stub in a test and one thing to
+// delete in a sabotage. Returns { session, name, from, until } or null.
+function arrivalNow(F, services) {
+  try { return (F && F.arrivalSessionNow) ? F.arrivalSessionNow(services) : null; } catch (e) { return null; }
+}
+
 function servingNewCount(ctx, seenTs) {
   const seen = Number(seenTs) || 0;
   if (!seen) return 0;   // no mark yet -> nothing is new. A member who joined a church with fifty events on
@@ -1697,6 +1858,11 @@ function TodayScreen({ ctx }) {
       {/* MY OWN CHILDREN AT TODAY'S SESSION, FIRST AMONG THE CARDS — a pickup code is needed at a door, now,
           and renders NOTHING for everybody else (see MyChildrenCard). */}
       <MyChildrenCard ctx={ctx} />
+
+      {/* …AND THE STEP BEFORE IT: "we're here", and the QR that saves the worker typing the names. Renders
+          NOTHING unless this member ticked the box, typed a name, and a service of their own church is in
+          window right now — see WereHereCard. §3b of PLAN-CHECKIN-NO-TYPING-2026-09-11. */}
+      <WereHereCard ctx={ctx} />
 
       {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}
       {beingCaredFor && !careBannerDismissed ? (

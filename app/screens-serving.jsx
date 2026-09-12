@@ -773,6 +773,13 @@ function KidsAddChild({ ctx, session, arrivals }) {
   // …AND THE PAIRING THE WORKER HAS BEEN ASKED TO CONFIRM, held separately so the confirmation can only ever
   // name what was on screen when she was asked.
   const [pending, setPending] = useSv(null);  // { childName, guardian, label } | null
+  // ── SCANNING THE PARENT'S CODE — §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md ───────────────────
+  const [scanning, setScanning] = useSv(false);
+  // QRScanner IS SINGLE-SHOT: its loop calls onResult once and stops rescheduling, relying on the caller to
+  // remount it. Same nonce idiom as the sign-in scanner in app/identity.jsx, and without it a second scan
+  // after a code that did not match would sit there doing nothing.
+  const [scanNonce, setScanNonce] = useSv(0);
+  const [scanned, setScanned] = useSv([]);    // the names off the last code that MATCHED a live arrival
   const pickedArrival = queue.find(a => a && a.pub === picked) || null;
   const write = async (childName, guardian) => {
     if (busy) return;
@@ -785,7 +792,17 @@ function KidsAddChild({ ctx, session, arrivals }) {
     if (res && res.ok) {
       // A MOMENT, then cleared for the next child, with a fresh code. The row itself appears from the relay.
       setMsg({ ok: true, text: childName + ' checked in. Pickup code ' + code.trim() + '.' });
-      setName(''); setCode(svNewCode()); setPicked('');
+      setCode(svNewCode());
+      // ONE CODE, TWO CHILDREN — §3b. When a scanned family has another child still to go in, the REST of the
+      // names stay on screen and THE FAMILY STAYS PICKED, so the second child is one tap and still carries the
+      // same signed arrival's guardian tag. Clearing `picked` here unconditionally (as this did before the
+      // scan existed, correctly, because there was nothing to carry) would have written Ivy with NO guardian
+      // link at all — silently, with the worker having done nothing wrong. Anything else clears exactly as it
+      // did yesterday, and the arrival is re-checked against the live queue so a family that has left cannot
+      // stay armed.
+      const rest = scanned.filter(n => n !== childName);
+      if (rest.length && guardian && queue.some(a => a && a.pub === guardian)) { setScanned(rest); setName(rest[0]); }
+      else { setScanned([]); setName(''); setPicked(''); }
     } else {
       // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
       setMsg({ ok: false, text: 'That did not save — see the desk. Nothing was written.' });
@@ -806,6 +823,48 @@ function KidsAddChild({ ctx, session, arrivals }) {
     if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalLabel(pickedArrival) }); return; }
     await write(nm, '');
   };
+  // ⚠ THE LOAD-BEARING RULE OF THE WHOLE NO-TYPING DESIGN, AND IT IS ENFORCED RIGHT HERE.
+  //
+  // The child's names come off the QR and are therefore UNAUTHENTICATED — exactly as the worker's typing is
+  // today, and no worse. What makes that safe is the other half: `picked` is set ONLY to the pubkey of a
+  // SIGNED ARRIVAL that is already in this session's queue, so the parent named in the confirmation below is
+  // rendered from `svArrivalLabel(pickedArrival)` — a document the relay admitted only from that pubkey's own
+  // address — and NEVER from the payload. parseArrivalQR discards every field but `g` and `c` for the same
+  // reason: a QR that carried a name could put a stranger's name on a pairing, and this one cannot.
+  //
+  // SO A PHOTOGRAPHED OR FORGED CODE BUYS NOTHING A PERSON STANDING AT THE DESK DID NOT ALREADY HAVE. It
+  // fills a name box. The worker still reads "Milo → Sarah Henderson?" off the signature and still answers
+  // it, and a code naming a family that is not in front of her shows her the mismatch in words.
+  //
+  // AND SCANNING WRITES NOTHING. This sets three pieces of screen state and stops; the existing confirmation
+  // and the existing ctx.checkinAdd are untouched below.
+  const onScan = (text) => {
+    setScanning(false);
+    setScanNonce(n => n + 1);
+    const F = window.Fellowship;
+    // DEFAULT-DENY, AND IT NEVER THROWS. The payload came off a camera; see parseArrivalQR in
+    // src/fellowship.src.js for what it refuses and why a throw here would blank the whole app.
+    const p = (F && F.parseArrivalQR) ? F.parseArrivalQR(text) : null;
+    if (!p) {
+      setScanned([]);
+      setMsg({ ok: false, text: 'That isn’t a check-in code. Type the child’s name instead.' });
+      return;
+    }
+    // …MATCHED AGAINST THIS SESSION'S ARRIVALS AND NO OTHER'S. `queue` is the arrivals for THIS session — the
+    // engine filters by session tag before it ever reaches this screen — so a code from the morning room
+    // simply is not in this list and falls through to the line below. The cross-session refusal is that, not
+    // a separate check that could be forgotten.
+    const hit = queue.find(a => a && a.pub === p.g);
+    if (!hit) {
+      // CLEAR ANY EARLIER PICK. A failed scan must not leave a stale pairing armed under a fresh name: that
+      // would be the "Milo → Sarah Henderson?" mitigation answering about the wrong family. Clearing can only
+      // ever REMOVE a guardian tag, never invent one, so it is the safe direction.
+      setScanned([]); setPicked(''); setPending(null);
+      setMsg({ ok: false, text: 'Nobody with that code has said they’re at this door. Type the child’s name instead.' });
+      return;
+    }
+    setPicked(hit.pub); setPending(null); setScanned(p.c); setName(p.c[0]); setMsg(null);
+  };
   return (
     <div style={{ borderTop: '1px solid var(--line)', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 8 }}>
       {/* THE ARRIVALS QUEUE — who has said they are at the door. A family is NOT dropped once one child is
@@ -814,7 +873,9 @@ function KidsAddChild({ ctx, session, arrivals }) {
       {queue.length ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {queue.map(a => (
-            <button key={a.pub} onClick={() => { setPicked(p => (p === a.pub ? '' : a.pub)); setPending(null); setMsg(null); }} aria-pressed={picked === a.pub}
+            // TAPPING A ROW BY HAND DROPS THE SCANNED NAMES. They belong to the code that picked the family
+            // this row may not be — leaving them up would offer one family's children under another's name.
+            <button key={a.pub} onClick={() => { setPicked(p => (p === a.pub ? '' : a.pub)); setPending(null); setMsg(null); setScanned([]); }} aria-pressed={picked === a.pub}
               style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 12, cursor: 'pointer',
                 border: '1px solid ' + (picked === a.pub ? 'var(--sage)' : 'var(--line)'), background: picked === a.pub ? 'color-mix(in oklab, var(--sage) 12%, var(--surface))' : 'var(--surface)' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -823,6 +884,36 @@ function KidsAddChild({ ctx, session, arrivals }) {
               </div>
               <span style={{ flexShrink: 0, fontSize: 12.5, fontWeight: 800, color: picked === a.pub ? 'var(--sage)' : 'var(--ink-3)' }}>{picked === a.pub ? 'Selected' : 'Check in'}</span>
             </button>
+          ))}
+        </div>
+      ) : null}
+      {/* SCAN THE PARENT'S CODE — §3b. It fills the name box and picks the family off the SIGNED arrival; it
+          writes nothing. QRScanner carries its own no-camera / camera-refused fallback (a paste box), and
+          `onManual` makes that a real way through rather than an apology — but the whole control is optional
+          anyway: the name box and "Check a child in" below it never move, and a child gets into the room with
+          no scan, no code and no app at the other end. DOMAIN.md, "do not block". */}
+      {scanning ? (
+        <React.Fragment>
+          <QRScanner key={scanNonce} onResult={onScan} onCancel={() => setScanning(false)}
+            prompt="Point at the parent’s code" onManual={onScan} manualPrompt="Paste the parent’s code" />
+          <button onClick={() => setScanning(false)}
+            style={{ alignSelf: 'flex-start', padding: '8px 14px', borderRadius: 11, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+            Type the name instead</button>
+        </React.Fragment>
+      ) : (
+        <button onClick={() => { setScanning(true); setMsg(null); }} disabled={busy}
+          style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 11, border: '1px solid var(--line)', cursor: busy ? 'default' : 'pointer', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>
+          <Icon name="qr" size={15} /> Scan the parent’s code</button>
+      )}
+      {/* TWO CHILDREN ON ONE CODE. The first is in the box already; the rest are one tap each, and each one
+          still goes through the named confirmation and a pickup code of its own. Nothing chains itself. */}
+      {scanned.length > 1 ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 700 }}>On this code:</span>
+          {scanned.map(n => (
+            <button key={n} onClick={() => { setName(n); setPending(null); setMsg(null); }}
+              style={{ padding: '6px 11px', borderRadius: 999, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5,
+                border: '1px solid ' + (name === n ? 'var(--sage)' : 'var(--line)'), background: name === n ? 'color-mix(in oklab, var(--sage) 12%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{n}</button>
           ))}
         </div>
       ) : null}

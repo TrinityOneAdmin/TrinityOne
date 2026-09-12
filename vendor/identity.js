@@ -12612,7 +12612,31 @@ zoo`.split("\n"));
       return { mnemonic, profile: deriveProfile(mnemonic) };
     },
     // render any string as a QR (SVG markup) — used for the steward invite
+    //
+    // ⚠ UTF-8, EXPLICITLY, AND THE DEFAULT DESTROYS NAMES. qrcode-generator's `stringToBytes` default is
+    // `charCodeAt(i) & 0xff` — ONE LOSSY BYTE PER UTF-16 CODE UNIT — while every decoder in this product, and
+    // every phone camera, reads byte mode as UTF-8. So without this line:
+    //
+    //     Milo -> 4d 69 6c 6f   "Milo"          (ASCII survives: UTF-8 and the default agree below U+0080)
+    //     Zoë  -> 5a 6f eb      "Zo<invalid>"   (U+0080-U+00FF encodes, then fails the decoder's UTF-8 pass)
+    //     安安  -> 89 89         garbage          (above U+00FF the character is GONE at ENCODE time)
+    //     Даша -> 14 30 48 30   "0H0"           (…and can look like plausible ASCII on the way out)
+    //
+    // Measured 2026-09-12 through the real encoder, a real bitmap and the shipped vendor/jsqr.js: Zoë, José,
+    // Müller, Ngô, Trần, مریم, علی and 安安 all decoded to the EMPTY STRING. It went unnoticed because the four
+    // callers before 2026-09-12 all pass npubs, hex and URLs, which are ASCII; the fifth — the children's
+    // check-in code in app/screens-today.jsx — is the first to put an arbitrary human NAME into a square, and
+    // reference/DOMAIN.md plus the persecuted-church-first positioning make non-ASCII the AUDIENCE, not an
+    // edge case. Round-tripped in scripts/a-childs-name-survives-the-square.test.mjs.
+    //
+    // Set per call rather than once at import: `qrcode` is a module-level singleton, so a stray `stringToBytes`
+    // assignment anywhere else in the bundle would silently take this back, and this is the only place in the
+    // member app that builds a QR.
     qrSVG(text) {
+      try {
+        import_qrcode_generator.default.stringToBytes = import_qrcode_generator.default.stringToBytesFuncs["UTF-8"];
+      } catch (e) {
+      }
       const qr = (0, import_qrcode_generator.default)(0, "M");
       qr.addData(String(text || ""));
       qr.make();

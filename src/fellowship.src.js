@@ -31,7 +31,8 @@ import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-r
 import { readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
          readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide,
          checkinGuardianPubs, checkinGuardianCopies,
-         readCheckinGuardianCopy, MAX_SESSION_SECONDS } from '../scripts/checkin-role-source.mjs';
+         readCheckinGuardianCopy, MAX_SESSION_SECONDS,
+         lifetimeWindow, DEFAULT_HELPER_LIFETIME } from '../scripts/checkin-role-source.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -2954,6 +2955,147 @@ if (typeof window !== 'undefined') {
   _obTimer = setTimeout(_obTick, 45000);
 }
 
+// ════════ THE PARENT'S OWN CHILDREN, KEPT ON THE PARENT'S OWN PHONE ═══════════════════════════════════════
+// §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md, the ACCEPTED design. The insight that collapses the
+// whole feature: if the QR carries the children's names OPTICALLY, the names never travel through the relay
+// at all. So there is no `checkinkids:` document, no session keypair, no envelope change, NO NEW RELAY GATE
+// and no new sealing. One screen on each side, and everything below this line is local to one phone.
+//
+// ⚠ KEYED BY CHURCH **AND MEMBER**, NEVER BY PHONE. Exactly the shape SG_ASSUME_KEY was fixed into on
+// 2026-09-11 (scripts/one-phone-two-members-safeguarding.test.mjs), and for exactly the same reason: one
+// phone is not one person. A 12-word restore, a reseat, an adopted steward seed or a phone passed on all put
+// a SECOND account on a device that already answered this question — and "Milo and Ivy" is a far worse thing
+// to inherit than a cached room list. A member half in the key means the next person starts blank.
+//
+// ⚠ AND IT IS WIPED BY A LOCKED BOOT, ON PURPOSE. clearCommunityCache's IDENTIFIER rule takes any
+// `trinityone.*` key whose NAME carries a 64-hex pubkey, which both of these do by construction. A list of
+// children's first names sitting on a seized, locked phone is precisely what that wipe exists to prevent, so
+// this is the correct outcome and not an oversight: the cost is that a member who PIN-locks re-types two
+// names, and the desk works regardless. Recorded here so nobody "fixes" it by exempting the prefix.
+const BRINGKIDS_KEY = 'trinityone.bringkids.';   // + churchPubHex + '|' + memberPubHex -> '1' | '0'
+const MYKIDNAMES_KEY = 'trinityone.mykidnames.'; // + churchPubHex + '|' + memberPubHex -> JSON string[]
+// A family, not a school register. The cap exists so a malformed or hostile QR cannot hand a screen five
+// hundred rows to paint, and it is applied on BOTH sides — when the parent saves and when the worker parses.
+const MYKIDS_MAX = 12;
+const MYKID_NAME_MAX = 40;
+
+// THE ONE NOTIFICATION, and it never leaves the phone. The parent's settings sheet and the "We're here" card
+// on Today are two different React trees reading the same localStorage, so without this a member could tick
+// the box and find the card still absent until the next cold start — the silent-blank shape this codebase
+// keeps paying for. Same idiom as `trinity-profiles` and `trinity-identity`.
+function _kidsChanged() {
+  try { window.dispatchEvent(new Event('trinity-mykids')); } catch (e) {}
+}
+// WHOSE SLOT. Empty when either half is unknown, and every caller treats empty as "cannot attribute" and
+// neither reads nor writes — the same rule _sgMine follows, for the same reason.
+function _kidSlot(prefix, cp) {
+  const me = _mePub();
+  return (cp && me) ? prefix + cp + '|' + me : '';
+}
+// THE ONE NORMALISER, used when the parent saves AND when the worker parses a QR. Two copies would drift and
+// the drift would be invisible: the worker would paint something the parent could never have typed.
+//
+// EVERY ENTRY THAT IS NOT A STRING IS DROPPED, and that is the load-bearing line rather than tidiness. React
+// throws on an object rendered as a child, and the app root is the only error boundary above the worker's
+// screen — so `c: [{}]` in a photographed QR would blank the WHOLE APP at a children's door. It is refused
+// here, quietly, and the worker types the name as she did yesterday.
+//
+// AND THE OTHER HALF OF THE SAME LINE: EVERY INVISIBLE CHARACTER GOES. Dropping non-strings stops React
+// throwing; this stops the confirmation sentence LYING, which is worse because nothing looks wrong.
+//   · U+202A-U+202E and U+2066-U+2069 are bidi overrides and isolates, and U+200E/U+200F the marks. A
+//     right-to-left override inside a scanned name REORDERS THE DISPLAY of "Milo → Sarah Henderson?" — the
+//     single mitigation this whole design rests on — while the string a test reads is unchanged.
+//   · C0/C1 controls and U+00AD render as nothing at all.
+//   · U+200B is a zero-width SPACE: it lets two names that are pixel-identical on screen be different
+//     strings in a safeguarding record, which is exactly how a register stops being a register.
+// ⚠ U+200C AND U+200D ARE DELIBERATELY KEPT. The zero-width non-joiner and joiner are ORDINARY LETTERS'
+// WORK in Persian, Arabic and the Indic scripts — "می‌روم" needs one — and this product puts the
+// persecuted church and the developing world first. Corrupting a real child's name to close a homograph
+// trick that the worker's own eyes already guard would be the wrong trade, made against the exact audience
+// the rest of this file exists for.
+// JS `\s` already covers NBSP, U+2000-200A, U+202F, U+205F, U+3000 and U+FEFF, so the collapse below takes
+// those; the class here is only what `\s` does NOT reach.
+function _kidNames(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    if (typeof raw !== 'string') continue;
+    const n = raw.replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+      .replace(/\s+/g, ' ').trim().slice(0, MYKID_NAME_MAX);
+    if (!n) continue;
+    if (out.some(x => x.toLowerCase() === n.toLowerCase())) continue;   // "Milo" twice is a slip, not two children
+    out.push(n);
+    if (out.length >= MYKIDS_MAX) break;
+  }
+  return out;
+}
+// WHICH SESSION IS A PARENT ARRIVING AT, RIGHT NOW — computed ON THE PARENT'S OWN PHONE from documents they
+// already receive. A session id IS a service id (checkinSessionOf / the console's issuer both say so), and
+// every member is already served every `trinityone/service:` — so nothing new is published to make this work.
+//
+// `lifetimeWindow` is the SAME FUNCTION the console uses to mint the session key and the relay uses to admit
+// the arrival. Importing it rather than re-deriving "45 minutes before, three hours after" is what stops the
+// parent's button appearing at a minute the relay would refuse.
+//
+// ⚠ BUT IT IS THE SAME ARITHMETIC ONLY BECAUSE OF SOMETHING THIS FUNCTION DOES NOT READ, and that is worth
+// stating rather than leaving as an assumption. This hardcodes DEFAULT_HELPER_LIFETIME and passes NO opts,
+// so the two agree exactly as long as the console's `issueCheckinSessionKeys` also mints with the default
+// lifetime and no `before`/`after` margins — which its single caller does today. A church that ever gets a
+// setting for either would break the agreement here first, and the symptom is the mild one: the button is
+// offered for a window the relay has narrowed, the arrival is refused, and the card says so and points at
+// the desk. The fix, when that setting exists, is to read the church's stored lifetime here rather than to
+// widen this. Nothing about it silently admits anything: the relay is the gate either way.
+//
+// TWO SERVICES IN ONE DAY: the LATEST-STARTING window that contains `now` wins. Under the `day` lifetime both
+// a 09:00 and an 11:00 service run to local midnight, so after 11:00 both windows contain now and a
+// first-match would send an 11 o'clock family to the 9 o'clock room.
+//
+// Returns { session, name, from, until } or null. Null is the ordinary answer on six days out of seven.
+function arrivalSessionNow(services, nowSec) {
+  const now = Number.isFinite(nowSec) ? Math.floor(nowSec) : Math.floor(Date.now() / 1000);
+  let best = null;
+  for (const s of (Array.isArray(services) ? services : [])) {
+    if (!s || !s.id) continue;
+    const w = lifetimeWindow(DEFAULT_HELPER_LIFETIME, s);
+    if (!w) continue;                                     // no date we can place -> no window -> no button
+    if (now < w.from || w.until == null || now > w.until) continue;
+    if (!best || w.from > best.from) best = { session: String(s.id), name: String(s.name || ''), from: w.from, until: w.until };
+  }
+  return best;
+}
+// THE QR PAYLOAD. `{ v:1, g:<parentpubhex>, c:[names] }` — NO KEY MATERIAL AND NO SECRET, by construction:
+// `g` is a public key and the names are what the worker would otherwise be typing. A photograph of this buys
+// what standing behind the parent at the desk already buys.
+function buildArrivalQR(myPub, names) {
+  if (!/^[0-9a-f]{64}$/.test(String(myPub || ''))) return '';
+  const c = _kidNames(names);
+  // A SQUARE WITH NO CHILDREN IN IT IS NOT A CHECK-IN CODE. parseArrivalQR refuses an empty `c` at the other
+  // end, so building one would only ever put a picture on a parent's screen that the worker's phone reports
+  // as "not a check-in code" — a dead end at a door. '' instead, and the screen offers the desk.
+  if (!c.length) return '';
+  return JSON.stringify({ v: 1, g: String(myPub), c });
+}
+// …AND READING ONE BACK, WHICH IS THE HOSTILE DIRECTION. Everything this returns came off a camera pointed at
+// something a stranger may have made, so this is DEFAULT-DENY and it NEVER THROWS: the worker's screen is a
+// leaf under the app root and a throw there is a blank app at a children's door.
+//
+// ⚠ IT RETURNS NO PARENT NAME AND CANNOT BE MADE TO. `g` is a pubkey the WORKER'S SCREEN then looks up among
+// the SIGNED ARRIVALS for her own session; the name she confirms against is rendered from that arrival and
+// never from this payload. That one rule is the whole reason a forged or photographed QR is safe, so any
+// extra field here — a name, a guardian, a session, a key — is DISCARDED rather than carried through.
+function parseArrivalQR(text) {
+  if (typeof text !== 'string' || text.length > 4096) return null;   // a camera can hand back a novel
+  let o;
+  try { o = JSON.parse(text); } catch (e) { return null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  if (o.v !== 1) return null;                                        // an unknown version is refused, never guessed at
+  if (!/^[0-9a-f]{64}$/.test(String(o.g || ''))) return null;
+  if (!Array.isArray(o.c)) return null;                              // `c` missing or an object is not "no children"
+  const c = _kidNames(o.c);
+  if (!c.length) return null;                                        // nothing to fill in is not a match
+  return { g: String(o.g), c };                                      // …and NOTHING ELSE off the payload
+}
+
 window.Fellowship = {
   relays: loadRelays(),
   // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
@@ -5281,6 +5423,55 @@ window.Fellowship = {
     return () => { try { window.removeEventListener('trinity-profiles', onNames); } catch (err) {} offDocs(); };
   },
 
+  // ── WHAT THIS PHONE'S OWNER HAS TOLD IT ABOUT THEIR OWN FAMILY ───────────────────────────────────────────
+  // §3b. All of it is localStorage and NOTHING HERE PUBLISHES: no relay call, no event, no document, no
+  // outbox entry. The church is never told that a member brings children, and never told their names. That
+  // is not a nicety — it is why this slice needs no new read gate, no new prefix and no new sealing, and it
+  // is asserted on the TRANSPORT (a publishing proxy that throws) rather than by reading a screen.
+  //
+  // The five below are the whole surface. `arrivalSessionNow` and `parseArrivalQR` are the pure module
+  // functions above, exposed by reference so the worker's screen and the parent's screen read ONE definition
+  // of the payload — two would drift, and the drift would show as a name the parent could not have typed.
+  arrivalSessionNow, parseArrivalQR,
+
+  // DOES THIS MEMBER BRING CHILDREN TO THIS CHURCH? Default NO, so a congregation that has nothing to do
+  // with children's work is offered nothing — the "no dead ends" finding from the parent persona of
+  // 2026-09-10, which found the ABSENCE of check-in correct.
+  bringsChildren(churchNpub) {
+    const slot = _kidSlot(BRINGKIDS_KEY, toPub(churchNpub));
+    if (!slot) return false;
+    try { return localStorage.getItem(slot) === '1'; } catch (e) { return false; }
+  },
+  setBringsChildren(churchNpub, on) {
+    const slot = _kidSlot(BRINGKIDS_KEY, toPub(churchNpub));
+    // `_mayCache()` is `!!sk`: a PIN-locked boot keeps PUB_KEY on purpose, so _mePub() can answer while the
+    // app is locked. Writing then would put a children's answer back on disk moments after the locked-boot
+    // wipe removed it — "wiping while still writing is theatre", the note at _mayCache, verbatim.
+    if (!slot || !_mayCache()) return false;
+    try { localStorage.setItem(slot, on ? '1' : '0'); } catch (e) { return false; }
+    _kidsChanged();
+    return !!on;
+  },
+  // THE NAMES. Returned normalised, so a caller can never be handed something it could not render.
+  myChildNames(churchNpub) {
+    const slot = _kidSlot(MYKIDNAMES_KEY, toPub(churchNpub));
+    if (!slot) return [];
+    try { return _kidNames(JSON.parse(localStorage.getItem(slot) || '[]')); } catch (e) { return []; }
+  },
+  setMyChildNames(churchNpub, names) {
+    const slot = _kidSlot(MYKIDNAMES_KEY, toPub(churchNpub));
+    const clean = _kidNames(names);
+    if (!slot || !_mayCache()) return clean;
+    try { localStorage.setItem(slot, JSON.stringify(clean)); } catch (e) {}
+    _kidsChanged();
+    return clean;
+  },
+  // THE QR ITSELF — built from this phone's own pubkey and this phone's own list. '' when there is nothing to
+  // show (no key, no names), and the screen then offers the desk instead of a square that means nothing.
+  arrivalQR(churchNpub) {
+    return buildArrivalQR(_mePub(), window.Fellowship.myChildNames(churchNpub));
+  },
+
   // ── A PARENT SAYS "WE ARE HERE" ──────────────────────────────────────────────────────────────────────────
   // STEP 1 of the parent surface. reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md section 3: a
   // parent announces themselves at the door of the children's room, and the WORKER turns that into the
@@ -5301,13 +5492,14 @@ window.Fellowship = {
   // job is to deliver the parent's pubkey provably, and the signature has already done that. The worker types
   // the child's name at the desk exactly as she does today.
   //
-  // ⚠ NOTHING IN app/ CALLS THIS YET, AND THAT IS SAID PLAINLY RATHER THAN LEFT TO BE FOUND. The parent's own
-  // surface -- entering the room code from the door, and reading their child's record back -- is STEP 2,
-  // because reading back needs a guardian-sealed copy that does not exist (see the STOP-AND-PLAN section of
-  // reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md). This function ships now so that the relay tests
-  // drive the SHIPPED writer rather than a mirror of it, which is the trap tests-must-drive-shipped-code
-  // records. It grants no authority it did not already have: any member could sign this event by hand, and
-  // the gate that matters is the relay's.
+  // ⚠ IT HAS A PRODUCT CALLER FROM 2026-09-12, AND UNTIL THEN IT HAD NONE. `ctx.checkinArrive` in
+  // app/app.jsx, called by WereHereCard in app/screens-today.jsx — §3b of
+  // reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md. The comment that stood here said "NOTHING IN app/ CALLS
+  // THIS YET" and named the reason: reading a record back needed a guardian-sealed copy that did not exist.
+  // That copy shipped, and §3b then removed the rest of the obstacle by carrying the children's names
+  // OPTICALLY, in a QR, so nothing new has to be published or sealed for the parent's surface to exist.
+  // Corrected rather than deleted, so the next reader learns the constraint moved and when.
+  // The screen is scripts/a-parent-shows-a-code-instead-of-typing.test.mjs.
   //
   // IT FAILS LOUD, NEVER OPTIMISTICALLY (design section 8). _publishAny THROWS unless a relay accepted the
   // write, so a refusal (not a member, a closed session, somebody else's address) and a mid-service outage

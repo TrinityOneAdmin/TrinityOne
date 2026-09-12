@@ -411,11 +411,12 @@ test('a guardian pubkey is normalised to ONE spelling, the one the relay stores'
 // tests-must-drive-shipped-code: the relay-side file builds its arrivals by hand, which proves the GATE.
 // This proves the two agree — that the event the member app actually signs is the event the box admits.
 //
-// ⚠ NOTHING IN app/ CALLS writeArrival YET. The parent's own surface (entering the room code from the door,
-// and reading their child's record back) is STEP 2, because reading back needs a guardian-sealed copy that
-// does not exist. Said here, not left to be found: by CLAUDE.md rule 1 that makes this a writer with no
-// screen, and the honest mitigation is that it grants no authority — any member could sign this event by
-// hand, and the gate that matters is the relay's, which IS driven end to end below.
+// ⚠ THIS PARAGRAPH SAID "NOTHING IN app/ CALLS writeArrival YET" UNTIL 2026-09-12, AND IT IS NO LONGER TRUE.
+// §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md gave it one: `ctx.checkinArrive` in app/app.jsx,
+// called by WereHereCard in app/screens-today.jsx, driven on the rendered screen in
+// scripts/a-parent-shows-a-code-instead-of-typing.test.mjs. So the rule-1 hole this paragraph declared is
+// closed; what stays true, and is still the reason this file drives the relay end to end, is that the writer
+// grants no authority — any member could sign this event by hand, and the gate that matters is the relay's.
 
 test('the shipped writeArrival emits an arrival the RELAY ADMITS, carrying no key material and no child', async () => {
   const { writeArrival, captured } = liftWriteArrival(gina);
