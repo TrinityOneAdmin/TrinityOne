@@ -51,17 +51,24 @@ test('…and it still offers a way out for a church that already exists elsewher
   assert.match(render(false, true), /id="rswNpub"/, 'asking for the by-ID route did not produce the field');
 });
 
-test('A BOX THAT ALREADY CARRIES A CHURCH IS ASKED BY ID, because that is a second church', () => {
-  const html = render(true, false);
+test('THE BY-ID ROUTE IS REACHABLE, and it is a restored church\u2019s only way onto this box', () => {
+  // ⚠ DRIVEN THROUGH `manual`, NOT `hasChurches`. An audit found `rswHasChurches` is ALWAYS false when this
+  // step renders — `openRelaySetup` is called only from `maybeFirstRun`'s `if (fresh)` branch, and `fresh`
+  // requires no churches. So the old row asserted a state the caller cannot produce (rule 1, inverted).
+  // `rswManual` is the reachable one: the "I already have a church" button on the fresh card sets it.
+  // AND THE BRANCH MUST NOT BE DELETED. A church restored from its twelve words skips the setup wizard
+  // (steward-root.jsx `adopt`), so `selfRegister`'s `createHere` never runs for it — this field is that
+  // church's only route onto this box.
+  const html = render(false, true);
   assert.equal(asksForNpub(html), true,
-    'adding a SECOND church to an established box lost its only control — auto-registration only ever ' +
-    'covers a church created in the console on this same box');
+    'THE BY-ID ROUTE IS GONE. A church restored from its twelve words has no way onto this box at all: ' +
+    'the wizard skips it, so the automatic path never runs for it.');
   assert.match(html, /Add your church/, 'the established-box card lost its heading');
 });
 
 test('the two cards are genuinely different screens, not one with a tweak', () => {
   // Re-anchor: if these ever collapsed to the same string, every assertion above would be vacuous.
-  assert.notEqual(render(false, false), render(true, false), 'the fresh and established cards are identical');
+  assert.notEqual(render(false, false), render(false, true), 'the fresh and by-ID cards are identical');
 });
 
 test('every control the step wires up exists in the card it belongs to', () => {
@@ -71,7 +78,7 @@ test('every control the step wires up exists in the card it belongs to', () => {
     assert.match(render(false, false), new RegExp('id="' + id + '"'), 'the fresh card has no #' + id);
   }
   for (const id of ['rswBack', 'rswSkip', 'rswAdd', 'rswNpub']) {
-    assert.match(render(true, false), new RegExp('id="' + id + '"'), 'the by-ID card has no #' + id);
+    assert.match(render(false, true), new RegExp('id="' + id + '"'), 'the by-ID card has no #' + id);
   }
   assert.ok(!/id="rswAdd"/.test(render(false, false)),
     'the fresh card renders an Add button whose handler is only wired on the by-ID path — a dead control');

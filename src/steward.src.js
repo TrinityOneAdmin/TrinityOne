@@ -1208,77 +1208,6 @@ async function localAdminToken() {
 }
 function _authHdr(tok) { return tok ? { 'Authorization': 'Bearer ' + tok } : {}; }
 
-// ── A CHURCH CREATED ON A SUITE BOX REGISTERS ITSELF THERE ────────────────────────────────────────────────
-// Owner, 2026-09-04, after being shown that creating a church on a self-hosting box silently pointed the
-// whole congregation at the hosted pool instead: "I think a suite box should auto register". And 2026-09-12:
-// "I really want to make sure the 'adding a church' isn't something that a steward has to do manually."
-// Until now the only way was the relay panel's wizard step 2 — "paste your church's npub, you'll find it in
-// the steward console" — which on a fresh box is impossible, because the church does not exist yet.
-//
-// ⚠ ONCE PER (CHURCH KEY, ORIGIN), REMEMBERED. RELAY-AUDIT-2026-07-20 H4: registration is a SETUP step, not
-// a heartbeat. The older self-register fired on every console mount from four call sites and left 19 tenants
-// on the shared box, most of them nameless, because nothing ever removes a row.
-//
-// ⚠ LOOPBACK ONLY, via localAdminToken(). That is the whole security boundary here and it is not new: the
-// token endpoint is already gated on _originIsLoopback(), so a HOSTED console at app.trinityone.church —
-// same-origin with the shared pool — gets nothing. This adds no authority; it uses the one door a steward
-// standing at their own box already has.
-//
-// ⚠ AND ONLY WITH A NAME. The relay's own name check lives inside `if (!isAdmin)`, so the admin token we
-// hold BYPASSES it — the relay would accept a nameless church from us. It must not: the name is the
-// readiness signal that this console has a church at all, and nameless rows are what H4 is about. So the
-// restraint is OURS, asserted by test, not enforced by the relay on this path.
-function _autoRegKey(origin) { return 'trinityone.steward.autoreg.' + (pub || '') + '|' + origin; }
-async function _registerOnOwnBox(name) {
-  try {
-    const nm = String(name || '').trim();
-    if (!nm || !pub || actingChurch) return;
-    const origin = _ownOrigin(); if (!origin) return;
-    // ⚠ AN EXPLICIT "NO" TO THE ALWAYS-ON QUESTION STOPS THIS. Owner, 2026-09-12: "if the can't leave it
-    // on, their relay mustn't be the primary one, their church should default to a public relay." The
-    // relay's first-run wizard writes `to_relay_always_on`; on a Suite box the panel and the console share
-    // an origin, so this is the same localStorage.
-    // ONLY AN EXPLICIT '0' REFUSES. An ABSENT answer must still register — a box whose wizard was skipped,
-    // or which predates the question, has not said no, and treating silence as refusal would quietly
-    // switch off self-hosting for everybody who never saw the screen.
-    // ⚠ THIS IS NOT CHUNK 4. Chunk 4 is the relay LIST — making a "no" leave the church on the public
-    // relays, and making a "yes" actually point members here. This is the narrower half: not binding a
-    // church to a box whose owner has just said they cannot keep it running.
-    try { if (String(lsGet('to_relay_always_on') || '') === '0') return; } catch (e) {}
-    if (lsGet(_autoRegKey(origin))) return;              // already done for this church on this box
-    const tok = await localAdminToken(); if (!tok) return;   // not loopback → not our box to register with
-    const r = await fetch('/config', {
-      method: 'POST', cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', ..._authHdr(tok) },
-      body: JSON.stringify({ addChurch: { npub: npubEncode(pub), name: nm } }),
-    });
-    // ⚠ A FAILURE HERE IS NOT ALLOWED TO BE SILENT, and this is the whole of chunk 6. The church has just
-    // been created and named — that part SUCCEEDED — but it is not on this box, so its congregation will be
-    // served by the public relays while the steward believes they are self-hosting. Nothing else on screen
-    // would ever say so.
-    // It reuses `steward-write-blocked`, the console's existing failure banner (app/stew-dashboard.jsx), so
-    // there is no new surface to keep in step. That event was itself once fired and listened to NOWHERE, so
-    // the listener is the thing to check if this ever goes quiet.
-    // The message NAMES WHAT SUCCEEDED FIRST, because "your church was not created" would be false and
-    // frightening, and a steward who re-creates the church in response has made things worse.
-    if (!r.ok) {
-      const why = r.status === 429
-        ? 'this relay has reached its limit of churches'
-        : r.status === 401 || r.status === 403
-          ? 'this computer did not accept the request'
-          : 'this computer did not answer properly';
-      try {
-        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'church relay',
-          message: 'Your church was created — but it has NOT been added to this computer, because ' + why +
-                   '. Your church is using TrinityOne\u2019s relays for now, which works, and you can connect ' +
-                   'it to this computer from the relay panel.' } }));
-      } catch (e) {}
-      return;
-    }
-    try { lsSet(_autoRegKey(origin), '1'); } catch (e) {}
-    try { window.dispatchEvent(new CustomEvent('steward-box-registered', { detail: { origin } })); } catch (e) {}
-  } catch (e) { /* never let this break the profile publish that triggered it */ }
-}
 async function refreshSelfPublicRelay() {
   if (!ownIsLoopback()) return;
   try {
@@ -4044,11 +3973,17 @@ window.Steward = {
       if (local && host) nip05 = local + '@' + host;
     }
     const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {} });
-    // ⚠ THE HOOK IS HERE, NOT IN THE THREE UI CALLERS. publishProfile is the one place a church is named
-    // (NameEditModal twice, plus the setup panel), and a fourth screen added later must not have to
-    // remember this. It runs AFTER the publish and never blocks or fails it.
-    return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk))
-      .then((ev) => { _registerOnOwnBox(m.name); return ev; });
+    // ⚠ NOTHING REGISTERS A BOX FROM HERE, AND THAT IS DELIBERATE. A `_registerOnOwnBox` hook sat on this
+    // publish for one day (2cb1582, reverted 2026-09-12). It duplicated `selfRegister(name, {createHere:
+    // true})`, which has done this correctly since 2026-09-04 from the setup wizard's name step, on the
+    // owner's decision that "a church is put on a box by a person, at the moment they create it there".
+    // The duplicate was worse in every measured way: it fired on EVERY profile write — a colour slider
+    // deciding relay admission — and it used the box's admin token, which bypasses all four of the relay's
+    // guards (invite-only, the H4 bootstrap lock written to stop 19 junk tenants, the name check, the cap).
+    // Proven redundant by execution, not by reading: with it fully dead in the bundle, a real browser
+    // driving the real wizard against a fresh relay still registered the church, recorded `by: "self"` —
+    // the signature door, not the token one.
+    return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
   },
   // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
   // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions

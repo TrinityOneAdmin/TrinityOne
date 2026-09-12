@@ -1096,9 +1096,15 @@
       // box there IS no church yet, so there is nothing in the console to find — and this wizard's own gate
       // (no relay handle AND no churches) fires it for precisely those people. Owner, 2026-09-12: "I really
       // want to make sure the 'adding a church' isn't something that a steward has to do manually."
-      // Since `2cb1582`, naming a church in a console served BY this box registers it here on its own
-      // (steward.src.js `_registerOnOwnBox`, hooked into publishProfile). So the honest thing to show a
-      // fresh box is what is about to happen, not a field it cannot fill.
+      // Naming a church in a console served BY this box registers it here on its own — `selfRegister(name,
+      // {createHere:true})` from the setup wizard's name step, the owner's 2026-09-04 decision. So the
+      // honest thing to show a fresh box is what is about to happen, not a field it cannot fill.
+      // ⚠ THIS COMMENT USED TO CREDIT `_registerOnOwnBox` (2cb1582). That function was a duplicate of the
+      // above and was reverted the same day; relay-app/*.js ships UNBUNDLED, so a stale name here would be
+      // a false claim in shipped source.
+      // ⚠ AND THE PASTE FIELD BELOW IS NOT DEAD CODE. A church RESTORED from its twelve words skips the
+      // setup wizard entirely (steward-root.jsx `adopt` sets wizard.done), so `createHere` never runs for
+      // it — the by-ID route is that church's only way onto this box. Reachable via `rswManual`.
       // ⚠ THE FIELD IS NOT DELETED. A church created somewhere else — restored from its words, or run from
       // another machine — still has to be added by ID, and so does a SECOND church. That is `rswManual`,
       // and it is the default whenever the box already carries a church.
@@ -1158,6 +1164,12 @@
         + '<div class="rsw-ic">' + RSW_IC.globe + '</div>'
         + '<h2 class="rsw-h">Can you leave this computer on?</h2>'
         + '<p class="rsw-sub">Your church is only reachable while this computer is running. A machine that sleeps at night, or a laptop you close, means members can\u2019t open your church until it wakes.</p>'
+        // ⚠ RECORD-ONLY, AND IT SAYS SO, because today the answer changes nothing. Its only consumer was
+        // `_registerOnOwnBox`, reverted 2026-09-12 — and an audit had already shown that guard was inert
+        // anyway (written at 127.0.0.1, read at localhost: separate storage partitions). A screen that
+        // offers a consequential-sounding "No" and then does nothing has asked a question the app ignores,
+        // which is worse than not asking. When chunk 4 gives the answer somewhere to act, delete this line.
+        + '<p class="rsw-sub" style="opacity:.8">We\u2019re noting this for later — it doesn\u2019t change anything yet.</p>'
         + '<div class="rsw-msg" id="rswOnMsg"></div>'
         + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswOnNo">No \u2014 it gets switched off</button><button class="btn btn-clay" id="rswOnYes">Yes, it stays on</button></div>';
       const answer = (on) => {
