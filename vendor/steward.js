@@ -17041,7 +17041,24 @@ zoo`.split("\n");
         oneose() {
           complete = true;
           finish();
-        }
+        },
+        // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — B0 of reference/PLAN-ENROLMENT-GAP-2026-09-02.md,
+        // and the same fix `_newestByD` has carried since AUDIT-8 measured it there.
+        // nostr-tools arms its OWN EOSE timer (default `baseEoseTimeout` 4400ms) and calls `oneose` when it
+        // expires, whether or not any relay ever sent the frame. This function's own bound is 6000ms, so the
+        // library's fake EOSE fired FIRST and set `complete = true` — a failed read reporting a COMPLETED read
+        // of an EMPTY church. That is the input to the doc-wipe chain: `relayNetDoc()` returns
+        // {ev:null, complete:true} while the church's relays are merely down (the a8 update blip is exactly
+        // this), the `!complete` guard does not fire, entries are rebuilt FROM SCRATCH with created_at: now(),
+        // and newest-wins un-admits every box the church had signed, on every member's phone.
+        // Pushing the library's timer well past our own bound means an EOSE arriving inside `ms` is a real one.
+        //
+        // ⚠ THIS ALONE DOES NOT CLOSE B0, and the plan says so in as many words. An UNREACHABLE relay still
+        // reports finished — measured in scripts/a-failed-read-is-not-an-empty-church.test.mjs, which drives a
+        // real socket that never sends EOSE and a genuinely dead port. `complete` means "every relay I could
+        // reach finished", which is not the question enrolment asks. Steps 2-3 of B0 — counting how many relays
+        // GENUINELY answered, and refusing the from-scratch path unless at least one did — are still open.
+        maxWait: ms + 5e3
       });
       setTimeout(finish, ms);
     });
