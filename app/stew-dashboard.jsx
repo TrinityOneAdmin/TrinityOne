@@ -397,7 +397,12 @@ function PublishErrorBanner() {
     const h = () => {
       // ⚠ THIS SENTENCE USED TO END "and members reach it through this machine". IT WAS FALSE. Registering
       // the church on this box makes the box CARRY it; it does not point a single member at it. Nothing
-      // publishes a relay list members read (`publishRelayList` has no callers), so until chunk 4 of
+      // publishes a relay list members read — ⚠ CORRECTED: an earlier version of this comment said
+      // `publishRelayList` has NO CALLERS. IT HAS ONE: `autoPickRelays` in steward.src.js, reached from
+      // this file. Its effect in the pilot looks nil (discoverRelayOffers returns nothing, so picks.length
+      // is 0 and the publish never runs), which is why the sentence shown to a steward is unchanged and
+      // still correct — but "no callers, measured" was a false claim and is fixed rather than left. So
+      // until chunk 4 of
       // reference/SCOPE-SUITE-AUTOREGISTER-2026-09-12.md lands — which is gated on the enrolment blockers
       // in PLAN-ENROLMENT-GAP-2026-09-02.md — members still reach the church through the shared relays.
       // Caught while answering "is it safe to release the Suite": the honest answer was yes, and this was
