@@ -7685,7 +7685,19 @@ window.Steward = {
         // collected row from the collection (DashCheckin), and without this a worker-released lock-in
         // dropped off 26 hours after the child ARRIVED rather than after she left. Relay-attested, like
         // `ts`: it is an event's created_at, not anything the body claims.
-        return { ...r, out: (rel.out != null ? rel.out : r.out), manual: rel.manual === true, releasedBy: rel._by || rel.by || '', releasedTs: rel.ts };
+        // ⚠ `rel.out || … || rel.ts` AND NOT `rel.out != null ? …`. A RELEASE DOCUMENT IS A COLLECTION:
+        // that is the whole of what it is, and the only question left is what TIME to show. `!= null`
+        // answered a different question, and on a release carrying `out: 0` — or `false`, or no `out` at
+        // all — it fell back to the check-in's own `out`, which is `null`, so a RELEASED CHILD RENDERED AS
+        // STILL IN THE ROOM with a live Check out button beside her. Driven end to end through the shipped
+        // bundle into the shipped screen by the audit of d72a5a1; not reachable from a shipped writer, and
+        // the same predicate class DashCheckin was corrected for one function downstream.
+        //
+        // So: the release's own time when it is usable, then whatever the record already carried, and
+        // failing both the RELEASE EVENT'S OWN created_at — which is attested, is within seconds of the
+        // real release on any live path, and is the one instant we can stand behind. What must never happen
+        // is the collection evaporating because a body field was malformed.
+        return { ...r, out: (rel.out || r.out || rel.ts), manual: rel.manual === true, releasedBy: rel._by || rel.by || '', releasedTs: rel.ts };
       }));
     }, 'checkin');
   },

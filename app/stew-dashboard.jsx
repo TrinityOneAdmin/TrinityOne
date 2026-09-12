@@ -6343,7 +6343,12 @@ function DashCheckin() {
   // class the block above claims to have closed, so the two now ask one question. `false`, `''` and `NaN`
   // were the milder mirror of the same disagreement: the body bound switched itself off and the row aged on
   // the attested clock alone, which can only ever keep a row rather than delete one.
-  const bodyClock = (r) => (r.out ? r.out : r.in);
+  // ⚠ AND `|| null` ON THE END, WHICH IS THE `in` SIDE OF THE SAME BUG. A live row carrying `in: 0` was
+  // read as 1 January 1970, fifty-six years outside the window, and deleted — a child in the room removed
+  // from the register because a body field was falsy. A falsy `in` is "no arrival time recorded", not an
+  // arrival in 1970, so it bounds nothing and the row ages on the attested clock alone. Both sides now
+  // answer the same way: truthy or it is not a measure.
+  const bodyClock = (r) => (r.out || r.in || null);
   const live = recs.filter(r => inWindow(lastTouch(r)) && !(Number.isFinite(bodyClock(r)) && !inWindow(bodyClock(r))));
   const present = live.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
   const out = live.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
@@ -6385,8 +6390,11 @@ function DashCheckin() {
   //
   // reference/DOMAIN.md forbids the obvious fix — nothing may stand between a child and the desk — but it
   // does not ask for silence, and "say the thing once, plainly, where it is useful" is the same page. So
-  // every child who is already on the register is still OFFERED, and her row says when she arrived. The
-  // leader decides; the screen stops hiding what it knows. Built below, where fmtT and notToday exist.
+  // every child who is already on the register is still OFFERED, and — WHERE THIS SCREEN CAN TELL, which
+  // is console-written rows only — her row says when she arrived. The leader decides; the screen stops
+  // hiding what it knows. The limit is not a footnote and is written out in full beside `alreadyIn`
+  // below, where the label is built: the member app writes `child: ''`, so on the worker-on-the-door
+  // path there is no key to match her by and the label does not appear at all.
   const [picking, setPicking] = React.useState(false);
   const [checkout, setCheckout] = React.useState(null);
   // THE REGISTER HAS ITS OWN KEY NOW, and a record cannot be written without it. Watch for it, so this screen
@@ -6598,14 +6606,7 @@ function DashCheckin() {
                 <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.childName || nameFor(r.child)}</div>
-                    {/* ⚠ A COLLECTION WHOSE TIME WE CANNOT READ SAYS SO, rather than nothing. Typing fmtT
-                        traded a LOUD wrong answer ("out Invalid Date") for SILENCE, and on this list silence
-                        is harder for a safeguarding lead to notice than an obvious error: a Collected row is
-                        the permanent record of a child leaving, and one with no time in it is a hole. The
-                        live row above is deliberately NOT given the same words — the child is in front of
-                        the leader, her code is on the row, and "In — time not recorded" would be a line of
-                        copy about a field nobody is acting on (reference/DOMAIN.md: do not nag).
-                        ONE EXPRESSION, AND A JOIN RATHER THAN A CONCATENATION. An unusable `in` or `date`
+                    {/* ONE EXPRESSION, AND A JOIN RATHER THAN A CONCATENATION. An unusable `in` or `date`
                         now contributes NOTHING instead of "Invalid Date" or a dangling "In ·", and the
                         pickup clause — the one a leader reads a name off — is never displaced. One
                         expression rather than several nodes because `glued()`, the JSX-newline guard in
@@ -6638,7 +6639,20 @@ function DashCheckin() {
                         says "by hand"; on the Oppo, 2026-09-11, this console said only "out 11:54 AM" for the same
                         release, so the one screen a safeguarding lead reads could not tell the two apart. Not an
                         accusation — §10: the gates keep strangers out, they do not police the church's own team. */}
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{[fmtT(r.in) ? 'In ' + fmtT(r.in) : '', notToday(r), fmtT(r.out) ? 'out ' + fmtT(r.out) : 'out — time not recorded', r.manual ? 'by hand' : ''].filter(Boolean).join(' · ')}</div></div>
+                    {/* ⚠ ON THIS LIST, A TIME WE CANNOT READ SAYS SO RATHER THAN GOING QUIET — BOTH TIMES.
+                        Typing fmtT traded a LOUD wrong answer ("out Invalid Date") for SILENCE, and a
+                        Collected row is the permanent record of a child leaving: one with a time missing
+                        out of it is a hole, and a hole is harder for a safeguarding lead to notice than an
+                        obvious error. The ARRIVAL gets the same treatment as the collection here, which the
+                        first version of this missed — "Collected · 1 Alice Fenn out 8:02 AM" with no
+                        arrival time at all is the same hole by the same argument.
+                        THE LIVE ROW ABOVE IS DELIBERATELY NOT GIVEN THESE WORDS. The child is in front of
+                        the leader with her pickup code on the row; "In — time not recorded" would be copy
+                        about a field nobody is acting on (reference/DOMAIN.md: do not nag).
+                        DEFENSIVE, NOT AN IMPROVEMENT TO ANYTHING REACHABLE: `out` and `in` are written as
+                        `null` or a real epoch by both shipped writers and a release now always folds a
+                        truthy `out`, so this fires only for a body no writer in this product produces. */}
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{[fmtT(r.in) ? 'In ' + fmtT(r.in) : 'in — time not recorded', notToday(r), fmtT(r.out) ? 'out ' + fmtT(r.out) : 'out — time not recorded', r.manual ? 'by hand' : ''].filter(Boolean).join(' · ')}</div></div>
                     <Icon name="check" size={16} stroke={2.4} color="var(--sage)" />
                   </div>
                 ))}

@@ -33,7 +33,14 @@ import { MAX_SESSION_SECONDS } from './checkin-role-source.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const SRC = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
-const STEWARD_SRC = readFileSync(join(ROOT, 'src/steward.src.js'), 'utf8');
+// ⚠ THE BUNDLE, NOT THE SOURCE. Until 2026-09-12 this was src/steward.src.js, and the audit proved what
+// that costs: breaking the fold in vendor/steward.js ALONE left this file at 37/0, while the same edit in
+// src alone turned it red. vendor/ is what steward.html loads and what sync-web.sh copies into the APK, so a
+// test that slices src is testing a file no phone runs — the `tests-must-drive-shipped-code` rule, which
+// this repo keeps as a named memory for exactly this shape. scripts/vendor-freshness.test.mjs guards the two
+// against each other, so slicing the bundle loses nothing and gains the artefact.
+// (Precedent: scripts/checkin-key-separation.test.mjs has sliced VENDOR since it was written.)
+const STEWARD_BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 
 const KID = 'a'.repeat(64), KID2 = 'b'.repeat(64), MUM = 'c'.repeat(64);
 const NOW = Math.floor(Date.now() / 1000);
@@ -157,6 +164,18 @@ const rec = (o) => ({ id: o.id, child: o.child || KID, childName: o.childName ||
   date: o.date, ts: o.ts, in: o.in != null ? o.in : o.ts, code: o.code || '4182',
   ...(o.out != null ? { out: o.out } : {}), ...(o.manual != null ? { manual: o.manual } : {}) });
 
+// THE SHIPPED subscribeCheckins, lifted out of vendor/steward.js and RUN. Returns what it emits, which is
+// exactly what window.useStewardCheckins hands DashCheckin, so a test can drive the real pipeline rather
+// than hand the screen a row the fold would never have produced.
+function foldThrough(rows) {
+  const body = fnBody(STEWARD_BUNDLE, 'subscribeCheckins(cb) {', 'subscribeCheckins');
+  let got = null;
+  const fakeWindow = { Steward: { encSubscribe: (_pfx, cb) => { cb(rows); return () => {}; } } };
+  new Function('window', 'return ({ ' + body + ' });')(fakeWindow).subscribeCheckins((out) => { got = out; });
+  assert.ok(Array.isArray(got), 're-anchor: the shipped subscribeCheckins emitted no array');
+  return got;
+}
+
 // WHAT THE PICKER WOULD BE OFFERED — read off the real `available` prop, by pressing the real button.
 async function offered(d) {
   // IT STARTS CLOSED. This assertion came off the test removed in ed1f40c and was not covered anywhere
@@ -279,7 +298,7 @@ test('…and with an OLDER bundle that cannot answer, the fallback is still MAX_
 
 test('the bundle\'s answer IS MAX_SESSION_SECONDS — run, not read', async () => {
   // Lifted and executed rather than matched, so a `return 26 * 3600` that merely LOOKS right cannot pass.
-  const body = fnBody(STEWARD_SRC, '  checkinRegisterWindow()', 'Steward.checkinRegisterWindow');
+  const body = fnBody(STEWARD_BUNDLE, 'checkinRegisterWindow()', 'Steward.checkinRegisterWindow');
   const got = new Function('MAX_SESSION_SECONDS', 'return ({ ' + body + ' }).checkinRegisterWindow();')(MAX_SESSION_SECONDS);
   assert.equal(got, MAX_SESSION_SECONDS,
     'Steward.checkinRegisterWindow() no longer returns MAX_SESSION_SECONDS, so the desk and the parent\'s ' +
@@ -657,11 +676,30 @@ test('A COLLECTED ROW WITH NO READABLE TIME SAYS SO RATHER THAN GOING QUIET', as
     const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY,
       ts: NOW - 600, in: NOW - 600, out: bad, code: '4182' }] });
     assert.match(d.collected(), /Alice Fenn/, 'the collected child vanished for `out` = ' + JSON.stringify(bad));
-    assert.match(d.collected(), /time not recorded/,
+    assert.match(d.collected(), /out — time not recorded/,
       'a Collected row with an unreadable collection time said NOTHING about it for `out` = ' +
       JSON.stringify(bad) + ': ' + d.collected());
     assert.doesNotMatch(d.collected(), /Invalid Date|1970/, 'and it must still not paint a wrong one');
   }
+});
+
+test('…AND THE SAME FOR AN UNREADABLE ARRIVAL ON A COLLECTED ROW', async () => {
+  // The gap the first version of this missed: "Collected · 1 Alice Fenn out 8:02 AM" with NO arrival time
+  // at all is the same hole in the same permanent record, by the same argument.
+  for (const bad of [undefined, NaN, 'abc', {}, Infinity]) {
+    const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY,
+      ts: NOW - 600, in: bad, out: NOW - 600, code: '4182' }] });
+    assert.match(d.collected(), /Alice Fenn/, 'the collected child vanished for `in` = ' + JSON.stringify(bad));
+    assert.match(d.collected(), /in — time not recorded/,
+      'a Collected row said nothing about an arrival time it could not read, for `in` = ' +
+      JSON.stringify(bad) + ': ' + d.collected());
+    assert.doesNotMatch(d.collected(), /Invalid Date|1970/, 'and it must still not paint a wrong one');
+  }
+});
+
+test('CONTROL: an ordinary collected row carries neither apology', async () => {
+  const d = await desk({ recs: [rec({ id: 'r1', date: TODAY, ts: NOW - 600, in: NOW - 3600, out: NOW - 600 })] });
+  assert.doesNotMatch(d.collected(), /time not recorded/, 'every collected row now carries an apology, so it says nothing');
 });
 
 test('CONTROL: an ordinary collection says the time and not the apology', async () => {
@@ -672,32 +710,48 @@ test('CONTROL: an ordinary collection says the time and not the apology', async 
 
 // ══════════════════ `releasedTs` IS ATTESTED, NOT CLAIMED ══════════════════════════════════════════════
 
-test('A `releasedTs` IN THE SEALED BODY CANNOT EXTEND A ROW — the fold overwrites it on every row', async () => {
-  // encSubscribe builds `{ id, ...obj, ts, _sid, _rel }` — body first, attested last — so `ts` overrides the
-  // body. `releasedTs` is added by subscribeCheckins' fold instead, and until 2026-09-12 the no-release path
-  // returned the row untouched, so a body-carried `releasedTs` flowed straight into the window.
+test('A `releasedTs` IN THE SEALED BODY CANNOT EXTEND A ROW — the fold and the screen, end to end', async () => {
+  // ⚠ REWRITTEN 2026-09-12. The previous version of this test handed `desk()` a row DIRECTLY, so
+  // subscribeCheckins was never called and nothing in it could be observed: what actually removed the row
+  // was its three-week-old `in`, and breaking the fold left this green. Worse, the same row with `in` simply
+  // ABSENT rendered the record as a child in the room, carried by a body-claimed `releasedTs`.
   //
-  // ⚠ THIS IS THE SCREEN'S HALF ONLY. A row reaching DashCheckin with a `releasedTs` and no release is
-  // exactly what the bundle now prevents; the bundle's half is asserted in the sibling test below.
-  const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(NOW - 21 * DAY),
-    ts: NOW - 21 * DAY, releasedTs: NOW - 5, in: NOW - 21 * DAY, code: '4182' }] });
+  // So this now runs the SHIPPED fold over the hostile row and hands ITS OUTPUT to the screen — which is the
+  // only arrangement in which the claim "a body `releasedTs` cannot extend a row" means anything.
+  //
+  // `in` IS DELIBERATELY ABSENT. With it present the `in` upper bound removes the row on its own and this
+  // test proves nothing about `releasedTs`; without it, `lastTouch` is the only thing standing between a
+  // body-claimed release time and a three-week-old record painted as live.
+  const hostile = { id: 'r1', child: KID, childName: 'Alice Fenn', date: localISO(NOW - 21 * DAY),
+    ts: NOW - 21 * DAY, releasedTs: NOW - 5, code: '4182' };
+
+  // CONTROL, and it is the row that makes the claim falsifiable: straight to the screen, the body's
+  // `releasedTs` IS believed, because the screen's contract is that its rows came through the fold.
+  const unfolded = await desk({ recs: [hostile] });
+  assert.match(unfolded.checkedIn(), /Alice Fenn/,
+    're-anchor: the screen no longer trusts `releasedTs` at all, so the fold is not what protects it and ' +
+    'this test is about the wrong thing');
+
+  // …and through the shipped fold, which is how a row actually reaches it.
+  const folded = await foldThrough([hostile]);
+  assert.equal(folded.length, 1, 're-anchor: the fold no longer emits this row at all');
+  const d = await desk({ recs: folded });
   assert.doesNotMatch(d.words(), /Alice Fenn/,
-    'a three-week-old record was rendered live because its own body claimed a release five seconds ago');
+    'A THREE-WEEK-OLD RECORD WAS RENDERED AS A CHILD IN THE ROOM because its own sealed body claimed a ' +
+    'release five seconds ago. The fold must overwrite `releasedTs` on every row, not only on released ' +
+    'ones. As rendered: ' + d.words());
 });
 
 test('the BUNDLE strips a body `releasedTs` off a row with no release — run, not read', async () => {
   // Lifted and executed, so a comment promising this cannot pass for the code doing it.
-  const body = fnBody(STEWARD_SRC, '  subscribeCheckins(cb) {', 'subscribeCheckins');
   const rows = [
     { id: 'a', child: KID, ts: 100, releasedTs: 999999 },                       // no release, body lies
     { id: 'b', child: KID2, ts: 200, _sid: 's1' },                              // no release, no claim
     { id: 'rel1', _rel: 'c', _sid: 's1', ts: 555, out: 550, manual: true },     // a real release for 'c'
     { id: 'c', child: KID, ts: 300, _sid: 's1' },                               // the child it releases
   ];
-  let got = null;
-  const fakeWindow = { Steward: { encSubscribe: (_pfx, cb) => { cb(rows); return () => {}; } } };
-  new Function('window', 'return ({ ' + body + ' });')(fakeWindow).subscribeCheckins((out) => { got = out; });
-  assert.ok(Array.isArray(got) && got.length === 3, 're-anchor: the fold no longer emits one row per child (' + JSON.stringify(got) + ')');
+  const got = foldThrough(rows);
+  assert.ok(got.length === 3, 're-anchor: the fold no longer emits one row per child (' + JSON.stringify(got) + ')');
   const a = got.find(r => r.id === 'a');
   assert.equal(a.releasedTs, null,
     'A BODY-CARRIED `releasedTs` SURVIVED THE FOLD on a row with no release, so the register would age that ' +
@@ -706,4 +760,64 @@ test('the BUNDLE strips a body `releasedTs` off a row with no release — run, n
   assert.equal(c.releasedTs, 555, "a genuinely released row lost the release document's own created_at");
   assert.equal(c.out, 550, 're-anchor: the release no longer folds `out` on');
   assert.equal(c.manual, true, 're-anchor: the release no longer folds `manual` on');
+});
+
+
+// ══════════════ A RELEASE DOCUMENT IS A COLLECTION, WHATEVER ITS BODY SAYS ══════════════════════════════
+//
+// The predicate DashCheckin was corrected for survived one function upstream: the fold said
+// `rel.out != null ? rel.out : r0.out`, so a release carrying `out: 0` — or `false`, or no `out` at all —
+// fell back to the check-in's own `out`, which is `null`. The child had been released and the screen showed
+// her IN THE ROOM, with a live Check out button. Driven here end to end: the shipped fold, then the shipped
+// screen, with a valid release for that exact session|checkinId.
+
+const relRow = (o) => ({ id: o.id, _rel: o.rel, _sid: 's1', ts: o.ts, _by: 'worker',
+  ...(('out' in o) ? { out: o.out } : {}), ...(o.manual != null ? { manual: o.manual } : {}) });
+
+test('CONTROL: a release with a real `out` collects the child and prints the time', async () => {
+  const d = await desk({ recs: foldThrough([
+    { id: 'c1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 3600, in: NOW - 3600, _sid: 's1', code: '4182' },
+    relRow({ id: 'rel1', rel: 'c1', ts: NOW - 600, out: NOW - 600, manual: true }),
+  ]) });
+  assert.match(d.collected(), /Alice Fenn/, 'a released child is not on the Collected list');
+  assert.match(d.collected(), /out \d/, 'the collection time is not printed');
+  assert.doesNotMatch(d.checkedIn(), /Alice Fenn/, 'a released child is still shown as in the room');
+});
+
+test('A RELEASE WITH A FALSY `out` STILL COLLECTS HER — she is not left standing in the room', async () => {
+  for (const rel of [{ out: 0 }, { out: false }, {}, { out: null }]) {
+    const d = await desk({ recs: foldThrough([
+      { id: 'c1', child: KID, childName: 'Alice Fenn', date: TODAY, ts: NOW - 3600, in: NOW - 3600, _sid: 's1', code: '4182' },
+      relRow({ id: 'rel1', rel: 'c1', ts: NOW - 600, ...rel }),
+    ]) });
+    assert.doesNotMatch(d.checkedIn(), /Alice Fenn/,
+      'A RELEASED CHILD IS SHOWN AS IN THE ROOM, with a live Check out button, for a release body of ' +
+      JSON.stringify(rel) + '. The release document IS the collection; the only open question was what time ' +
+      'to print. As rendered: ' + d.words());
+    assert.match(d.collected(), /Alice Fenn/, 'she vanished from the screen altogether for ' + JSON.stringify(rel));
+    // …and the time shown is the RELEASE EVENT'S OWN created_at, which is attested, rather than invented
+    assert.match(d.collected(), /out \d/,
+      'no collection time at all for ' + JSON.stringify(rel) + ' — the release event\'s created_at is the ' +
+      'one instant we can stand behind: ' + d.collected());
+    assert.doesNotMatch(d.collected(), /1970|Invalid Date/, 'a falsy `out` was painted as a real time');
+  }
+});
+
+// ══════════════ THE `in` SIDE OF THE FALSY BUG ═════════════════════════════════════════════════════════
+
+test('A LIVE ROW WITH `in: 0` IS NOT DELETED — a falsy arrival is "not recorded", not 1970', async () => {
+  // The mirror of the `out: 0` fault: read as 1 January 1970, fifty-six years outside the window, so the
+  // body bound removed a child who was in the room.
+  for (const bad of [0, false, '']) {
+    const d = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY,
+      ts: NOW - 600, in: bad, code: '4182' }] });
+    assert.match(d.checkedIn(), /Alice Fenn/,
+      'a child in the room was deleted from the register because `in` was ' + JSON.stringify(bad) +
+      ' — a falsy arrival bounds nothing, it does not mean 1970. As rendered: ' + d.words());
+    assert.match(d.checkedIn(), /4182/, 'her pickup code went with her');
+  }
+  // …and a real 1970 arrival IS still aged out, so this is not the bound switched off
+  const old = await desk({ recs: [{ id: 'r1', child: KID, childName: 'Alice Fenn', date: TODAY,
+    ts: NOW - 600, in: 1, code: '4182' }] });
+  assert.doesNotMatch(old.words(), /Alice Fenn/, 're-anchor: the `in` bound no longer removes anything at all');
 });
