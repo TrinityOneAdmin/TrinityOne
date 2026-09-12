@@ -1191,8 +1191,13 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   return (
     <Overlay open={open} onClose={onClose} docked={docked} label="What's happening">
       <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 12px' }}>
-          <button onClick={onClose} aria-label="Close" title="Close" style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+        {/* ⚠ THE BACK BUTTON MOVED DOWN ONTO THE TAB ROW — owner, 2026-09-12, "the empty header row".
+            Removing the title and the church name on 2026-09-11 left this row holding a 38px back button and
+            an empty spacer, and it still cost 58px (38 + 8 + 12) of a 360px-wide phone: a whole row of
+            content spent on one icon. The button is now the first item of the row below, OUTSIDE that row's
+            horizontal scroll, so it stays put while the tabs slide under it.
+            The comment that used to live here — why there is no title and no church name — is unchanged and
+            still true; it is just recorded on the row that survived. */}
           {/* NO TITLE AND NO CHURCH NAME — owner, 2026-09-11, and both halves have a reason.
               The title said "Serving", and this page stopped being only that: the strip below it now carries
               Serving, Rota, Kids, Events, Calendar and Care, so the heading named one tab out of six and
@@ -1206,8 +1211,6 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               the first tab, so a screen reader would announce this dialog as "Serving", which is the exact
               wrong name this change exists to remove. The `label` on Overlay below is that fix and is not
               decoration; scripts/the-serving-page-is-not-only-serving.test.mjs holds it in place. */}
-          <div style={{ flex: 1, minWidth: 0 }} />
-        </div>
         {/* Four tabs need 399px and a 360px phone offers 320 after padding and gaps, so Care was cut off at
             the right edge — tappable, but its label never readable, and nothing here scrolled. `flex: 1` is
             not the shrink it looks like: a flex item defaults to `min-width: auto`, so these refuse to go
@@ -1225,7 +1228,14 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             end of a swipe. It is 10px, not 14: `gap: 4` applies before it too, and 4 + 10 is the 14 the left
             side gets. scroll-padding covers the other scroll — scrollIntoView aligns the BUTTON to the
             nearest edge and reads straight past a spacer. */}
-        <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '4px 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        {/* OUTSIDE THE SCROLLER, DELIBERATELY. Inside it the back button would slide away with the tabs and
+            a member mid-scroll would have no way out of the page. `flexShrink: 0` because a flex item's
+            automatic minimum would otherwise let it be squeezed by six tabs that refuse to shrink.
+            Its 38px height is what now sets this row's height, so nothing was lost by deleting the row
+            above — the button is the same size, it simply shares a line with something. */}
+        <button onClick={onClose} aria-label="Close" title="Close" style={{ width: 38, height: 38, marginLeft: 6, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+        <div className="no-scrollbar" style={{ flex: 1, minWidth: 0, display: 'flex', gap: 4, padding: '4px 0 12px 8px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
           {_tabs.map(([k, lbl, ic]) => {
             const on = tab === k;
             return (
@@ -1235,6 +1245,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             );
           })}
           <div aria-hidden="true" style={{ flex: '0 0 10px' }} />
+        </div>
         </div>
       </div>
 
