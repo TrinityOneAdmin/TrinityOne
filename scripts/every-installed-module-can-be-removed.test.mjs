@@ -1163,24 +1163,40 @@ const TWIN_B = { id: 'gnw-nt', abbr: 'NT', name: 'Nuevo Testamento Guaraní Pe',
 FIXTURE.set('engbsb.zip', { kind: 'bible', bytes: rawOf(BIBLE), declares: 'BSB' });
 FIXTURE.set('guiNT_usfm.zip', { kind: 'bible', bytes: rawOf(BIBLE), declares: 'NT' });
 FIXTURE.set('gnwNT_usfm.zip', { kind: 'bible', bytes: rawOf(BIBLE), declares: 'NT' });
+const TWIN_C = { id: 'qvh-nt', abbr: 'NT', name: 'Nuevo Testamento Guaraní Pe', kind: 'bible', format: 'USFM', category: 'bibles', url: 'modules/qvhNT_usfm.zip' };
+FIXTURE.set('qvhNT_usfm.zip', { kind: 'bible', bytes: rawOf(BIBLE), declares: 'NT' });
 
-test('A RECORD WITHOUT ITS BYTES MUST NOT LEAVE THE MEMBER WITH AN EMPTY READER', async () => {
-  // `cachePut` swallows its own failures, so installing on a full phone writes the record and stores
-  // nothing. At the next launch `restoreInstalled` hits `if(!bytes) continue;`. The `?module=` branch then
-  // declines to re-download because a RECORD exists, and — before this fix — the default-Bible branch
-  // declined to heal because a URL was asked for. Neither fired and the member had nothing to read.
-  const e = engine({ modules: [] });
-  await e.installModule(BIBLE);
-  await e.cacheDelete(BIBLE.url);                       // the bytes go; the record stays
-  assert.ok(e.getInstalled()[BIBLE.url], 're-anchor: the record did not survive, so this tests nothing');
-  assert.equal(await e.cacheGet(BIBLE.url), null, 're-anchor: the bytes are still there');
+test('A RECORD WITHOUT ITS BYTES MUST NOT LEAVE THE MEMBER WITH AN EMPTY READER', () => {
+  // ⚠ THE FIRST VERSION OF THIS TEST WAS VACUOUS, and it is worth saying how, because the shape is easy to
+  // repeat: it called `installModule(BIBLE)` and then `cacheDelete(BIBLE.url)`. Deleting the cached BYTES
+  // does not unload the module — `modules` and `order` still held it — so `order.length > 0` was already
+  // true before `autoLoad()` ran, and the assertion could not fail. Both sabotage rows for this fix left it
+  // green; only the dictionary test below ever bit. A test that cannot fail is not a guard, and CLAUDE.md
+  // rule 1 is exactly about this.
+  //
+  // The state has to be a real COLD BOOT: a record on disk, no bytes, nothing loaded. `setInstalled` writes
+  // the record without loading anything, which is precisely the state a phone reaches when `cachePut`
+  // swallows a quota failure — the record lands, the bytes never do.
+  return (async () => {
+    const e = engine();
+    e.setInstalled({ [BIBLE.url]: { url: BIBLE.url, id: BIBLE.id, abbr: BIBLE.abbr, name: BIBLE.name, kind: 'bible', category: 'bibles' } });
+    assert.ok(e.getInstalled()[BIBLE.url], 're-anchor: the record was not written, so this tests nothing');
+    assert.equal(await e.cacheGet(BIBLE.url), null, 're-anchor: bytes exist, so restoreInstalled will load it');
+    assert.equal(e.order().length, 0, 're-anchor: something is already loaded, so the assertion below is free');
 
-  e.setSearch('?module=' + BIBLE.url);
-  await e.autoLoad();
-  assert.ok(e.order().length > 0,
-    'THE MEMBER OPENED THE APP AND HAS NO BIBLE AT ALL. A record survived without its bytes, so the ' +
-    '`?module=` branch skipped (already recorded) and the default-Bible branch skipped (a url was asked ' +
-    'for). No error, nothing on screen — the silent-blank-app class.');
+    e.setSearch('?module=' + BIBLE.url);
+    await e.autoLoad();
+
+    // EITHER outcome proves the self-heal ran: a Bible loaded (the shipped app, where the default really
+    // installs), or the integrity refusal that names it (this harness, which cannot satisfy KNOWN_HASHES for
+    // the default module). Asserting only the second would break the day the product gets BETTER.
+    const healed = e.order().length > 0 || /engbsb/.test(String(e.win.Bible._error || ''));
+    assert.ok(healed,
+      'THE MEMBER OPENED THE APP AND HAS NO BIBLE AT ALL. A record survived without its bytes, so the ' +
+      '`?module=` branch skipped (already recorded) and — before this fix — the default-Bible branch skipped ' +
+      'too (a url was asked for). Neither fired. No error, nothing on screen: the silent-blank-app class. ' +
+      'order=' + JSON.stringify(e.order()) + ' _error=' + JSON.stringify(e.win.Bible._error || null));
+  })();
 });
 
 test('…and a ?module= DICTIONARY on a fresh phone still tries to give the member a Bible', async () => {
@@ -1192,12 +1208,12 @@ test('…and a ?module= DICTIONARY on a fresh phone still tries to give the memb
   // check refusing our substitute is the shipped gate doing its job. What is under test is the GUARD, and
   // the recorded integrity failure is proof the branch was reached at all. Before the fix the branch was
   // skipped outright and `_error` stayed undefined.
-  const e = engine({ modules: [] });
+  const e = engine();
   e.setSearch('?module=' + DICT.url);
   await e.autoLoad();
   assert.ok(e.dicts.length > 0, 're-anchor: the dictionary itself did not install, so nothing below follows');
   assert.equal(e.order().length, 0, 're-anchor: a dictionary entered `order`, which holds Bibles only');
-  assert.match(String(e.win.Bible._error || ''), /engbsb/,
+  assert.ok(e.order().length > 0 || /engbsb/.test(String(e.win.Bible._error || '')),
     'THE DEFAULT BIBLE WAS NEVER EVEN ATTEMPTED. A member followed a link to a dictionary and the reader was ' +
     'left with nothing to read, because the self-heal was skipped whenever a `?module=` was present.');
 });
@@ -1208,7 +1224,7 @@ test('the reader can remove one of two translations that share BOTH name and abb
   // translations — "Couldn't remove NT", for ever, megabytes unreclaimable.
   // A THIRD Bible is active, because the active one is refused on purpose and the reader never offers Remove
   // for it — so leaving one of the twins active would measure that refusal instead of the name collision.
-  const e = engine({ modules: [] });
+  const e = engine();
   await e.installModule(BIBLE);
   e.setActive(BIBLE.abbr);
   await e.installModule(TWIN_A);
@@ -1249,7 +1265,7 @@ test('the active Bible is refused even when its record was never written', async
   // true, and `delete modules[active]` runs with `active` still naming it: a blank reader over a dangling
   // pointer. Defence in depth — no shipped screen offers Remove for the active Bible — but it is one of the
   // two refusals this file exists to hold.
-  const e = engine({ modules: [] });
+  const e = engine();
   await e.installModule(BIBLE);
   e.setActive(BIBLE.abbr);
   // ⚠ getInstalled() RETURNS A FRESH PARSE of localStorage, so mutating what it hands back changes nothing.
@@ -1264,4 +1280,43 @@ test('the active Bible is refused even when its record was never written', async
     'THE BIBLE BEING READ WAS REMOVED. Its record was missing, so the url comparison could not fire and the ' +
     'name fallback was skipped — leaving `active` pointing at a module that is no longer loaded.');
   assert.ok(e.modules[BIBLE.abbr], 'the active Bible was dropped from memory');
+});
+
+test('an ambiguous name is still REFUSED when the loaded copy is not one of the candidates', () => {
+  // The `named.includes(loadedFrom)` half of the ambiguity fix. Without this row the clause is
+  // unfalsifiable — dropping it leaves every other test green — and CLAUDE.md rule 4 says a claim in the
+  // permanent record needs a test behind it.
+  //
+  // ⚠ REACHING IT TAKES A SPECIFIC STATE, and an earlier version of this test did not reach it: pointing
+  // `urlOf` at a url with NO record resolves to a record that does not exist, which `removeModule` refuses
+  // further down for its own reasons — so the row passed either way and proved nothing. The state that
+  // actually exercises the clause is `urlOf` pointing at a REAL record that is no longer a CANDIDATE:
+  // `urlOf` is rebuilt each launch from what loaded, the installed map outlives it, and
+  // `noteRegisteredAbbr` can rewrite a record's abbr afterwards. Then resolving to it would delete a real
+  // module's real bytes — one the member never pointed at.
+  return (async () => {
+    // A FOURTH, UNRELATED Bible is the one being read. Without it the module this resolves to IS the active
+    // Bible, and the active-Bible refusal answers first — which is what an earlier version of this row
+    // measured while believing it was measuring the candidacy guard.
+    const e = engine();
+    await e.installModule(BIBLE);
+    e.setActive(BIBLE.abbr);
+    await e.installModule(TWIN_A);
+    await e.installModule(TWIN_B);
+    await e.installModule(TWIN_C);                       // urlOf['bibles|NT'] now names TWIN_C
+    e.noteRegisteredAbbr(TWIN_C.url, 'NTX');             // …and TWIN_C's record stops being an 'NT'
+
+    const named = Object.values(e.getInstalled()).filter(r => r.abbr === 'NT');
+    assert.equal(named.length, 2, 're-anchor: the candidate set is not ambiguous, so the clause is not reached');
+    assert.ok(e.getInstalled()[TWIN_C.url] && e.getInstalled()[TWIN_C.url].abbr === 'NTX',
+      're-anchor: TWIN_C is still a candidate, so `named.includes` cannot be what refuses');
+
+    assert.equal(await e.removeModule('NT', 'bibles'), false,
+      'AN AMBIGUOUS NAME RESOLVED TO A MODULE THAT IS NOT ONE OF THE CANDIDATES. `urlOf` outlived the abbr ' +
+      'it was keyed under, and the removal followed it — deleting a real module the member never pointed at. ' +
+      'A guess is never better than a refusal on a destructive action.');
+    assert.ok(await e.cacheGet(TWIN_C.url) !== null,
+      "it deleted the bytes of a module that was not even a candidate for the name it was given");
+    assert.ok(e.getInstalled()[TWIN_C.url], 'it removed the record of a module that was not a candidate');
+  })();
 });
