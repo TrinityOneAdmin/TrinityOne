@@ -2966,12 +2966,29 @@ function _kidSlot(prefix, cp) {
 // throws on an object rendered as a child, and the app root is the only error boundary above the worker's
 // screen — so `c: [{}]` in a photographed QR would blank the WHOLE APP at a children's door. It is refused
 // here, quietly, and the worker types the name as she did yesterday.
+//
+// AND THE OTHER HALF OF THE SAME LINE: EVERY INVISIBLE CHARACTER GOES. Dropping non-strings stops React
+// throwing; this stops the confirmation sentence LYING, which is worse because nothing looks wrong.
+//   · U+202A-U+202E and U+2066-U+2069 are bidi overrides and isolates, and U+200E/U+200F the marks. A
+//     right-to-left override inside a scanned name REORDERS THE DISPLAY of "Milo → Sarah Henderson?" — the
+//     single mitigation this whole design rests on — while the string a test reads is unchanged.
+//   · C0/C1 controls and U+00AD render as nothing at all.
+//   · U+200B is a zero-width SPACE: it lets two names that are pixel-identical on screen be different
+//     strings in a safeguarding record, which is exactly how a register stops being a register.
+// ⚠ U+200C AND U+200D ARE DELIBERATELY KEPT. The zero-width non-joiner and joiner are ORDINARY LETTERS'
+// WORK in Persian, Arabic and the Indic scripts — "می‌روم" needs one — and this product puts the
+// persecuted church and the developing world first. Corrupting a real child's name to close a homograph
+// trick that the worker's own eyes already guard would be the wrong trade, made against the exact audience
+// the rest of this file exists for.
+// JS `\s` already covers NBSP, U+2000-200A, U+202F, U+205F, U+3000 and U+FEFF, so the collapse below takes
+// those; the class here is only what `\s` does NOT reach.
 function _kidNames(list) {
   if (!Array.isArray(list)) return [];
   const out = [];
   for (const raw of list) {
     if (typeof raw !== 'string') continue;
-    const n = raw.replace(/\s+/g, ' ').trim().slice(0, MYKID_NAME_MAX);
+    const n = raw.replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+      .replace(/\s+/g, ' ').trim().slice(0, MYKID_NAME_MAX);
     if (!n) continue;
     if (out.some(x => x.toLowerCase() === n.toLowerCase())) continue;   // "Milo" twice is a slip, not two children
     out.push(n);
@@ -2983,9 +3000,18 @@ function _kidNames(list) {
 // already receive. A session id IS a service id (checkinSessionOf / the console's issuer both say so), and
 // every member is already served every `trinityone/service:` — so nothing new is published to make this work.
 //
-// `lifetimeWindow` is the SAME arithmetic the console uses to mint the session key and the relay uses to
-// admit the arrival. Importing it rather than re-deriving "45 minutes before, three hours after" is what
-// stops the parent's button appearing at a minute the relay would refuse.
+// `lifetimeWindow` is the SAME FUNCTION the console uses to mint the session key and the relay uses to admit
+// the arrival. Importing it rather than re-deriving "45 minutes before, three hours after" is what stops the
+// parent's button appearing at a minute the relay would refuse.
+//
+// ⚠ BUT IT IS THE SAME ARITHMETIC ONLY BECAUSE OF SOMETHING THIS FUNCTION DOES NOT READ, and that is worth
+// stating rather than leaving as an assumption. This hardcodes DEFAULT_HELPER_LIFETIME and passes NO opts,
+// so the two agree exactly as long as the console's `issueCheckinSessionKeys` also mints with the default
+// lifetime and no `before`/`after` margins — which its single caller does today. A church that ever gets a
+// setting for either would break the agreement here first, and the symptom is the mild one: the button is
+// offered for a window the relay has narrowed, the arrival is refused, and the card says so and points at
+// the desk. The fix, when that setting exists, is to read the church's stored lifetime here rather than to
+// widen this. Nothing about it silently admits anything: the relay is the gate either way.
 //
 // TWO SERVICES IN ONE DAY: the LATEST-STARTING window that contains `now` wins. Under the `day` lifetime both
 // a 09:00 and an 11:00 service run to local midnight, so after 11:00 both windows contain now and a

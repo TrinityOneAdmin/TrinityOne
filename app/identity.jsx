@@ -1800,17 +1800,29 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
     setNames((F && F.myChildNames) ? F.myChildNames(np) : []);
     setDraft(''); setErr('');
   }, [open, np]);
-  const save = (list) => { setNames((F && F.setMyChildNames) ? F.setMyChildNames(np, list) : []); };
+  // ⚠ WHAT IS ON SCREEN IS WHAT IS ON DISK, and it is read back rather than assumed. `setMyChildNames`
+  // returns the list it WOULD have stored and writes nothing when the app is PIN-locked (`_mayCache()` is
+  // `!!sk`) or when storage is full — so setting state from its return value painted names that were not
+  // saved and would be gone at the next open. Two answers, kept apart, because they are two different
+  // things to tell somebody: `wanted` is what the engine accepted, `stored` is what came back off disk.
+  const save = (list) => {
+    const wanted = (F && F.setMyChildNames) ? F.setMyChildNames(np, list) : [];
+    const stored = (F && F.myChildNames) ? F.myChildNames(np) : [];
+    setNames(stored);
+    return { wanted, stored };
+  };
+  const has = (list, n) => list.some(x => x.toLowerCase() === n.toLowerCase());
   const add = () => {
     const n = draft.trim();
     if (!n) return;
-    const before = names.length;
-    save([...names, n]);
+    const { wanted, stored } = save([...names, n]);
     setDraft('');
-    // SAY SO WHEN NOTHING HAPPENED. The engine drops a duplicate and caps the list at twelve; a box that
-    // simply emptied itself would read as "saved" either way. Fix the control, not the label.
-    setErr(before === ((F && F.myChildNames) ? F.myChildNames(np).length : 0)
-      ? 'That name is already on the list, or the list is full.' : '');
+    // THREE OUTCOMES, NOT TWO, and the middle one is the whole reason this was rewritten: a locked phone
+    // used to show the name added AND an error saying it was a duplicate, at the same time, and then lose it.
+    // Fix the control, not the label — and when the control genuinely could not act, say which one it was.
+    setErr(has(stored, n) ? ''
+      : has(wanted, n) ? 'That didn’t save. Unlock the app with your PIN and try again.'
+      : 'That name is already on the list, or the list is full.');
   };
   const drop = (n) => { save(names.filter(x => x !== n)); setErr(''); };
   const flip = () => {

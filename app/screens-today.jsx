@@ -1550,7 +1550,15 @@ function WereHereCard({ ctx }) {
   // as unknown — and rendering the QR every draw is a few hundred modules of work for a picture nobody is
   // looking at. Both reasons point the same way: build it when it is wanted.
   const qr = (landed || unsure) && F && F.arrivalQR ? F.arrivalQR(np) : '';
-  const svg = (qr && window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(qr) : '';
+  // ⚠ GUARDED, AND NOT BECAUSE IT CAN OVERFLOW TODAY. qrcode-generator throws when a payload will not fit
+  // any symbol version, measured at about 2331 bytes at this error-correction level; twelve names of forty
+  // characters caps this payload at roughly 1118 even at four bytes a character, so it cannot reach that
+  // now. The try/catch makes the safety independent of those two caps rather than conditional on them —
+  // the app root is the only error boundary above Today, so a throw here blanks the whole screen, and a cap
+  // somebody widens later must not be able to do that. No square is already a state this card words.
+  let svg = '';
+  try { svg = (qr && window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(qr) : ''; }
+  catch (e) { svg = ''; }
   const say = async () => {
     if (busy) return;
     setBusy(true); setRes(null);
@@ -1580,15 +1588,23 @@ function WereHereCard({ ctx }) {
           {/* …AND IT IS ABOUT THE ROOM IN FRONT OF THEM. `arrivedFor` pins every one of these three states to
               the session they were answered for, so a refusal at nine o'clock is not still on screen over the
               eleven o'clock button. A church with two services is the case that makes it visible.
-              THE THIRD OUTCOME, WORDED AS WHAT IT IS. `refused` is settled — the relay read it and said no,
-              commonly because this church has not opened a children's room for this service at all (the
-              steward's tick does not exist yet, so this card cannot know in advance). The desk is the answer
-              and the sentence says so without blaming the parent or the app. */}
+              ⚠ THE THIRD OUTCOME NAMES NO CAUSE IT HAS NOT MEASURED, and this sentence used to. It read
+              "Your church hasn't opened a children's room for this service", which is only ONE of at least
+              four things `refused` covers: _PUB_REFUSED matches /^(error|blocked|invalid|restricted|
+              rate-limited|auth-required)/, so a phone whose clock is more than ten minutes out fails NIP-42
+              and gets `auth-required`, an unauthenticated or PIN-locked socket gets `restricted`, and a
+              member the church has BLOCKED gets `blocked`. All three rendered as the church's fault.
+              That is the mistake scripts/a-refused-proof-does-not-accuse-the-clock-or-the-member.test.mjs
+              exists for, one document over: the relay's refusals are byte-identical from here, so the
+              MEASURED skew is the only honest discriminator the client has. Same rule, same shape — name
+              the clock when it is measured wrong, and otherwise name no cause and point at a person. */}
           {res && !res.ok && arrivedFor === now.session ? (
             <span style={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.35, color: 'var(--ink-2)' }}>
-              {res.reason === 'refused'
-                ? 'Your church hasn’t opened a children’s room for this service. Take them to the desk — they’ll be checked in there.'
-                : 'That didn’t reach your church. Take them to the desk — they’ll be checked in there.'}
+              {res.reason !== 'refused'
+                ? 'That didn’t reach your church. Take them to the desk — they’ll be checked in there.'
+                : ctx && ctx.clockIsWrong
+                  ? 'This phone’s clock is about ' + (ctx.clockSkewMins || 'a few') + ' minutes ' + (ctx.clockSkewAhead ? 'ahead of' : 'behind') + ' your church’s, which is why that was turned away. Take them to the desk — they’ll be checked in there.'
+                  : 'That was turned away and we can’t tell why. Take them to the desk — they’ll be checked in there, and whoever runs the room can look into it afterwards.'}
             </span>
           ) : null}
         </div>

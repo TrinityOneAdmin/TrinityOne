@@ -9177,7 +9177,7 @@
     const out = [];
     for (const raw of list) {
       if (typeof raw !== "string") continue;
-      const n = raw.replace(/\s+/g, " ").trim().slice(0, MYKID_NAME_MAX);
+      const n = raw.replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "").replace(/\s+/g, " ").trim().slice(0, MYKID_NAME_MAX);
       if (!n) continue;
       if (out.some((x) => x.toLowerCase() === n.toLowerCase())) continue;
       out.push(n);

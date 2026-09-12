@@ -230,6 +230,65 @@ test('a malformed QR is REFUSED, and refusing never throws', () => {
   assert.deepEqual(F.parseArrivalQR(good), { g: SARAH, c: ['Milo'] });
 });
 
+// ── AND THE OTHER HALF OF THE SAME LINE: CHARACTERS THAT ARE NOT THERE ───────────────────────────────────
+// Dropping non-strings stops React throwing. This stops the confirmation sentence LYING, which is worse
+// because nothing looks wrong: the whole design rests on the worker reading "Milo → Sarah Henderson?" and
+// acting on it, and a right-to-left override inside a scanned name reorders that sentence on screen while
+// leaving the string a test reads unchanged.
+test('a bidi override in a scanned name is stripped, not carried into the confirmation', () => {
+  const F = engine(device());
+  for (const [what, raw, want] of [
+    ['a right-to-left override', '\u202EMilo', 'Milo'],
+    ['a left-to-right override', '\u202DMilo', 'Milo'],
+    ['an isolate pair', '\u2066Milo\u2069', 'Milo'],
+    ['a right-to-left mark', 'Milo\u200F', 'Milo'],
+    ['a left-to-right mark', '\u200EMilo', 'Milo'],
+  ]) {
+    const out = F.parseArrivalQR(JSON.stringify({ v: 1, g: SARAH, c: [raw] }));
+    assert.ok(out, what + ' made the whole payload unreadable');
+    assert.deepEqual(out.c, [want],
+      'A BIDI CONTROL REACHED THE NAME A WORKER CONFIRMS AGAINST (' + what + '): ' + JSON.stringify(out.c) +
+      '. It reorders "Milo → Sarah Henderson?" on screen while the string stays the same, which defeats the ' +
+      'one mitigation this design rests on and leaves nothing for a test to see.');
+  }
+});
+
+test('control characters and a zero-width SPACE are stripped, so two identical-looking names are one name', () => {
+  const F = engine(device());
+  // A zero-width space lets two names that are pixel-identical on screen be different strings in a
+  // safeguarding record — which is how a register stops being a register.
+  assert.deepEqual(F.parseArrivalQR(JSON.stringify({ v: 1, g: SARAH, c: ['Mi\u200Blo', 'Milo'] })).c, ['Milo'],
+    'a zero-width space produced two entries that look identical on a worker’s screen');
+  for (const [what, raw] of [['a null', 'a\u0000b'], ['a bell', 'a\u0007b'], ['a DEL', 'a\u007Fb'],
+                             ['a C1 control', 'a\u0085b'], ['a soft hyphen', 'a\u00ADb']]) {
+    assert.deepEqual(F.parseArrivalQR(JSON.stringify({ v: 1, g: SARAH, c: [raw] })).c, ['ab'],
+      what + ' survived into a name a screen will render and a record will store');
+  }
+  // A name that is ONLY invisible characters is not a name.
+  assert.equal(F.parseArrivalQR(JSON.stringify({ v: 1, g: SARAH, c: ['\u202E\u200B\u0000'] })), null,
+    'a name made entirely of invisible characters was accepted');
+});
+
+test('⚠ THE ZERO-WIDTH JOINERS ARE KEPT, and that is a decision rather than an oversight', () => {
+  // U+200C and U+200D are ORDINARY LETTERS' WORK in Persian, Arabic and the Indic scripts — Persian
+  // "می‌روم" needs one. This product puts the persecuted church and the developing world first
+  // (reference/DOMAIN.md, positioning-not-cushy-american), so corrupting a real child's name to close a
+  // homograph trick the worker's own eyes already guard is the wrong trade against the exact audience the
+  // rest of this feature exists for.
+  const F = engine(device());
+  assert.deepEqual(F.parseArrivalQR(JSON.stringify({ v: 1, g: SARAH, c: ['می\u200Cروم'] })).c, ['می\u200Cروم'],
+    'a Persian name lost its zero-width non-joiner — the name is now spelled wrongly on a worker’s screen');
+  assert.deepEqual(F.parseArrivalQR(JSON.stringify({ v: 1, g: SARAH, c: ['क्\u200Dष'] })).c, ['क्\u200Dष'],
+    'an Indic name lost its zero-width joiner');
+});
+
+test('the parent’s OWN typing is cleaned by the same rule — one normaliser, not two', () => {
+  const dev = device();
+  const F = engine(dev);
+  assert.deepEqual(F.setMyChildNames(CHURCH, ['\u202EMilo', 'Mi\u200Blo']), ['Milo'],
+    'a name typed on the parent’s own screen kept its invisible characters, so the two sides disagree');
+});
+
 test('an object smuggled INTO a list of names is dropped, and the real names survive beside it', () => {
   const F = engine(device());
   const out = F.parseArrivalQR(JSON.stringify({ v: 1, g: SARAH, c: [{ toString: 'x' }, 'Milo', 42, null, 'Ivy'] }));

@@ -463,3 +463,23 @@ test('the scan control is on the Kids pane of the real Serving screen, not only 
     'THE SCAN CONTROL IS NOT ON THE SCREEN A WORKER ACTUALLY OPENS. Every assertion about KidsAddChild in ' +
     'isolation is then about a component nobody renders — CLAUDE.md rule 1, verbatim.');
 });
+
+// ══════════════ AN INVISIBLE CHARACTER MUST NOT REACH THE ONE SENTENCE THAT MATTERS ═══════════════════════
+test('a bidi override in a scanned name never reaches the confirmation', async () => {
+  // The whole design rests on the worker reading "Milo → Sarah Henderson?" and acting on it. A right-to-left
+  // override inside the name REORDERS that sentence on screen while leaving the string unchanged, so an
+  // assertion on the string alone would never see it. Measured on the rendered tree, and on what is written.
+  const d = desk(register([session('svc-am', [arrival(SARAH, 'Sarah Henderson')])]));
+  d.scan(0, qr(SARAH, ['\u202EMilo\u200B']));
+  assert.equal(d.input(0, 'Child\u2019s name').props.value, 'Milo',
+    'AN INVISIBLE CHARACTER REACHED THE WORKER\u2019S NAME BOX: ' + JSON.stringify(d.input(0, 'Child\u2019s name').props.value));
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo \u2192 Sarah Henderson\?/, 'the confirmation did not render: ' + JSON.stringify(t));
+  assert.ok(!/[\u0000-\u001F\u007F-\u009F\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(t),
+    'a bidi or zero-width character is in the sentence the worker confirms against, where it reorders what ' +
+    'she reads while the string a test reads stays the same');
+  await d.click(0, 'Yes, check in');
+  assert.equal(d.checkinCalls[0].childName, 'Milo',
+    'an invisible character was written into the safeguarding record: ' + JSON.stringify(d.checkinCalls[0].childName));
+});
