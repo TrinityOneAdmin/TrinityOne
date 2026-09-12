@@ -1207,6 +1207,45 @@ async function localAdminToken() {
   try { const r = await fetch('/local-token', { cache: 'no-store' }); if (!r.ok) return ''; const j = await r.json(); _localToken = (j && j.token) || ''; return _localToken; } catch (e) { return ''; }
 }
 function _authHdr(tok) { return tok ? { 'Authorization': 'Bearer ' + tok } : {}; }
+
+// ── A CHURCH CREATED ON A SUITE BOX REGISTERS ITSELF THERE ────────────────────────────────────────────────
+// Owner, 2026-09-04, after being shown that creating a church on a self-hosting box silently pointed the
+// whole congregation at the hosted pool instead: "I think a suite box should auto register". And 2026-09-12:
+// "I really want to make sure the 'adding a church' isn't something that a steward has to do manually."
+// Until now the only way was the relay panel's wizard step 2 — "paste your church's npub, you'll find it in
+// the steward console" — which on a fresh box is impossible, because the church does not exist yet.
+//
+// ⚠ ONCE PER (CHURCH KEY, ORIGIN), REMEMBERED. RELAY-AUDIT-2026-07-20 H4: registration is a SETUP step, not
+// a heartbeat. The older self-register fired on every console mount from four call sites and left 19 tenants
+// on the shared box, most of them nameless, because nothing ever removes a row.
+//
+// ⚠ LOOPBACK ONLY, via localAdminToken(). That is the whole security boundary here and it is not new: the
+// token endpoint is already gated on _originIsLoopback(), so a HOSTED console at app.trinityone.church —
+// same-origin with the shared pool — gets nothing. This adds no authority; it uses the one door a steward
+// standing at their own box already has.
+//
+// ⚠ AND ONLY WITH A NAME. The relay's own name check lives inside `if (!isAdmin)`, so the admin token we
+// hold BYPASSES it — the relay would accept a nameless church from us. It must not: the name is the
+// readiness signal that this console has a church at all, and nameless rows are what H4 is about. So the
+// restraint is OURS, asserted by test, not enforced by the relay on this path.
+function _autoRegKey(origin) { return 'trinityone.steward.autoreg.' + (pub || '') + '|' + origin; }
+async function _registerOnOwnBox(name) {
+  try {
+    const nm = String(name || '').trim();
+    if (!nm || !pub || actingChurch) return;
+    const origin = _ownOrigin(); if (!origin) return;
+    if (lsGet(_autoRegKey(origin))) return;              // already done for this church on this box
+    const tok = await localAdminToken(); if (!tok) return;   // not loopback → not our box to register with
+    const r = await fetch('/config', {
+      method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', ..._authHdr(tok) },
+      body: JSON.stringify({ addChurch: { npub: npubEncode(pub), name: nm } }),
+    });
+    if (!r.ok) return;                                   // chunk 6 words the failures; silence is not success
+    try { lsSet(_autoRegKey(origin), '1'); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent('steward-box-registered', { detail: { origin } })); } catch (e) {}
+  } catch (e) { /* never let this break the profile publish that triggered it */ }
+}
 async function refreshSelfPublicRelay() {
   if (!ownIsLoopback()) return;
   try {
@@ -3955,7 +3994,11 @@ window.Steward = {
       if (local && host) nip05 = local + '@' + host;
     }
     const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {} });
-    return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
+    // ⚠ THE HOOK IS HERE, NOT IN THE THREE UI CALLERS. publishProfile is the one place a church is named
+    // (NameEditModal twice, plus the setup panel), and a fourth screen added later must not have to
+    // remember this. It runs AFTER the publish and never blocks or fails it.
+    return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk))
+      .then((ev) => { _registerOnOwnBox(m.name); return ev; });
   },
   // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
   // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions

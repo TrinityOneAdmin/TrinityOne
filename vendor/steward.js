@@ -15856,6 +15856,36 @@ zoo`.split("\n");
   function _authHdr(tok) {
     return tok ? { "Authorization": "Bearer " + tok } : {};
   }
+  function _autoRegKey(origin) {
+    return "trinityone.steward.autoreg." + (pub || "") + "|" + origin;
+  }
+  async function _registerOnOwnBox(name) {
+    try {
+      const nm = String(name || "").trim();
+      if (!nm || !pub || actingChurch) return;
+      const origin = _ownOrigin();
+      if (!origin) return;
+      if (lsGet(_autoRegKey(origin))) return;
+      const tok = await localAdminToken();
+      if (!tok) return;
+      const r = await fetch("/config", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", ..._authHdr(tok) },
+        body: JSON.stringify({ addChurch: { npub: npubEncode(pub), name: nm } })
+      });
+      if (!r.ok) return;
+      try {
+        lsSet(_autoRegKey(origin), "1");
+      } catch (e) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("steward-box-registered", { detail: { origin } }));
+      } catch (e) {
+      }
+    } catch (e) {
+    }
+  }
   async function refreshSelfPublicRelay() {
     if (!ownIsLoopback()) return;
     try {
@@ -17942,7 +17972,10 @@ zoo`.split("\n");
         if (local && host) nip05 = local + "@" + host;
       }
       const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", banner: m.banner || "", bannerFade: typeof m.bannerFade === "number" ? m.bannerFade : 16, accent: m.accent || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim(), giving: !!m.giving, features: m.features && typeof m.features === "object" ? m.features : {}, rules: m.rules && typeof m.rules === "object" ? m.rules : {} });
-      return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk));
+      return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk)).then((ev) => {
+        _registerOnOwnBox(m.name);
+        return ev;
+      });
     },
     // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
     // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions
