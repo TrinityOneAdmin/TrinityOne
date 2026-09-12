@@ -121,6 +121,19 @@
   .sx-grid--dl { align-items: stretch; }
   .sx-dl { display: flex; flex-direction: column; }
   .sx-acts { margin-top: auto; padding-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  /* ⚠ SCOPED TO .sx-dl — the DOWNLOAD cards only. Owner 2026-09-12: "make those cards about 2/3rds the
+     size". .sx-card is shared with the Features and Support grids, so the shrink is scoped here or it
+     takes three other sections with it. */
+  .sx-dl { padding: 15px 17px; }
+  .sx-dl h3 { font-size: 16.5px; margin-bottom: 5px; }
+  .sx-dl p { font-size: 13.5px; line-height: 1.5; }
+  .sx-dl .sx-acts { padding-top: 12px; gap: 6px; }
+  .sx-dl .sx-act { padding: 7px 11px; border-radius: 10px; }
+  .sx-dl .sx-act b { font-size: 13px; }
+  .sx-dl .sx-act span { font-size: 11.5px; }
+  /* Two actions on one line, half width each — the two Linux builds, which are one choice, not two. */
+  .sx-act-row { display: flex; gap: 6px; }
+  .sx-act-row > .sx-act { flex: 1 1 0; min-width: 0; }
   .sx-act { display: block; padding: 10px 13px; border-radius: 12px; border: 1px solid var(--line); background: var(--paper); text-decoration: none; color: var(--ink); transition: border-color .15s, transform .15s; }
   .sx-act:hover { border-color: var(--clay); transform: translateY(-1px); }
   .sx-act b { display: block; font-size: 14px; font-weight: 700; }
@@ -636,8 +649,8 @@
     <div class="sx-grid sx-grid--dl">
       <div class="sx-card sx-dl">
         <h3>TrinityOne</h3>
-        <p>For every member — read the Bible, join your groups, pray together, and keep up with your church through the week.</p>
-        <p style="color:var(--ink-3);margin-top:9px">The Bible works straight away. To join your church you'll need the invite link or code they shared with you.</p>
+        <p>Read the Bible, join your groups, pray together, and keep up with your church through the week.</p>
+        <p style="color:var(--ink-3);margin-top:7px">The Bible works straight away. To join your church you'll need their invite link or code.</p>
         <div class="sx-acts">
           <a class="sx-act sx-act--go" href="https://app.trinityone.church/trinityone.apk" download><b>Android</b><span>Download the app</span></a>
           <a class="sx-act" href="https://app.trinityone.church/"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen</span></a>
@@ -647,16 +660,19 @@
 
       <div class="sx-card sx-dl">
         <h3>TrinityOne Suite</h3>
-        <p><b>The whole church on a computer you own.</b> Your church's records stay on your own machine, and the console to run it — groups, rotas, members — comes with them. One double-click app, no command line.</p>
-        <p style="color:var(--ink-3);margin-top:9px">This is the way we'd point you. Any always-on computer will do; leave it switched on and your church is reachable through the week.</p>
+        <p><b>The whole church on a computer you own.</b> Your records stay on your machine, and the console to run it comes with them — one double-click app, no command line.</p>
+        <p style="color:var(--ink-3);margin-top:7px">The way we'd point you. Any computer you can leave on will do.</p>
         <div class="sx-acts">
           <a class="sx-act sx-act--go" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe"><b>Windows</b><span>Installer (.exe)</span></a>
           <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg"><b>macOS</b><span>Apple silicon (.dmg)</span></a>
-          <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage"><b>Linux</b><span>AppImage</span></a>
-            <!-- CI builds `deb,appimage` and publishes both (relay-desktop.yml). The page named the
-                 Debian package in prose and linked only the AppImage, so the one reader who wanted it
-                 had nowhere to click. -->
-            <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.deb"><b>Linux</b><span>Debian package (.deb)</span></a>
+          <!-- CI builds `deb,appimage` and publishes both (relay-desktop.yml). The page named the Debian
+               package in prose and linked only the AppImage, so the one reader who wanted it had nowhere
+               to click. They share a row because they are ONE choice — which Linux package — not two
+               platforms, and stacked they made this card taller than the member card beside it. -->
+          <div class="sx-act-row">
+            <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage"><b>Linux</b><span>AppImage</span></a>
+            <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.deb"><b>Linux</b><span>.deb</span></a>
+          </div>
         </div>
       </div>
     </div>
