@@ -60,3 +60,33 @@
     })
     .catch(function () {});
 })();
+
+// ── FIRST LAUNCH GOES THROUGH RELAY SETUP ─────────────────────────────────────────────────────────────
+// Owner, 2026-09-12: the Suite should "have a wizard that goes through the relay setup first? Then,
+// automatically on completion, shows the relay dashboard, then a popup asks, 'time to set up a church'".
+//
+// THE WIZARD ALREADY EXISTED AND ALMOST NOBODY REACHED IT. `maybeFirstRun()` lives in control.js, and
+// control.js is loaded by control.html and by nothing else (measured) — so it fires only for someone who
+// picks "Manage a relay". A steward who picks "Run your church" goes to /steward.html and never loads it,
+// which is most stewards. That, not a missing wizard, was the gap.
+//
+// ⚠ THIS DOES NOT SEND FIRST RUN TO THE CONSOLE, and must never be changed to. `6966c4f` (2026-09-08)
+// fixed exactly that: first run used to open steward.html, so somebody installing the Suite purely to run
+// a relay was walked into church setup with no way past it. This lands on the RELAY PANEL, where both
+// doors stay one click away.
+//
+// ⚠ LOOPBACK ONLY, and that is not caution — it is what stops a redirect loop. control.js's
+// `maybeFirstRun()` returns early when it has no admin token, BEFORE it sets the seen-marker, and
+// localAdminToken() is loopback-gated. Over a tunnel the marker would therefore never be set and this
+// would bounce the launcher to the panel on every single launch, forever.
+//
+// The marker is control.js's own `to_relay_setup_seen`, and it is set on EVERY exit from that wizard —
+// finished, skipped, or "this relay is already established, do not nag". So this redirects at most once.
+(function () {
+  try {
+    if (localStorage.getItem('to_relay_setup_seen')) return;
+    var h = String(location.hostname || '').replace(/^\[|\]$/g, '');
+    if (!/^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(h)) return;
+    location.replace('/relay-app/control.html');
+  } catch (e) { /* no storage → leave the launcher alone */ }
+})();

@@ -80,3 +80,68 @@ test('the console says where the church lives, so drift is never silent', () => 
   const D = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
   assert.match(D, /Your church lives on|lives on:/i, 'nothing on screen names where the records are kept');
 });
+
+// ── FIRST LAUNCH WALKS THROUGH RELAY SETUP ────────────────────────────────────────────────────────────────
+// Owner, 2026-09-12. The wizard existed in control.js and control.js is loaded by control.html ALONE, so it
+// only ever fired for someone who picked "Manage a relay" — a steward picking "Run your church" never met
+// it. home.js now sends a first launch to the relay panel so the wizard runs.
+//
+// ⚠ RUN, NEVER MATCHED. relay-app/*.js ships unbundled exactly like app/*.jsx, so `false && ` in front of
+// this would leave every word of it in place and a text-matching assertion would still pass — CLAUDE.md
+// rule 3, same hazard, different directory. The block is lifted out of the shipped file and EXECUTED
+// against a stubbed window.
+const HOMEJS = readFileSync(new URL('../relay-app/home.js', import.meta.url), 'utf8');
+const FIRSTRUN = (() => {
+  const i = HOMEJS.indexOf('// ── FIRST LAUNCH GOES THROUGH RELAY SETUP');
+  assert.notEqual(i, -1, 'the first-launch block is gone from relay-app/home.js');
+  return HOMEJS.slice(i);
+})();
+
+function launch({ seen = null, hostname = '127.0.0.1', storageThrows = false } = {}) {
+  const went = [];
+  const localStorage = storageThrows
+    ? { getItem() { throw new Error('site data blocked'); }, setItem() {} }
+    : { getItem: (k) => (k === 'to_relay_setup_seen' ? seen : null), setItem() {} };
+  const location = { hostname, replace: (u) => went.push(u) };
+  new Function('localStorage', 'location', FIRSTRUN)(localStorage, location);
+  return went;
+}
+
+test('a FIRST launch is sent to relay setup — the wizard nobody could reach', () => {
+  assert.deepEqual(launch(), ['/relay-app/control.html'],
+    'THE FIRST LAUNCH DOES NOT REACH THE RELAY WIZARD. maybeFirstRun() lives in control.js, which only ' +
+    'control.html loads, so a steward who picks "Run your church" never meets relay setup at all.');
+});
+
+test('…and NEVER to the console, which is the 2026-09-08 regression', () => {
+  // 6966c4f: first run used to open steward.html, so somebody installing the Suite purely to run a relay
+  // was walked into church setup with no way past it.
+  assert.equal(launch().some(u => /steward\.html/.test(u)), false,
+    'FIRST RUN LANDS ON THE CONSOLE. A relay-only operator is walked into church setup with no way past.');
+});
+
+test('once the wizard has been seen — finished, skipped, or an established relay — it never fires again', () => {
+  // control.js sets `to_relay_setup_seen` on EVERY exit from that wizard, including "do not nag an
+  // established relay". Without this the launcher would bounce to the panel on every single launch.
+  assert.deepEqual(launch({ seen: '1' }), [], 'the launcher re-ran relay setup after it had been seen');
+});
+
+test('OVER A TUNNEL IT DOES NOTHING, and that is what stops an infinite redirect', () => {
+  // control.js's maybeFirstRun() returns early when it has no admin token, BEFORE it sets the marker, and
+  // localAdminToken() is loopback-gated. So off loopback the marker is never set — and a redirect that did
+  // not check this would bounce the launcher to a panel it cannot use, for ever.
+  for (const host of ['relay.example.ts.net', 'app.trinityone.church', '192.168.1.40']) {
+    assert.deepEqual(launch({ hostname: host }), [],
+      'the launcher redirected to relay setup from ' + host + ', where the wizard cannot set its own ' +
+      'seen-marker — that is a redirect on every launch, for ever');
+  }
+  // …and the loopback spellings that MUST still work, so the line above is a condition and not a deletion.
+  for (const host of ['localhost', '127.0.0.1', '::1']) {
+    assert.deepEqual(launch({ hostname: host }), ['/relay-app/control.html'], host + ' did not reach relay setup');
+  }
+});
+
+test('a browser with site data blocked is left alone rather than crashed', () => {
+  assert.deepEqual(launch({ storageThrows: true }), [],
+    'a launcher that cannot read localStorage threw instead of simply not redirecting');
+});
