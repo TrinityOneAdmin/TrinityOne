@@ -46,7 +46,7 @@ import { eligibleHelpers, helperPolicy, lifetimeWindow, buildHelperGrant, HELPER
          permittedHelpers, permissionPolicy, permissionWindow, buildCheckinPermission,
          readCheckinPermission, PERMISSION_LIFETIMES, GRANT_SOURCE, KEY_LEAD_SECONDS,
          permissionFault, readCheckinHelperCopy, checkinSessionOf,
-         checkinGuardianCopies } from '../scripts/checkin-role-source.mjs';
+         checkinGuardianCopies, MAX_SESSION_SECONDS } from '../scripts/checkin-role-source.mjs';
 
 // ---- backup encryption: seal an export to the CHURCH KEY, so only the church private key can open it ----
 // Hybrid ECIES: a throwaway ephemeral key does an ECDH (via NIP-44's key agreement) with the church PUBLIC
@@ -6921,6 +6921,27 @@ window.Steward = {
     return { source: policy.source, lifetime: policy.lifetime,
       pubs: eligibleHelpers(policy.source, { rota: o.rota, childrenTeams: o.childrenTeams, rosters: o.rosters, teamId: o.teamId, people: o.people }) };
   },
+  // ── HOW LONG A RECORD STAYS ON THE REGISTER, read from the one place that defines it ────────────────────
+  // The console's register (DashCheckin in app/stew-dashboard.jsx) shows WHO IS IN THE ROOM, not who was
+  // stamped with today's date — owner's decision 2026-09-11, asked as "should the register show 'checked in
+  // today' or 'still in the room'?": *"still in the room — that's what a worker at a door actually needs"*.
+  // A record with no release must still not sit there for ever, so the desk ages one out on the measure the
+  // PARENT's screen already uses: MYKIDS_WINDOW in src/fellowship.src.js is MAX_SESSION_SECONDS, and so is
+  // this. Same length, same field (`created_at`), where before one side was a calendar day and the other a
+  // window.
+  //
+  // ⚠ THE DESK ALSO BOUNDS ON THE SEALED `in`, WHICH THE PARENT'S SIDE DOES NOT — because of
+  // migrateCheckinKeys() below. It re-publishes every legacy record through encPublish, which stamps a fresh
+  // created_at, so `ts` on a migrated record is the MIGRATION time and not an arrival. The conjunction that
+  // fixes it is written up at the top of DashCheckin; this function supplies only the length, and the length
+  // is the same on both sides.
+  //
+  // Exposed rather than restated on the screen, for the same reason as checkinPermissionLifetimes() below: a
+  // screen holding its own figure is free to disagree with the rest of the product about it. ONE CALLER:
+  // DashCheckin. It is a function, not a field, because every other shape-of-the-rules reader on this object
+  // is one and a mixed surface invites a screen to read the wrong kind.
+  checkinRegisterWindow() { return MAX_SESSION_SECONDS; },
+
   // THE SHAPES A STEWARD MAY PICK FOR A CLEARANCE, read from the one place that defines them rather than
   // restated on a screen — same reason as checkinLifetimes() below.
   checkinPermissionLifetimes() {
@@ -7646,8 +7667,37 @@ window.Steward = {
       }
       cb(kids.map((r) => {
         const rel = releases.get(String(r._sid || '') + '|' + String(r.id));
-        if (!rel) return r;
-        return { ...r, out: (rel.out != null ? rel.out : r.out), manual: rel.manual === true, releasedBy: rel._by || rel.by || '' };
+        // ⚠ `releasedTs` IS SET ON EVERY ROW, INCLUDING THE ONES WITH NO RELEASE, and that is the whole of
+        // what makes it attested rather than claimed. encSubscribe builds `{ id, ...obj, ts, _sid, _rel }` —
+        // BODY FIRST, attested fields last — so `ts`, `_sid` and `_rel` override anything the sealed body
+        // says. `releasedTs` is not in that list; it is added here. Until 2026-09-12 this path returned `r`
+        // untouched, so a `releasedTs` sitting in the SEALED BODY flowed straight through to the register's
+        // window: measured, a record whose attested `ts` was three weeks old and whose body claimed
+        // `releasedTs` five seconds ago was rendered as live. No escalation — writing that body needs the
+        // check-in write capability, which already lets you publish a fresh row — but the comment and the
+        // commit message both called this field relay-attested, and a false claim about an invariant is
+        // worse than the weakening it describes. Overwriting unconditionally makes the claim true.
+        if (!rel) return { ...r, releasedTs: null };
+        // `releasedTs` IS THE RELEASE DOCUMENT'S OWN created_at, and it is carried because the two release
+        // paths otherwise disagree about when a collection happened. A CONSOLE checkout rewrites the record
+        // itself, so the row's own `ts` becomes the collection; a WORKER's release is a SEPARATE document,
+        // so the row's `ts` stays the arrival and the collection instant is only here. The register ages a
+        // collected row from the collection (DashCheckin), and without this a worker-released lock-in
+        // dropped off 26 hours after the child ARRIVED rather than after she left. Relay-attested, like
+        // `ts`: it is an event's created_at, not anything the body claims.
+        // ⚠ `rel.out || … || rel.ts` AND NOT `rel.out != null ? …`. A RELEASE DOCUMENT IS A COLLECTION:
+        // that is the whole of what it is, and the only question left is what TIME to show. `!= null`
+        // answered a different question, and on a release carrying `out: 0` — or `false`, or no `out` at
+        // all — it fell back to the check-in's own `out`, which is `null`, so a RELEASED CHILD RENDERED AS
+        // STILL IN THE ROOM with a live Check out button beside her. Driven end to end through the shipped
+        // bundle into the shipped screen by the audit of d72a5a1; not reachable from a shipped writer, and
+        // the same predicate class DashCheckin was corrected for one function downstream.
+        //
+        // So: the release's own time when it is usable, then whatever the record already carried, and
+        // failing both the RELEASE EVENT'S OWN created_at — which is attested, is within seconds of the
+        // real release on any live path, and is the one instant we can stand behind. What must never happen
+        // is the collection evaporating because a body field was malformed.
+        return { ...r, out: (rel.out || r.out || rel.ts), manual: rel.manual === true, releasedBy: rel._by || rel.by || '', releasedTs: rel.ts };
       }));
     }, 'checkin');
   },

@@ -160,6 +160,7 @@ const NAMES = { [CHILD_A]: 'Amelia Fenn', [CHILD_B]: 'Noah Kettleborough-Reid',
   [MUM]: 'Ruth Fenn', [DAD]: 'Sam Fenn', [HELPER]: 'Margaret Ashby', [STEWARD]: 'Tom Vane' };
 const iso = (d) => new Date(Date.parse(TODAY + 'T10:00:00Z') + d * 86400000).toISOString().slice(0, 10);
 const secs = (d) => Math.floor(Date.parse(iso(d) + 'T10:00:00Z') / 1000);
+const REALNOW = Math.floor(Date.now() / 1000);   // only for `ts` — see the note on useStewardCheckins below
 
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
@@ -182,9 +183,25 @@ function checkinPage({ width = 360, longNote = false } = {}) {
     { React, window: helpWin, Icon, useStewDialog, document: doc, history: { pushState() {} } });
   const win = {
     innerWidth: width, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true, localStorage,
+    // ⚠ `ts`, `in` AND `out` ARE CLOCK-RELATIVE ON THIS PAGE, and they have to be. The register selects on
+    // who is still in the room: a record inside one MAX_SESSION_SECONDS window of NOW — off the event's own
+    // created_at, AND off the sealed body's `in` when it carries a numeric one — rather than on the stamped
+    // `date`. A fixture whose `ts`/`in` are fixed calendar instants is filtered out entirely, and this test
+    // would measure an EMPTY register while still passing. They also have to agree with each other: a real
+    // record's `in` and `created_at` come from ONE clock microseconds apart (checkIn stamps `in`, encPublish
+    // stamps `created_at`), and only migrateCheckinKeys ever separates them.
+    //
+    // WHAT IS STILL FIXED is everything the LAYOUT depends on: `date`, todayISO, and the services. So the
+    // day marker below is a stable "Sat, 12 Sep" whatever day the suite runs.
+    //
+    // r1 AND r2 ARE STAMPED WITH THE PREVIOUS DAY ON PURPOSE. The register outlives a midnight now, so the
+    // LONGEST row this page can paint is one carrying a day marker AS WELL AS a time, a pickup list and a
+    // code. With every fixture dated TODAY the marker never rendered and the widest row on the real screen
+    // was never measured at 360px — the exact shape this file exists to catch. The assertion that pins this
+    // is in 'the check-in page renders…' above.
     useStewardCheckins: () => [
-      { id: 'r1', child: CHILD_A, childName: NAMES[CHILD_A], date: TODAY, in: secs(0), code: '4182' },
-      { id: 'r2', child: CHILD_B, childName: NAMES[CHILD_B], date: TODAY, in: secs(0) - 3600, out: secs(0) - 600, code: '9079' },
+      { id: 'r1', child: CHILD_A, childName: NAMES[CHILD_A], date: iso(-1), ts: REALNOW - 600, in: REALNOW - 600, code: '4182' },
+      { id: 'r2', child: CHILD_B, childName: NAMES[CHILD_B], date: iso(-1), ts: REALNOW - 3600, in: REALNOW - 3600, out: REALNOW - 600, code: '9079' },
     ],
     useStewardSafeguard: () => ({ minors: [CHILD_A, CHILD_B], minorsKnown: true }),
     useStewardGuardians: () => ({ [CHILD_A]: [MUM, DAD], [CHILD_B]: [MUM] }),
@@ -395,6 +412,15 @@ test('the check-in page renders, at the width under test, with its three panels'
       'clearances + session keys this file measures — re-anchor it');
     assert.ok(PAGES[i].html.includes('Kids check-in'),
       `the register panel is gone from the check-in page at ${c.width}px — nothing below can measure a card that is not rendered`);
+    // ⚠ THE WIDEST ROW MUST ACTUALLY BE ON THE PAGE. Since the register outlives a midnight, the longest
+    // thing it can paint is a row carrying a DAY MARKER as well as a time, a pickup list and a code — and
+    // both fixtures used to be dated TODAY, so the marker never rendered and the widest real row was never
+    // measured here. This pins the fixture to its purpose: change the dates back and this fails rather than
+    // quietly measuring a narrower page.
+    const dayMarker = new Date(iso(-1) + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    assert.ok(PAGES[i].html.includes(dayMarker),
+      `no "${dayMarker}" day marker on the register at ${c.width}px, so the widest row this page can paint ` +
+      'is not among the ones being measured — check the useStewardCheckins fixture is still dated iso(-1)');
   }
 });
 

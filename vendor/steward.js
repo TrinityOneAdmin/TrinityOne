@@ -20992,6 +20992,28 @@ zoo`.split("\n");
         pubs: eligibleHelpers(policy.source, { rota: o.rota, childrenTeams: o.childrenTeams, rosters: o.rosters, teamId: o.teamId, people: o.people })
       };
     },
+    // ── HOW LONG A RECORD STAYS ON THE REGISTER, read from the one place that defines it ────────────────────
+    // The console's register (DashCheckin in app/stew-dashboard.jsx) shows WHO IS IN THE ROOM, not who was
+    // stamped with today's date — owner's decision 2026-09-11, asked as "should the register show 'checked in
+    // today' or 'still in the room'?": *"still in the room — that's what a worker at a door actually needs"*.
+    // A record with no release must still not sit there for ever, so the desk ages one out on the measure the
+    // PARENT's screen already uses: MYKIDS_WINDOW in src/fellowship.src.js is MAX_SESSION_SECONDS, and so is
+    // this. Same length, same field (`created_at`), where before one side was a calendar day and the other a
+    // window.
+    //
+    // ⚠ THE DESK ALSO BOUNDS ON THE SEALED `in`, WHICH THE PARENT'S SIDE DOES NOT — because of
+    // migrateCheckinKeys() below. It re-publishes every legacy record through encPublish, which stamps a fresh
+    // created_at, so `ts` on a migrated record is the MIGRATION time and not an arrival. The conjunction that
+    // fixes it is written up at the top of DashCheckin; this function supplies only the length, and the length
+    // is the same on both sides.
+    //
+    // Exposed rather than restated on the screen, for the same reason as checkinPermissionLifetimes() below: a
+    // screen holding its own figure is free to disagree with the rest of the product about it. ONE CALLER:
+    // DashCheckin. It is a function, not a field, because every other shape-of-the-rules reader on this object
+    // is one and a mixed surface invites a screen to read the wrong kind.
+    checkinRegisterWindow() {
+      return MAX_SESSION_SECONDS;
+    },
     // THE SHAPES A STEWARD MAY PICK FOR A CLEARANCE, read from the one place that defines them rather than
     // restated on a screen — same reason as checkinLifetimes() below.
     checkinPermissionLifetimes() {
@@ -21693,8 +21715,8 @@ zoo`.split("\n");
         }
         cb(kids.map((r) => {
           const rel = releases.get(String(r._sid || "") + "|" + String(r.id));
-          if (!rel) return r;
-          return { ...r, out: rel.out != null ? rel.out : r.out, manual: rel.manual === true, releasedBy: rel._by || rel.by || "" };
+          if (!rel) return { ...r, releasedTs: null };
+          return { ...r, out: rel.out || r.out || rel.ts, manual: rel.manual === true, releasedBy: rel._by || rel.by || "", releasedTs: rel.ts };
         }));
       }, "checkin");
     },

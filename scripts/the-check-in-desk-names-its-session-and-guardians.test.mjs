@@ -230,9 +230,16 @@ test('A BY-HAND RELEASE IS MARKED AS ONE ON THE CONSOLE — the fallback must le
   // fallback, it is a hole." Measured on the Oppo 2026-09-11: the worker's phone said "Collected · 11:54 am
   // · by hand" and this console said only "out 11:54 AM" for the same release, so the one screen a
   // safeguarding lead reads could not tell a code-matched collection from a by-hand one.
+  // `ts` AND `in` ARE BOTH REAL INSTANTS HERE, and they have to be. The register selects on who is still in
+  // the room — `ts` (the event's created_at) inside one MAX_SESSION_SECONDS window, AND, when the sealed body
+  // carries a numeric `in`, that inside the window too. The second bound exists because migrateCheckinKeys
+  // re-stamps created_at on every legacy record; see scripts/the-register-shows-who-is-in-the-room.test.mjs.
+  // `in: 1000` was January 1970 and is not a record this console can be handed; with it the rows below are
+  // filtered out and this test measures an empty screen while still passing.
+  const NOW = Math.floor(Date.now() / 1000);
   const s = await desk({ services: [SVC], recs: [
-    { id: 'ci-1', child: KID, childName: 'Ada Fenn', date: TODAY, in: 1000, out: 2000, manual: true, session: SVC.id },
-    { id: 'ci-2', child: KID2, childName: 'Bem Okafor', date: TODAY, in: 1000, out: 2000, manual: false, session: SVC.id },
+    { id: 'ci-1', child: KID, childName: 'Ada Fenn', date: TODAY, ts: NOW - 3600, in: NOW - 3600, out: NOW - 600, manual: true, session: SVC.id },
+    { id: 'ci-2', child: KID2, childName: 'Bem Okafor', date: TODAY, ts: NOW - 3600, in: NOW - 3600, out: NOW - 600, manual: false, session: SVC.id },
   ] });
   const t = reads(s.tree());
   assert.match(t, /Ada Fenn/, 'fixture: the collected child is not on the screen at all');

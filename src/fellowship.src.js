@@ -123,13 +123,46 @@ const CHECKINARRIVAL_D = 'trinityone/checkinarrival:';
 // CHILD WAS STILL IN THE ROOM and the worker's key was still live — and the release, when it came, then had
 // no row to fold onto. The parent's view must not expire before the session that produced it can.
 const MYKIDS_WINDOW = MAX_SESSION_SECONDS;
-// TODAY, IN THE ROOM THE CHILD IS STANDING IN — never the UTC day. The console's register filters
-// `recs.filter(r => r.date === today)` against ITS local day (app/stew-dashboard.jsx), and src/steward.src.js
-// has stamped records with a local `_todayISO()` since it was written. This phone was the odd one out: it
-// stamped `new Date().toISOString().slice(0, 10)`, so a worker checking a child in on a Sunday MORNING in
-// Auckland wrote the previous day's date and the child never appeared on the desk's own register — the
-// 2026-07-24 kids-roll bug, back in the one writer that post-dates the guard. Caught by
-// scripts/calendar-day.test.mjs, which scans this file for exactly that idiom.
+// TODAY, IN THE ROOM THE CHILD IS STANDING IN — never the UTC day. src/steward.src.js has stamped records
+// with a local `_todayISO()` since it was written. This phone was the odd one out: it stamped
+// `new Date().toISOString().slice(0, 10)`, so a worker checking a child in on a Sunday MORNING in Auckland
+// wrote the previous day's date — the 2026-07-24 kids-roll bug, back in the one writer that post-dates the
+// guard. Caught by scripts/calendar-day.test.mjs, which scans this file for exactly that idiom.
+//
+// ⚠ CORRECTED 2026-09-11: this said the stamped date was what the CONSOLE'S REGISTER FILTERS ON
+// (`recs.filter(r => r.date === today)` in app/stew-dashboard.jsx), and therefore that an Auckland morning
+// stamped as Saturday put the child on no register at all. IT NO LONGER SELECTS ON IT. The desk shows who is
+// still in the room — not checked out, and inside one MAX_SESSION_SECONDS window of the record's own `ts`,
+// the same length and the same field MYKIDS_WINDOW applies above. So a mis-stamped day now costs a wrong DAY
+// LABEL on the row rather than the whole row. Still worth getting right: the console prints this field beside
+// the arrival time whenever it is not the viewer's own day, so a wrong one tells a worker at a door that a
+// child arrived yesterday when they walked in this morning. It also decides, on that screen alone, whether a
+// child is offered for check-in again — a row from ANOTHER day never withholds one, because nothing may
+// block a child at the door.
+//
+// ⚠ AND THE TWO SIDES ARE NOT IDENTICAL, which the first version of this note claimed. The desk adds ONE
+// bound this reader deliberately does not have: a record is live there only if the sealed body's `in` is
+// ALSO inside the window (a conjunction, so it can only ever REMOVE a row). It has to, because
+// `Steward.migrateCheckinKeys()` re-publishes every legacy record through encPublish with a fresh
+// `created_at` and runs automatically when an owner opens the console — which hands every never-released
+// record in a church's history a `ts` of that minute.
+//
+// THIS READER HAS NO SUCH BOUND. That is STRUCTURALLY OPEN AND HAS ZERO INSTANCES IN THE CURRENT CORPUS,
+// and the first version of this note overclaimed it as "a parent's screen can show a three-week-old
+// check-in as live" — corrected 2026-09-12 after the re-audit measured the reachability:
+//
+//   migrateCheckinKeys() re-publishes ONLY records that fail to open with the safeguarding ring and DO open
+//   with the legacy church self-key — i.e. records written before the capability split (7d698ad,
+//   2026-08-20). `guardians` did not enter the check-in body until 3a61f01 (2026-09-10), three weeks later.
+//   So every record the migration can touch carries no guardians, mints no ['p'] tag and no ['gk'] copy,
+//   and openRec below returns 'not-mine' — the row is dropped before `fresh` is ever consulted, and it
+//   cannot reach askAtDesk either (that branch also requires r.mine).
+//
+// So the hole is real and currently unreachable. IT BECOMES REACHABLE AT THE NEXT KEY MIGRATION, whenever
+// one re-publishes records that DO carry guardians — which is why this stays written down. Closing it means
+// overturning a deliberate, test-locked decision ("A RECORD PUBLISHED THIS MINUTE WAS HIDDEN because the
+// body it carried disagreed with the clock"), which is a decision about what a parent at a door is shown
+// rather than a tidy-up.
 // ONE CALLER: writeCheckin. Mirrors steward.src.js:_todayISO deliberately — the two bundles must agree on
 // what day it is or a record written on a phone and a record written at the desk sort differently.
 const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
@@ -5062,11 +5095,18 @@ window.Fellowship = {
           helpers: g ? g.grant.pubs.length : 0,
           // FOLD A RELEASE ONTO ITS CHILD ROW — a new object, never mutating the `rows` memo. A collected
           // child keeps their row (so the register stays a legible record of who was in the room) and gains
-          // `out` / `manual` / `releasedBy`. The release's `out` wins when present; otherwise whatever the
-          // check-in record itself carried.
+          // `out` / `manual` / `releasedBy`.
+          //
+          // ⚠ A RELEASE DOCUMENT IS A COLLECTION, so `out` is truthy whatever its body says: the release's
+          // own time when usable, else whatever the record carried, else the RELEASE EVENT'S created_at.
+          // This was `rel.out != null ? rel.out : r0.out`, which on a release carrying `out: 0`, `false` or
+          // no `out` fell back to `null` and painted a RELEASED CHILD AS STILL IN THE ROOM. Corrected
+          // 2026-09-12 at all three folds at once (this one, subscribeMyChildrenCheckins below, and
+          // subscribeCheckins in src/steward.src.js) so the worker's register, the parent's screen and the
+          // console cannot disagree about whether a child has left.
           rows: (bySession.get(sid) || []).map((r0) => {
             const rel = releaseByRel.get(sid + '|' + r0.id);
-            return rel ? { ...r0, out: (rel.out != null ? rel.out : r0.out), manual: !!rel.manual, releasedBy: rel.by } : r0;
+            return rel ? { ...r0, out: (rel.out || r0.out || rel.ts), manual: !!rel.manual, releasedBy: rel.by } : r0;
           }).sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
         };
       }).sort((a, b) => (a.from || 0) - (b.from || 0));
@@ -5585,6 +5625,18 @@ window.Fellowship = {
       // ONE MEASURE FOR BOTH BRANCHES, off the event's own created_at, and symmetric — see the note above
       // for the two faults reading the sealed body's `in` had. `row` is still taken so a caller cannot
       // reintroduce the split by passing it.
+      //
+      // ⚠ OPEN, 2026-09-12, and recorded here because both sides' comments insist these two screens use ONE
+      // rule and right now they do not. The CONSOLE's register was given two corrections this reader has
+      // not had:
+      //   1. a COLLECTED row ages from the COLLECTION, not from the arrival. On the worker-release path the
+      //      release is a separate document, so a row's own created_at is the ARRIVAL — which means a
+      //      lock-in collected at 25.5 hours loses the parent's collected row minutes after the child
+      //      actually left. subscribeCheckins now carries the release's own `ts` for exactly this; the fold
+      //      below carries `out`/`manual` and not that.
+      //   2. the sealed body's clock as a second UPPER bound, which is what makes a re-stamped record safe.
+      // Neither is applied here. (2) is deliberate and test-locked — see the note above. (1) is not a
+      // decision, it is a gap.
       const fresh = (r, _row) => Math.abs(at - (r.ts || 0)) <= MYKIDS_WINDOW;
       let askAtDesk = 0;
       const kids = [];
@@ -5615,7 +5667,9 @@ window.Fellowship = {
       cb({
         children: kids.map((r0) => {
           const rel = releaseByRel.get(r0.session + '|' + r0.id);
-          return rel ? { ...r0, out: (rel.out != null ? rel.out : r0.out), manual: !!rel.manual } : r0;
+          // A RELEASE IS A COLLECTION — see the note at the sibling fold above for the `out: 0` case this
+          // replaced, and for why the release event's own created_at is the last resort rather than null.
+          return rel ? { ...r0, out: (rel.out || r0.out || rel.ts), manual: !!rel.manual } : r0;
         }).sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
         askAtDesk,
         settled: eosed,

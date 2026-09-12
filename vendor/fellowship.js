@@ -11610,11 +11610,18 @@
             helpers: g ? g.grant.pubs.length : 0,
             // FOLD A RELEASE ONTO ITS CHILD ROW — a new object, never mutating the `rows` memo. A collected
             // child keeps their row (so the register stays a legible record of who was in the room) and gains
-            // `out` / `manual` / `releasedBy`. The release's `out` wins when present; otherwise whatever the
-            // check-in record itself carried.
+            // `out` / `manual` / `releasedBy`.
+            //
+            // ⚠ A RELEASE DOCUMENT IS A COLLECTION, so `out` is truthy whatever its body says: the release's
+            // own time when usable, else whatever the record carried, else the RELEASE EVENT'S created_at.
+            // This was `rel.out != null ? rel.out : r0.out`, which on a release carrying `out: 0`, `false` or
+            // no `out` fell back to `null` and painted a RELEASED CHILD AS STILL IN THE ROOM. Corrected
+            // 2026-09-12 at all three folds at once (this one, subscribeMyChildrenCheckins below, and
+            // subscribeCheckins in src/steward.src.js) so the worker's register, the parent's screen and the
+            // console cannot disagree about whether a child has left.
             rows: (bySession.get(sid) || []).map((r0) => {
               const rel = releaseByRel.get(sid + "|" + r0.id);
-              return rel ? { ...r0, out: rel.out != null ? rel.out : r0.out, manual: !!rel.manual, releasedBy: rel.by } : r0;
+              return rel ? { ...r0, out: rel.out || r0.out || rel.ts, manual: !!rel.manual, releasedBy: rel.by } : r0;
             }).sort((a, b) => String(a.childName || "").localeCompare(String(b.childName || "")) || (a.ts || 0) - (b.ts || 0))
           };
         }).sort((a, b) => (a.from || 0) - (b.from || 0));
@@ -12164,7 +12171,7 @@
         cb({
           children: kids.map((r0) => {
             const rel = releaseByRel.get(r0.session + "|" + r0.id);
-            return rel ? { ...r0, out: rel.out != null ? rel.out : r0.out, manual: !!rel.manual } : r0;
+            return rel ? { ...r0, out: rel.out || r0.out || rel.ts, manual: !!rel.manual } : r0;
           }).sort((a, b) => String(a.childName || "").localeCompare(String(b.childName || "")) || (a.ts || 0) - (b.ts || 0)),
           askAtDesk,
           settled: eosed

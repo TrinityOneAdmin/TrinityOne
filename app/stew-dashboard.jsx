@@ -5580,7 +5580,10 @@ function CkModal({ title, children, onClose }) {
     </div>
   );
 }
-function CheckinPicker({ available, nameFor, guardiansOf, onPick, onClose }) {
+// `alreadyIn` MAPS A CHILD TO WHEN SHE ARRIVED, for the children who are on the register already and are
+// STILL OFFERED — see the note beside it in DashCheckin. Optional: every other caller and every test that
+// slices this component without it simply gets no label, which is the pre-2026-09-12 rendering.
+function CheckinPicker({ available, alreadyIn, nameFor, guardiansOf, onPick, onClose }) {
   return (
     <CkModal title="Check a child in" onClose={onClose}>
       {available.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', padding: '12px 0' }}>Everyone’s already checked in.</div> : (
@@ -5588,7 +5591,7 @@ function CheckinPicker({ available, nameFor, guardiansOf, onPick, onClose }) {
           {available.map(c => { const gs = guardiansOf(c); return (
             <button key={c} onClick={() => onPick(c)} title="Check this child in" style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 36, height: 36, borderRadius: 999, background: 'var(--clay-soft)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="child" size={18} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{nameFor(c)}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{gs.length ? 'Pickup: ' + gs.join(', ') : 'No adult guardian linked'}</div></div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{nameFor(c)}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[(alreadyIn && alreadyIn[c]) ? 'Already checked in · ' + alreadyIn[c] : '', gs.length ? 'Pickup: ' + gs.join(', ') : 'No adult guardian linked'].filter(Boolean).join(' · ')}</div></div>
               <Icon name="plus" size={16} color="var(--clay)" />
             </button>
           ); })}
@@ -6231,11 +6234,167 @@ function DashCheckin() {
   const [sessionPick, setSessionPick] = React.useState('');
   const session = (todaysServices.length === 1) ? todaysServices[0].id
     : (todaysServices.some(sv => sv.id === sessionPick) ? sessionPick : '');
-  const todays = recs.filter(r => r.date === today);
-  const present = todays.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
-  const out = todays.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
-  const inIds = new Set(present.map(r => r.child));
+  // ── WHO IS IN THE ROOM, NOT WHO WAS STAMPED WITH TODAY'S DATE ─────────────────────────────────────────
+  //
+  // Owner's decision 2026-09-11, asked as "should the register show *checked in today* or *still in the
+  // room*?": *"still in the room — that's what a worker at a door actually needs."*
+  //
+  // This was `recs.filter(r => r.date === today)`, and `r.date` is stamped ONCE when the child is checked
+  // in while `today` is recomputed on every render. So a child checked in at 23:58 fell off the desk's own
+  // register at 00:00 WHILE THEY WERE STILL IN THE ROOM — a watchnight service or an overnight lock-in is
+  // the ordinary case, not a contrived one — and with them went their pickup code and their Check out
+  // button, on the one screen a safeguarding lead reads.
+  //
+  // ⚠ IT MUST STILL NOT BE UNBOUNDED. Nothing ever arrives to say "that session was abandoned", so a record
+  // with no release would otherwise sit here for ever. It ages out on the measure the PARENT'S SCREEN
+  // already applies to the same record: `MYKIDS_WINDOW` in src/fellowship.src.js is MAX_SESSION_SECONDS, and
+  // Steward.checkinRegisterWindow() is the same constant. Same length, same field, so the desk and the
+  // parent stop disagreeing about when one record is live — which they did while one was a calendar day and
+  // the other a 26-hour window.
+  //
+  // ⚠⚠ AND THEN ONE EXTRA UPPER BOUND, WHICH THE PARENT'S SIDE DELIBERATELY DOES NOT HAVE. `ts` ALONE IS
+  // NOT SAFE ON THIS SCREEN, and the reason is a writer that does not exist on the parent's:
+  //
+  //   `Steward.migrateCheckinKeys()` re-publishes EVERY legacy check-in record through encPublish, which
+  //   stamps `created_at: now()` — and encSubscribe sets `ts = e.created_at`. It runs AUTOMATICALLY, 1.2s
+  //   after this console mounts, once per church per session (the capability-key effect above calls it).
+  //   So the first time a pilot church's owner opens the console, every never-released record it has ever
+  //   written gets a `ts` of this minute. Measured against this compiled screen: two records from three
+  //   weeks ago rendered as "Checked in · 2", and `available` came back EMPTY — CheckinPicker then says
+  //   "Everyone's already checked in." to a worker with actual children in front of her.
+  //
+  //   PRESERVING THE ORIGINAL created_at IS NOT AVAILABLE, checked before choosing this: the address is
+  //   replaceable and scripts/event-store.mjs refuses an equal-or-older timestamp as 'have-newer'
+  //   (`if (rt > et) return 'have-newer'`, and on a tie the lower id wins), so a migration that kept the old
+  //   stamp would be a coin flip at best and would usually not land at all.
+  //
+  // So `in` — which the migration DOES preserve, because it re-publishes the opened body — is taken as a
+  // second upper bound, and the shape of the conjunction is the whole of its safety: **it can only ever
+  // REMOVE a row, never resurrect one.** A record is live iff its `ts` is in window AND its `in`, when there
+  // is a usable one, is in window too. A missing or non-numeric `in` removes nothing.
+  //
+  // WHAT THAT DOES AND DOES NOT COST, stated rather than inherited:
+  //   · A FORGED FUTURE `in` (the fault that pinned a row on the parent's screen at +399 days) now REMOVES a
+  //     row instead of pinning one. It buys an attacker nothing: a helper who wants a child off this
+  //     register simply does not write the record, and one who can overwrite another's record can already
+  //     set `out` and mark the child collected, which is worse.
+  //   · CLOCK DRIFT BETWEEN `in` AND `ts` IS NOT A THING ON THIS PATH, and the earlier version of this
+  //     comment claimed it was, inherited from the parent-side note without being re-measured. Both come
+  //     from ONE clock microseconds apart — `checkIn` below stamps `in: Math.floor(Date.now() / 1000)` and
+  //     encPublish stamps `created_at: now()` on the same device; the phone's writeCheckin does the same on
+  //     its device. What drifts is the WRITER's clock against this VIEWER's, and that moves `in` and `ts`
+  //     together, so the conjunction never throws away a record `ts` would have kept. The ONE case where the
+  //     two disagree is the migration above, which is exactly what this is for.
+  //   · The parent's screen has no migration of its own to defend against and DELIBERATELY prefers showing a
+  //     record whose body disagrees with the clock to hiding one (test-locked in
+  //     scripts/a-parent-reads-their-own-children.test.mjs, "A RECORD PUBLISHED THIS MINUTE WAS HIDDEN").
+  //     That decision is not overturned here. It does mean a migrated record reaches a PARENT's screen with
+  //     a fresh ts and no upper bound — unfixed, and recorded so nobody believes this commit closed it.
+  //
+  // NOTHING ABOUT WHAT IS WRITTEN CHANGES. `date` is still stamped on every record by checkIn below and by
+  // publishCheckin in the bundle; this screen has simply stopped selecting on it, and now only READS it, to
+  // say which day an arrival was (fmtDay). The relay is untouched.
+  //
+  // A COLLECTED CHILD STILL LEAVES THIS LIST exactly as before: the release is folded upstream in
+  // subscribeCheckins (a `rel`-tagged record is never a row of its own; it sets `out` and `manual` on the
+  // child's row, matched on session|checkinId), so `!r.out` is unchanged and the fold is untouched.
+  const at = Math.floor(Date.now() / 1000);
+  // ONE SOURCE FOR THE WINDOW: the bundle's, read rather than restated — the mistake StewBackupModal below
+  // is commented for ("READ the floor, do not restate it"). The literal is the fallback for a console whose
+  // bundle is older than this screen, because an empty children's register is the worse failure of the two;
+  // scripts/the-register-shows-who-is-in-the-room.test.mjs renders BOTH paths against MAX_SESSION_SECONDS
+  // itself, so the fallback cannot quietly drift away from it.
+  const ckWindow = (window.Steward && typeof window.Steward.checkinRegisterWindow === 'function' && window.Steward.checkinRegisterWindow()) || (26 * 3600);
+  const inWindow = (t) => Number.isFinite(t) && Math.abs(at - t) <= ckWindow;
+  // ── WHEN THIS ROW LAST MEANT SOMETHING: the RELAY-ATTESTED half of the bound ──────────────────────────
+  // `ts` is the record's own created_at. For a row with no release that is the arrival. For a COLLECTED row
+  // it depends on WHICH release path collected it, and the two disagree:
+  //   · a CONSOLE checkout rewrites the record (writeCheckin({ ...r, out })), so `ts` becomes the collection;
+  //   · a WORKER's release is a SEPARATE document folded on by subscribeCheckins, so `ts` stays the arrival
+  //     and the collection instant arrives as `releasedTs`.
+  // Taking the later of the two makes a collected row age from the COLLECTION on both paths. Without it a
+  // lock-in released by a worker vanished 26h after the child ARRIVED — measured: a child in at 18:00
+  // Saturday and collected at 19:30 Sunday was on the Collected list five seconds later and gone forty
+  // minutes later, so a safeguarding lead looking an hour after the event saw her neither in the room nor
+  // collected. subscribeCheckins says the rule in as many words: "The collected child KEEPS their row — a
+  // register that erased them would stop being a record of who was in the room."
+  // Both fields are event created_ats, not body claims.
+  const lastTouch = (r) => Math.max(Number.isFinite(r.ts) ? r.ts : -Infinity, Number.isFinite(r.releasedTs) ? r.releasedTs : -Infinity);
+  // ── AND THE BODY'S OWN CLOCK: the half that can only ever REMOVE a row ────────────────────────────────
+  // For a live row that is `in` (the arrival); for a collected row it is `out` (the collection), because
+  // that is the instant the row is now about. Bounding a collected row on its ARRIVAL is what produced the
+  // vanishing lock-in above from the other direction.
+  //
+  // UNTYPED, so `Number.isFinite` and not `typeof`: these come straight out of the sealed body, which a
+  // helper writes. Anything that is not a finite number is not a bound and must remove nothing —
+  // `typeof NaN === 'number'`, so a typeof gate would delete a live child from a safeguarding register
+  // because a body was malformed — and it must not coerce, so the string '1789084514' is not a measure
+  // either. The parent's reader types every painted field (`_str`/`_when` in openRec) for the same reason.
+  // ⚠ THE PREDICATE IS `r.out ?` AND NOT `r.out != null ?`, AND THE DIFFERENCE DELETED A CHILD FROM THE
+  // REGISTER. `present` below splits the list on TRUTHINESS (`!r.out`). This asked a different question with
+  // `!= null`, and on `out: 0` the two disagreed: this one called the row collected and handed back 0 — a
+  // finite number fifty-six years outside the window — so the row was dropped from `live` entirely, while
+  // `present` still called it live. Measured on the compiled screen: "Checked in · 0 · Nobody is checked in"
+  // with the child in the room. `Number.isFinite` cannot catch it, because 0 IS finite: the fault was the
+  // selector, not the guard, which is why the comment above — "anything that is not a finite number must
+  // remove nothing" — was true and still let this through.
+  //
+  // Not reachable from either shipped writer (both write `out: null` or a real epoch), but this is the exact
+  // class the block above claims to have closed, so the two now ask one question. `false`, `''` and `NaN`
+  // were the milder mirror of the same disagreement: the body bound switched itself off and the row aged on
+  // the attested clock alone, which can only ever keep a row rather than delete one.
+  // ⚠ AND `|| null` ON THE END, WHICH IS THE `in` SIDE OF THE SAME BUG. A live row carrying `in: 0` was
+  // read as 1 January 1970, fifty-six years outside the window, and deleted — a child in the room removed
+  // from the register because a body field was falsy. A falsy `in` is "no arrival time recorded", not an
+  // arrival in 1970, so it bounds nothing and the row ages on the attested clock alone. Both sides now
+  // answer the same way: truthy or it is not a measure.
+  const bodyClock = (r) => (r.out || r.in || null);
+  const live = recs.filter(r => inWindow(lastTouch(r)) && !(Number.isFinite(bodyClock(r)) && !inWindow(bodyClock(r))));
+  const present = live.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
+  const out = live.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));
+  // ── THE DOOR IS NEVER BLOCKED, AND THIS IS WHERE THAT IS DECIDED ──────────────────────
+  // `available` is what CheckinPicker offers; an empty one renders "Everyone's already checked in." The
+  // exclusion exists to stop ONE accident — checking the same child in twice in one session, which puts two
+  // live rows and two pickup codes on the register for one child.
+  //
+  // ⚠ SO IT IS SCOPED TO THE VIEWER'S OWN DAY, and that is not tidiness. Now that a row can outlive a
+  // midnight, a Saturday youth club nobody pressed Check out on would otherwise stand between that child and
+  // the desk until 26 hours had passed: Sunday 09:30 the register says she is in the room, shows Saturday's
+  // code, and will not offer her. reference/DOMAIN.md is explicit — *"Do not block. A ratio outside policy, a
+  // helper whose clearance has lapsed, a rota with a gap — none of these may stop a child being checked in.
+  // Blocking at the door harms the child in the room to satisfy a rule in a database."*
+  //
+  // WHY THIS RATHER THAN AN "she left without being checked out" ACTION, which was the other shape
+  // considered. A new action would still leave the door shut until somebody performed it, which is the thing
+  // DOMAIN.md forbids; it would need a new written field on a safeguarding record; and it would not be
+  // needed for the ordinary case, where nobody at the desk wants to record anything about yesterday — they
+  // want to check a child in. This costs nothing, invents nothing, and writes nothing.
+  //
+  // AND IT REMOVES THE FABRICATION TRAP. Before this, the only way past a forgotten check-out was
+  // CheckoutModal, which requires the OLD code and then stamps `out: Math.floor(Date.now() / 1000)` —
+  // recording that the child was collected on SUNDAY MORNING. Check out stays on a not-today row because a
+  // watchnight or a lock-in genuinely needs it; it is simply no longer the only way through.
+  //
+  // A record with NO usable day is treated as not-today, i.e. offerable. Where the two readings disagree the
+  // non-blocking one wins, by the rule above.
+  const blocksToday = (r) => !!(r && typeof r.date === 'string' && r.date === today);
+  const inIds = new Set(present.filter(blocksToday).map(r => r.child));
   const available = minors.filter(c => !inIds.has(c));
+  // ── …AND SAYING SO IS THE OTHER HALF, because non-blocking is not the same as silent ──────────────────
+  // The scoping above is right and it leaves a real hole: a child checked in TEN MINUTES ago whose row is
+  // stamped with the previous day is offered again with nothing on her row to say she is already on the
+  // register. Watchnight — children in at 23:30-23:58, and at 00:05 the leader opens the picker for a
+  // latecomer and everyone already in the room is silently on offer. One mis-tap gives one child two live
+  // rows, two pickup codes and two Check out buttons. The same hole opens for any `date` stamped in a
+  // different timezone from this console, which is the 2026-07-24 Auckland shape this repo has had once.
+  //
+  // reference/DOMAIN.md forbids the obvious fix — nothing may stand between a child and the desk — but it
+  // does not ask for silence, and "say the thing once, plainly, where it is useful" is the same page. So
+  // every child who is already on the register is still OFFERED, and — WHERE THIS SCREEN CAN TELL, which
+  // is console-written rows only — her row says when she arrived. The leader decides; the screen stops
+  // hiding what it knows. The limit is not a footnote and is written out in full beside `alreadyIn`
+  // below, where the label is built: the member app writes `child: ''`, so on the worker-on-the-door
+  // path there is no key to match her by and the label does not appear at all.
   const [picking, setPicking] = React.useState(false);
   const [checkout, setCheckout] = React.useState(null);
   // THE REGISTER HAS ITS OWN KEY NOW, and a record cannot be written without it. Watch for it, so this screen
@@ -6250,7 +6409,113 @@ function DashCheckin() {
     setSgKey(!!(S.capKeyRing && S.capKeyRing('checkin').length));   // a switch resets the ring; re-read it
     return S.subscribeCapKey('checkin', (ring) => setSgKey(!!(ring && ring.length)));
   }, [_ckIdv, _ckConn]);
-  const fmtT = (ts) => { try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } };
+  // ⚠ AND fmtT HAS EXACTLY THE SAME TWO FAULTS AS fmtDay BELOW, in the same function, one symbol away.
+  // `in` and `out` are untyped sealed-body content — the window above deliberately lets a non-finite one
+  // THROUGH, so that a malformed body can never delete a live child from the register — and this is what
+  // then painted it. Measured on the compiled screen: missing / NaN / Infinity / {} / 'abc' rendered
+  // "In Invalid Date"; null / true / false / [] rendered "In 1:00 AM", which is 1 January 1970; and the
+  // string '1789084514' coerced to a real-looking time (the same coercion that put "Collected · 1789084514"
+  // on the Oppo). A confidently wrong value beside a child's name is worse than no value, for the reason
+  // fmtDay is commented at length for: a worker at a door cannot tell that it is wrong.
+  //
+  // So: a finite number or nothing. The ROW, not this function, decides what to do with nothing — see the
+  // part-join below, which omits the whole "In …" clause rather than printing a dangling label.
+  const fmtT = (ts) => { if (!Number.isFinite(ts)) return ''; try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } };
+  // WHICH DAY, BUT ONLY WHEN IT IS NOT TODAY'S. Now that the register can outlive a midnight, a row reading
+  // "In 11:58 PM" beside one reading "In 9:15 AM" would put an overnight arrival and this morning's on the
+  // same page with nothing to tell them apart, and the older one would read as the LATER of the two. So a
+  // row whose stamped day is not the viewer's day says which day it was, in three words, and every ordinary
+  // Sunday row is untouched — the copy cull's rule, said once where it is useful (reference/DOMAIN.md).
+  // It reads `r.date`, which is exactly the field this screen stopped SELECTING on: it is still written, and
+  // it is still the writer's own local day, which is the day the child actually walked in.
+  //
+  // ⚠ IT TYPES ITS INPUT, AND A try/catch IS NOT ENOUGH ON ITS OWN. `date` is untyped sealed-body content,
+  // like `in` above, and `new Date('x' + 'T00:00')` DOES NOT THROW: it returns an Invalid Date whose
+  // toLocaleDateString RETURNS THE STRING "Invalid Date", so a record carrying a non-ISO `date` painted
+  // "· Invalid Date" beside a child's name on a safeguarding screen.
+  //
+  // ⚠⚠ AND A SHAPE CHECK IS NOT ENOUGH EITHER, which is why this is a ROUND-TRIP and not a regex. Measured:
+  // `'2026-02-30'` matches /^\d{4}-\d{2}-\d{2}$/ AND parses — JavaScript rolls it over — and rendered
+  // "Mon, Mar 2". A confidently WRONG day beside a child's name is worse than no day at all, because a
+  // worker at a door has no way to tell it is wrong. So the parsed day is written back out in the same
+  // format and must equal what came in; anything else produces NO marker, and the row falls back to the bare
+  // arrival time, which is the ordinary rendering and says nothing false.
+  //
+  // (It also drops the handful of exotic strings that parse correctly but are not written in this shape —
+  // `'+002026-09-13'` is the one I found. Nothing in this product writes one: both writers stamp `date` with
+  // a `_todayISO()` that produces exactly this format.)
+  //
+  // TWO RULES, AND THE SECOND IS NOT THE ONE I FIRST DELETED. A `typeof iso !== 'string'` check was here and
+  // IS genuinely subsumed by the round-trip (a non-string never equals the string it was concatenated into),
+  // so it is gone. The `isFinite(d.getTime())` read-back was deleted on the SAME reasoning and that reasoning
+  // was WRONG, caught by the re-audit of ed1f40c:
+  //
+  //     fmtDay('NaN-NaN-NaN')  ->  "Invalid Date"
+  //
+  // 'NaN-NaN-NaNT00:00' parses to an Invalid Date, so every getter is NaN, so `back` is the literal string
+  // 'NaN-NaN-NaN' — which EQUALS the input. The round-trip passes and toLocaleDateString returns its own
+  // name, straight onto the row. The round-trip can never catch that; the read-back always does. The
+  // sabotage row that "could not make it bite" was mis-aimed: its list of malformed dates did not contain
+  // the one string that is a fixed point of this idiom. It does now.
+  //
+  // Reachable? Barely — 'NaN-NaN-NaN' is exactly what the getFullYear+padStart idiom emits from an invalid
+  // Date, and neither writer's `_todayISO()` can produce one. The defect is narrow; deleting a guard from a
+  // safeguarding screen on a false claim is not.
+  const fmtDay = (iso) => {
+    try {
+      const d = new Date(iso + 'T00:00');
+      if (!Number.isFinite(d.getTime())) return '';
+      const back = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      if (back !== iso) return '';
+      return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    } catch (e) { return ''; }
+  };
+  const notToday = (r) => (r && typeof r.date === 'string' && r.date && r.date !== today ? fmtDay(r.date) : '');
+// WHO IS ALREADY ON THE REGISTER, AND WHEN SHE ARRIVED — the label the picker paints beside a child it is
+// still offering. Defined HERE and not up beside `available`, because it needs fmtT and notToday: the first
+// version sat above both and threw "Cannot access 'fmtT' before initialization", which blanks the page.
+// Keyed by child; the newest row wins, because `present` is already sorted by arrival, newest first.
+// It falls back to the day, and then to a bare word, so a row with no usable time still SAYS she is on the
+// register rather than silently dropping the whole warning — the one thing this must not do.
+  // ⚠⚠ AND THE LIMIT, WHICH IS NOT SMALL AND WHICH MY OWN COMMIT MESSAGE GOT WRONG. All three of the
+  // de-duplication mechanisms on this screen — this label, `inIds` above and `headcount` below — key on
+  // `r.child`, a member PUBKEY. `src/fellowship.src.js`'s writeCheckin writes `child: ''` ALWAYS, and by
+  // design: *"this writer holds no guardian map"*. That is the WORKER-ON-THE-DOOR path, which is the
+  // ordinary one. So for every row the member app writes:
+  //   · this label never appears, and the child is offered silently — at ANY hour, not only across midnight;
+  //   · `inIds` never withholds her, which it already never did (that part is unchanged);
+  //   · `headcount` counts each row as its own head.
+  // "Checked in · N counts children, not rows" and "her row says when she arrived" are therefore true of
+  // CONSOLE-written rows only. Stated here rather than fixed, because there is no key to fix it with: the
+  // picker's list is `minors`, which is pubkeys, and a name match would be a FALSE "already checked in"
+  // beside a same-named child — a leader who trusts it leaves a child off the register, which is worse than
+  // the duplicate it would prevent, and worse than saying nothing.
+  //
+  // WHAT SAVES IT IS THAT ALL THREE DEGRADE IN THE SAFE DIRECTION: silent-but-offered (never blocked), never
+  // withheld, and counted per row (never UNDER-counted). The real fix is upstream — writeCheckin carrying
+  // the child's pubkey — and belongs with whoever changes that writer, not here.
+  const alreadyIn = {};
+  for (const r of present) { if (r && r.child && !alreadyIn[r.child]) alreadyIn[r.child] = (fmtT(r.in) || notToday(r) || 'already'); }
+// ── "CHECKED IN · N" IS A HEADCOUNT, SO IT COUNTS CHILDREN, NOT ROWS ──────────────────────────────────
+// One child can now hold two live rows: a forgotten check-out from an earlier day plus today's, which is
+// the ordinary consequence of the picker no longer shutting the door on her. `present.length` then reads
+// "Checked in · 2" over one child, and a leader counting heads in a room against that number is counting
+// against a figure the software made up.
+//
+// In every other case rows and children are the same number and nothing changes; this only bites where
+// they differ, and where they differ the row count is the wrong one. Every row stays on the list — each is
+// a real record and the stale one carries its own day beside it — so the count and the rows can differ, and
+// that is the honest way round rather than the flattering one.
+//
+// A row with no child id counts as one, because nothing proves it is a duplicate of anything — and that is
+// EVERY member-app-written row, not a rarity. See the limit written up beside `alreadyIn` above: on the
+// worker path this is a row count, and it over-counts rather than under-counts, which is the direction a
+// headcount on a safeguarding screen should fail in.
+//
+// "COLLECTED · N" IS DELIBERATELY NOT THE SAME. That list is a log of collections, not a count of people
+// anywhere: a child collected from a morning session and again from an evening one really was collected
+// twice, and saying "1" would be under-reporting a safeguarding record.
+  const headcount = (rows) => { const seen = new Set(); let n = 0; for (const r of rows) { const k = r && r.child ? String(r.child) : ''; if (!k) { n++; continue; } if (!seen.has(k)) { seen.add(k); n++; } } return n; };
   // AWAITED, AND ANSWERED. This was fire-and-forget: publishCheckin's promise was dropped on the floor, so a
   // refused write left the child on screen as "in" and nothing on the relay. On the day the register got its
   // own key that stopped being theoretical — a console without the safeguarding key returns null from
@@ -6334,14 +6599,19 @@ function DashCheckin() {
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>
       ) : (
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          <div style={{ fontSize: 11.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 8 }}>Checked in · {present.length}</div>
-          {present.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 18 }}>Nobody checked in yet today.</div> : (
+          <div style={{ fontSize: 11.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 8 }}>Checked in · {headcount(present)}</div>
+          {present.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 18 }}>Nobody is checked in.</div> : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
               {present.map(r => { const gs = guardiansOf(r.child); return (
                 <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.childName || nameFor(r.child)}</div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>In {fmtT(r.in)}{gs.length ? ' · pickup: ' + gs.join(', ') : ' · no adult guardian linked'}</div>
+                    {/* ONE EXPRESSION, AND A JOIN RATHER THAN A CONCATENATION. An unusable `in` or `date`
+                        now contributes NOTHING instead of "Invalid Date" or a dangling "In ·", and the
+                        pickup clause — the one a leader reads a name off — is never displaced. One
+                        expression rather than several nodes because `glued()`, the JSX-newline guard in
+                        the-check-in-page-fits-the-phone, reports a false junction across sibling nodes. */}
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[fmtT(r.in) ? 'In ' + fmtT(r.in) : '', notToday(r), gs.length ? 'pickup: ' + gs.join(', ') : 'no adult guardian linked'].filter(Boolean).join(' · ')}</div>
                   </div>
                   {/* LABELLED WHERE IT CAN BE READ. The only label was a `title` tooltip — invisible on a
                       touch screen and to a screen reader. Round 7: a safeguarding lead looking at this row saw
@@ -6369,7 +6639,20 @@ function DashCheckin() {
                         says "by hand"; on the Oppo, 2026-09-11, this console said only "out 11:54 AM" for the same
                         release, so the one screen a safeguarding lead reads could not tell the two apart. Not an
                         accusation — §10: the gates keep strangers out, they do not police the church's own team. */}
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>In {fmtT(r.in)} · out {fmtT(r.out)}{r.manual ? ' · by hand' : ''}</div></div>
+                    {/* ⚠ ON THIS LIST, A TIME WE CANNOT READ SAYS SO RATHER THAN GOING QUIET — BOTH TIMES.
+                        Typing fmtT traded a LOUD wrong answer ("out Invalid Date") for SILENCE, and a
+                        Collected row is the permanent record of a child leaving: one with a time missing
+                        out of it is a hole, and a hole is harder for a safeguarding lead to notice than an
+                        obvious error. The ARRIVAL gets the same treatment as the collection here, which the
+                        first version of this missed — "Collected · 1 Alice Fenn out 8:02 AM" with no
+                        arrival time at all is the same hole by the same argument.
+                        THE LIVE ROW ABOVE IS DELIBERATELY NOT GIVEN THESE WORDS. The child is in front of
+                        the leader with her pickup code on the row; "In — time not recorded" would be copy
+                        about a field nobody is acting on (reference/DOMAIN.md: do not nag).
+                        DEFENSIVE, NOT AN IMPROVEMENT TO ANYTHING REACHABLE: `out` and `in` are written as
+                        `null` or a real epoch by both shipped writers and a release now always folds a
+                        truthy `out`, so this fires only for a body no writer in this product produces. */}
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{[fmtT(r.in) ? 'In ' + fmtT(r.in) : 'in — time not recorded', notToday(r), fmtT(r.out) ? 'out ' + fmtT(r.out) : 'out — time not recorded', r.manual ? 'by hand' : ''].filter(Boolean).join(' · ')}</div></div>
                     <Icon name="check" size={16} stroke={2.4} color="var(--sage)" />
                   </div>
                 ))}
@@ -6378,7 +6661,7 @@ function DashCheckin() {
           ) : null}
         </div>
       )}
-      {picking ? <CheckinPicker available={available} nameFor={nameFor} guardiansOf={guardiansOf} onPick={checkIn} onClose={() => setPicking(false)} /> : null}
+      {picking ? <CheckinPicker available={available} alreadyIn={alreadyIn} nameFor={nameFor} guardiansOf={guardiansOf} onPick={checkIn} onClose={() => setPicking(false)} /> : null}
       {checkout ? <CheckoutModal rec={checkout} onConfirm={async () => { const r = checkout; setCheckout(null); await writeCheckin({ ...r, out: Math.floor(Date.now() / 1000) }, (r.childName || 'That child') + '’s collection'); }} onClose={() => setCheckout(null)} /> : null}
     </Panel>
   );

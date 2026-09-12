@@ -50,7 +50,7 @@ async function loadSlices(anchors, exportNames, globals) {
 }
 
 const furniture = () => ({
-  CustomEvent, setTimeout, clearTimeout, Promise, Date, Math, JSON, Set, Object, String, Array,
+  CustomEvent, setTimeout, clearTimeout, Promise, Date, Math, JSON, Set, Object, String, Array, Number,
   location: { search: '', hostname: 'x' },
   document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
   SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },
@@ -164,7 +164,11 @@ async function checkin({ minors, guardians, present }) {
     React, ...furniture(),
     window: {
       Steward: { capKeyRing: () => ['k'], subscribeCapKey: () => () => {}, publishCheckin: () => Promise.resolve(true) },
-      useStewardCheckins: () => present.map((child, i) => ({ id: 'r' + i, child, childName: NAMES[child], date: '2026-09-07', in: NOW - 600, code: '1234' })),
+      // `ts` IS THE EVENT'S created_at and every record from encSubscribe carries one (steward.src.js sets it
+      // beside the opened body). The register selects on it — who is still in the room, within one
+      // MAX_SESSION_SECONDS window — rather than on the stamped `date`, so a fixture without it models no
+      // record this console can ever be handed. See scripts/the-register-shows-who-is-in-the-room.test.mjs.
+      useStewardCheckins: () => present.map((child, i) => ({ id: 'r' + i, child, childName: NAMES[child], date: '2026-09-07', ts: NOW - 600, in: NOW - 600, code: '1234' })),
       useStewardSafeguard: () => ({ minors, minorsKnown: true }),
       useStewardGuardians: () => guardians,
       useStewardMembers: members,
