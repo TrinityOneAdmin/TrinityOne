@@ -70,11 +70,19 @@ const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === 
 // folded the card, and the button that came back could then report the arrival refused).
 //
 // The default is UNCHANGED and every existing caller keeps it: dropping stores costs a set per draw and
-// changes what a mid-test `draw` means, and the ~40 files that use this were written against the old
+// changes what a mid-test `draw` means, and every file that uses this was written against the old
 // behaviour. Pass the option in a test that needs to open and close something.
 //
-// ALL CALLERS OF miniReact() (rule 2) — none of them pass an option, so none of them change:
-//   scripts/*.test.mjs, 40 files, every one calling `miniReact()` bare. Verified with:
+// ⚠ THE RULE-2 NOTE HERE SAID "40 files, every one calling `miniReact()` bare. Verified with: grep …" AND
+// BOTH HALVES WERE WRONG. The count was ~59 files at the time (an audit measured 58 the same week, and the
+// number moves every time a screen test is added — which is exactly why a hard number does not belong in a
+// comment). And the quoted grep no longer returns nothing: it returns the one deliberate caller below.
+//
+// THE RULE, WHICH DOES NOT DRIFT: every caller passes NO option and therefore keeps the old behaviour.
+// There is exactly one exception, and it is deliberate —
+//   scripts/a-parent-shows-a-code-instead-of-typing.test.mjs, which needs a component to genuinely UNMOUNT
+//   in order to see a check-in arrival being thrown away by a fold.
+// To re-check that, and read the answer rather than trusting this comment:
 //     grep -rn "miniReact(" scripts/ | grep -v "miniReact()" | grep -v render-jsx-screen.mjs
 export function miniReact(opts) {
   const UNMOUNTS = !!(opts && opts.unmounts);
