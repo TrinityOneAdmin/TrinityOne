@@ -992,6 +992,10 @@
   // an established relay is never nagged.
   const RSW_SEEN = 'to_relay_setup_seen';
   let rswOpen = false, rswStep = 0, rswHandle = '', rswAdded = false;
+  // Does this box already carry a church? Set from the same /config read that decides whether the wizard
+  // opens at all, so the church step can tell "a brand-new box" from "adding a second church".
+  let rswHasChurches = false;
+  let rswManual = false;        // the steward asked for the paste field on a fresh box (a church made elsewhere)
   const RSW_IC = {
     wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 16 0"/><path d="M2 20h20"/><circle cx="12" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v5.6a2 2 0 0 0 .6 1.4l7 7a2 2 0 0 0 2.8 0l5.6-5.6a2 2 0 0 0 0-2.8l-7-7A2 2 0 0 0 12.6 5H7a4 4 0 0 0-4 4Z"/><circle cx="8" cy="10" r="1.3" fill="currentColor" stroke="none"/></svg>',
@@ -1010,14 +1014,38 @@
       ]);
     } catch (e) { return; }
     if (!nm || !cf) return;                                   // couldn't read (401 / relay down) — don't guess
-    const fresh = !nm.handle && (cf.churches || []).length === 0;
+    rswHasChurches = (cf.churches || []).length > 0;
+    const fresh = !nm.handle && !rswHasChurches;
     if (fresh) openRelaySetup();
     else localStorage.setItem(RSW_SEEN, '1');                 // an established relay must never be nagged
   }
   window.maybeFirstRun = maybeFirstRun;
 
-  function openRelaySetup() { rswOpen = true; rswStep = 0; rswHandle = ''; rswAdded = false; document.getElementById('relaySetup').classList.add('show'); renderRSW(); }
+  function openRelaySetup() { rswOpen = true; rswStep = 0; rswHandle = ''; rswAdded = false; rswManual = false; document.getElementById('relaySetup').classList.add('show'); renderRSW(); }
   function closeRSW() { localStorage.setItem(RSW_SEEN, '1'); rswOpen = false; document.getElementById('relaySetup').classList.remove('show'); }
+  // ── THE CHURCH STEP, AS TWO PURE FUNCTIONS SO THEY CAN BE RUN IN A TEST ─────────────────────────────
+  // relay-app/*.js ships unbundled exactly like app/*.jsx, so a test that MATCHED this markup would still
+  // pass with the whole branch disabled (CLAUDE.md rule 3, same hazard, different directory). Returning a
+  // string lets scripts/a-fresh-relay-never-asks-for-an-npub.test.mjs execute the real thing.
+  function rswChurchAsksById(hasChurches, manual) { return !!(hasChurches || manual); }
+  function rswChurchCard(askById, dots) {
+    if (!askById) {
+      return dots
+        + '<div class="rsw-ic">' + RSW_IC.church + '</div>'
+        + '<h2 class="rsw-h">Your church goes on next</h2>'
+        + '<p class="rsw-sub">Nothing to copy or paste. Open the Steward console on this computer, create your church and give it a name — it will be added to this relay automatically, and its records will live here.</p>'
+        + '<div class="rsw-msg" id="rswNpubMsg"></div>'
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswById">I already have a church</button><button class="btn btn-clay" id="rswSkip">Continue</button></div>';
+    }
+    return dots
+      + '<div class="rsw-ic">' + RSW_IC.church + '</div>'
+      + '<h2 class="rsw-h">Add your church</h2>'
+      + '<p class="rsw-sub">Paste your church\u2019s ID (its npub) so it\u2019s allowed to publish to and read from this relay. You\u2019ll find it in the steward console. You can add more churches later.</p>'
+      + '<div class="rsw-lbl">Church npub</div>'
+      + '<input class="rsw-in" id="rswNpub" placeholder="npub1\u2026" autocomplete="off" spellcheck="false" />'
+      + '<div class="rsw-msg" id="rswNpubMsg"></div>'
+      + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip">Skip for now</button><button class="btn btn-clay" id="rswAdd">Add &amp; continue</button></div>';
+  }
   function rswDots() { let s = ''; for (let i = 0; i < 4; i++) s += '<span class="' + (i <= rswStep ? 'on' : '') + '"></span>'; return '<div class="rsw-dots">' + s + '</div>'; }
 
   function renderRSW() {
@@ -1063,18 +1091,32 @@
       return;
     }
     if (rswStep === 2) {
-      card.innerHTML = rswDots()
-        + '<div class="rsw-ic">' + RSW_IC.church + '</div>'
-        + '<h2 class="rsw-h">Add your church</h2>'
-        + '<p class="rsw-sub">Paste your church’s ID (its npub) so it’s allowed to publish to and read from this relay. You’ll find it in the steward console. You can add more churches later.</p>'
-        + '<div class="rsw-lbl">Church npub</div>'
-        + '<input class="rsw-in" id="rswNpub" placeholder="npub1…" autocomplete="off" spellcheck="false" />'
-        + '<div class="rsw-msg" id="rswNpubMsg"></div>'
-        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip">Skip for now</button><button class="btn btn-clay" id="rswAdd">Add &amp; continue</button></div>';
+      // ⚠ A FRESH BOX IS NEVER ASKED FOR AN NPUB, AND THE OLD STEP COULD NOT BE ANSWERED.
+      // It read: "Paste your church's ID (its npub)… You'll find it in the steward console." On a brand-new
+      // box there IS no church yet, so there is nothing in the console to find — and this wizard's own gate
+      // (no relay handle AND no churches) fires it for precisely those people. Owner, 2026-09-12: "I really
+      // want to make sure the 'adding a church' isn't something that a steward has to do manually."
+      // Since `2cb1582`, naming a church in a console served BY this box registers it here on its own
+      // (steward.src.js `_registerOnOwnBox`, hooked into publishProfile). So the honest thing to show a
+      // fresh box is what is about to happen, not a field it cannot fill.
+      // ⚠ THE FIELD IS NOT DELETED. A church created somewhere else — restored from its words, or run from
+      // another machine — still has to be added by ID, and so does a SECOND church. That is `rswManual`,
+      // and it is the default whenever the box already carries a church.
+      const askById = rswChurchAsksById(rswHasChurches, rswManual);
+      card.innerHTML = rswChurchCard(askById, rswDots());
+      if (!askById) {
+        document.getElementById('rswBack').onclick = () => { rswStep = 1; renderRSW(); };
+        document.getElementById('rswById').onclick = () => { rswManual = true; renderRSW(); };
+        document.getElementById('rswSkip').onclick = () => { rswStep = 3; renderRSW(); };
+        return;
+      }
+      // Back out of the by-ID detour returns to the automatic card, not to the relay-name step — otherwise
+      // a steward who tapped "I already have a church" by mistake is thrown two screens backwards.
+      const backToAuto = rswManual && !rswHasChurches;
       const inp = document.getElementById('rswNpub');
       inp.focus();
       inp.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('rswAdd').click(); });
-      document.getElementById('rswBack').onclick = () => { rswStep = 1; renderRSW(); };
+      document.getElementById('rswBack').onclick = () => { if (backToAuto) { rswManual = false; } else { rswStep = 1; } renderRSW(); };
       document.getElementById('rswSkip').onclick = () => { rswStep = 3; renderRSW(); };
       document.getElementById('rswAdd').onclick = async () => {
         const npub = (inp.value || '').trim();
