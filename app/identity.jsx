@@ -1449,6 +1449,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const D = window.TrinityData;
   const [edit, setEdit] = useId(false);
   const [family, setFamily] = useId(false);
+  const [kidsAt, setKidsAt] = useId(false);   // §3b: "Children at church" — the parent's own, local, answer
   const [name, setName] = useId(identity.name || '');
   const [av, setAv] = useId(identity.avatar);
   // seed the form when the sheet OPENS, and refresh it if the profile changes while NOT editing — but never
@@ -1657,6 +1658,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SETTINGS</div>
         <Group>
           <Row icon="bell" label="Notifications" sub="Choose what you’re alerted about" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openNotifSettings(); }} />
+          {/* §3b. ONLY INSIDE A CHURCH, because the answer is per-church: a member of two congregations brings
+              children to one and not the other, and the stored key carries the church for that reason. It is
+              in SETTINGS rather than MY FAMILY deliberately — MY FAMILY is about a child's own ACCOUNT, and
+              most children checked into a crèche have no phone at all (design §7). */}
+          {ctx.church && ctx.church.npub ? (
+            <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
+          ) : null}
           <Row icon="bolt" label="Currency" sub={(() => { const c = window.TrinityLN && window.TrinityLN.currency && window.TrinityLN.currency(); return c ? `Show giving amounts in ${c.label} (${c.symbol})` : 'Currency for giving amounts'; })()} accent="var(--gold)" onClick={() => { onClose && onClose(); ctx.openCurrency(); }} />
         </Group>
 
@@ -1715,6 +1723,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <AppVersion />
       </div>
       {family ? <FamilySheet open={family} onClose={() => setFamily(false)} ctx={ctx} /> : null}
+      {kidsAt ? <ChildrenAtChurchSheet open={kidsAt} onClose={() => setKidsAt(false)} ctx={ctx} /> : null}
     </Overlay>
   );
 }
@@ -1760,6 +1769,111 @@ window.AppVersion = AppVersion;
 // KEYED BY CHURCH AS WELL AS NAME. Same name, different church, is a different child; handing church B's
 // "Sam" the key minted for church A's would be one account for two people, which is worse than the bug.
 const _familyPendingKey = { church: '', name: '', mnemonic: '' };
+// ── CHILDREN AT CHURCH: the parent's own answer, kept on the parent's own phone ─────────────────────────────
+// §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md. Two settings and nothing else: does this member
+// bring children, and what are they called. BOTH ARE LOCAL. Nothing on this sheet publishes a document, and
+// the church is never told either answer — which is why this whole slice needs no new relay gate.
+//
+// WHAT IT BUYS. With the box ticked and at least one name, a "We're here" card appears on Today while the
+// church's children's work is in window, and the QR it shows saves the worker typing the names at the door.
+// EVERY PART OF THAT IS OPTIONAL: DOMAIN.md's "do not block" — the desk works with no app at all, and a
+// worker types a name today exactly as she did yesterday.
+//
+// ⚠ WHY THE NAMES LIVE HERE AND NOT ON THE RELAY. A parent's phone does not hold the church's children:
+// `minors:` and `guardians:` are owner-only at the relay, measured 2026-09-11, and that is deliberate. The
+// alternative shape — a church-authored, sealed per-guardian children document — was designed and REJECTED
+// (§3/§4 of the plan) because the read gate it needed did not exist where the plan claimed. Typed once, here,
+// is the version with no new document type in it at all.
+function ChildrenAtChurchSheet({ open, onClose, ctx }) {
+  const F = window.Fellowship;
+  const np = (ctx && ctx.church && ctx.church.npub) || '';
+  const [brings, setBrings] = useId(() => !!(F && F.bringsChildren && F.bringsChildren(np)));
+  const [names, setNames] = useId(() => ((F && F.myChildNames) ? F.myChildNames(np) : []));
+  // A ROW YOU CAN TYPE INTO BEFORE IT IS A CHILD. `names` is what is SAVED; `draft` is the box on screen.
+  // Persisting every keystroke would store "M", "Mi", "Mil" in turn, and a half-typed name is exactly what
+  // would then be painted at a door if the parent closed the app mid-word.
+  const [draft, setDraft] = useId('');
+  const [err, setErr] = useId('');
+  useIdE(() => {
+    if (!open) return;
+    setBrings(!!(F && F.bringsChildren && F.bringsChildren(np)));
+    setNames((F && F.myChildNames) ? F.myChildNames(np) : []);
+    setDraft(''); setErr('');
+  }, [open, np]);
+  const save = (list) => { setNames((F && F.setMyChildNames) ? F.setMyChildNames(np, list) : []); };
+  const add = () => {
+    const n = draft.trim();
+    if (!n) return;
+    const before = names.length;
+    save([...names, n]);
+    setDraft('');
+    // SAY SO WHEN NOTHING HAPPENED. The engine drops a duplicate and caps the list at twelve; a box that
+    // simply emptied itself would read as "saved" either way. Fix the control, not the label.
+    setErr(before === ((F && F.myChildNames) ? F.myChildNames(np).length : 0)
+      ? 'That name is already on the list, or the list is full.' : '');
+  };
+  const drop = (n) => { save(names.filter(x => x !== n)); setErr(''); };
+  const flip = () => {
+    const next = !brings;
+    setBrings(!!(F && F.setBringsChildren && F.setBringsChildren(np, next)));
+  };
+  const Grp = ({ children }) => (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)', marginBottom: 14 }}>{children}</div>
+  );
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
+            <Icon name="chevL" size={20} /></button>
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Children at church</h1>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
+        <Grp>
+          <NotifToggleRow icon="child" accent="var(--sage)" label="I bring children to church"
+            sub="Shows a “We’re here” button when your church’s children’s work is on"
+            on={brings} onFlip={flip} />
+        </Grp>
+        {brings ? (
+          <React.Fragment>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>WHO YOU BRING</div>
+            <Grp>
+              {names.map(n => (
+                <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderTop: '1px solid var(--line-2)' }}>
+                  <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n}</div>
+                  <button onClick={() => drop(n)} aria-label={'Remove ' + n}
+                    style={{ flexShrink: 0, padding: '7px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Remove</button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '13px 16px', borderTop: '1px solid var(--line-2)' }}>
+                <input value={draft} onChange={e => { setDraft(e.target.value.slice(0, 40)); setErr(''); }} aria-label="A child’s name" placeholder="A child’s name"
+                  style={{ flex: 1, minWidth: 0, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5 }} />
+                <button onClick={add} disabled={!draft.trim()}
+                  style={{ flexShrink: 0, padding: '9px 14px', borderRadius: 11, border: 'none', cursor: draft.trim() ? 'pointer' : 'default', opacity: draft.trim() ? 1 : 0.5, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>Add</button>
+              </div>
+            </Grp>
+            {err ? <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', margin: '0 6px 12px', lineHeight: 1.45 }}>{err}</div> : null}
+          </React.Fragment>
+        ) : null}
+        {/* THE PROMISE, AND IT IS A TRUE ONE — asserted on the transport, not on this sentence. Nothing on
+            this sheet reaches a relay: scripts/a-parents-children-stay-on-their-own-phone.test.mjs runs the
+            shipped setters with every publishing path replaced by a proxy that throws. */}
+        <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '8px 6px 0' }}>
+          These names stay on this phone. Your church is never sent them, and nobody else can see them. They are shown, on screen, only to the person checking your children in — and only when you hold up the code.
+        </p>
+        {/* AND THE HONEST BOUNDARY. A PIN lock wipes every stored thing that names a church or a member, this
+            list included, because a children's list on a seized locked phone is exactly what that wipe is
+            for. Saying so here is cheaper than a parent wondering where the names went. */}
+        <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '10px 6px 0' }}>
+          If you lock the app with a PIN, this list is cleared from the phone along with everything else about your church. You can type it again — and the children’s desk works whether you do or not.
+        </p>
+      </div>
+    </Overlay>
+  );
+}
+window.ChildrenAtChurchSheet = ChildrenAtChurchSheet;
+
 function FamilySheet({ open, onClose, ctx }) {
   const F = window.Fellowship;
   const me = (F && F.myPubkey) || null;

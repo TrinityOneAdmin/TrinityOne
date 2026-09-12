@@ -1249,6 +1249,17 @@ function App() {
     if (!np || !F || !F.writeCheckin) return { ok: false, reason: 'unavailable' };
     return F.writeCheckin(np, rec);
   };
+  // A PARENT SAYS "WE ARE HERE" — §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md, and the FIRST
+  // product caller Fellowship.writeArrival has ever had. It signs `checkinarrival:<sid>:<ownpub>`, carries no
+  // child's name and no key material, and the relay gates it at all four doors. Returns { ok, reason }, and
+  // the screen must word all THREE outcomes — `refused` is settled, `unconfirmed` means nobody answered and
+  // the arrival may well be on the worker's screen already (device finding F1, 2026-09-11).
+  const checkinArrive = async (rec) => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.writeArrival) return { ok: false, reason: 'unavailable' };
+    return F.writeArrival(np, rec);
+  };
   // slice C: a worker releases a child. The CODE MATCH is on the screen (KidsRow); this only writes the
   // release document the match (or a manual release) produces. Returns { ok, reason }.
   const checkinRelease = async (rec) => {
@@ -1977,6 +1988,7 @@ function App() {
     checkinRegister,
     checkinAdd,   // slice B: a worker checks a child in — Fellowship.writeCheckin, returns { ok, reason }
     checkinRelease,   // slice C: a worker releases a child (code match on screen) — Fellowship.releaseCheckin
+    checkinArrive,    // §3b: a parent says "we're here" — Fellowship.writeArrival, returns { ok, reason }
     // …AND THE PARENT'S HALF. Their own children at today's session, with the pickup code the worker will
     // ask for — { children, askAtDesk, settled }. There is deliberately NO parent release control anywhere
     // beside it: a parent checking their own child out routes straight round the pickup code.

@@ -6263,6 +6263,7 @@
     // lost — it moved to the permission, where it means what a church means by it: this person is cleared until
     // we say otherwise.
   });
+  var DEFAULT_HELPER_LIFETIME = "session";
   var isDeclaredLifetime = (id) => typeof id === "string" && Object.prototype.hasOwnProperty.call(HELPER_LIFETIMES, id);
   var MAX_SESSION_SECONDS = 26 * 3600;
   var PERMISSION_LIFETIMES = Object.freeze({
@@ -6442,6 +6443,26 @@
   var isPermissionSource = (id) => isDeclaredSource(id) && id !== GRANT_SOURCE;
   var GRANT_SOURCE = "permission";
   var isDeclaredSource = (id) => typeof id === "string" && Object.prototype.hasOwnProperty.call(HELPER_SOURCES, id);
+  function lifetimeWindow(lifetimeId, service, opts) {
+    const o = opts || {};
+    const life = HELPER_LIFETIMES[isDeclaredLifetime(lifetimeId) ? lifetimeId : ""];
+    if (!life) return null;
+    const date = String(service && service.date || "");
+    const time = String(service && service.time || "10:30");
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+    const t = /^(\d{1,2}):(\d{2})$/.exec(time);
+    if (!m || !t) return null;
+    const start = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(t[1]), Number(t[2]), 0, 0);
+    const startS = Math.floor(start.getTime() / 1e3);
+    if (!Number.isFinite(startS)) return null;
+    const endOfDay = Math.floor(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 0).getTime() / 1e3);
+    const w = life.window(startS, o, endOfDay);
+    let from = Math.floor(w.from);
+    let until = w.until == null ? null : Math.floor(w.until);
+    if (until != null && life.max != null && until - from > life.max) until = from + life.max;
+    if (until != null && until <= from) return null;
+    return { from, until, lifetime: life.id };
+  }
   function windowFault(from, until, lifetimeId) {
     if (!isDeclaredLifetime(lifetimeId)) return "unknown lifetime " + JSON.stringify(lifetimeId);
     const life = HELPER_LIFETIMES[lifetimeId];
@@ -9137,6 +9158,67 @@
     };
     _obTimer = setTimeout(_obTick, 45e3);
   }
+  var BRINGKIDS_KEY = "trinityone.bringkids.";
+  var MYKIDNAMES_KEY = "trinityone.mykidnames.";
+  var MYKIDS_MAX = 12;
+  var MYKID_NAME_MAX = 40;
+  function _kidsChanged() {
+    try {
+      window.dispatchEvent(new Event("trinity-mykids"));
+    } catch (e) {
+    }
+  }
+  function _kidSlot(prefix, cp) {
+    const me = _mePub();
+    return cp && me ? prefix + cp + "|" + me : "";
+  }
+  function _kidNames(list) {
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (const raw of list) {
+      if (typeof raw !== "string") continue;
+      const n = raw.replace(/\s+/g, " ").trim().slice(0, MYKID_NAME_MAX);
+      if (!n) continue;
+      if (out.some((x) => x.toLowerCase() === n.toLowerCase())) continue;
+      out.push(n);
+      if (out.length >= MYKIDS_MAX) break;
+    }
+    return out;
+  }
+  function arrivalSessionNow(services, nowSec) {
+    const now = Number.isFinite(nowSec) ? Math.floor(nowSec) : Math.floor(Date.now() / 1e3);
+    let best = null;
+    for (const s of Array.isArray(services) ? services : []) {
+      if (!s || !s.id) continue;
+      const w = lifetimeWindow(DEFAULT_HELPER_LIFETIME, s);
+      if (!w) continue;
+      if (now < w.from || w.until == null || now > w.until) continue;
+      if (!best || w.from > best.from) best = { session: String(s.id), name: String(s.name || ""), from: w.from, until: w.until };
+    }
+    return best;
+  }
+  function buildArrivalQR(myPub, names) {
+    if (!/^[0-9a-f]{64}$/.test(String(myPub || ""))) return "";
+    const c = _kidNames(names);
+    if (!c.length) return "";
+    return JSON.stringify({ v: 1, g: String(myPub), c });
+  }
+  function parseArrivalQR(text) {
+    if (typeof text !== "string" || text.length > 4096) return null;
+    let o;
+    try {
+      o = JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o)) return null;
+    if (o.v !== 1) return null;
+    if (!/^[0-9a-f]{64}$/.test(String(o.g || ""))) return null;
+    if (!Array.isArray(o.c)) return null;
+    const c = _kidNames(o.c);
+    if (!c.length) return null;
+    return { g: String(o.g), c };
+  }
   window.Fellowship = {
     relays: loadRelays(),
     // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
@@ -11794,6 +11876,66 @@
         offDocs();
       };
     },
+    // ── WHAT THIS PHONE'S OWNER HAS TOLD IT ABOUT THEIR OWN FAMILY ───────────────────────────────────────────
+    // §3b. All of it is localStorage and NOTHING HERE PUBLISHES: no relay call, no event, no document, no
+    // outbox entry. The church is never told that a member brings children, and never told their names. That
+    // is not a nicety — it is why this slice needs no new read gate, no new prefix and no new sealing, and it
+    // is asserted on the TRANSPORT (a publishing proxy that throws) rather than by reading a screen.
+    //
+    // The five below are the whole surface. `arrivalSessionNow` and `parseArrivalQR` are the pure module
+    // functions above, exposed by reference so the worker's screen and the parent's screen read ONE definition
+    // of the payload — two would drift, and the drift would show as a name the parent could not have typed.
+    arrivalSessionNow,
+    parseArrivalQR,
+    // DOES THIS MEMBER BRING CHILDREN TO THIS CHURCH? Default NO, so a congregation that has nothing to do
+    // with children's work is offered nothing — the "no dead ends" finding from the parent persona of
+    // 2026-09-10, which found the ABSENCE of check-in correct.
+    bringsChildren(churchNpub) {
+      const slot = _kidSlot(BRINGKIDS_KEY, toPub(churchNpub));
+      if (!slot) return false;
+      try {
+        return localStorage.getItem(slot) === "1";
+      } catch (e) {
+        return false;
+      }
+    },
+    setBringsChildren(churchNpub, on) {
+      const slot = _kidSlot(BRINGKIDS_KEY, toPub(churchNpub));
+      if (!slot || !_mayCache()) return false;
+      try {
+        localStorage.setItem(slot, on ? "1" : "0");
+      } catch (e) {
+        return false;
+      }
+      _kidsChanged();
+      return !!on;
+    },
+    // THE NAMES. Returned normalised, so a caller can never be handed something it could not render.
+    myChildNames(churchNpub) {
+      const slot = _kidSlot(MYKIDNAMES_KEY, toPub(churchNpub));
+      if (!slot) return [];
+      try {
+        return _kidNames(JSON.parse(localStorage.getItem(slot) || "[]"));
+      } catch (e) {
+        return [];
+      }
+    },
+    setMyChildNames(churchNpub, names) {
+      const slot = _kidSlot(MYKIDNAMES_KEY, toPub(churchNpub));
+      const clean4 = _kidNames(names);
+      if (!slot || !_mayCache()) return clean4;
+      try {
+        localStorage.setItem(slot, JSON.stringify(clean4));
+      } catch (e) {
+      }
+      _kidsChanged();
+      return clean4;
+    },
+    // THE QR ITSELF — built from this phone's own pubkey and this phone's own list. '' when there is nothing to
+    // show (no key, no names), and the screen then offers the desk instead of a square that means nothing.
+    arrivalQR(churchNpub) {
+      return buildArrivalQR(_mePub(), window.Fellowship.myChildNames(churchNpub));
+    },
     // ── A PARENT SAYS "WE ARE HERE" ──────────────────────────────────────────────────────────────────────────
     // STEP 1 of the parent surface. reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md section 3: a
     // parent announces themselves at the door of the children's room, and the WORKER turns that into the
@@ -11814,13 +11956,14 @@
     // job is to deliver the parent's pubkey provably, and the signature has already done that. The worker types
     // the child's name at the desk exactly as she does today.
     //
-    // ⚠ NOTHING IN app/ CALLS THIS YET, AND THAT IS SAID PLAINLY RATHER THAN LEFT TO BE FOUND. The parent's own
-    // surface -- entering the room code from the door, and reading their child's record back -- is STEP 2,
-    // because reading back needs a guardian-sealed copy that does not exist (see the STOP-AND-PLAN section of
-    // reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md). This function ships now so that the relay tests
-    // drive the SHIPPED writer rather than a mirror of it, which is the trap tests-must-drive-shipped-code
-    // records. It grants no authority it did not already have: any member could sign this event by hand, and
-    // the gate that matters is the relay's.
+    // ⚠ IT HAS A PRODUCT CALLER FROM 2026-09-12, AND UNTIL THEN IT HAD NONE. `ctx.checkinArrive` in
+    // app/app.jsx, called by WereHereCard in app/screens-today.jsx — §3b of
+    // reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md. The comment that stood here said "NOTHING IN app/ CALLS
+    // THIS YET" and named the reason: reading a record back needed a guardian-sealed copy that did not exist.
+    // That copy shipped, and §3b then removed the rest of the obstacle by carrying the children's names
+    // OPTICALLY, in a QR, so nothing new has to be published or sealed for the parent's surface to exist.
+    // Corrected rather than deleted, so the next reader learns the constraint moved and when.
+    // The screen is scripts/a-parent-shows-a-code-instead-of-typing.test.mjs.
     //
     // IT FAILS LOUD, NEVER OPTIMISTICALLY (design section 8). _publishAny THROWS unless a relay accepted the
     // write, so a refusal (not a member, a closed session, somebody else's address) and a mid-service outage
