@@ -118,8 +118,14 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // same reason: with a stale id it resolves to no npub, the effect falls back to the empty default, and the
   // parent's card simply is not there — which is indistinguishable, on a phone, from having no children
   // checked in.
-  assert.equal(sites.length, 40,
-    `the active-church resolution sites changed (${sites.length} vs 40) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 40 → 41 on 2026-09-12: ctx.checkinArrive (§3b, a parent taps "We're here"), which resolves the active
+  // church to its npub to call Fellowship.writeArrival. It is BYTE-IDENTICAL IN SHAPE to ctx.checkinRelease
+  // immediately below it in app/app.jsx — same find(), same `if (!np …) return { ok:false }` — so it
+  // benefits from the heal for the same reason: a stale id leaves np undefined and the tap is a LOUD no-op
+  // the card reports in words, never a silent write to the wrong church. Checked by reading both, not by
+  // assuming the shape from the name.
+  assert.equal(sites.length, 41,
+    `the active-church resolution sites changed (${sites.length} vs 41) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {
