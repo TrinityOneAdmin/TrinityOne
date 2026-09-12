@@ -571,15 +571,33 @@ test('and the safeguarding lead is given each session\'s key, or a helper\'s rec
     'steward roster, or removing them from it would leave a grant still admitting them');
 });
 
-test('a Finance-only steward still receives the ciphertext, exactly as today — named, not fixed', async () => {
-  // HONESTY, not an endorsement. canRead's privileged short-circuit admits `stewardCan(authed, cp, 'any')`,
-  // which any single capability satisfies, and fourteen other rules share that line. Narrowing it is a change
-  // to a grant this slice has no business touching. What the treasurer cannot do is OPEN one — that is
-  // checkin-key-separation.test.mjs, and it is the protection that actually holds.
-  const got = await asks(treasurer, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-gina'] });
-  assert.equal(got.length, 1, 're-anchor: this changed. If it is now 0 that is a TIGHTENING and probably good, ' +
-    'but it was not decided here and the comment above is stale');
-  assert.throws(() => nip44.decrypt(got[0].content, unhex('44'.repeat(32))),
+// RENAMED AND FLIPPED 2026-09-11, and the old title is kept rather than deleted (CLAUDE.md rules 4 and 8).
+// It was 'a Finance-only steward still receives the ciphertext, exactly as today — named, not fixed', and it
+// asserted `got.length === 1` under this reasoning:
+//
+//     "HONESTY, not an endorsement. canRead's privileged short-circuit admits `stewardCan(authed, cp, 'any')`,
+//      which any single capability satisfies, and fourteen other rules share that line. Narrowing it is a
+//      change to a grant this slice has no business touching. What the treasurer cannot do is OPEN one."
+//
+// ITS OWN RE-ANCHOR INVITED THIS CHANGE — "if it is now 0 that is a TIGHTENING and probably good, but it was
+// not decided here" — and it has now been decided, in its own commit, with the full who-must-keep-it half in
+// scripts/a-check-in-record-the-relay-will-share.test.mjs.
+//
+// AND THE REASONING THE OLD COMMENT RESTED ON WAS TOO KIND TO ITSELF. "They cannot open it" is true and is
+// not the whole disclosure: ['p'] and ['session'] are CLEARTEXT because the relay routes on them, `roster:`
+// turns a pubkey into a name, and a session resolves to a dated service. So the treasurer did not need to
+// open anything to derive "this named parent had a child at church on this date", for the whole history.
+// The narrowing is done WITHOUT touching the shared short-circuit: the check-in documents are simply decided
+// BEFORE it now, by checkinReader() — so the other fourteen rules are untouched.
+test('A FINANCE-ONLY STEWARD IS REFUSED THE REGISTER — decided 2026-09-11, was served it until then', async () => {
+  assert.deepEqual(await asks(treasurer, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-gina'] }), [],
+    'A STEWARD TICKED FOR FINANCE ALONE WAS SERVED A CHILD\'S CHECK-IN RECORD. Sealed is not the same as ' +
+    'withheld: the cleartext tags alone give up which named parent had a child at church on which date.');
+  // AND THE SAFEGUARDING LEAD STILL HAS IT, in the same breath, because a narrowing measured only on the
+  // person who loses it is how a register goes blank on a Sunday.
+  const sg = await asks(sgLead, { kinds: [30078], '#d': [D.CHECKIN + 'r-now-gina'] });
+  assert.equal(sg.length, 1, 'the safeguarding lead lost the register alongside the treasurer');
+  assert.throws(() => nip44.decrypt(sg[0].content, unhex('44'.repeat(32))),
     're-anchor: the record is not sealed at all');
 });
 
@@ -865,12 +883,14 @@ test('THE CLEARANCE IS NOT SERVED TO THE CONGREGATION — it names the church\'s
     'the church cannot read the clearance it granted');
   assert.equal((await asks(sgLead, { kinds: [30078], '#d': [D.CHECKINPERM + ada.pub] })).length, 1,
     'the safeguarding lead cannot see who the church has cleared');
-  // HONESTY, not an endorsement, and the same note the register carries: canRead's privileged short-circuit
-  // admits stewardCan(authed, cp, 'any'), which any single capability satisfies. Narrowing that is a change to
-  // a grant fourteen other rules share and is not this slice's to make.
-  assert.equal((await asks(treasurer, { kinds: [30078], '#d': [D.CHECKINPERM + ada.pub] })).length, 1,
-    're-anchor: this changed. If it is now 0 that is a TIGHTENING and probably good, but it was not decided ' +
-    'here and the comment above is stale');
+  // NARROWED 2026-09-11, and the note this replaces said the opposite: "HONESTY, not an endorsement… canRead's
+  // privileged short-circuit admits stewardCan(authed, cp, 'any'), which any single capability satisfies.
+  // Narrowing that is a change to a grant fourteen other rules share and is not this slice's to make." It was
+  // narrowed without touching that grant — the check-in documents are decided BEFORE the short-circuit now.
+  // A clearance IS the church's cleared safeguarding team, one person at a time, so a treasurer reading it is
+  // the same disclosure the line four above withholds from a parent.
+  assert.deepEqual(await asks(treasurer, { kinds: [30078], '#d': [D.CHECKINPERM + ada.pub] }), [],
+    'a steward ticked for Finance alone was served a clearance — the church\'s cleared safeguarding team');
   // AND A NON-MEMBER HELPER READS HIS OWN, because the grant is his whole authority — he may never have joined
   // the congregation at all.
   assert.equal((await asks(dan, { kinds: [30078], '#d': [D.CHECKINPERM + dan.pub] })).length, 1,

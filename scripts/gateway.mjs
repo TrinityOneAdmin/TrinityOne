@@ -1596,6 +1596,95 @@ const checkinHelperOf = (pub, cp, sessionId) => {
   // property no change to this feature may touch.
   return checkinPermitted(pub, cp);
 };
+// ── THE CHURCH-LEVEL HALF OF EVERY CHECK-IN READ ──────────────────────────────────────────────────────────
+//
+// WHO GETS THE CHILDREN'S REGISTER *BECAUSE OF WHO THEY ARE*, as opposed to because a particular record
+// names them. It exists so that one answer is given to all four check-in documents, and — the point of the
+// change that introduced it — so that answer is given BEFORE canRead's general
+// `stewardCan(authed, cp, 'any') || careAdmin(authed, cp)` short-circuit rather than after it.
+//
+// THE DEFECT IT CLOSES, recorded here because the shape is easy to re-introduce. That short-circuit runs
+// first, so every branch below it was unreachable for anyone it admitted: a treasurer ticked for Finance
+// alone, a volunteer ticked for Groups & rotas alone, and any care-team admin were each served EVERY
+// `trinityone/checkin:` and `trinityone/checkinarrival:` the church has ever written. They cannot open one —
+// the body is sealed to the safeguarding ring, the ['ck'] copy to a session key and the ['gk'] copy to a
+// parent — but the CLEARTEXT TAGS carry ['p',<guardian pubkey>] and ['session',<sessionId>], `roster:` maps
+// a pubkey to a name and a session maps to a dated service. So "this named parent had a child at church on
+// this date" was derivable with no key at all. The console's own copy told churches the opposite: records
+// open to "you, anyone you have given Safeguarding to, a cleared helper holding that session's key, and the
+// child's own guardians".
+//
+// HOW FAR BACK, stated exactly rather than as "the whole history", which is what this said until it was
+// measured. `publishCheckin` wrote exactly [['d'],['t'],['enc','1']] until 2026-09-09 — no ['session'], no
+// ['p'] (the scope note quoted at the head of
+// scripts/a-check-in-record-the-relay-will-share.test.mjs). A record naming no parent supports no inference
+// about a parent, so the reach is records written SINCE 2026-09-09 — which is every record any church will
+// write from now on, and the reason this is worth closing rather than a reason it is small.
+//
+// `stewardCanExplicitly(…, 'safeguarding')` AND NOT `stewardCan(…)`. THIS IS THE WHOLE POINT OF THE RULE,
+// so it is written out rather than left to the reader.
+//
+// THE TWO GATES DISAGREED WITH EACH OTHER, and that disagreement WAS the leak.
+//   • THE KEY GATE has always been strict: `_capAllows` returns `!spec.explicit`, and `CAP_KEYS.checkin` is
+//     `explicit: true` (src/steward.src.js). So a steward with no capability list is NEVER wrapped into
+//     `checkinkey:` and never could open one record. The console says so in as many words —
+//     "Safeguarding has to be given on purpose — it isn't included in 'everything'".
+//   • THE READ GATE was loose: stewardCan()'s compatibility branch is `if (!caps) return true`, so the relay
+//     SERVED that same steward every record and every arrival.
+// What they received was ciphertext they could not open — and the tags are CLEARTEXT, so the whole
+// "this named parent had a child at church on this date" inference was theirs for every record written
+// since 2026-09-09. The strict predicate makes the read gate tell the truth the key gate already tells.
+//
+// AND THIS IS THE ORDINARY CHURCH, NOT A LEGACY ONE, which is what makes it worth the change:
+// src/steward.src.js publishes `{ pubkeys: [...] }` with NO `caps` key at all unless somebody opens the
+// capability editor. At the relay that is INDISTINGUISHABLE from a roster whose caps map omits one person
+// (the STEWARDS_D branch builds an empty Map either way, so `byPub.get(pub)` is undefined in both), so the
+// compat branch was firing for the common shape, not the rare one.
+//
+// NOTHING FUNCTIONAL IS LOST. Nobody loses a document they could ever have opened. The church key holder
+// keeps all four documents. WHAT CHANGES FOR A REAL PERSON, stated plainly: a delegated safeguarding
+// steward in a church that never opened the capability editor stops being served the register until the
+// owner ticks Safeguarding for them — which that owner already has to do before they can open a single
+// record, so it moves a failure from "the screen is mysteriously empty" to "you have not been given this".
+//
+// THE MIGRATION COST WAS PRICED AND IS ZERO. Owner, 2026-09-12, asked about churches appointed before
+// capabilities: "There are no live churches. This isn't an issue I dont think. U need to remember that we
+// are pre pilot still." An earlier version of this comment argued the opposite at length (that the strict
+// form would be "an availability failure dressed as a security improvement") and chose stewardCan() on that
+// ground. It was reasoning about a migration that does not exist. reference/DOMAIN.md now carries the
+// standing rule: do not price migrations until the pilot starts.
+//
+// THE ONE HONEST ASYMMETRY, named rather than smoothed over: accept()'s CHECKIN_D WRITE gate still asks
+// stewardCan(…, 'safeguarding'), so an unscoped steward may WRITE a record and may not read it back. That
+// is not this gate being wrong — it is the same disagreement one document over, in the write direction,
+// and closing it is a separate change with its own scope. Recorded so the next reader does not "fix" the
+// read rule back to match it.
+//
+// networkOf() IS KEPT. A `network:<pub>` row is written by the CHURCH KEY ITSELF and only ever over itself
+// (note()'s NETWORK_D branch requires `CHURCH_PUBS.has(e.pubkey)`), so a network key is a second church-level
+// key the church deliberately granted authority over its own data — the mechanism by which churches host one
+// another (reference/DOMAIN.md, "churches SHARE each other's relays"). It is per-church scoped (C4), so this
+// is not the relay-wide NETWORKS union.
+//
+// ⚠ A SECOND REASON WAS WRITTEN HERE AND IS DELETED RATHER THAN SOFTENED, because it proves too much. It
+// said: "it is already a reader of `minors:` and `guardians:`, so withholding the register from it would
+// protect nothing it does not already hold." careAdmin() is a reader of those two documents ON THE SAME LINE
+// of the same rule, and careAdmin() is REMOVED here — so that argument, taken seriously, would keep the care
+// admin too. It is also false on its own terms: the register carries attendance BY DATE and pickup codes,
+// and the family map carries neither. The church-level-key reason above is the whole reason.
+//
+// AND careAdmin() IS GONE, which is the other half of the narrowing. A care-team seat is a willingness to
+// cook a meal or give a lift; the same sentence is already written twice in canRead's CAREREQ_D and
+// CARECHAT_D branches, where a care seat was found not to be a vetting check.
+//
+// CALLERS — every one, per CLAUDE.md rule 2. There is exactly ONE: the combined dispatch guard in canRead's
+// kind-30078 section, which tests all four prefixes in a single `if` and calls this once. (An earlier version
+// of this note listed FOUR callers, one per branch — that described a shape the code never had, and a rule-2
+// list that is wrong is worse than none. The four DOCUMENTS it decides are CHECKIN_D, CHECKINARRIVAL_D,
+// CHECKINPERM_D and CHECKINHELPER_D; the one CALL SITE is the guard above them.)
+// Nothing else calls it, and nothing outside canRead may: it is a READ grant and says nothing about writes.
+const checkinReader = (authed, cp) => !!authed && !!cp &&
+  (authed === cp || networkOf(authed, cp) || stewardCanExplicitly(authed, cp, 'safeguarding'));
 // ── IS THIS SESSION OPEN TO AN ARRIVAL RIGHT NOW? ─────────────────────────────────────────────────────────
 //
 // The WINDOW half of the arrival rule (the stateless half is arrivalIdOk, far below beside carereqIdOk).
@@ -4170,27 +4259,35 @@ function canRead(e, authed) {
     // saying "nothing", and that reads the same as removing them — which is today's behaviour for removal.
     if (ch && !retractionExempt) { if (!(e.pubkey === ch || stewardCan(e.pubkey, ch, 'any'))) return false; }
     if (!authed) return false;
-    // C3: `CHURCH_PUBS.has(authed)` / `NETWORKS.has(authed)` were UNSCOPED — any configured church key, and
-    // any key any church had ever declared a network, read every OTHER church's roster, safeguarding lists
-    // and care PII. On the shared community relay (where /config self-registration is open by default) that
-    // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
-    if (authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)) return true;
-    // WHO MAY FETCH THE ROTA. Default — and every church that existed before this setting — is unchanged:
-    // any member of the church. A steward may narrow it to the people who actually serve, or to stewards.
-    // The church key, its network, its stewards and care admins have already returned true above, so this
-    // only ever narrows the ORDINARY MEMBER grant that follows.
+    // ══ THE CHECK-IN DOCUMENTS DECIDE THEIR OWN READERS, AND THEY DECIDE THEM *FIRST* ═════════════════════
     //
-    // Say plainly what this does and does not do. rota:/runsheet: are sealed under the church name key and
-    // EVERY MEMBER HOLDS THAT KEY, so this decides who may FETCH the document, never who could decrypt one
-    // they already hold — and the member app caches every rota it has already fetched in localStorage. So
-    // narrowing the setting does not reach back and take the rota off the phones that already have it. That
-    // is real enforcement against anyone who has not fetched it, and it is the same standard the rest of the
-    // church corpus runs on; it is NOT a cryptographic wall between members, and no copy anywhere may say it
-    // is. (Care's own team/whole-church toggle is weaker still: it is honoured client-side only.)
-    if (d.startsWith(ROTA_D) || d.startsWith(RUNSHEET_D)) {
-      const vis = (ROTA_VIS.get(cp) || {}).v || 'church';
-      if (vis === 'stewards') return false;                        // stewards already returned true above
-      if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
+    // MOVED ABOVE THE GENERAL STEWARD SHORT-CIRCUIT, 2026-09-11, and the move IS the fix. These four branches
+    // sat BELOW `stewardCan(authed, cp, 'any') || careAdmin(authed, cp)`, so for anyone that line admitted
+    // they were dead code: a Finance-only treasurer, a Groups-&-rotas volunteer, a Members steward and every
+    // care-team admin were served the whole children's register and every arrival. checkinReader() (defined
+    // beside checkinHelperOf, with the full reasoning and the caller list) is the church-level half, and it
+    // is NARROWER than the line below on purpose — safeguarding stewards only, and no care admin.
+    //
+    // ⚠ WHAT `git show` SHOWS, said here because the commit message first got it wrong. The general
+    // short-circuit below is MOVED — it now sits about 180 lines further down the file than it did — and it
+    // is BYTE-IDENTICAL, so its behaviour for every other document is unchanged. "Untouched" was the wrong
+    // word for a line the diff relocates, and the property that matters is not that it was not edited but
+    // that nothing else moved across it: the only prefixes that changed side are the four check-in ones.
+    // An independent 17-persona × 29-document matrix against a live gateway measured exactly 35 changed
+    // cells, all 35 in the check-in documents, all 35 one-to-zero, none on roster/stewards/minors/guardians/
+    // group/rota/runsheet/careteam/carereq/care/approved/service/event/careavail or any key envelope.
+    //
+    // WHY THE ORDER IS THE WHOLE THING, said plainly so nobody re-sorts this function: a `return true` that
+    // runs earlier is not a grant a later rule can take back. Any future reader who is tempted to move these
+    // back down, or to add a check-in prefix to a rule above this line, is re-opening the same defect.
+    //
+    // ONE PROPERTY EVERY BRANCH BELOW HOLDS AND MUST KEEP: each one RETURNS. None falls through to the
+    // ordinary effective-member rule at the foot of this function — that fall-through is the defect the
+    // helper grant carried until 2026-09-09, measured on a live gateway, and it is why the floor here is
+    // default-deny rather than a tidy convention.
+    if (d.startsWith(CHECKIN_D) || d.startsWith(CHECKINARRIVAL_D)
+        || d.startsWith(CHECKINPERM_D) || d.startsWith(CHECKINHELPER_D)) {
+      if (checkinReader(authed, cp)) return true;
     }
     // THE CHILDREN'S REGISTER IS NO LONGER SERVED TO THE WHOLE CONGREGATION.
     //
@@ -4203,11 +4300,16 @@ function canRead(e, authed) {
     // nothing if the ciphertext it opens was handed out to everybody in advance.
     //
     // WHO IS ADMITTED, decided rather than inherited:
-    //   • the church, its network, ANY steward and a care admin — all returned true above, at the privileged
-    //     short-circuit. NOTE HONESTLY what that means: a Finance-only steward still receives the ciphertext,
-    //     exactly as they do today. They cannot open it (that has its own test, and its own August incident),
-    //     and narrowing `stewardCan(authed, cp, 'any')` there is a change to a grant fourteen other rules
-    //     share. Out of scope here, and named so it is not mistaken for having been fixed.
+    //   • the church, its network, and a steward the church ticked for SAFEGUARDING — checkinReader(), a few
+    //     lines above, and no longer the general steward short-circuit. UNTIL 2026-09-11 THIS BULLET READ
+    //     "the church, its network, ANY steward and a care admin", and said of it: "a Finance-only steward
+    //     still receives the ciphertext, exactly as they do today… Out of scope here, and named so it is not
+    //     mistaken for having been fixed." That is the defect this branch's move fixes. What was named as
+    //     harmless-because-sealed was not: `['p',<guardian>]` and `['session',<sid>]` are CLEARTEXT, so a
+    //     treasurer could read a named parent's attendance history off the tags without opening anything.
+    //     TICKED, AND NOT MERELY UNSCOPED — stewardCanExplicitly, owner's decision 2026-09-12. A steward
+    //     with no capability list has never been given the register KEY (CAP_KEYS.checkin is explicit), so
+    //     serving them the ciphertext only ever handed over the cleartext-tag inference. See checkinReader.
     //   • an IN-WINDOW HELPER of the session this record names. Not any helper: the session in the record's
     //     ['session'] tag has to be one they hold, now.
     //   • THE GUARDIAN THE RECORD NAMES. §7 of the design: "most children getting checked in, will not have a
@@ -4257,8 +4359,10 @@ function canRead(e, authed) {
     // a church gets should not depend on it having found a screen. This is the shape of the members-list rule
     // and of `careavail:`: withhold from the congregation, not from the people accountable.
     //
-    // WHO STILL READS IT: the church, its network, any steward and a care admin, all of whom returned true at
-    // the privileged short-circuit above, and a pubkey NAMED IN THE GRANT ITSELF — including one who is not a
+    // WHO STILL READS IT: the church, its network and a SAFEGUARDING steward, who returned true at
+    // checkinReader() above (it was "any steward and a care admin" until 2026-09-11 — the envelope's cleartext
+    // `pubs` array names everyone doing children's work that morning, which is not a treasurer's business any
+    // more than the register itself is), and a pubkey NAMED IN THE GRANT ITSELF — including one who is not a
     // member of the congregation, which is the whole reason this branch exists. A helper reading a grant for a
     // session they are not on is now refused rather than served; they have no use for last week's envelope and
     // no client asks for one.
@@ -4295,8 +4399,10 @@ function canRead(e, authed) {
     // reasoning, at the same size, as the grant rule above, and NOT conditional on that setting for the same
     // reason: a protection that waits for a church to find a settings page is a reward for reading the manual.
     //
-    // WHO STILL READS IT: the church, its network, any steward and a care admin, all of whom returned true at
-    // the privileged short-circuit above — and THE PERSON IT NAMES, who already knows they were cleared and
+    // WHO STILL READS IT: the church, its network and a SAFEGUARDING steward, who returned true at
+    // checkinReader() above ("any steward and a care admin" until 2026-09-11; this document IS the church's
+    // cleared safeguarding team, so the people who may see it are the ones who hold that job) — and THE
+    // PERSON IT NAMES, who already knows they were cleared and
     // whose own screen has to be able to say "your clearance ends on the 4th". Note they may not be a member of
     // the congregation at all, which is why the ordinary member rule is not what serves it. IT RETURNS: no
     // fall-through, because that fall-through is the defect this same rule had on the grant until 2026-09-09.
@@ -4324,8 +4430,11 @@ function canRead(e, authed) {
     // document and then fell through served it to every member anyway, and it was measured on a live gateway.
     // DEFAULT-DENY, `return false` at the foot, and any future reader of an arrival is added by name here.
     //
-    // WHO STILL READS IT: the church, its network, any steward and a care admin, all of whom returned true at
-    // the privileged short-circuit far above -- and these two:
+    // WHO STILL READS IT: the church, its network and a SAFEGUARDING steward, who returned true at
+    // checkinReader() a few lines above ("any steward and a care admin" until 2026-09-11 -- an arrival is a
+    // presence record for a NAMED HOUSEHOLD, carrying the parent's own pubkey in its address and the session
+    // in a cleartext tag, so it leaks the same inference as the register and is narrowed with it) -- and
+    // these two:
     //   * THE AUTHOR, from the d-tag rather than from e.pubkey. arrivalIdOk means the two are equal on any
     //     stored event, so this is the same answer by the cheaper route, and it stays correct for a tombstone.
     //   * AN IN-WINDOW HELPER OF THE NAMED SESSION -- checkinHelperOf, the same conjunction (named in the
@@ -4361,6 +4470,28 @@ function canRead(e, authed) {
         if (guardianOfIn(h, authed, cp) && !minorOf(authed, cp)) return true;
       }
       return false;
+    }
+    // C3: `CHURCH_PUBS.has(authed)` / `NETWORKS.has(authed)` were UNSCOPED — any configured church key, and
+    // any key any church had ever declared a network, read every OTHER church's roster, safeguarding lists
+    // and care PII. On the shared community relay (where /config self-registration is open by default) that
+    // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
+    if (authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)) return true;
+    // WHO MAY FETCH THE ROTA. Default — and every church that existed before this setting — is unchanged:
+    // any member of the church. A steward may narrow it to the people who actually serve, or to stewards.
+    // The church key, its network, its stewards and care admins have already returned true above, so this
+    // only ever narrows the ORDINARY MEMBER grant that follows.
+    //
+    // Say plainly what this does and does not do. rota:/runsheet: are sealed under the church name key and
+    // EVERY MEMBER HOLDS THAT KEY, so this decides who may FETCH the document, never who could decrypt one
+    // they already hold — and the member app caches every rota it has already fetched in localStorage. So
+    // narrowing the setting does not reach back and take the rota off the phones that already have it. That
+    // is real enforcement against anyone who has not fetched it, and it is the same standard the rest of the
+    // church corpus runs on; it is NOT a cryptographic wall between members, and no copy anywhere may say it
+    // is. (Care's own team/whole-church toggle is weaker still: it is honoured client-side only.)
+    if (d.startsWith(ROTA_D) || d.startsWith(RUNSHEET_D)) {
+      const vis = (ROTA_VIS.get(cp) || {}).v || 'church';
+      if (vis === 'stewards') return false;                        // stewards already returned true above
+      if (vis === 'team' && !onAnyRoster(authed, cp)) return false;
     }
     // A CHILD IS NOT ADVERTISED TO THE CONGREGATION AS AN AVAILABLE HELPER.
     //
