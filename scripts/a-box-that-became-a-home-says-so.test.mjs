@@ -55,8 +55,14 @@ test('WHEN THE BOX BECOMES THE CHURCH’S HOME, THE CONSOLE SAYS SO', () => {
     'self-hosted in silence — the exact shape this banner was built to end.');
   b.fire('steward-box-registered', {});
   const t = reads(b.tree);
-  assert.match(t, /this computer is now your church/i, 'the confirmation does not say what happened. Read: ' + t);
-  assert.match(t, /records live here/i, 'it does not say what it means for the church');
+  assert.match(t, /carries your church/i, 'the confirmation does not say what happened. Read: ' + t);
+  // ⚠ AND IT MUST NOT CLAIM MEMBERS ARE POINTED HERE. Registering makes this box CARRY the church; it
+  // points nobody at it. Nothing publishes a relay list members read, and chunk 4 — which would — is gated
+  // on the enrolment blockers. An earlier version of this message said "members reach it through this
+  // machine", which would have told a steward their congregation had moved when it had not.
+  assert.ok(!/members reach it through this machine/i.test(t),
+    'THE CONFIRMATION CLAIMS MEMBERS NOW USE THIS BOX. They do not until enrolment lands. Read: ' + t);
+  assert.match(t, /still connect through/i, 'it does not say where members actually are meanwhile');
 });
 
 test('…and it GOES, because a confirmation is a moment', () => {
@@ -77,7 +83,7 @@ test('A SUCCESS NEVER EVICTS A SAFEGUARDING WARNING — they hold separate slots
   b.fire('steward-box-registered', {});
   const t = reads(b.tree);
   assert.match(t, /clearance was refused/i, 'THE SAFEGUARDING WARNING WAS EVICTED BY A SUCCESS MESSAGE.');
-  assert.match(t, /this computer is now your church/i, 're-anchor: the confirmation did not render at all');
+  assert.match(t, /carries your church/i, 're-anchor: the confirmation did not render at all');
   // ⚠ AND THE ORDINARY REFUSAL TOO, which is the half that actually proves the slots are separate.
   // Measured: with the safeguarding ROUTING removed, everything above still passed — both messages simply
   // arrived through one slot and both rendered. The property AUDIT-8 is about is a LATER generic message
@@ -101,5 +107,5 @@ test('…nor an ordinary refusal', () => {
   b.fire('steward-box-registered', {});
   const t = reads(b.tree);
   assert.match(t, /could not be saved/i, 'a failure banner was replaced by a success message');
-  assert.match(t, /this computer is now your church/i, 're-anchor: the confirmation did not render');
+  assert.match(t, /carries your church/i, 're-anchor: the confirmation did not render');
 });

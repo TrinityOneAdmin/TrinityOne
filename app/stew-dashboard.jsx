@@ -395,7 +395,14 @@ function PublishErrorBanner() {
     // CONFIRMATIONS ARE MOMENTS: this one says what changed and then goes, because nothing about it is
     // actionable — unlike the two above, which stay until dismissed.
     const h = () => {
-      setOkMsg('This computer is now your church\u2019s home. Its records live here, and members reach it through this machine.');
+      // ⚠ THIS SENTENCE USED TO END "and members reach it through this machine". IT WAS FALSE. Registering
+      // the church on this box makes the box CARRY it; it does not point a single member at it. Nothing
+      // publishes a relay list members read (`publishRelayList` has no callers), so until chunk 4 of
+      // reference/SCOPE-SUITE-AUTOREGISTER-2026-09-12.md lands — which is gated on the enrolment blockers
+      // in PLAN-ENROLMENT-GAP-2026-09-02.md — members still reach the church through the shared relays.
+      // Caught while answering "is it safe to release the Suite": the honest answer was yes, and this was
+      // the one thing that would have lied to a steward about what they had just set up.
+      setOkMsg('This computer now carries your church\u2019s records. Members still connect through TrinityOne\u2019s relays for now.');
       clearTimeout(h._t); h._t = setTimeout(() => setOkMsg(''), 8000);
     };
     window.addEventListener('steward-publish-error', f);
