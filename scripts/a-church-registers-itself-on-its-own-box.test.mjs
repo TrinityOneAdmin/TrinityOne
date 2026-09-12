@@ -19,12 +19,13 @@ const NPUB = 'npub1theonechurch';
 
 // The shipped function, over a scope where every collaborator is named rather than assumed.
 function box({ origin = 'http://127.0.0.1:8795', token = 'tok-123', already = null,
-               acting = null, pub = PUB, ok = true, alwaysOn = undefined } = {}) {
+               acting = null, pub = PUB, ok = true, status = 200, alwaysOn = undefined } = {}) {
   const store = {};
   if (alwaysOn !== undefined) store['to_relay_always_on'] = alwaysOn;
   if (already) store['trinityone.steward.autoreg.' + pub + '|' + origin] = already;
   const sent = [];
   const events = [];
+  const said = [];
   const scope = {
     pub, actingChurch: acting,
     _ownOrigin: () => origin,
@@ -33,8 +34,8 @@ function box({ origin = 'http://127.0.0.1:8795', token = 'tok-123', already = nu
     npubEncode: () => NPUB,
     lsGet: (k) => (k in store ? store[k] : ''),
     lsSet: (k, v) => { store[k] = String(v); },
-    fetch: async (url, opts) => { sent.push({ url, opts }); return { ok, json: async () => ({}) }; },
-    window: { dispatchEvent: (e) => events.push(e && e.type) },
+    fetch: async (url, opts) => { sent.push({ url, opts }); return { ok, status, json: async () => ({}) }; },
+    window: { dispatchEvent: (e) => { events.push(e && e.type); said.push((e && e.detail && e.detail.message) || ''); } },
     CustomEvent: function CustomEvent(t, d) { this.type = t; this.detail = d && d.detail; },
     String, JSON, Object, Promise, console,
   };
@@ -46,7 +47,7 @@ function box({ origin = 'http://127.0.0.1:8795', token = 'tok-123', already = nu
       get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
         throw new ReferenceError('the shipped registrar needs a stub for ' + String(k)); },
     }));
-  return { run: (n) => fn(n), sent, events, store, origin, pub };
+  return { run: (n) => fn(n), sent, events, said, store, origin, pub };
 }
 
 test('NAMING A CHURCH ON ITS OWN BOX REGISTERS IT THERE — no npub pasted, no token typed', async () => {
@@ -172,4 +173,31 @@ test('…but SILENCE is not a no — a box that never saw the question still reg
     await b.run("St Chad's");
     assert.equal(b.sent.length, 1, 'an answer of ' + JSON.stringify(v) + ' was treated as a refusal');
   }
+});
+
+test('A REGISTRATION THAT FAILED SAYS SO — and says what DID work', async () => {
+  // The church has just been created and named; only the binding to this box failed. Silence here leaves a
+  // steward believing they self-host while their congregation is served by the public relays.
+  const b = box({ ok: false, status: 500 });
+  await b.run("St Chad's");
+  assert.deepEqual(b.events, ['steward-write-blocked'],
+    'A FAILED REGISTRATION SAID NOTHING AT ALL. Nothing else on any screen reports this.');
+  const m = b.said.join(' ');
+  assert.match(m, /was created/i, 'it does not say the church itself succeeded — a steward may re-create it');
+  assert.match(m, /NOT been added to this computer/i, 'it does not say what actually failed');
+  assert.match(m, /relays for now/i, 'it does not say where the church is meanwhile, so nothing looks recoverable');
+});
+
+test('…and a relay that is FULL says that, rather than a generic shrug', async () => {
+  // /config caps self-registration (CHURCH_REPLACE_CAP) and answers 429. "Didn't answer properly" would
+  // send a steward chasing a network fault that is not there.
+  const b = box({ ok: false, status: 429 });
+  await b.run("St Chad's");
+  assert.match(b.said.join(' '), /limit of churches/i, 'a 429 was reported as a generic failure');
+});
+
+test('a SUCCESS is announced too, so chunk 5 has something to render', async () => {
+  const b = box();
+  await b.run("St Chad's");
+  assert.deepEqual(b.events, ['steward-box-registered'], 'success dispatched nothing, or dispatched a failure');
 });

@@ -15878,7 +15878,17 @@ zoo`.split("\n");
         headers: { "Content-Type": "application/json", ..._authHdr(tok) },
         body: JSON.stringify({ addChurch: { npub: npubEncode(pub), name: nm } })
       });
-      if (!r.ok) return;
+      if (!r.ok) {
+        const why = r.status === 429 ? "this relay has reached its limit of churches" : r.status === 401 || r.status === 403 ? "this computer did not accept the request" : "this computer did not answer properly";
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+            what: "church relay",
+            message: "Your church was created \u2014 but it has NOT been added to this computer, because " + why + ". Your church is using TrinityOne\u2019s relays for now, which works, and you can connect it to this computer from the relay panel."
+          } }));
+        } catch (e) {
+        }
+        return;
+      }
       try {
         lsSet(_autoRegKey(origin), "1");
       } catch (e) {

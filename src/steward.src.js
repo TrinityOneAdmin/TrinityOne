@@ -1252,7 +1252,29 @@ async function _registerOnOwnBox(name) {
       headers: { 'Content-Type': 'application/json', ..._authHdr(tok) },
       body: JSON.stringify({ addChurch: { npub: npubEncode(pub), name: nm } }),
     });
-    if (!r.ok) return;                                   // chunk 6 words the failures; silence is not success
+    // ⚠ A FAILURE HERE IS NOT ALLOWED TO BE SILENT, and this is the whole of chunk 6. The church has just
+    // been created and named — that part SUCCEEDED — but it is not on this box, so its congregation will be
+    // served by the public relays while the steward believes they are self-hosting. Nothing else on screen
+    // would ever say so.
+    // It reuses `steward-write-blocked`, the console's existing failure banner (app/stew-dashboard.jsx), so
+    // there is no new surface to keep in step. That event was itself once fired and listened to NOWHERE, so
+    // the listener is the thing to check if this ever goes quiet.
+    // The message NAMES WHAT SUCCEEDED FIRST, because "your church was not created" would be false and
+    // frightening, and a steward who re-creates the church in response has made things worse.
+    if (!r.ok) {
+      const why = r.status === 429
+        ? 'this relay has reached its limit of churches'
+        : r.status === 401 || r.status === 403
+          ? 'this computer did not accept the request'
+          : 'this computer did not answer properly';
+      try {
+        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'church relay',
+          message: 'Your church was created — but it has NOT been added to this computer, because ' + why +
+                   '. Your church is using TrinityOne\u2019s relays for now, which works, and you can connect ' +
+                   'it to this computer from the relay panel.' } }));
+      } catch (e) {}
+      return;
+    }
     try { lsSet(_autoRegKey(origin), '1'); } catch (e) {}
     try { window.dispatchEvent(new CustomEvent('steward-box-registered', { detail: { origin } })); } catch (e) {}
   } catch (e) { /* never let this break the profile publish that triggered it */ }
