@@ -367,6 +367,16 @@ function PublishErrorBanner() {
   // steward ended with silence. The link that produces the safeguarding banner is exactly the link that
   // produces generic publish errors, so the child-safety message was the one most likely to be evicted.
   const [sgMsg, setSgMsg] = React.useState('');
+  // ⚠ CHURCH REGISTRATION GETS ITS OWN SLOT, for the same reason `sgMsg` has one, and the measurement is the
+  // same. `selfRegister`'s `ownRefused` has fired `steward-write-blocked` with `what: 'church registration'`
+  // since e028209 (2026-08-17) into the SHARED `msg`, which `f` overwrites and then auto-clears after 9s.
+  // And a box that just refused a registration is the box whose next write also fails — so the one message
+  // telling a steward "your church is NOT on this computer" was the message most likely to be wiped.
+  // Reproduced end to end: the registration text rendered, one publish error replaced it, one 9000ms timer
+  // armed, and after it the screen read "".
+  // IT IS ALSO STICKY. It is not a transient failure — it is a standing state ("you believe you are
+  // self-hosting and you are not") that stays true until somebody acts on it.
+  const [regMsg, setRegMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
       const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
@@ -383,13 +393,17 @@ function PublishErrorBanner() {
       const d = e.detail || {};
       const text = d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.');
       if (d.what === 'safeguarding clearances') { setSgMsg(text); return; }
+      // Matched on the two `what` values selfRegister and the relay panel actually send. A prefix test
+      // rather than equality, so a future "church registration (retry)" lands here too rather than
+      // silently falling back into the evictable slot.
+      if (/^church (registration|relay)/.test(String(d.what || ''))) { setRegMsg(text); return; }
       clearTimeout(f._t); setMsg(text);
     };
     window.addEventListener('steward-publish-error', f);
     window.addEventListener('steward-write-blocked', g);
     return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
-  if (!msg && !sgMsg) return null;
+  if (!msg && !sgMsg && !regMsg) return null;
   // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
   // surface in this codebase without it — app/ui.jsx, app/screens-today.jsx and app/stew-meals.jsx all get it
   // right — so a TalkBack user got nothing at all when a child-safeguarding warning appeared. The dismiss
@@ -429,6 +443,9 @@ function PublishErrorBanner() {
   return (
     <div style={{ flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
       {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
+      {/* ABOVE the generic slot: a church that is not where its steward believes it is outranks a write that
+          failed once. Both stay until dismissed — this one because nothing clears it but acting on it. */}
+      {regMsg ? card(regMsg, 'reg', () => setRegMsg(''), 'gen') : null}
       {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
     </div>
   );

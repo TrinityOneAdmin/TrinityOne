@@ -31,17 +31,32 @@ test('something actually renders that event', () => {
   // refusals the code called "visible and retryable" reached no screen at all.
   assert.match(D, /addEventListener\('steward-write-blocked'/,
     'nothing in the console listens for steward-write-blocked — every refusal is still invisible');
-  // ⚠ WAS A 2000-CHARACTER PROXIMITY WINDOW, AND IT BROKE ON A COMMENT. Adding a documented state slot to
-  // PublishErrorBanner pushed `function PublishErrorBanner` more than 2000 characters above the listener
-  // and this failed, with the listener still exactly where it belongs. Distance is not the property; being
-  // INSIDE that component is. Sliced from the function's own opening to the next top-level `function`.
-  const at = D.indexOf("addEventListener('steward-write-blocked'");
+  // ⚠ TWICE WRONG BEFORE THIS, AND BOTH WAYS ARE WORTH KNOWING.
+  // (1) It was a 2000-CHARACTER PROXIMITY WINDOW, and adding a documented state slot to PublishErrorBanner
+  //     pushed the declaration out of range — it failed with the listener exactly where it belongs.
+  // (2) Repaired to "from `function PublishErrorBanner` to the next top-level `\nfunction `", which an
+  //     audit then PROVED BLIND: a listener moved into a top-level `const X = () => {}` sits in the gap
+  //     after the component's closing brace and before the next `function` keyword, and the test stayed
+  //     5/5 green with the console listening for nothing at all.
+  // Distance was never the property and neither is the next token. CONTAINMENT is: brace-match to the
+  // component's OWN closing brace. Same lesson, and the same shape as `backfillEffect()` in
+  // scripts/clearance-backfill.test.mjs, which carries the "fixed-window trap this repo keeps re-learning".
   const from = D.indexOf('function PublishErrorBanner');
-  assert.ok(from !== -1 && from < at, 'the listener must live in a component that is actually mounted');
-  const next = D.indexOf('\nfunction ', from + 1);
-  assert.ok(next === -1 || at < next,
-    'the steward-write-blocked listener has moved OUT of PublishErrorBanner, into whatever is declared ' +
-    'after it — so it is only wired when that other component happens to be mounted');
+  assert.notEqual(from, -1, 'PublishErrorBanner is gone from the console');
+  const open = D.indexOf('{', from);
+  let depth = 0, end = -1;
+  for (let i = open; i < D.length; i++) {
+    if (D[i] === '{') depth++;
+    else if (D[i] === '}' && --depth === 0) { end = i; break; }
+  }
+  assert.ok(end > open, 'could not brace-match PublishErrorBanner — re-anchor this test');
+  // ⚠ SEARCHED INSIDE THE SLICE, not with a file-wide indexOf. The old version took the FIRST global
+  // occurrence, so a listener added anywhere earlier would have satisfied a check about this component.
+  const body = D.slice(open, end + 1);
+  assert.ok(body.includes("addEventListener('steward-write-blocked'"),
+    'the steward-write-blocked listener is no longer INSIDE PublishErrorBanner. Wherever it has gone, it ' +
+    'is wired only when THAT component happens to be mounted — which is the "fired and listened to ' +
+    'nowhere" bug this test exists for.');
   assert.match(D, /<PublishErrorBanner \/>/, 'the banner is not mounted');
 });
 
