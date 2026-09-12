@@ -925,8 +925,26 @@ window.safeImgUrl = function (v) {
     let url = inst[id] ? id : null;
     if(!url){
       const named = Object.keys(inst).filter(u => inst[u].abbr === id && (!category || catOf(inst[u]) === category));
-      if(named.length > 1) return false;   // two records share this name: refuse rather than delete a guess
-      url = named[0] || null;
+      if(named.length > 1){
+        // TWO RECORDS, ONE NAME, ONE CATEGORY — and this is not hypothetical. `addSource`'s dedupe is
+        // `while(modules[abbr] && modules[abbr].name !== src.name)`, so an identical NAME skips the rename
+        // and both records are written under one abbr. ebible-catalog.json ships two such groups covering
+        // FIVE translations: "NT | Nuevo Testamento Guaraní Pe" (2 urls) and "NT | Mushog Testamento" (3) —
+        // minority-language New Testaments, which is this product's first audience.
+        //
+        // The reader's Translations sheet has only a name to give us (`versions()` carries abbr/name/kind and
+        // no url), so refusing outright made Remove permanently dead for those five: "Couldn't remove NT",
+        // for ever, with the megabytes unreclaimable. Refusing was still RIGHT compared with what preceded
+        // it — guessing deleted the wrong module's bytes — but it is not the end of the job.
+        //
+        // So: prefer the url the LOADED module of that name came from. That is the copy the member is
+        // actually looking at in the reader, it is recorded by `noteLoadedFrom` at load time rather than
+        // inferred here, and it must still be one of the candidate records. If we cannot establish it we
+        // refuse exactly as before — a guess is never better than a refusal on a destructive action.
+        const loadedFrom = category ? urlOf[urlKey(category, id)] : null;
+        if(!loadedFrom || !named.includes(loadedFrom)) return false;
+        url = loadedFrom;
+      } else url = named[0] || null;
     }
     const meta = url ? inst[url] : null;
     const abbr = (meta && meta.abbr) || id;
@@ -943,8 +961,17 @@ window.safeImgUrl = function (v) {
     // whose module never loaded (bytes evicted, or corrupt enough to throw) can no longer borrow the active
     // module's name and make its own megabytes unreclaimable. The name comparison stays as the fallback for
     // a module loaded from no url at all — a file import that could not be written down.
+    //
+    // ⚠ THE TERNARY THAT USED TO BE HERE PICKED ITS BRANCH ON THE WRONG THING — on whether the ACTIVE module
+    // had a known url, not on whether THIS CALL had resolved one. With `activeFrom` known and `url` null (a
+    // loaded Bible whose record was never written, because setInstalled swallowed a failure) neither side of
+    // the comparison fired, the refusal was skipped, and `loadedHere = !url` was then true — so
+    // `delete modules[active]` ran with `active` still naming it: a blank reader over a dangling pointer.
+    // Compare urls only when BOTH are known; otherwise fall back to the name, which is what the line did
+    // unconditionally before urls existed here.
     const activeFrom = active ? urlOf[urlKey("bibles", active)] : null;
-    if(cat === "bibles" && active && (activeFrom ? activeFrom === url : abbr === active)) return false;
+    const isTheActiveBible = (url && activeFrom) ? (url === activeFrom) : (abbr === active);
+    if(cat === "bibles" && active && isTheActiveBible) return false;
     if(url && installing.has(url)) return false;
     if(url){
       await cacheDelete(url);
@@ -1114,9 +1141,25 @@ window.safeImgUrl = function (v) {
       }
       catch(err){ console.error(err); window.Bible._error = err.message; }
     }
-    // first run: nothing installed and nothing requested — install the bundled default Bible so a
-    // fresh open lands on scripture, not the empty state.
-    if(order.length === 0 && !url){
+    // NOTHING TO READ? INSTALL THE DEFAULT BIBLE. The condition is `order.length === 0` and NOTHING ELSE,
+    // and the `&& !url` that used to be here was the bug.
+    //
+    // `order` holds BIBLES only (addSource is its one writer), so this asks exactly "does this phone have a
+    // Bible loaded" — which is the question a member's empty reader is asking.
+    //
+    // ⚠ THE TWO GUARDS HAD DRIFTED APART AND BETWEEN THEM LEFT AN EMPTY READER. The `?module=` branch above
+    // gates on the RECORD (`isInstalled(url)`); this one gated on the QUERY STRING. So for a module whose
+    // record survived but whose BYTES did not, the first branch declined to re-download (a record exists)
+    // and this one declined to self-heal (a url was asked for) — restoreInstalled hit `if(!bytes) continue;`
+    // and the member landed on nothing, with no error. `cachePut` swallows its own failures, so installing
+    // on a full phone produces exactly that state; so does an evicted store, or a module loadModuleBytes
+    // throws on. Before the record was added to this path the link simply re-downloaded and the reader
+    // worked. Found by audit 2026-09-12; it is the silent-blank-app class this codebase keeps paying for.
+    //
+    // It also fixes a second, older face of the same line: a FRESH phone opening `?module=<a dictionary>`
+    // installs the dictionary and, because a dictionary never enters `order`, used to end up with no Bible
+    // at all. Now it gets one.
+    if(order.length === 0){
       try{ await installModule(DEFAULT_MODULE); }
       catch(err){ console.error(err); window.Bible._error = err.message; }
     }
