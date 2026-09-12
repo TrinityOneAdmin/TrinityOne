@@ -619,7 +619,7 @@
       <div class="sx-card"><h3>The admin, handled</h3><p>Joining codes and a printable invite poster, member approval, serving rotas, the calendar, and a treasurer's ledger with quarterly statements that share totals without naming anyone.</p></div>
     </div>
     <div class="sx-actions">
-      <a href="https://app.trinityone.church/steward.html" data-steward-cta class="to-btn to-btn--clay">Start a church — free</a>
+      <a href="#get" class="to-btn to-btn--clay">Start a church — free</a>
       <a href="#" data-switching-open class="to-btn to-btn--ghost" style="color:var(--paper);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.35)">Already on WhatsApp or another platform?</a>
     </div>
   </div>
@@ -646,18 +646,9 @@
       </div>
 
       <div class="sx-card sx-dl">
-        <h3>TrinityOne Steward</h3>
-        <p>The console to set up and run your church — groups, rotas, members and the church's life. You only need it once per church, and it is best on a computer.</p>
-        <div class="sx-acts">
-          <a class="sx-act sx-act--go" href="https://app.trinityone.church/steward.html"><b>Computer</b><span>Open the console — nothing to install</span></a>
-          <a class="sx-act" href="https://app.trinityone.church/trinityone-steward.apk" data-steward-cta download><b>Android</b><span>Download the Steward app</span></a>
-          <a class="sx-act" href="https://app.trinityone.church/steward.html"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen</span></a>
-        </div>
-      </div>
-
-      <div class="sx-card sx-dl">
         <h3>TrinityOne Suite</h3>
-        <p>Optional, for churches that host their own: your own relay <b>and</b> the Steward console in one double-click app — no command line.</p>
+        <p><b>The whole church on a computer you own.</b> Your church's records stay on your own machine, and the console to run it — groups, rotas, members — comes with them. One double-click app, no command line.</p>
+        <p style="color:var(--ink-3);margin-top:9px">This is the way we'd point you. Any always-on computer will do; leave it switched on and your church is reachable through the week.</p>
         <div class="sx-acts">
           <a class="sx-act sx-act--go" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe"><b>Windows</b><span>Installer (.exe)</span></a>
           <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg"><b>macOS</b><span>Apple silicon (.dmg)</span></a>
@@ -667,6 +658,26 @@
                  had nowhere to click. -->
             <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.deb"><b>Linux</b><span>Debian package (.deb)</span></a>
         </div>
+      </div>
+    </div>
+
+    <!-- ⚠ STEWARD IS DELIBERATELY SMALL AND BELOW THE FOLD OF THIS SECTION. Owner, 2026-09-01 (recorded in
+         reference/DOMAIN.md, "The Suite is the path we push"): "we need to prioritise the TrinityOne Suite in
+         the marketing, so that more people run the Relay+steward console together, running just the relay
+         should be harder to get to on the website."
+         It is NOT removed, and that is the point — a church with no always-on computer still has to be able
+         to start. It is a fallback with its cost stated, not a third equal choice.
+         WHY THE EMPHASIS IS LOAD-BEARING, not taste: a church's own relay has to be vouched for before any
+         phone will talk to it. When the console is served BY that relay the vouch is automatic and safe —
+         to load it the steward already ran that box's key-holding code, so adopting it adds no trust they
+         had not already given. With the hosted console that argument does not hold: the key lives against
+         our origin and the steward never loads anything from their own box. -->
+    <div style="max-width:760px;margin:26px auto 0;padding:15px 18px;border:1px solid var(--line);border-radius:14px;background:var(--paper)">
+      <div style="font-weight:700;font-size:15px;color:var(--ink);margin-bottom:5px">No computer you can leave on?</div>
+      <p style="font-size:14px;color:var(--ink-2);line-height:1.55;margin:0 0 10px">Open <b>TrinityOne Steward</b> in your browser instead. Nothing to install, and you can move to the Suite later — but your church's records will live on our relays rather than your own.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:9px;font-size:13.5px">
+        <a href="https://app.trinityone.church/steward.html" style="font-weight:700;color:var(--clay)">Open the console &rarr;</a>
+        <a href="https://app.trinityone.church/trinityone-steward.apk" data-steward-cta download style="font-weight:700;color:var(--ink-3)">Android app</a>
       </div>
     </div>
 
@@ -683,6 +694,42 @@
   </div>
 </section>
 
+<!-- ══ SUPPORT THE PROJECT ══ Owner request 2026-09-12. A version of this existed on the pre-2026-07-09 page
+     (Share + Open source) and was lost when the pages were folded into the single scroll. It comes back with
+     the two things a reader can do TODAY, and a third that is honestly named as not open yet.
+     ⚠ THE GIVING CARD HAS NO BUTTON ON PURPOSE. There is no route to take money and no decision on what a
+     gift would fund, and a live-looking "Donate" over neither is the exact mistake commit 031480e went back
+     and fixed ("stop promising support we cannot give"). It states the position and says what to do instead.
+     ⚠ THE RELAY CARD POINTS AT #get, NOT AT A DOWNLOAD, so it lands on the Suite card rather than jumping a
+     reader straight into an installer for a machine they may not have. It is the same 2026-09-01 emphasis
+     decision as the section above: the Suite is the route we advertise. -->
+<section class="sx" id="support" style="border-top:1px solid var(--line)">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill">Support the project</span></div>
+    <h2>Owned by no one. Kept alive by everyone.</h2>
+    <p class="sx-intro">TrinityOne is free, open source and ad-free, and it stays that way because people pitch in. Two things help right now.</p>
+    <div class="sx-grid">
+      <div class="sx-card">
+        <h3>Tell someone</h3>
+        <p>A friend, your small group, your pastor. Every church that joins makes the network stronger for all of them — and costs us nothing to run.</p>
+        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)">Share the app &rarr;</a></p>
+      </div>
+      <div class="sx-card">
+        <h3>Run a relay</h3>
+        <p>The most useful thing you can give is a computer that stays on. A church that hosts its own keeps its records on its own machine — and a network of them has no middle for anyone to lean on.</p>
+        <p style="color:var(--ink-3);margin-top:9px">Any always-on computer will do. The Suite is one double-click app, no command line.</p>
+        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)">Get the Suite &rarr;</a></p>
+      </div>
+      <div class="sx-card">
+        <h3>Give</h3>
+        <p>Not open yet. When it is, it will be for the things that genuinely cost money to keep running, and we will say plainly what those are.</p>
+        <p style="color:var(--ink-3);margin-top:9px">Until then the two above are worth more than money, and the code is there to read, fork and improve.</p>
+        <p style="margin-top:11px"><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="font-weight:700;color:var(--clay)">View the source &rarr;</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- FINAL CTA -->
 <section class="final" id="start">
   <div style="position:absolute;inset:0;background:radial-gradient(60% 70% at 50% 0%, var(--gold-tint), transparent 60%);pointer-events:none"></div>
@@ -691,7 +738,7 @@
     <h2>Bring your church <span class="one">home</span>.</h2>
     <p>Start a church today — it's free, and there are written guides for setting it up.</p>
     <div class="cta">
-      <a href="https://app.trinityone.church/steward.html" class="to-btn to-btn--clay">Start a church</a>
+      <a href="#get" class="to-btn to-btn--clay">Start a church</a>
       <a href="#get" id="join" class="to-btn to-btn--ghost">Download</a>
     </div>
     <p style="margin-top:18px;font-size:15px;color:var(--ink-2);font-weight:600">Free to use, with guides and a help section built into the app.</p>
@@ -702,7 +749,7 @@
   <div class="wrap">
     <a href="#" class="wm"><svg class="halo" style="font-size:30px;color:var(--paper);--spark:var(--gold)"><use href="#to-halo" /></svg><span>Trinity<span class="one">One</span></span></a>
     <p>A church home of your own — Bible, prayer, chat, and care, all in one place.</p>
-    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="#why" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="#features" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="#get" style="color:var(--paper);text-decoration:none;opacity:.85">Get the app</a><a href="help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a><a href="#churches" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
+    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="#why" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="#features" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="#get" style="color:var(--paper);text-decoration:none;opacity:.85">Get the app</a><a href="#support" style="color:var(--paper);text-decoration:none;opacity:.85">Support</a><a href="help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a><a href="#churches" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
     <div class="copy">© 2026 TrinityOne · Made for the Church.</div>
   </div>
 </footer>

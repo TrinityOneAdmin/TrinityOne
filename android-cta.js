@@ -1,4 +1,12 @@
-// android-cta.js — on an Android phone, point "Start a church" at the Steward APK instead of the web console.
+// android-cta.js — on an Android phone, point a Steward link at the Steward APK rather than the web console.
+//
+// ⚠ IT NO LONGER TOUCHES THE HERO "Start a church" BUTTON, and that is the 2026-09-01 decision, not a tidy-up
+// (reference/DOMAIN.md, "The Suite is the path we push"). That button used to carry data-steward-cta, so on
+// Android this script rewrote it into a Steward APK download — the one route the owner asked to make HARDER
+// to reach, reached in one tap from the top of the page, before the reader had seen the Suite at all. The
+// button now goes to #get on every device, where the Suite is the card that answers first.
+// The attribute stays on the demoted Steward link below that section, where an Android visitor genuinely
+// does want the app: the Suite is a desktop installer and cannot serve them.
 //
 // Carried over from welcome-churches.2.js when that page was folded into the single scroll (2026-08-06). Its
 // two siblings, welcome.js and welcome.4.js, are NOT carried over: they were orphaned — no page loaded either
