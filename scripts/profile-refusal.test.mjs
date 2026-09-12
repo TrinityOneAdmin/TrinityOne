@@ -31,10 +31,17 @@ test('something actually renders that event', () => {
   // refusals the code called "visible and retryable" reached no screen at all.
   assert.match(D, /addEventListener\('steward-write-blocked'/,
     'nothing in the console listens for steward-write-blocked — every refusal is still invisible');
+  // ⚠ WAS A 2000-CHARACTER PROXIMITY WINDOW, AND IT BROKE ON A COMMENT. Adding a documented state slot to
+  // PublishErrorBanner pushed `function PublishErrorBanner` more than 2000 characters above the listener
+  // and this failed, with the listener still exactly where it belongs. Distance is not the property; being
+  // INSIDE that component is. Sliced from the function's own opening to the next top-level `function`.
   const at = D.indexOf("addEventListener('steward-write-blocked'");
-  const near = D.slice(Math.max(0, at - 2000), at);
-  assert.match(near, /function PublishErrorBanner/,
-    'the listener must live in a component that is actually mounted');
+  const from = D.indexOf('function PublishErrorBanner');
+  assert.ok(from !== -1 && from < at, 'the listener must live in a component that is actually mounted');
+  const next = D.indexOf('\nfunction ', from + 1);
+  assert.ok(next === -1 || at < next,
+    'the steward-write-blocked listener has moved OUT of PublishErrorBanner, into whatever is declared ' +
+    'after it — so it is only wired when that other component happens to be mounted');
   assert.match(D, /<PublishErrorBanner \/>/, 'the banner is not mounted');
 });
 
