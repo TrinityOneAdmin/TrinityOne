@@ -85,8 +85,26 @@
 (function () {
   try {
     if (localStorage.getItem('to_relay_setup_seen')) return;
+    // ⚠ ONCE PER APP RUN, INDEPENDENTLY OF THE MARKER. The marker is written by control.js when its wizard
+    // exits — but an audit found several loopback paths where the wizard cannot even OPEN and so never
+    // writes it: a stale admin token surviving a relay data reset, a relay not yet serving /config, and
+    // quitting mid-wizard. Every one of those would otherwise land the launcher on the panel on EVERY
+    // launch, for ever. A loop that needs the relay to be healthy in order to stop is not safely prevented.
+    // sessionStorage is per-origin and per-window and dies with the app, so a genuine next launch still
+    // gets the wizard. home.html and control.html share an origin, so it survives the navigation below.
+    if (sessionStorage.getItem('to_relay_setup_tried')) return;
+    // ⚠ `0.0.0.0` IS DELIBERATELY NOT IN THIS LIST, and it used to be. The gateway's /local-token gate
+    // accepts only 127.0.0.1, localhost and ::1 — so a webview at 0.0.0.0 passed THIS check, was refused
+    // the admin token, and control.js returned before writing its marker. That box then landed on the
+    // panel on every launch with no way to reach the wizard. Admitting an address the server refuses is
+    // strictly worse than not admitting it.
     var h = String(location.hostname || '').replace(/^\[|\]$/g, '');
-    if (!/^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(h)) return;
-    location.replace('/relay-app/control.html');
-  } catch (e) { /* no storage → leave the launcher alone */ }
+    if (!/^(localhost|127\.0\.0\.1|::1)$/i.test(h)) return;
+    sessionStorage.setItem('to_relay_setup_tried', '1');
+    // ⚠ `href`, NOT `replace`. `replace` CONSUMES this page's history entry, and the relay panel's only way
+    // out is `openConsole`, whose rule is `history.length > 1 ? history.back() : go to the launcher`. With
+    // the entry consumed, Back landed on the bundled "Starting your relay…" splash — no links, no address
+    // bar, nothing but quitting the app. Pushing restores the one assumption that exit depends on.
+    location.href = '/relay-app/control.html';
+  } catch (e) { /* no storage, or a browser refusing it → leave the launcher alone, never trap the user */ }
 })();
