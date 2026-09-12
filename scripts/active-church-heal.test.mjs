@@ -102,8 +102,24 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // 34 → 35 on 2026-09-06: ctx.joinSent, the fourth state of the join question ("did a relay accept it?").
   // Identical in shape to joinQueued/joinFailed directly above it; an ordinary active-church read.
   // 35 → 36 on 2026-09-06: ctx.joinIntent, the join a locked phone promised to make once unlocked. Same shape.
-  assert.equal(sites.length, 36,
-    `the active-church resolution sites changed (${sites.length} vs 36) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 36 → 37 on 2026-09-10: the children's check-in register subscription (slice 3's worker view), which
+  // resolves the active church to its npub to open Fellowship.subscribeCheckinRegister. Identical in shape to
+  // the safeguarding subscription immediately below it, and it BENEFITS FROM THE HEAL for the same reason and
+  // then some: with a stale id it resolves to no npub, the effect falls back to the all-false default, and a
+  // cleared worker's Kids tab simply is not there — silent, and exactly the blank this heal exists for.
+  // 37 → 39 on 2026-09-11: ctx.checkinAdd (slice B, a worker checks a child in) and ctx.checkinRelease
+  // (slice C, a worker checks a child out) each resolve the active church to its npub to call
+  // Fellowship.writeCheckin / releaseCheckin. Ordinary active-church reads, identical in shape, and they
+  // benefit from the heal: with a stale id np is undefined and the action returns { ok:false } — a LOUD
+  // no-op the screen reports as "see the desk", never a silent write to the wrong church.
+  // 39 → 40 on 2026-09-11: the PARENT's own children subscription (STEP 2 of the parent surface), which
+  // resolves the active church to its npub to open Fellowship.subscribeMyChildrenCheckins. Identical in
+  // shape to the worker's register subscription five lines above it, and it benefits from the heal for the
+  // same reason: with a stale id it resolves to no npub, the effect falls back to the empty default, and the
+  // parent's card simply is not there — which is indistinguishable, on a phone, from having no children
+  // checked in.
+  assert.equal(sites.length, 40,
+    `the active-church resolution sites changed (${sites.length} vs 40) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

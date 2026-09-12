@@ -254,6 +254,39 @@ window.HelpData = {
       ],
     },
     {
+      // THE ARTICLE THE KIDS TAB'S HELP BUTTON OPENS. The owner's instruction of 2026-09-10 — "cut down on the
+      // instructional copy in the ui itself. Use tool tips and help docs for this kind of information" — means
+      // the screen carries one short true sentence per state and everything else lives here.
+      //
+      // ⚠ THE ID IS LOAD-BEARING. app/screens-serving.jsx calls ctx.openHelp('checkin-register'), and
+      // HelpArticleView does `if (!a) return null` on an id it cannot find — so a typo here gives a worker a
+      // header, a back button and a blank page. That is live today for ctx.openHelp('wallet') in
+      // screens-giving.jsx, which names an article that does not exist.
+      id: 'checkin-register',
+      illo: 'shield',
+      title: 'The children’s register',
+      summary: 'If your church has cleared you for children’s check-in, this is what you can see — and what it means when you can’t.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'Some churches check children in and out of their groups on a Sunday. If your church has cleared you to help with that, a Kids tab appears under Serving, showing who is in the room and each child’s pickup code. Nobody else in the church sees this tab at all.' },
+        { type: 'list', items: [
+          { lead: 'Your church clears you once, not every week.', text: 'A steward marks you as cleared for children’s check-in — usually for a year, the way a church already does it. That is a separate decision from being cleared to message young people, and doing one does not do the other.' },
+          { lead: 'A key arrives for each session.', text: 'Being cleared is not the same as holding a key. Your church’s console hands out a key for each session, and only for the session it is for — so last Sunday’s key opens last Sunday and nothing else.' },
+          { lead: 'Tap to see a pickup code.', text: 'Codes stay covered until you ask for one, and only one shows at a time. A register with every code painted down the screen is a phone anyone can read over your shoulder.' },
+        ] },
+        { type: 'p', text: 'The screen tells you exactly which of four things is true, because they look the same if nobody says:' },
+        { type: 'list', items: [
+          { lead: '“No session keys have reached this phone.”', text: 'Nothing is wrong and nothing is broken. Your church has cleared you and has not yet handed out a key — which it does from its console, so a church whose console has not been opened has no keys to hand out yet. Ask whoever runs the console.' },
+          { lead: '“Nobody has been checked in yet.”', text: 'You hold the key, the register is open, and no child has arrived. This is the ordinary start of a morning.' },
+          { lead: '“This phone cannot open N records.”', text: 'Children are checked in and this phone has no copy it can read — usually because the console had no key for that session when it wrote them. The register is not empty; ask at the desk.' },
+          { lead: '“N records belong to another session.”', text: 'Records reached this phone from a session you hold no key for. They are counted and never opened. Your key opens your session, and deliberately nothing else.' },
+        ] },
+        { type: 'rule', text: 'Nothing here ever stops a child being checked in. If your clearance has run out mid-morning the register stays on your screen and the desk keeps working — the app tells you, it does not lock you out.' },
+        { type: 'note', text: 'You are shown a child’s name and pickup code because that is what the door needs. You are not shown medical, allergy or contact details — those are not in this part of the app.' },
+        { type: 'tech', text: 'Each check-in record is locked twice over. One copy is sealed to your church’s safeguarding key, so the safeguarding lead can always read the register; a second copy rides on the same record, sealed under that one session’s key, which is what your phone opens. The session key lives only inside a church-signed envelope, wrapped separately to each person cleared for that session, so your phone can unwrap its own share and nobody else’s. Your church’s relay serves you a record only while both hold — you are named in that session’s envelope AND your clearance is live — so the screen is reading what the relay decided, never deciding it.' },
+      ],
+    },
+    {
       id: 'directory',
       illo: 'people',
       title: 'The church directory',
@@ -617,6 +650,53 @@ window.HelpData = {
         { type: 'callout', tone: 'gold', text: 'The books are your church’s private bookkeeping, encrypted to a key of their own — the relay only ever holds unreadable ciphertext. The people who can open them are you and anyone you have given <b>Finance</b> to; nobody else, including whoever runs the relay. A statement you choose to share carries totals only, never member names, so it’s safe to hand out or post.' },
         { type: 'note', text: 'Finance is one of the grants under Settings → Security → Delegated stewards. Whoever holds it can see every entry the church has ever recorded — giving, salaries, benevolence — and add more. That is the right grant for a treasurer and a heavy one for anybody else.' },
         { type: 'note', text: 'More is on the way, all free: a balance sheet and trustees’ report, budgets, and regional giving-relief packs (like UK Gift Aid). Giving straight from a member’s own phone wallet is a separate idea we’re still building — nothing to set up for it yet.' },
+      ],
+    },
+    // ── CHECK-IN, 2026-09-10 ──────────────────────────────────────────────────────────────────────────────
+    // This article exists because three standing explainers were taken OFF the Check-in page. The owner's
+    // direction that session: *"we need to cut down on the instructional copy in the ui itself. Use tool
+    // tips and help docs for this kind of information imo."* — and on that page the copy was not merely
+    // wordy, it was what overflowed the cards and painted over the controls underneath (measured 40 pairs of
+    // text-on-text at 360px; the layout bug behind it is fixed too, in DashCheckin).
+    //
+    // WHAT IS HERE AND WHAT STAYED ON THE SCREEN. The two claims that stop a steward reaching a WRONG
+    // conclusion were kept on the page in short form rather than moved here — that parents see nothing of
+    // check-in in their own app (a leader who does not say so at the announcement sends the whole church
+    // looking for a button that does not exist), and that session keys are minted only while this page is
+    // open (a church that assumes otherwise finds its cleared helpers hold no key for a month of Sundays).
+    // Everything below is the detail behind those: the desk routine, who can open a record, what a
+    // clearance is and is not, and what a session key costs when it is replaced.
+    {
+      id: 'console-checkin',
+      illo: 'people',
+      title: 'Children’s check-in at the door',
+      summary: 'A leader checks children in on this device, hands out pickup codes, and matches the code at collection.',
+      minutes: 3,
+      blocks: [
+        { type: 'p', text: 'Check-in is a door operation. A leader stands at the children’s room with this console open, checks each child in, and gives the parent the pickup code. At collection you ask for the code, match it against the one on screen, and check the child out. Nobody has to have an app for any of it.' },
+        { type: 'callout', tone: 'clay', text: 'A parent with the app sees their OWN children for today — the name and the pickup code — and nothing else: no register, no other family, no way to check a child out. A parent with no app, or one you checked in at the desk without them, sees nothing and is told to ask you for the code. Say both when you announce it.' },
+        { type: 'steps', label: 'Before your first Sunday', items: [
+          'Members → mark each child, and confirm who their guardians are. The register reads that list, so a child who is not marked cannot be checked in.',
+          'Settings → Features → “Kids check-in” must be on for the page to appear at all.',
+          'Check-in → “Clear someone” for any children’s worker who is not already a safeguarding steward.',
+        ] },
+        { type: 'steps', label: 'On the day', items: [
+          'Check-in → “Check a child in” → tap the child. A four-digit pickup code appears beside their name.',
+          'Write the code on the parent’s slip, or ask them to note it.',
+          'At collection: “Check out”, ask the parent for the code, and type it in. A code that does not match is not a reason to release the child.',
+        ] },
+        { type: 'list', items: [
+          { lead: 'Who can open a record', text: 'You, anyone you have given Safeguarding to, a helper you have cleared who holds that session’s key, and the child’s own guardians as listed in Members. Nobody else — the relay included.' },
+          { lead: 'What the relay holds', text: 'Ciphertext. The register is encrypted to your church’s safeguarding key, so a record is unreadable to whoever runs the machine it is stored on.' },
+          { lead: 'The guardian list is the pickup list', text: 'Only adults appear on it. A child wrongly listed as another child’s guardian is never offered as the person who may collect them.' },
+        ] },
+        { type: 'p', text: 'A clearance is your church’s own sign-off for children’s work — the DBS or its local equivalent, the training, your safeguarding lead’s decision. The app does not check any of that and does not pretend to; it records the decision you have already made. The relay then re-checks the clearance on every single request, so withdrawing one ends that person’s access to every session at once, with nothing to un-send.' },
+        { type: 'note', text: 'A clearance is not by itself a key on somebody’s phone. It says the church trusts them; the key is what actually opens a record, and it is issued separately by the console that holds the church key.' },
+        { type: 'p', text: 'Each session gets its own key, wrapped to the people you have cleared and to your safeguarding stewards. This console issues them for the next fortnight whenever you open the Check-in page, and again whenever a clearance changes. If nobody opens it for a month, the Sundays in that month have no helper keys and the desk falls back to you and your safeguarding stewards — which is inconvenient and never blocks a check-in.' },
+        { type: 'callout', tone: 'gold', text: 'Only the console holding the church key can issue a session key, because the key is wrapped by the church’s own key. A delegated steward’s console can run the register perfectly well and cannot mint one. If a church is only ever opened by delegates, no session keys are issued at all and its cleared helpers are handed records their phone cannot open — the page says so when that is the case.' },
+        { type: 'note', text: 'If this console cannot open a key that was already issued for a session, re-issuing gives that session a new one. Every check-in already written for it then stops being readable to cleared helpers for good — there is no re-wrap, because the old key is precisely the thing this console could not open. You and the church can still read those records in the register.' },
+        { type: 'note', text: 'A church with no service in today’s calendar still checks children in. The records simply carry no session, so no HELPER can open them — you, your safeguarding stewards and the child’s own guardians still can, and the parent still gets their pickup code. Nothing about how your church runs its children’s work is assumed here, and nothing blocks a child being checked in.' },
+        { type: 'tech', text: 'A check-in record is a relay-side gated document sealed THREE times: to the safeguarding capability ring (the church plus every steward holding Safeguarding) in its content, under the session key in a [\'ck\'] tag, and to each guardian the record names in one [\'gk\'] tag apiece. The relay admits a reader who is the church, a safeguarding steward, a guardian named in the record’s [\'p\'] tags, or an in-window cleared helper of the session in its [\'session\'] tag — checked at request time, never cached. A guardian copy, once published, cannot be withdrawn from that guardian: removing the link stops FUTURE records naming them, and the records they were already named on stay readable to them.' },
       ],
     },
   ],

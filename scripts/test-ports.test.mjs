@@ -134,9 +134,15 @@ test('every test that binds a fixed port checks it first', () => {
 // Written after adding relay-careid-rehydrate.test.mjs on port 8859, which relay-childsafe.test.mjs already owned.
 // Two full suite runs were abandoned at 400s and 600s before the clash was spotted. The convention in this repo is
 // one port per file, and it was being held by hand.
+//
+// ⚠ PROBES WERE INVISIBLE TO THIS UNTIL 2026-09-11, when an audit noticed that several test files carry the
+// comment "unique across scripts/*.test.mjs AND scripts/*.probe.mjs" — a claim NOTHING checked, because this
+// scan read only `.test.mjs`. A probe is hand-run, so a clash with one does not hang the suite; it does
+// something quieter and worse, which the requireFreePort message above already spells out: the probe's relay
+// can answer on behalf of the one a test meant to start, and broken code reports green. Probes are in scope.
 test('no two test files claim the same fixed port', () => {
   const byPort = new Map();
-  for (const f of readdirSync(SCRIPTS).filter(f => f.endsWith('.test.mjs'))) {
+  for (const f of readdirSync(SCRIPTS).filter(f => f.endsWith('.test.mjs') || f.endsWith('.probe.mjs'))) {
     const src = readFileSync(join(SCRIPTS, f), 'utf8');
     for (const { port } of declaredPorts(src)) {
       if (!byPort.has(port)) byPort.set(port, []);

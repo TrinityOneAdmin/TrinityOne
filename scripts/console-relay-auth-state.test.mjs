@@ -317,11 +317,22 @@ test('the trusted-view gate REFUSES a list write when the relay is gone', async 
 
   relay.kill('SIGKILL');
   await sleep(1200);
-  assert.throws(() => gate('list of children'), /finished connecting/,
+  assert.throws(() => gate('list of children'), /hasn’t finished connecting to your church/,
     'with the relay dead, a minors-list write went through on an untrustworthy view. That write republishes ' +
     'the whole list from whatever the console currently holds and hard-deletes the previous version — so ' +
     'every child not in that stale view silently stops being a minor.');
   assert.equal(blocked.length, 1, 'the refusal never reached a screen, so the steward thinks it saved');
+  // AND IT MUST NOT TELL THEM TO WAIT. Both known causes are permanent until something specific happens: a
+  // brand-new church gets no NIP-42 challenge at all until its first member publishes a sealed name (measured
+  // 2026-09-11), and a socket re-opened by an ordinary read leaves the console write-locked while every health
+  // check reads green (console-relay-health.test.mjs, still open). A steward told to "wait a moment" waits for
+  // ever. The message must say nothing was saved, and name what actually clears it.
+  const said = String(blocked[0].detail.message || '');
+  assert.doesNotMatch(said, /wait a moment|try again shortly|in a moment/i,
+    'the refusal tells the steward to WAIT, and in both known causes waiting never ends: ' + said);
+  assert.match(said, /nothing was changed/i, 'the refusal does not say the church is unchanged: ' + said);
+  assert.match(said, /reopen it|first member joins/i,
+    'the refusal names no way out — a steward is told it failed and not what clears it: ' + said);
   try { sub.close(); } catch {}
   s.close();
   await startRelay();

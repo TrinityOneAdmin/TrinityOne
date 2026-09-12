@@ -1,0 +1,769 @@
+// A CLEARED WORKER'S PHONE READS ONE SESSION'S REGISTER — AND PROVABLY NOTHING ELSE.
+// Run: node --test scripts/a-cleared-worker-reads-one-sessions-register.test.mjs
+//
+// Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, read half. This is the first test in the repo of
+// a MEMBER-APP reader for a check-in record: before it, `helperKeyFor` and `readCheckinHelperCopy` had no
+// product caller anywhere in src/ or app/ — their only in-repo caller was a test, which CLAUDE.md rule 1 says
+// is not a feature.
+//
+// ── WHAT IS SHIPPED CODE HERE AND WHAT IS FIXTURE ─────────────────────────────────────────────────────────
+// Everything between a church sealing a record and a worker reading a name off it is lifted out of the built
+// bundles and executed. Nothing in the chain is a stand-in:
+//
+//   • the ENVELOPE is minted by the shipped `buildHelperGrant` (scripts/checkin-role-source.mjs, which esbuild
+//     inlines into both bundles) with real nip44 wrapping, per recipient;
+//   • the RECORD's cleartext tags and its helper copy come from `_encCleartextTags` and `_encSealedCopies`
+//     lifted out of vendor/steward.js — the console's real sealer, so the ['session'] tag the reader routes on
+//     and the ['ck'] tag it opens are the ones a console really writes;
+//   • the READER is `subscribeCheckinRegister` lifted out of vendor/fellowship.js, with the shipped
+//     `readHelperGrant` / `helperKeyFor` / `readCheckinHelperCopy` / `checkinSessionOf` / `permissionAdmits`
+//     underneath it and real nip44 for the crypto.
+//
+// ⚠ THE BUNDLE, NOT THE SOURCE. vendor/fellowship.js is rebuilt by `npm run build:fellowship`; editing
+// src/fellowship.src.js and running this without that tests the OLD bundle and goes green. The freshness net
+// is scripts/vendor-freshness.test.mjs, and only if the whole suite runs.
+//
+// ⚠ ESBUILD RENAMES ON COLLISION. In vendor/fellowship.js the nip44 pair are plain `decrypt` (:5296) and
+// `getConversationKey` (:5194) — nip04's decrypt became `decrypt3` — so the stub names below are the BUNDLE's
+// spellings, not the source's. Stub only the src/ spellings (`nip44d`, `nip44ck`) and the scope Proxy throws,
+// which is the loud failure this harness wants rather than a silent no-op.
+//
+// NO RELAY AND NO PORT. Every assertion here is over a subscription's own handlers, so nothing binds a socket
+// and this file cannot collide with the fixed-port relay tests.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
+import * as nip44 from 'nostr-tools/nip44';
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { fnBody, stmt } from './test-slice.mjs';
+import { buildHelperGrant, buildCheckinPermission, GRANT_SOURCE,
+         readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide,
+         checkinGuardianPubs } from './checkin-role-source.mjs';
+
+const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+const STEWARD    = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+
+const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
+const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+// REAL secp256k1 PAIRS, not random bytes. nip44's conversation key is an ECDH over the peer's pubkey, so a
+// pubkey that is not a point on the curve makes every wrap throw — and buildHelperGrant CATCHES per recipient,
+// which produces an envelope with an EMPTY `keys` object and makes "X holds no key" pass vacuously. That trap
+// is written up in checkin-helper-mint-is-the-shipped-one.test.mjs:120-128; the `failed` assertion in
+// envelope() below is the guard against walking into it again.
+const keypair = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
+
+// Four people, named once so a failure message names the same person twice.
+const church  = keypair();
+const morning = keypair();   // cleared, and holds the MORNING session's key
+const evening = keypair();   // cleared, and holds the EVENING session's key — never the morning's
+const nobody  = keypair();   // in this church and cleared for nothing
+
+const AM = 'svc-sunday-am', PM = 'svc-sunday-pm';
+const NOW = 1788600000;                    // a fixed clock: 2026-09-06T12:00:00Z, inside both windows below
+const WIN = { from: NOW - 3600, until: NOW + 3600 };
+
+const CHECKINPERM_D = 'trinityone/checkinperm:';
+const CHECKINHELPER_D = 'trinityone/checkinhelper:';
+const CHECKIN_D = 'trinityone/checkin:';
+const CHECKINARRIVAL_D = 'trinityone/checkinarrival:';
+
+// ── THE CHURCH'S SIDE, ALL SHIPPED ────────────────────────────────────────────────────────────────────────
+// An envelope: one session's key, wrapped per recipient by the shipped minter with real nip44.
+function envelope(session, sessionKeyHex, helpers) {
+  const g = buildHelperGrant({
+    session, source: GRANT_SOURCE, lifetime: 'session', from: WIN.from, until: WIN.until,
+    helpers: helpers.map(h => h.pub), keepers: [church.pub], sessionKeyHex,
+    // ⚠ THE RECIPIENT COMES FIRST. buildHelperGrant calls `wrap(p, sessionKeyHex)` — pubkey, then plaintext —
+    // which is the opposite order to nip44's own `encrypt(plain, key)`, and getting it round the wrong way
+    // wraps the PUBKEY under a conversation key derived from the session key. It throws nothing: it produces a
+    // perfectly valid ciphertext that unwraps to something that is not 32 bytes of hex, so helperKeyFor answers
+    // '' and every register in this file is empty for the wrong reason.
+    wrap: (toPub, plain) => nip44.encrypt(plain, nip44.getConversationKey(church.sk, toPub)),
+  });
+  assert.deepEqual(g.failed, [], 'fixture: buildHelperGrant could not wrap a slot, so any "no key" below is vacuous');
+  return { pubkey: church.pub, created_at: NOW - 600, content: JSON.stringify(g.doc),
+           tags: [['d', CHECKINHELPER_D + session], ['t', 'trinityone'], ['church', church.pub], ['session', session]] };
+}
+// A clearance for one person, from the shipped builder.
+function clearance(who, over = {}) {
+  const doc = buildCheckinPermission({ person: who.pub, source: 'steward', lifetime: 'dated',
+    from: over.from != null ? over.from : WIN.from, until: over.until != null ? over.until : WIN.until });
+  return { pubkey: (over.by || church).pub, created_at: NOW - 900, content: JSON.stringify(doc),
+           tags: [['d', CHECKINPERM_D + who.pub], ['t', 'trinityone'], ['church', church.pub]] };
+}
+// THE CONSOLE'S REAL SEALER, lifted out of vendor/steward.js. `_encSealedCopies` decides whether a record
+// carries the helper's copy and what it is sealed under; `_encCleartextTags` decides the ['session'] tag the
+// reader routes on. Both stubbed would be the test answering its own question.
+const consoleSealer = (sessionKeys) => {
+  // ⚠ `encrypt3`, NOT `nip44e`. In vendor/steward.js esbuild renamed nip44's encrypt on collision, and
+  // _encSealedCopies CATCHES its own failure and returns [] — so stubbing the src/ spelling produces a record
+  // with NO ['ck'] tag and every "the worker read her register" assertion in this file fails while every
+  // "she opened nothing" assertion passes VACUOUSLY. It cost this file one debugging round; the `ck` assertion
+  // in record() below is the guard that makes it impossible to ship green.
+  const scope = { _ckSessionKeys: sessionKeys, encrypt3: nip44.encrypt, _unhex, JSON, Math, String, Array, Object, Set, RegExp };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the console sealer needs a stub for ' + String(k)); },
+  });
+  const cleartextTags = new Function(fnBody(STEWARD, 'function _encCleartextTags(kind, obj) {', '_encCleartextTags') + '\nreturn _encCleartextTags;')();
+  const sealedCopies = new Function('scope', 'with (scope) { return (' +
+    stmt(STEWARD, 'var _encSealedCopies = (kind, obj) =>', '_encSealedCopies').replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + '); }')(proxy);
+  return { cleartextTags, sealedCopies };
+};
+// One check-in record, written the way publishCheckin writes one: `content` is the ring's ciphertext (opaque
+// to a worker and DELIBERATELY not openable here — a worker holds no ring key and must not try), plus the
+// cleartext tags and the ['ck'] copy from the shipped sealer.
+function record(id, obj, session, sessionKeyHex, over = {}) {
+  const keys = new Map();
+  if (sessionKeyHex) keys.set(session, sessionKeyHex);
+  const { cleartextTags, sealedCopies } = consoleSealer(keys);
+  const body = { ...obj, id, session };
+  const tags = [['d', CHECKIN_D + id], ['t', 'trinityone'], ['church', church.pub], ['enc', sessionKeyHex ? '2' : '1'],
+    ...cleartextTags('checkin', body), ...sealedCopies('checkin', body)];
+  // A COUNTER THAT PROVES THE SHIPPED SEALER RAN. `_encSealedCopies` swallows every failure and answers [],
+  // so without this a mis-stubbed harness silently produces records with no helper copy at all — and the whole
+  // file then reports a clean sheet of refusals it never tested.
+  if (sessionKeyHex) assert.ok(tags.find(t => t[0] === 'ck'),
+    'fixture: the shipped _encSealedCopies produced no ["ck"] copy for a session whose key it was given — the ' +
+    'harness is stubbing a name the bundle does not use, and every refusal in this file would pass vacuously');
+  if (over.session) {   // a record whose SESSION TAG says something other than the key it was sealed under
+    for (const t of tags) if (t[0] === 'session') t[1] = over.session;
+  }
+  return { pubkey: over.by || church.pub, created_at: over.at || NOW, tags,
+           content: 'RING-CIPHERTEXT-A-WORKER-CANNOT-OPEN-' + id };
+}
+
+// A RELEASE (slice C / KNOT 2), the way Fellowship.releaseCheckin writes one: its OWN fresh checkin: address,
+// a cleartext ['rel', <checkinId>] tag, and a ['ck'] body `{ rel, out, manual, by }` under the session key.
+// `content` is a non-empty sentinel, never a ring copy. Authored by the worker, as the shipped writer signs
+// it — the reader does not filter records by author (except tombstones), so this mirrors reality.
+function release(id, relId, session, sessionKeyHex, over = {}) {
+  const keys = new Map(); if (sessionKeyHex) keys.set(session, sessionKeyHex);
+  const { sealedCopies } = consoleSealer(keys);
+  const body = { id, rel: relId, session, out: over.out != null ? over.out : NOW + 1800, manual: over.manual === true, by: (over.by || morning).pub };
+  const tags = [['d', CHECKIN_D + id], ['t', 'trinityone'], ['church', church.pub], ['session', session], ['rel', relId], ['enc', '2'], ...sealedCopies('checkin', body)];
+  assert.ok(tags.find(t => t[0] === 'ck'), 'fixture: the shipped sealer produced no ck copy for the release, so the fold below is vacuous');
+  if (over.tagSession) { for (const t of tags) if (t[0] === 'session') t[1] = over.tagSession; }
+  return { pubkey: (over.by || morning).pub, created_at: over.at || (NOW + 1800), tags, content: 'RELEASE-SENTINEL-' + id };
+}
+
+// ── THE WORKER'S PHONE: THE SHIPPED READER OUT OF vendor/fellowship.js ────────────────────────────────────
+function phone(who, profiles = {}) {
+  const emitted = [];
+  const listeners = [];   // what the reader subscribed to on `window`, so the teardown can be measured
+  let handler = null;
+  const dropped = [];       // what the reader asked the hub cache to forget, and when
+  const refetches = [];
+  const hub = { since: 42, fullAt: 42 };
+  const scope = {
+    // THE CACHE, as far as this reader touches it: a withdrawal must DROP the check-in slices (owner 2026-09-11),
+    // and a later re-clearance must reset the cursor and refetch in full. Recorded, never simulated further.
+    _hubDropSlices: (cp, prefixes) => { dropped.push(prefixes.slice()); return 0; },
+    _docsHubs: new Map([[church.pub, hub]]),
+    refetchChurchDocs: () => refetches.push(Date.now()),
+    setTimeout: (fn) => { fn(); return 0; },   // the deferred refetch runs at once here
+    toPub: (x) => x,
+    pub: who.pub, sk: who.sk,
+    // The real _coalesce defers to a macrotask; here it runs at once so a test reads the answer without a
+    // tick between every event. The DEFERRAL is not what is under test and a queue would only hide which
+    // event produced which answer.
+    _coalesce: (fn) => { const f = () => fn(); f.cancel = () => {}; return f; },
+    _onChurchDocs: (cp, h) => { handler = h; return () => { handler = null; }; },
+    // TRUSTED AUTHORS: the church key alone in this harness. It decides only which TOMBSTONES are honoured
+    // (see the reader's own note on red-team F1 — it does not filter records by author, on purpose).
+    _churchVoice: (cp, rec) => (rec && rec._by) === church.pub,
+    readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf, readCheckinPermission, permissionAdmits,
+    roomCode, roomCodesCollide,
+    // STEP 2 of the parent surface: openRec now normalises the record's `guardians` through the SAME shared
+    // function both writers seal by, so the checkout a worker writes from a row can carry the parent's copy.
+    // The real one, not a stub — a stub here would answer the question the sibling test file asks.
+    checkinGuardianPubs,
+    // slice B: the reader now MIRRORS each session key it unwraps into the module-level _ckMemberKeys map, so
+    // the WRITER (writeCheckin) can reach it. This file tests the READER, not the writer, so these are no-ops —
+    // the reader's own `keys` closure is what every assertion below reads.
+    _ckMemKeySet: () => {}, _ckMemKeyDel: () => {}, _ckMemKeyClear: () => {},
+    _unhex,
+    // ⚠ THE BUNDLE'S SPELLINGS. See the header note on esbuild renaming.
+    decrypt: nip44.decrypt, getConversationKey: nip44.getConversationKey,
+    CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D,
+    // A PARENT'S NAME, resolved the way every other screen in this app resolves a pubkey. The reader reads
+    // this map and re-emits when `trinity-profiles` fires, so both are here: an empty map is the cold-start
+    // answer and the tests below put names into it to prove the resolution is real and not hard-coded.
+    profiles,
+    window: { addEventListener: (ev, fn) => { listeners.push([ev, fn]); }, removeEventListener: (ev, fn) => { const i = listeners.findIndex(x => x[0] === ev && x[1] === fn); if (i >= 0) listeners.splice(i, 1); } },
+    Date: { now: () => NOW * 1000 },
+    Map, Math, String, Number, Array, Object, JSON, Boolean, console,
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped reader needs a stub for ' + String(k)); },
+  });
+  const api = new Function('scope', 'with (scope) { return ({ ' +
+    fnBody(FELLOWSHIP, 'subscribeCheckinRegister(churchNpub, cb) {', 'subscribeCheckinRegister') + ' }); }')(proxy);
+  const stop = api.subscribeCheckinRegister(church.pub, (v) => emitted.push(v));
+  // ⚠ A COUNTER THAT PROVES THE HARNESS ENTERED THE CODE. fnBody returns the whole function INCLUDING its
+  // signature and the house scaffold wraps it in an object literal; nest that wrong and nothing runs while
+  // every negative below passes vacuously. If no subscription was opened there is no `handler` and this fails
+  // here rather than reporting a clean sheet.
+  assert.ok(handler && typeof handler.onevent === 'function',
+    'the lifted subscribeCheckinRegister never registered a docs-hub handler — this harness is running nothing');
+  assert.deepEqual(handler.want, [CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D],
+    're-anchor: the reader no longer asks the hub for these four document types, so it is replaying a ' +
+    'different slice of the corpus than this test feeds it. An omitted CHECKINARRIVAL_D is the parent queue ' +
+    'silently never replayed from cache on a cold start.');
+  const dtag = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+  const cache = () => ({ dropped, refetches, hub });
+  return {
+    cache,
+    listeners,
+    // A NAME ARRIVING LATE, the way it really arrives: the sealed `name:` document opens on the docs hub,
+    // writes into `profiles`, and fires `trinity-profiles`. Driven here rather than simulated by re-feeding.
+    nameArrives(pubkey, name) { profiles[pubkey] = { ...(profiles[pubkey] || {}), name }; for (const [ev, fn] of listeners) if (ev === 'trinity-profiles') fn(); return this; },
+    feed(...events) { for (const e of events) handler.onevent(e, dtag(e)); return this; },
+    settle() { handler.oneose(); return this; },
+    last() { assert.ok(emitted.length, 'the shipped reader emitted nothing at all, not even an empty answer'); return emitted[emitted.length - 1]; },
+    emitted, stop,
+  };
+}
+// Every child's name the register would put on a screen, across every session.
+const namesOn = (v) => v.sessions.flatMap(s => s.rows.map(r => r.childName)).sort();
+const codesOn = (v) => v.sessions.flatMap(s => s.rows.map(r => String(r.code)));
+
+const AM_KEY = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+const PM_KEY = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+
+// ── THE BASELINE. Everything works; every refusal below is measured against this. ─────────────────────────
+test('BASELINE: a cleared worker reads her own session — the names and the pickup codes', () => {
+  const p = phone(morning)
+    .feed(clearance(morning),
+          envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          record('ci-2', { childName: 'Amos Bello', code: '9081' }, AM, AM_KEY))
+    .settle();
+  const v = p.last();
+  assert.equal(v.cleared, true, 'the shipped reader did not recognise this worker\'s own clearance document');
+  assert.equal(v.keysHeld, 1, 'the shipped helperKeyFor gave this cleared helper no session key at all');
+  assert.equal(v.sessions.length, 1);
+  assert.equal(v.sessions[0].session, AM);
+  assert.deepEqual(namesOn(v), ['Amos Bello', 'Esther Ncube'],
+    'THE REGISTER IS EMPTY FOR A WORKER WHO HOLDS THE KEY. The records were served, the key was held, and no ' +
+    'row reached the screen — which looks exactly like "no children are checked in".');
+  assert.deepEqual(codesOn(v).sort(), ['4417', '9081'],
+    'the rows arrived without pickup codes, which is the field the door needs');
+  assert.equal(v.unreadable, 0, 'a record was reported unreadable in the baseline, so nothing below is about a key');
+  assert.equal(v.foreign, 0, 'a record was reported as another session\'s in the baseline');
+  assert.equal(v.lapsed, false);
+  assert.equal(v.notYet, false);
+  assert.equal(v.settled, true, 'the reader never reported the corpus as read, so a screen cannot tell "loading" from "nothing"');
+  p.stop();
+});
+
+// ── NEGATIVE 1. NO CLEARANCE — with everything else succeeding. ───────────────────────────────────────────
+test('a worker the church has NOT cleared sees nothing, and the machinery around her works', () => {
+  // The envelope names HER (so a reader keying only off the envelope would hand her the key), the records are
+  // sealed under a key she could unwrap, and the ONLY thing missing is the clearance. Both halves are what
+  // the relay requires; a screen that leant on one of them would pass a test that fed both.
+  const p = phone(nobody)
+    .feed(envelope(AM, AM_KEY, [nobody]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY))
+    .settle();
+  const v = p.last();
+  assert.equal(v.cleared, false,
+    'the shipped reader reported an UNCLEARED person as cleared — the Kids tab is shown from this field');
+  assert.equal(v.lapsed, false, 'a person the church never cleared was told her clearance had ended');
+  assert.equal(v.notYet, false, 'a person the church never cleared was told her clearance had not started');
+  assert.equal(v.from, null);
+  assert.equal(v.until, null);
+  // AND THE HONEST LIMIT, STATED RATHER THAN OVERCLAIMED: the relay would never serve her either document.
+  // This reader is not the gate and must not be sold as one — what it owes is that the CLEARANCE field, which
+  // is what makes the tab exist, is false when no clearance document arrived.
+  p.stop();
+});
+
+// ── NEGATIVE 2. ONE SESSION'S KEY OPENS NOTHING OF ANOTHER'S. ─────────────────────────────────────────────
+test('a worker holding the EVENING key opens nothing of the MORNING register', () => {
+  // She is cleared, she holds a real session key, and she is served the morning's records — which is exactly
+  // what the relay does to a person cleared for the year while a console has run ahead and minted. Every
+  // piece works; the only thing that must not happen is a row.
+  const p = phone(evening)
+    .feed(clearance(evening),
+          envelope(PM, PM_KEY, [evening]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          record('ci-2', { childName: 'Amos Bello', code: '9081' }, AM, AM_KEY))
+    .settle();
+  const v = p.last();
+  assert.equal(v.cleared, true, 're-anchor: this worker is not cleared, so the refusal below is not about the key');
+  assert.equal(v.keysHeld, 1, 're-anchor: this worker holds no key at all, so nothing here is about which key');
+  assert.deepEqual(namesOn(v), [],
+    'A MORNING REGISTER WAS HANDED TO AN EVENING HELPER. The reader tried a key the record\'s own session tag ' +
+    'did not name — the exact fallback the red-team pass of 2026-09-10 found.');
+  assert.deepEqual(codesOn(v), [], 'a child\'s PICKUP CODE from another session reached this phone');
+  assert.equal(v.foreign, 2,
+    'the two records from a session this phone holds no key for were not reported as such — so the screen ' +
+    'cannot tell "another session" from "nobody is here", and one of those is a worker staring at an empty room');
+  assert.equal(v.unreadable, 0,
+    'another session\'s records were filed as "cannot open", which would tell this worker to go and ask at a ' +
+    'desk about a register that is not hers');
+  assert.equal(v.sessions.length, 1, 'a session this phone holds no key for was given a card on the screen');
+  assert.equal(v.sessions[0].session, PM);
+  assert.deepEqual(v.sessions[0].rows, [], 'her own session shows rows it was never fed');
+  p.stop();
+});
+
+// ── NEGATIVE 3. THE SESSION TAG DECIDES, NOT THE KEY THAT HAPPENS TO FIT. ─────────────────────────────────
+test('a record whose SESSION TAG names a session she does not hold opens nothing, even sealed under her key', () => {
+  // THE ONE THE PIECE-1 AUDIT SAID ITS OWN TESTS WERE BLIND TO. Every fixture filed its key under the
+  // record's own session, so a reader that ignored the tag and tried every held key would have passed the lot.
+  // Here the ['ck'] copy really is sealed under the MORNING key — the key this phone holds — and the record's
+  // cleartext session tag says EVENING. `checkinSessionOf` must decide, so nothing opens.
+  const rec = record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY, { session: PM });
+  // RE-ANCHORED FOUR WAYS, so an empty register cannot pass here for the wrong reason.
+  assert.equal(checkinSessionOf(rec.tags), PM, 'fixture: the session tag was not overridden, so this proves nothing');
+  assert.ok(rec.tags.find(t => t[0] === 'ck'), 'fixture: the record carries no helper copy at all');
+  assert.equal(readCheckinHelperCopy(rec.tags, AM_KEY, (ct, k) => nip44.decrypt(ct, _unhex(k))).code, '4417',
+    'fixture: the copy does not open with the morning key either, so the refusal below is not about the tag');
+  const p = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), rec)
+    .settle();
+  const v = p.last();
+  assert.equal(v.keysHeld, 1, 're-anchor: this phone holds no key, so nothing here is about the session tag');
+  assert.deepEqual(namesOn(v), [],
+    'THE READER OPENED A RECORD BY "ANY KEY I HOLD" RATHER THAN BY THE RECORD\'S OWN SESSION. That is how a ' +
+    'morning register reaches an evening helper, and the record need not even be honestly tagged for it.');
+  assert.equal(v.foreign, 1, 'the record was not reported as belonging to a session this phone holds no key for');
+  // …AND THE CONTROL: the same record, honestly tagged, does open. Without this the assertion above passes
+  // over a reader that opens nothing at all.
+  const ok = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY))
+    .settle().last();
+  assert.deepEqual(namesOn(ok), ['Esther Ncube'], 'CONTROL: the reader opens nothing whatever the tag says');
+  p.stop();
+});
+
+// ── NEGATIVE 4. SERVED, AND THIS PHONE CANNOT OPEN IT — TOLD APART FROM AN EMPTY ROOM. ────────────────────
+test('a record written with no helper copy is "cannot open", never "nobody is here"', () => {
+  // The ordinary case, and not a fault: publishCheckin OMITS the ['ck'] copy when the console holds no session
+  // key, rather than refusing to write, because nothing may block a check-in. Every record written before the
+  // double lock landed is in this state too.
+  const bare = record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, '');
+  assert.equal(bare.tags.find(t => t[0] === 'ck'), undefined, 'fixture: the record HAS a helper copy, so this proves nothing');
+  assert.equal(checkinSessionOf(bare.tags), AM, 'fixture: the record lost its session tag, so it would be unroutable for a different reason');
+  const v = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning]), bare).settle().last();
+  assert.equal(v.unreadable, 1,
+    '"REFUSED" AND "SERVED BUT UNREADABLE" ARE DIFFERENT FAILURES and this one vanished. A worker would be ' +
+    'shown an empty register for a room with a child in it.');
+  assert.equal(v.foreign, 0, 'a record in her OWN session was filed as another session\'s');
+  assert.deepEqual(namesOn(v), [], 'a row was rendered from a record that carries no copy this phone can read');
+  assert.equal(v.keysHeld, 1, 're-anchor: she holds no key, so "cannot open" would be true for a different reason');
+
+  // AND A COPY SEALED UNDER A KEY THAT IS NOT THE SESSION'S is the same honest state — not a row, not silence.
+  const wrong = record('ci-2', { childName: 'Amos Bello', code: '9081' }, AM, PM_KEY);
+  assert.ok(wrong.tags.find(t => t[0] === 'ck'), 'fixture: no copy was sealed at all');
+  const v2 = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning]), wrong).settle().last();
+  assert.equal(v2.unreadable, 1, 'a copy sealed under the wrong key produced neither a row nor an honest count');
+  assert.deepEqual(namesOn(v2), [], 'a row came out of ciphertext this phone cannot open');
+});
+
+// ── CLEARED, AND NO KEY. The commonest state there is, and the one nothing could say before. ──────────────
+test('cleared with NO envelope is "no keys have reached this phone", not an empty register', () => {
+  // Nothing mints session keys unless an OWNER console is open, so a church whose console stays shut has
+  // cleared helpers holding no keys, for any Sunday, ever. Before this screen there was no surface on which
+  // that was visible, and the console's own panel was measured claiming the opposite.
+  const v = phone(morning).feed(clearance(morning)).settle().last();
+  assert.equal(v.cleared, true, 'the clearance document did not reach the shipped reader');
+  assert.equal(v.keysHeld, 0, 'a key appeared from nowhere');
+  assert.deepEqual(v.sessions, [], 'a session card was invented for a session this phone holds no key for');
+  assert.equal(v.settled, true,
+    'the reader swallowed its EOSE because it had nothing to show — so the one screen that could tell a ' +
+    'worker "nothing is wrong, no key has been issued" would sit on a loading state that never resolves');
+});
+
+// ── A FUTURE CLEARANCE HAS NOT ENDED. The console shipped this wrong and a sim caught it four times. ──────
+test('a clearance that has not started yet says so — it has NOT "ended"', () => {
+  const v = phone(morning).feed(clearance(morning, { from: NOW + 86400, until: NOW + 172800 })).settle().last();
+  assert.equal(v.cleared, false, 'a clearance whose window has not opened admitted somebody');
+  assert.equal(v.notYet, true,
+    'A CLEARANCE FOR NEXT SUNDAY IS NOT REPORTED AS PENDING. The console shipped exactly this as a binary on ' +
+    '2026-09-10 and told a churchwarden four times over that a clearance she had just granted had ENDED.');
+  assert.equal(v.lapsed, false, 'a clearance that has not started was reported as ended');
+  assert.equal(v.from, NOW + 86400, 'the screen has no date to name, so it cannot say WHEN it starts');
+});
+
+test('a clearance whose window has passed is "ended", and the register it already holds stays readable', () => {
+  // reference/DOMAIN.md: "say a key has expired, do not lock someone out of a room mid-session." So the state
+  // is reported AND the rows stay. A reader that dropped them would be the block the whole feature forbids.
+  const v = phone(morning)
+    .feed(clearance(morning, { from: NOW - 172800, until: NOW - 86400 }),
+          envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY))
+    .settle().last();
+  assert.equal(v.cleared, false, 'an expired clearance still admits');
+  assert.equal(v.lapsed, true, 'an expired clearance is silent, so a worker cannot tell why records stopped arriving');
+  assert.equal(v.notYet, false, 'an expired clearance was reported as not yet started');
+  assert.deepEqual(namesOn(v), ['Esther Ncube'],
+    'THE REGISTER WAS TAKEN OFF THE SCREEN BECAUSE A CLEARANCE LAPSED. DOMAIN.md forbids exactly that: the ' +
+    'app says a key has expired, it does not lock somebody out of a room mid-session.');
+});
+
+test('a clearance the SAFEGUARDING STEWARD wrote counts — the relay admits it, and the phone must not second-guess', () => {
+  // Red team 2026-09-11, F-A. The relay has accepted a safeguarding steward's clearance since 2026-09-10
+  // (checkinPermGrantor) and serves the person everything that follows; the reader dropped it as
+  // "church-key-only", so a steward-cleared helper read `cleared:false` — and with no key minted yet, no
+  // Kids tab at all. Same fixture as the baseline, one field different: who signed the clearance.
+  const sgLead = keypair();
+  const v = phone(morning)
+    .feed(clearance(morning, { by: sgLead }), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY))
+    .settle().last();
+  assert.equal(v.cleared, true,
+    'A STEWARD\'S CLEARANCE IS INVISIBLE TO THE PERSON IT CLEARS. The relay served it (only the church or a ' +
+    'safeguarding steward can write one; only the person can read it) and the phone threw it away — before a ' +
+    'key arrives that is no Kids tab for the commonest way a church clears somebody.');
+  // and before any key has been minted, the tab must exist for her: the rule ServingScreen applies
+  const noKey = phone(morning).feed(clearance(morning, { by: sgLead })).settle().last();
+  assert.equal(!noKey.cleared && !noKey.notYet && !(noKey.keysHeld > 0), false,
+    'with a steward-written clearance and no key yet, the screen\'s nothingKnown rule hides the tab');
+});
+
+test('a helper copy with the WRONG TYPES in it reaches the screen as strings and numbers, never as objects', () => {
+  // Red team 2026-09-11, F-C. The reader vouched for "a JSON object" and nothing inside it; `childName: {…}`
+  // and `out: {…}` reached KidsRow as JSX children, which React refuses by throwing, and the only error
+  // boundary above the row is the app root. A helper in her window can write such a record.
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('good', { childName: 'Real Child', code: '4417', in: 1789080000 }, AM, AM_KEY),
+          record('evil', { childName: { nope: true }, code: { a: 1 }, in: 'soon', out: { when: 2 } }, AM, AM_KEY),
+          record('numeric', { childName: 7, code: 1234, out: '1789084514' }, AM, AM_KEY))
+    .settle().last();
+  const rows = Object.fromEntries(v.sessions.flatMap(s => s.rows).map(r => [r.id, r]));
+  assert.equal(typeof rows.good.childName, 'string'); assert.equal(rows.good.in, 1789080000);
+  assert.equal(typeof rows.evil.childName, 'string',
+    'AN OBJECT REACHED THE SCREEN AS A CHILD\'S NAME. React throws on it and the whole app blanks: ' + JSON.stringify(rows.evil.childName));
+  assert.equal(rows.evil.childName, '', 'a name that is not a string must read as absent, not as "[object Object]"');
+  assert.equal(typeof rows.evil.code, 'string'); assert.equal(rows.evil.code, '');
+  assert.equal(rows.evil.out, undefined, 'an `out` that is not a time was kept: ' + JSON.stringify(rows.evil.out));
+  assert.equal(rows.evil.in, undefined);
+  assert.equal(rows.numeric.childName, '7'); assert.equal(rows.numeric.code, '1234');
+  assert.equal(rows.numeric.out, 1789084514, 'a numeric string `out` (an older writer) was dropped');
+});
+
+test('a WITHDRAWAL EMPTIES THE PHONE — memory and the cache the next boot replays — and a re-clearance refetches in full', () => {
+  // Owner's decision 2026-09-11 (device finding D3, second half): the relay refuses a withdrawn worker
+  // everything from that moment; what the phone already held must go too, and not come back on a cold start.
+  const tomb = { pubkey: church.pub, created_at: NOW - 60, content: '',
+                 tags: [['d', CHECKINPERM_D + morning.pub], ['t', 'trinityone'], ['church', church.pub], ['deleted', '1']] };
+  const p = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY))
+    .settle();
+  assert.deepEqual(namesOn(p.last()), ['Esther Ncube'], 'fixture: the register was never there to be dropped');
+  p.feed(tomb);
+  const v = p.last();
+  assert.deepEqual(namesOn(v), [], 'the rows survived the withdrawal in memory');
+  assert.equal(v.keysHeld, 0, 'the key survived the withdrawal in memory');
+  // …AND THE ARRIVAL SLICE BY NAME. `startsWith(CHECKIN_D)` does NOT match `checkinarrival:` — the colon
+  // makes the two prefixes disjoint — so a drop list that named only the register would leave a withdrawn
+  // worker's phone replaying, from disk and through a cold start, the list of WHICH FAMILIES WERE AT CHURCH.
+  assert.deepEqual(p.cache().dropped, [[CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D]],
+    'THE CACHE WAS NOT TOLD TO FORGET the envelope and the records — a force-stop and relaunch replays them, ' +
+    'names and pickup codes included, exactly as the Oppo did. dropped: ' + JSON.stringify(p.cache().dropped));
+  // …and records arriving AFTER the withdrawal (a replay, a race) do not resurrect anything: no key, so unopenable
+  p.feed(record('ci-2', { childName: 'Amos Bello', code: '9081' }, AM, AM_KEY));
+  assert.deepEqual(namesOn(p.last()), [], 'a record arriving after the withdrawal was opened — the key came back');
+  // the church clears her again: the documents it will serve are older than the cursor, so refetch in FULL
+  p.feed({ ...clearance(morning), created_at: NOW - 30 });
+  assert.equal(p.cache().hub.since, 0, 're-clearance did not reset the hub cursor — a cursored refetch returns none of the old envelope or records');
+  assert.equal(p.cache().refetches.length, 1, 're-clearance did not refetch the church documents');
+  assert.equal(p.last().cleared, true, 're-anchor: the re-clearance did not clear');
+});
+
+test('a WITHDRAWN clearance is reported as withdrawn — not as "never cleared", and not silently', () => {
+  // Device finding D3, 2026-09-11: after the church withdrew a helper's clearance the phone kept the register
+  // through a resume and a cold start with no line saying anything had changed. The tombstone arrived; the
+  // state had no word for it. This is that word. The rows stay (the phone already holds them, and the relay
+  // serves nothing new) — whether to DROP them is the owner's call, not this reader's.
+  const tomb = { pubkey: church.pub, created_at: NOW - 60, content: '',
+                 tags: [['d', CHECKINPERM_D + morning.pub], ['t', 'trinityone'], ['church', church.pub], ['deleted', '1']] };
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY), tomb)
+    .settle().last();
+  assert.equal(v.cleared, false, 'a withdrawn clearance still admits');
+  assert.equal(v.withdrawn, true,
+    'A WITHDRAWAL IS SILENT. The church took this clearance away and the phone reports the same state as ' +
+    'somebody who was never cleared — the screen has nothing to say. State: ' + JSON.stringify({ cleared: v.cleared, lapsed: v.lapsed, notYet: v.notYet, withdrawn: v.withdrawn }));
+  assert.equal(v.lapsed, false, 'a withdrawal was reported as an expiry');
+  // OWNER'S DECISION 2026-09-11 (reversing the first version of this test): a withdrawal EMPTIES the phone.
+  assert.deepEqual(namesOn(v), [], 'A WITHDRAWN WORKER STILL HOLDS THE REGISTER — names and pickup codes stay on a phone the church has just refused: ' + JSON.stringify(namesOn(v)));
+  assert.equal(v.keysHeld, 0, 'the session key survived the withdrawal');
+  // and never cleared is NOT withdrawn — the cold-start race, where nothing has arrived, must not say "withdrawn"
+  const never = phone(morning).feed(envelope(AM, AM_KEY, [morning])).settle().last();
+  assert.equal(never.withdrawn, false, 'a phone that has never seen a clearance document reports one as withdrawn');
+  // nor is a clearance body this parser cannot vouch for (relay/app version skew) — audit 2026-09-11
+  const junk = { ...clearance(morning), content: JSON.stringify({ person: morning.pub, lifetime: 'forever' }) };
+  const skew = phone(morning).feed(junk, envelope(AM, AM_KEY, [morning])).settle().last();
+  assert.equal(skew.cleared, false, 're-anchor: an unreadable clearance must not clear');
+  assert.equal(skew.withdrawn, false, 'a clearance this phone cannot read is reported as "withdrawn by the church"');
+  // and a withdrawal the SAFEGUARDING STEWARD signed is a withdrawal — the relay honours it (red team F-A / audit F1)
+  const sgLead = keypair();
+  const sgTomb = { ...tomb, pubkey: sgLead.pub };
+  const byLead = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning]), sgTomb).settle().last();
+  assert.equal(byLead.cleared, false, 'A STEWARD\'S WITHDRAWAL IS IGNORED BY THE PHONE, which goes on saying cleared');
+  assert.equal(byLead.withdrawn, true, 'a steward-signed withdrawal is not reported as one');
+});
+
+// ── THE RACE THE CONSOLE'S HOLDING PEN GOT WRONG. ─────────────────────────────────────────────────────────
+test('records arriving BEFORE the envelope still open when the key lands', () => {
+  // On a cold start this is the ORDINARY order: the docs hub replays its persisted corpus oldest-first, so the
+  // records reach the reader before any envelope can be unwrapped. The console's own pen stored only
+  // { content, ts } and lost the tags, so a retry could never find the ['ck'] copy — a whole register would
+  // have read as unreadable for ever.
+  const p = phone(morning)
+    .feed(record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          record('ci-2', { childName: 'Amos Bello', code: '9081' }, AM, AM_KEY));
+  const before = p.last();
+  assert.deepEqual(namesOn(before), [], 're-anchor: rows appeared before any key was held, so the retry proves nothing');
+  assert.equal(before.foreign, 2, 're-anchor: the records were not held as another session\'s while no key was held');
+
+  p.feed(clearance(morning), envelope(AM, AM_KEY, [morning])).settle();
+  const after = p.last();
+  assert.deepEqual(namesOn(after), ['Amos Bello', 'Esther Ncube'],
+    'THE KEY ARRIVED AND NOTHING RE-OPENED. Every record already on the phone stays shut for the life of the ' +
+    'session — which on a cold start is every record there is.');
+  assert.equal(after.foreign, 0, 'the records are still filed as another session\'s after their own key arrived');
+});
+
+// ── AND THE THING A WORKER MUST NOT BE ABLE TO DO: OPEN `content`. ────────────────────────────────────────
+test('the register never comes from `content` — a worker holds no safeguarding ring key and does not try', () => {
+  // `content` is sealed to the church's SAFEGUARDING RING. The whole double-lock design rests on a worker
+  // reading only the ['ck'] tag, so this feeds a record whose `content` is a plain, readable JSON body — the
+  // shape a reader that had quietly fallen back to `content` would happily render — and asserts nothing comes
+  // out of it. A reader that ever learns to open `content` would be opening the church's copy.
+  const naked = record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, '');
+  naked.content = JSON.stringify({ id: 'ci-1', childName: 'LEAKED FROM CONTENT', code: '0000', session: AM });
+  const v = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning]), naked).settle().last();
+  assert.deepEqual(namesOn(v), [],
+    'THE READER OPENED `content`. That is the safeguarding ring\'s copy, and a worker must never read it — ' +
+    'the helper\'s copy is the ["ck"] tag and nothing else.');
+  assert.equal(v.unreadable, 1, 'and the honest state was lost too');
+});
+
+// ── A STRANGER'S TOMBSTONE MUST NOT HIDE A CHILD WHO IS IN THE ROOM. ──────────────────────────────────────
+test('a tombstone from somebody the reader does not trust removes nothing', () => {
+  const live = record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY);
+  const p = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning]), live).settle();
+  assert.deepEqual(namesOn(p.last()), ['Esther Ncube'], 're-anchor: the row was never there to remove');
+
+  p.feed({ pubkey: evening.pub, created_at: NOW + 60, content: '',
+           tags: [['d', CHECKIN_D + 'ci-1'], ['deleted', '1'], ['session', AM]] });
+  assert.deepEqual(namesOn(p.last()), ['Esther Ncube'],
+    'A STRANGER\'S TOMBSTONE TOOK A CHILD OFF THE REGISTER. kind-30078 is per-author so it never replaced the ' +
+    'record on the relay — honouring it here simply hides a child who is in the room.');
+
+  // …and the church's own tombstone IS honoured, so the assertion above is not passing over a reader that
+  // ignores every deletion.
+  p.feed({ pubkey: church.pub, created_at: NOW + 120, content: '',
+           tags: [['d', CHECKIN_D + 'ci-1'], ['deleted', '1'], ['session', AM]] });
+  assert.deepEqual(namesOn(p.last()), [], 'CONTROL: the reader honours no tombstone at all, from anybody');
+});
+
+// ── SLICE C: a checkout is a SEPARATE document, folded onto its child row by the READER ────────────────────
+test('a RELEASE folds onto the child row it names — the child is COLLECTED, and the release is not a phantom row', () => {
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          release('cr-1', 'ci-1', AM, AM_KEY, { out: NOW + 1800 }))
+    .settle().last();
+  assert.deepEqual(namesOn(v), ['Esther Ncube'],
+    'THE RELEASE RENDERED AS ITS OWN ROW, or the child vanished. A release is folded onto its check-in, never shown as a phantom child.');
+  const row = v.sessions[0].rows.find(r => r.childName === 'Esther Ncube');
+  assert.equal(row.out, NOW + 1800, 'the child is not marked collected — the release did not fold onto the row');
+  assert.equal(row.manual, false, 'a code-matched release was recorded as by-hand');
+});
+
+test('a MANUAL release folds with its distinct marker, so the guardian and the lead can tell it apart', () => {
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          release('cr-1', 'ci-1', AM, AM_KEY, { manual: true, out: NOW + 1800 }))
+    .settle().last();
+  const row = v.sessions[0].rows.find(r => r.childName === 'Esther Ncube');
+  assert.equal(row.out, NOW + 1800, 'the manual release did not mark the child collected');
+  assert.equal(row.manual, true,
+    'A MANUAL RELEASE WAS NOT RECORDED DISTINCTLY. §7: a register that cannot tell a by-hand collection from a ' +
+    'code one is incomplete.');
+});
+
+test('a release for ANOTHER session does not collect a child — the session tags must match (the F1 shape, one level up)', () => {
+  // The phone holds BOTH keys, so both records are readable; the only thing standing between the AM release
+  // and the PM child is the session-match guard in the fold.
+  const v = phone(morning)
+    .feed(clearance(morning),
+          envelope(AM, AM_KEY, [morning]), envelope(PM, PM_KEY, [morning]),
+          record('ci-am', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          record('ci-pm', { childName: 'Amos Bello', code: '9081' }, PM, PM_KEY),
+          // an AM-session release that NAMES the PM child. It must not collect her.
+          release('cr-1', 'ci-pm', AM, AM_KEY, { out: NOW + 1800 }))
+    .settle().last();
+  const pm = v.sessions.find(s => s.session === PM).rows.find(r => r.childName === 'Amos Bello');
+  assert.equal(pm.out, undefined,
+    'A RELEASE SCOPED TO ONE SESSION COLLECTED A CHILD IN ANOTHER. The fold keyed on the checkin id alone, not ' +
+    'on session|id — the exact cross-session shape F1 was about, one level up.');
+  const am = v.sessions.find(s => s.session === AM).rows;
+  assert.deepEqual(am.map(r => r.childName), ['Esther Ncube'], 'the AM release leaked into the AM child list as a row');
+  assert.equal(am[0].out, undefined, 'the AM release folded onto the wrong AM child');
+});
+
+test('a release this phone holds no key for is counted, never folded and never rendered', () => {
+  // The release is sealed under the EVENING key; the morning phone cannot open it, so it is foreign — and a
+  // foreign release must not silently collect a child it names.
+  const v = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          record('ci-1', { childName: 'Esther Ncube', code: '4417' }, AM, AM_KEY),
+          release('cr-1', 'ci-1', PM, PM_KEY, {}))
+    .settle().last();
+  const row = v.sessions[0].rows.find(r => r.childName === 'Esther Ncube');
+  assert.equal(row.out, undefined, 'a release this phone could not even open marked a child collected');
+  assert.equal(v.foreign, 1, 'the unreadable release was not counted as belonging to another session');
+});
+
+// ══════════════ THE PARENT'S ARRIVAL, THROUGH THE SHIPPED READER ══════════════
+// STEP 1 of the parent surface, 2026-09-11. The relay half is
+// scripts/a-parent-writes-an-arrival-never-a-register-row.test.mjs; the screen half is
+// scripts/the-kids-tab-is-only-for-a-cleared-worker.test.mjs. THIS is the join between them: what the
+// shipped subscribeCheckinRegister actually puts in `sessions[].arrivals`, out of vendor/fellowship.js.
+//
+// THE BODY IS NEVER OPENED, and that is the design rather than a limitation this file works around. A parent
+// seals her arrival to her OWN key, so this phone cannot read it and does not need to: the document's whole
+// job is to deliver her pubkey provably, which the relay checked the signature for. Everything the reader
+// takes is CLEARTEXT — the address, the session tag, created_at.
+
+const gina = keypair();          // a parent
+const omar = keypair();          // a second parent, at the door at the same moment
+const ARRIVAL_D = 'trinityone/checkinarrival:';
+// An arrival exactly as Fellowship.writeArrival signs one, minus the self-seal (nothing reads it, so a
+// non-empty opaque string is a faithful stand-in for a ciphertext nothing opens — and a test that "decrypted"
+// it would be asserting a path the product does not have).
+function arrival(who, session, over = {}) {
+  const tags = [['d', ARRIVAL_D + (over.addrSession || session) + ':' + (over.addrPub || who.pub)], ['t', 'trinityone'],
+                ['church', church.pub], ['session', over.tagSession || session]];
+  if (over.deleted) tags.push(['deleted', '1']);
+  return { pubkey: over.by || who.pub, created_at: over.at || NOW, tags,
+           content: over.deleted ? '' : 'SELF-SEALED-TO-THE-PARENT-ONLY' };
+}
+const arrivalsOn = (v, sid) => ((v.sessions.find(s => s.session === sid) || {}).arrivals || []);
+
+test('ARRIVALS: a parent at the door reaches the worker\'s session, named', () => {
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM))
+    .settle();
+  const q = arrivalsOn(p.last(), AM);
+  assert.equal(q.length, 1, 'THE ARRIVAL NEVER REACHED THE REGISTER. The queue the worker\'s screen renders is empty at source.');
+  assert.equal(q[0].pub, gina.pub, 'the arrival names the wrong pubkey — the one thing it exists to deliver');
+  assert.equal(q[0].name, 'Sarah Henderson', 'the parent\'s name was not resolved, so the worker confirms a pairing against nothing');
+  assert.equal(q[0].checkedIn, 0, 'a family with no child in the room yet is reported as already checked in');
+  // …AND IT IS NOT A CHILD. An arrival reaching `rows` would be a phantom on a safeguarding register.
+  assert.deepEqual(namesOn(p.last()), [], 'AN ARRIVAL RENDERED AS A CHILD IN THE REGISTER — a phantom child with no pickup code and nobody able to collect them');
+  assert.equal(p.last().unreadable, 0, 'the arrival was counted as a record this phone cannot open — it is not a record, and that banner says the register is incomplete');
+  assert.equal(p.last().foreign, 0, 'the arrival was counted as another session\'s record');
+});
+
+test('ARRIVALS: a name that arrives LATE still reaches the queue', () => {
+  // On a cold start the arrival wins the race with the sealed `name:` document every time. Without the
+  // re-emit the queue keeps the name it had when the arrival landed — none — and the worker confirms a
+  // pairing against "name not on this phone" for a family whose name the phone does in fact hold.
+  const p = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM))
+    .settle();
+  assert.equal(arrivalsOn(p.last(), AM)[0].name, '', 'fixture: the name was already resolved, so the re-emit below proves nothing');
+  p.nameArrives(gina.pub, 'Sarah Henderson');
+  assert.equal(arrivalsOn(p.last(), AM)[0].name, 'Sarah Henderson',
+    'A NAME THAT ARRIVED AFTER THE ARRIVAL NEVER REACHED THE SCREEN. The queue is stuck on the cold-start ' +
+    'answer, and the name is what the worker confirms the child-to-parent pairing against.');
+});
+
+test('ARRIVALS: "we are not coming after all" removes the family from the queue', () => {
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM))
+    .settle();
+  assert.equal(arrivalsOn(p.last(), AM).length, 1, 'fixture: nothing was in the queue to withdraw');
+  p.feed(arrival(gina, AM, { deleted: true, at: NOW + 60 }));
+  assert.equal(arrivalsOn(p.last(), AM).length, 0,
+    'A WITHDRAWN ARRIVAL STAYED IN THE QUEUE. The family went home; the worker is still being offered them, ' +
+    'and a mis-tap now pairs a child with a parent who is not in the building.');
+});
+
+test('ARRIVALS: an arrival whose ADDRESS and SIGNATURE disagree is DROPPED, whatever the relay served', () => {
+  // The relay refuses this at all four doors (arrivalIdOk). A phone that trusted its relay to have done so
+  // would show a family's NAME beside somebody else's key on a hostile or out-of-date box — and the name is
+  // exactly what the confirmation is checked against, so this is the mis-pairing the screen cannot catch.
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' }, [omar.pub]: { name: 'Omar Haddad' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          arrival(omar, AM, { addrPub: gina.pub }))       // signed by omar, addressed as gina
+    .settle();
+  assert.deepEqual(arrivalsOn(p.last(), AM), [],
+    'A FORGED ARRIVAL REACHED THE WORKER\'S QUEUE under another family\'s name. Served: ' +
+    JSON.stringify(arrivalsOn(p.last(), AM)));
+});
+
+test('ARRIVALS: an arrival whose SESSION TAG and ADDRESS disagree is DROPPED, BOTH WAYS ROUND', () => {
+  // The F1 shape, one document over: readers route by the tag, the store keys on the address. THE DIRECTION
+  // THAT BITES IS ADDRESS-HERE / TAG-ELSEWHERE. Found by the sabotage matrix, 2026-09-11: the first version
+  // of this test put the ADDRESS on the afternoon and the TAG on the morning, and deleting the agreement
+  // check left it green — the reader takes `sid` from the ADDRESS, so that document was already filtered out
+  // by session scoping and the test was pinning the wrong rule. This way round the address IS the morning,
+  // so nothing else refuses it and only the agreement check does.
+  const wrongTag = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          arrival(gina, AM, { addrSession: AM, tagSession: PM }))
+    .settle();
+  assert.deepEqual(arrivalsOn(wrongTag.last(), AM), [],
+    'an arrival at the MORNING address carrying an AFTERNOON session tag reached the morning queue — the ' +
+    'cleartext tag every reader routes by does not have to agree with the address the document lives at');
+  // …and the mirror image, which the session scoping refuses for its own reason. Kept because a later reader
+  // that routed by the tag rather than the address would make this the live direction.
+  const wrongAddr = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]),
+          arrival(gina, AM, { addrSession: PM, tagSession: AM }))
+    .settle();
+  assert.deepEqual(arrivalsOn(wrongAddr.last(), AM), [], 'an arrival stored at the afternoon\'s address rendered on the morning\'s queue');
+});
+
+test('ARRIVALS: a session this phone holds NO KEY for shows no queue at all', () => {
+  // The sessions list is "every session this phone holds a key for". An arrival for a room she is not on
+  // must not conjure a card, or a worker is shown families at a door she has no business at.
+  const p = phone(morning)
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, PM))
+    .settle();
+  assert.deepEqual(p.last().sessions.map(s => s.session), [AM], 'an arrival for an unheld session created a session card out of nothing');
+  assert.deepEqual(arrivalsOn(p.last(), AM), [], 'the afternoon\'s arrival was folded onto the morning\'s queue');
+});
+
+test('ARRIVALS: a family part-way through is COUNTED, not dropped — from the record\'s cleartext p-tag', () => {
+  // A parent with two children checks both in from ONE arrival. The count comes from the record's CLEARTEXT
+  // ['p'] tag, so it needs no key and holds for a record this phone cannot open.
+  const rec = record('ci-1', { childName: 'Milo', code: '4417' }, AM, AM_KEY);
+  rec.tags.push(['p', gina.pub]);
+  const p = phone(morning, { [gina.pub]: { name: 'Sarah Henderson' } })
+    .feed(clearance(morning), envelope(AM, AM_KEY, [morning]), arrival(gina, AM), rec)
+    .settle();
+  const q = arrivalsOn(p.last(), AM);
+  assert.equal(q.length, 1, 'THE FAMILY VANISHED FROM THE QUEUE once one child was in. The second child now looks like a mistake and the parent is sent back to the desk.');
+  assert.equal(q[0].checkedIn, 1, 'the queue does not say how many of this family are already in the room');
+  assert.deepEqual(namesOn(p.last()), ['Milo'], 'fixture: the child\'s record did not land, so the count above is measuring nothing');
+});
+
+test('ARRIVALS: the reader lets go of its name listener when it tears down', () => {
+  // The docs-hub teardown was the ONLY thing this subscription returned before today. A listener left on
+  // `window` after a church switch keeps a dead closure alive and re-emits into a screen that is gone.
+  const p = phone(morning).feed(clearance(morning), envelope(AM, AM_KEY, [morning])).settle();
+  assert.equal(p.listeners.filter(l => l[0] === 'trinity-profiles').length, 1, 'the reader never subscribed to name resolution at all');
+  p.stop();
+  assert.equal(p.listeners.filter(l => l[0] === 'trinity-profiles').length, 0,
+    'THE NAME LISTENER SURVIVED THE TEARDOWN. Every church switch and every reconnect leaves another one behind.');
+});

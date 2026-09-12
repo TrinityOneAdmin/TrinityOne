@@ -13,10 +13,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  HELPER_SOURCES, DEFAULT_HELPER_SOURCE, isDeclaredSource, eligibleHelpers,
-  HELPER_LIFETIMES, DEFAULT_HELPER_LIFETIME, isDeclaredLifetime, helperPolicy,
-  MAX_SESSION_SECONDS, sessionWindow, lifetimeWindow, windowFault,
-  buildHelperGrant, readHelperGrant, grantAdmits, helperKeyFor,
+  HELPER_SOURCES, DEFAULT_HELPER_SOURCE, isDeclaredSource, eligibleHelpers, HELPER_LIFETIMES,
+  DEFAULT_HELPER_LIFETIME, isDeclaredLifetime, helperPolicy, MAX_SESSION_SECONDS, sessionWindow, lifetimeWindow,
+  windowFault, buildHelperGrant, readHelperGrant, grantAdmits, helperKeyFor, GRANT_SOURCE, isPermissionSource,
+  permittedHelpers, permissionPolicy, permissionWindow, permissionFault, buildCheckinPermission,
+  readCheckinPermission, permissionAdmits, PERMISSION_LIFETIMES, DEFAULT_PERMISSION_LIFETIME,
+  isDeclaredPermissionLifetime, MAX_PERMISSION_SECONDS, KEY_LEAD_SECONDS,
+  readCheckinHelperCopy, checkinSessionOf, roomCode, roomCodesCollide
 } from './checkin-role-source.mjs';
 import { D, DOC_TYPES } from './trinity-doc-types.mjs';
 
@@ -146,9 +149,16 @@ test('windowFault names every refusal, and says why', () => {
   // AND THE TWO THAT KEEP A LIFETIME FROM BECOMING ANOTHER ONE
   assert.match(windowFault(1000, null, 'session'), /must carry an end/,
     'a session grant with no end was accepted — that is how "access ends when the turn does" becomes permanent');
-  assert.match(windowFault(1000, 2000, 'open'), /must not carry an end/,
-    'an open-ended grant carrying an end is two policies at once, and nobody can say which one holds');
-  assert.equal(windowFault(1000, null, 'open'), '', 'the church\'s own "until a steward ends it" was refused');
+  // AND `open` IS NO LONGER A SESSION LIFETIME AT ALL — it moved to the permission on 2026-09-09. A session key
+  // with no end would be a standing key to the children's register, and it is now minted by machinery rather
+  // than by a steward's weekly click, which makes it worse than it was.
+  assert.match(windowFault(1000, null, 'open'), /unknown lifetime/,
+    'a session key declared the open-ended lifetime and was not refused — the open-ended shape belongs to the ' +
+    'PERMISSION, which carries no key material, and nowhere else');
+  assert.match(windowFault(1000, null, 'day'), /must carry an end/,
+    'a DAY session key with no end was accepted — that is a standing key with a day-shaped name');
+  assert.equal(Object.values(HELPER_LIFETIMES).filter(l => l.max == null).length, 0,
+    'a session lifetime with no cap is back. Every key this product mints must expire; only a clearance may not.');
   assert.equal(windowFault(1000, 1000 + HELPER_LIFETIMES.day.max, 'day'), '');
   assert.match(windowFault(1000, 1000 + HELPER_LIFETIMES.day.max + 1, 'day'), /may not exceed/);
 });
@@ -167,7 +177,7 @@ test('the pubkeys the RELAY enforces and the keys that actually OPEN things are 
   // a rotation would quietly hand the key to someone the mint had excluded". Here the relay compares `pubs`
   // and the crypto uses `keys`, so a divergence is a helper the gate admits and who can open nothing — or,
   // far worse, one who can open everything and whom the gate does not know about.
-  const { doc } = buildHelperGrant({ lifetime: 'session', session: 'svc-next', source: 'rota', from: 1000, until: 4000,
+  const { doc } = buildHelperGrant({ lifetime: 'session', session: 'svc-next', source: 'permission', from: 1000, until: 4000,
     helpers: [ADA, BEN], keepers: [CHI], sessionKeyHex: KEY, wrap });
   assert.deepEqual(doc.pubs.sort(), [ADA, BEN].sort(), 'the enforced list is not the helper list');
   for (const p of doc.pubs) assert.ok(doc.keys[p], 'a helper the relay will admit has no key wrapped to them');
@@ -178,7 +188,7 @@ test('the pubkeys the RELAY enforces and the keys that actually OPEN things are 
 });
 
 test('a grant carrying nothing about any child', () => {
-  const { doc } = buildHelperGrant({ lifetime: 'session', session: 'svc-next', source: 'rota', from: 1000, until: 4000,
+  const { doc } = buildHelperGrant({ lifetime: 'session', session: 'svc-next', source: 'permission', from: 1000, until: 4000,
     helpers: [ADA], keepers: [CHI], sessionKeyHex: KEY, wrap });
   // The relay stores this in the clear, and must, because it has to read the window and the list it enforces.
   // So the test that matters is what is NOT in it.
@@ -198,9 +208,17 @@ test('a grant carrying nothing about any child', () => {
 });
 
 test('a grant refuses at BUILD time everything the relay refuses at the door', () => {
-  const base = { lifetime: 'session', session: 'svc-next', source: 'rota', from: 1000, until: 4000, helpers: [ADA], keepers: [], sessionKeyHex: KEY, wrap };
+  const base = { lifetime: 'session', session: 'svc-next', source: 'permission', from: 1000, until: 4000, helpers: [ADA], keepers: [], sessionKeyHex: KEY, wrap };
   assert.throws(() => buildHelperGrant({ ...base, session: '' }), /no session id/);
-  assert.throws(() => buildHelperGrant({ ...base, source: 'invented' }), /undeclared helper source/);
+  assert.throws(() => buildHelperGrant({ ...base, source: 'invented' }), /must declare source/);
+  // AND EVERY DECLARED SOURCE THAT IS NOT THE PINNED ONE, which is the regression that would look like
+  // working software: an envelope built from a rota is the pre-2026-09-09 model, where a service's rota
+  // decided who held a key instead of the church's own clearances.
+  for (const src of Object.keys(HELPER_SOURCES).filter(k => k !== GRANT_SOURCE)) {
+    assert.throws(() => buildHelperGrant({ ...base, source: src }), /must declare source/,
+      'an envelope was built declaring source=' + src + ' — who may hold a key is a PERMISSION now, and an ' +
+      'envelope that cites a rota is the shape this restructure exists to remove');
+  }
   assert.throws(() => buildHelperGrant({ ...base, until: 1000 + MAX_SESSION_SECONDS + 1 }), /may not exceed/);
   assert.throws(() => buildHelperGrant({ ...base, until: 500 }), /closes before it opens/);
   assert.throws(() => buildHelperGrant({ ...base, sessionKeyHex: 'short' }), /32 bytes of hex/);
@@ -209,7 +227,7 @@ test('a grant refuses at BUILD time everything the relay refuses at the door', (
 
 test('one damaged recipient does not deny the session to everyone else — but is REPORTED', () => {
   const flaky = (p, pl) => { if (p === BEN) throw new Error('bad key'); return wrap(p, pl); };
-  const { doc, failed } = buildHelperGrant({ lifetime: 'session', session: 's', source: 'rota', from: 1, until: 2,
+  const { doc, failed } = buildHelperGrant({ lifetime: 'session', session: 's', source: 'permission', from: 1, until: 2,
     helpers: [ADA, BEN], keepers: [], sessionKeyHex: KEY, wrap: flaky });
   assert.ok(doc.keys[ADA], 'one damaged steward code denied the whole session');
   assert.deepEqual(failed, [BEN],
@@ -217,12 +235,16 @@ test('one damaged recipient does not deny the session to everyone else — but i
 });
 
 test('readHelperGrant refuses anything it cannot vouch for, and NEVER returns an unbounded one', () => {
-  const { doc } = buildHelperGrant({ lifetime: 'session', session: 's1', source: 'rota', from: 1000, until: 4000,
+  const { doc } = buildHelperGrant({ lifetime: 'session', session: 's1', source: 'permission', from: 1000, until: 4000,
     helpers: [ADA], keepers: [], sessionKeyHex: KEY, wrap });
   assert.ok(readHelperGrant(JSON.stringify(doc)), 'a well-formed grant was rejected');
   for (const bad of [
     '', 'not json', '[]', 'null', '"a string"',
     JSON.stringify({ ...doc, source: 'invented' }),
+    JSON.stringify({ ...doc, source: 'rota' }),
+    JSON.stringify({ ...doc, source: 'team' }),
+    JSON.stringify({ ...doc, source: 'steward' }),
+    JSON.stringify({ ...doc, source: undefined }),
     JSON.stringify({ ...doc, until: doc.from + MAX_SESSION_SECONDS + 1 }),
     JSON.stringify({ ...doc, until: doc.from - 1 }),
     JSON.stringify({ ...doc, session: '' }),
@@ -233,7 +255,7 @@ test('readHelperGrant refuses anything it cannot vouch for, and NEVER returns an
 });
 
 test('the window is compared, not assumed — the boundary is inclusive at both ends and closed outside them', () => {
-  const g = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 's1', source: 'rota', from: 1000,
+  const g = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 's1', source: 'permission', from: 1000,
     until: 4000, helpers: [ADA], keepers: [CHI], sessionKeyHex: KEY, wrap }).doc));
   assert.equal(grantAdmits(g, ADA, 1000), true, 'the helper is refused at the exact moment their turn begins');
   assert.equal(grantAdmits(g, ADA, 4000), true, 'the helper is refused at the exact moment their turn ends');
@@ -247,7 +269,7 @@ test('the window is compared, not assumed — the boundary is inclusive at both 
 });
 
 test('helperKeyFor hands the session key to its holder and to nobody else', () => {
-  const g = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 's1', source: 'rota', from: 1000,
+  const g = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 's1', source: 'permission', from: 1000,
     until: 4000, helpers: [ADA, BEN], keepers: [], sessionKeyHex: KEY, wrap }).doc));
   assert.equal(helperKeyFor(g, ADA, 2000, unwrapAs(ADA)), KEY, 'a helper cannot get their own session key');
   assert.equal(helperKeyFor(g, ADA, 5000, unwrapAs(ADA)), '',
@@ -262,9 +284,9 @@ test('LAST WEEK\'S KEY DOES NOT OPEN THIS WEEK — the crypto, not the gate', ()
   // survives a broken gate: the session keys are independent, so a helper holding last week's opens nothing
   // this week even if every rule in gateway.mjs were deleted.
   const k1 = '11'.repeat(32), k2 = '22'.repeat(32);
-  const last = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 'svc-last', source: 'rota',
+  const last = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 'svc-last', source: 'permission',
     from: 1000, until: 4000, helpers: [ADA], keepers: [], sessionKeyHex: k1, wrap }).doc));
-  const now_ = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 'svc-now', source: 'rota',
+  const now_ = readHelperGrant(JSON.stringify(buildHelperGrant({ lifetime: 'session', session: 'svc-now', source: 'permission',
     from: 9000, until: 12000, helpers: [BEN], keepers: [], sessionKeyHex: k2, wrap }).doc));
   assert.notEqual(k1, k2, 'two sessions were minted the same key');
   assert.equal(helperKeyFor(last, ADA, 2000, unwrapAs(ADA)), k1);
@@ -328,7 +350,15 @@ test('THE DEFAULT IS THE TIGHTEST OPTION', () => {
 test('the church\'s answer to BOTH questions is read in one place, and unknown values fall to the tightest', () => {
   assert.deepEqual(helperPolicy(null), { source: DEFAULT_HELPER_SOURCE, lifetime: DEFAULT_HELPER_LIFETIME });
   assert.deepEqual(helperPolicy({}), { source: DEFAULT_HELPER_SOURCE, lifetime: DEFAULT_HELPER_LIFETIME });
-  assert.deepEqual(helperPolicy({ source: 'team', lifetime: 'open' }), { source: 'team', lifetime: 'open' });
+  assert.deepEqual(helperPolicy({ source: 'team', lifetime: 'day' }), { source: 'team', lifetime: 'day' });
+  // A CHURCH THAT STORED 'open' BEFORE 2026-09-09 FALLS TO THE TIGHTEST, not to a shape that no longer
+  // exists and not to something looser. The safe direction, and the one this function commits to.
+  assert.equal(helperPolicy({ lifetime: 'open' }).lifetime, DEFAULT_HELPER_LIFETIME,
+    'a stored session lifetime of "open" survived the restructure as something other than the tightest');
+  // AND THE SOURCE IS NARROWED TO A PERMISSION SOURCE: this field decides which list a steward is SHOWN
+  // when choosing who to clear, and "clear whoever is already cleared" is not an answer.
+  assert.equal(helperPolicy({ source: GRANT_SOURCE }).source, DEFAULT_HELPER_SOURCE,
+    'the pinned envelope source was honoured as a suggestion source, which is circular');
   // the direction that matters: garbage must not become "forever"
   assert.equal(helperPolicy({ lifetime: 'forever' }).lifetime, DEFAULT_HELPER_LIFETIME,
     'an unrecognised lifetime resolved to something other than the tightest — the wrong fallback here leaves ' +
@@ -346,12 +376,13 @@ test('every lifetime on offer is a real one a steward could read and choose', ()
     assert.ok(l.max === null || (Number.isInteger(l.max) && l.max > 0 && l.max <= MAX_SESSION_SECONDS),
       'lifetime ' + id + ' has a cap above the ceiling every expiring grant is held to');
   }
-  assert.deepEqual(Object.keys(HELPER_LIFETIMES).sort(), ['day', 'open', 'session'],
-    'the set of shapes a church may choose changed — three were offered because they are the three a church ' +
-    'would name out loud, and a fourth needs its own decision, not a quiet addition');
-  assert.equal(Object.values(HELPER_LIFETIMES).filter(l => l.max == null).length, 1,
-    'more than one lifetime never expires — exactly one shape may be open-ended, and only the one whose entire ' +
-    'point is "until a steward ends it"');
+  assert.deepEqual(Object.keys(HELPER_LIFETIMES).sort(), ['day', 'session'],
+    'the set of shapes a SESSION KEY may take changed. There were three until 2026-09-09; `open` moved to the ' +
+    'permission, because a key with no end is a standing key and these are now issued by machinery rather than ' +
+    'by a steward. A fourth needs its own decision, not a quiet addition.');
+  assert.equal(Object.values(HELPER_LIFETIMES).filter(l => l.max == null).length, 0,
+    'a session key may be open-ended again. That is the one shape this restructure removed on purpose: the ' +
+    'church\'s "until a steward ends it" now lives on a document that carries no key.');
 });
 
 test('EACH lifetime expires when it says — asserted by the refusal after the boundary', () => {
@@ -359,7 +390,7 @@ test('EACH lifetime expires when it says — asserted by the refusal after the b
   const P2 = ADA;
   const mk = (life) => {
     const w = lifetimeWindow(life, svc, {});
-    const { doc } = buildHelperGrant({ lifetime: life, session: 's', source: 'rota', from: w.from,
+    const { doc } = buildHelperGrant({ lifetime: life, session: 's', source: 'permission', from: w.from,
       until: w.until, helpers: [P2], keepers: [], sessionKeyHex: KEY, wrap });
     return { w, g: readHelperGrant(JSON.stringify(doc)) };
   };
@@ -379,25 +410,28 @@ test('EACH lifetime expires when it says — asserted by the refusal after the b
     'a DAY grant did not end at the end of the day');
   assert.equal(new Date(d0.w.until * 1000).getDate(), 13, 'the day grant does not end on the day of the service');
 
-  // OPEN: still valid a year later, because only a steward ends it
-  const o0 = mk('open');
-  assert.equal(o0.w.until, null, 'the open-ended lifetime minted an end date, so it is not open-ended');
-  assert.equal(grantAdmits(o0.g, P2, s0.w.until + 365 * 24 * 3600), true,
-    'a church that chose "until a steward ends it" had its grant expire on its own');
-  assert.equal(grantAdmits(o0.g, P2, o0.w.from - 1), false,
-    'an open-ended grant was live BEFORE it opened — open-ended means no end, not no beginning');
+  // AND THERE IS NO THIRD SHAPE. `open` was one until 2026-09-09; asking for it now produces no window at all,
+  // which is the fail-closed direction — a caller that wanted a permanent key gets nothing, not a default one.
+  assert.equal(lifetimeWindow('open', svc, {}), null,
+    'the open-ended session lifetime is back, or lifetimeWindow silently substituted another shape for it');
+  for (const life of Object.keys(HELPER_LIFETIMES)) {
+    const w = lifetimeWindow(life, svc, {});
+    assert.ok(Number.isInteger(w.until), 'session lifetime ' + life + ' minted a key with no end');
+    assert.ok(w.until - w.from <= MAX_SESSION_SECONDS,
+      'session lifetime ' + life + ' outlives the ceiling every key is held to');
+  }
 });
 
 test('NO LIFETIME CAN BE MADE INTO ANOTHER ONE', () => {
   // The protection that survives a modified client: the cap travels with the lifetime the grant declares, in
   // the enforced record. A `session` grant cannot be handed a week-long window by any caller, and an absent
   // end is refused rather than read as "forever".
-  const base2 = { session: 's', source: 'rota', from: 1000, helpers: [ADA], keepers: [], sessionKeyHex: KEY, wrap };
+  const base2 = { session: 's', source: 'permission', from: 1000, helpers: [ADA], keepers: [], sessionKeyHex: KEY, wrap };
   assert.throws(() => buildHelperGrant({ ...base2, lifetime: 'session', until: 1000 + HELPER_LIFETIMES.session.max + 1 }), /may not exceed/);
   assert.throws(() => buildHelperGrant({ ...base2, lifetime: 'day', until: 1000 + HELPER_LIFETIMES.day.max + 1 }), /may not exceed/);
   assert.throws(() => buildHelperGrant({ ...base2, lifetime: 'session', until: null }), /must carry an end/);
   assert.throws(() => buildHelperGrant({ ...base2, lifetime: 'day', until: undefined }), /must carry an end/);
-  assert.throws(() => buildHelperGrant({ ...base2, lifetime: 'open', until: 5000 }), /must not carry an end/);
+  assert.throws(() => buildHelperGrant({ ...base2, lifetime: 'open', until: 5000 }), /undeclared lifetime/);
   assert.throws(() => buildHelperGrant({ ...base2, lifetime: 'forever', until: 5000 }), /undeclared lifetime/);
   assert.throws(() => buildHelperGrant({ ...base2, until: 5000 }), /undeclared lifetime/,
     'a grant with NO lifetime was built — a caller that has not asked the church must not get a default here, ' +
@@ -423,15 +457,16 @@ test('NO CONFIGURATION CHANGES WHAT THE KEY OPENS — the invariant, across ever
   // checkin-helper-capability.test.mjs, over every configuration.
   const svc = { date: '2026-09-13', time: '10:30' };
   const shapes = [];
-  for (const source of Object.keys(HELPER_SOURCES)) {
-    for (const life of Object.keys(HELPER_LIFETIMES)) {
-      const w = lifetimeWindow(life, svc, {});
-      const { doc } = buildHelperGrant({ lifetime: life, session: 's', source, from: w.from, until: w.until,
-        helpers: [ADA], keepers: [CHI], sessionKeyHex: KEY, wrap });
-      shapes.push({ source, life, doc });
-    }
+  // THE ENVELOPE'S SOURCE IS PINNED SINCE 2026-09-09, so the matrix is every LIFETIME rather than every
+  // source × lifetime. The sources have not gone away — they moved to the permission, and the matrix over them
+  // is in the permission section below.
+  for (const life of Object.keys(HELPER_LIFETIMES)) {
+    const w = lifetimeWindow(life, svc, {});
+    const { doc } = buildHelperGrant({ lifetime: life, session: 's', source: GRANT_SOURCE, from: w.from, until: w.until,
+      helpers: [ADA], keepers: [CHI], sessionKeyHex: KEY, wrap });
+    shapes.push({ source: GRANT_SOURCE, life, doc });
   }
-  assert.equal(shapes.length, Object.keys(HELPER_SOURCES).length * Object.keys(HELPER_LIFETIMES).length);
+  assert.equal(shapes.length, Object.keys(HELPER_LIFETIMES).length);
   const fields = Object.keys(shapes[0].doc).sort().join(',');
   for (const { source, life, doc } of shapes) {
     assert.equal(Object.keys(doc).sort().join(','), fields,
@@ -440,8 +475,336 @@ test('NO CONFIGURATION CHANGES WHAT THE KEY OPENS — the invariant, across ever
     assert.deepEqual(doc.pubs, [ADA], `source=${source} lifetime=${life} changed WHO the grant admits`);
     assert.deepEqual(Object.keys(doc.keys).sort(), [ADA, CHI].sort(),
       `source=${source} lifetime=${life} changed who can OPEN what a helper writes`);
-    assert.doesNotMatch(JSON.stringify(doc), /scope|capab|permission|allow|finance|care|members|minors|guardian/i,
+    // `source` is EXCLUDED from this scan and the pin is asserted separately, because its only legal value is
+    // now the word "permission" and the scan reads for exactly that word. Everything else in the document is
+    // still held to it: a grant says WHO and WHEN and must never acquire a WHAT.
+    const { source: _src, ...rest } = doc;
+    assert.equal(_src, GRANT_SOURCE, `lifetime=${life} produced an envelope whose source is not the pinned one`);
+    assert.doesNotMatch(JSON.stringify(rest), /scope|capab|permission|allow|finance|care|members|minors|guardian/i,
       `source=${source} lifetime=${life} produced a grant carrying something that reads like a permission — ` +
       'this document says WHO and WHEN, and must never acquire a WHAT');
   }
+});
+
+// ══ THE PERMISSION: A PERSON IS CLEARED ═══════════════════════════════════════════════════════════════════
+// reference/FINDING-CHECKIN-GRANTS-SHOULD-BE-PER-PERSON-2026-09-09.md, the DECIDED block. Churches clear
+// safeguarding volunteers ANNUALLY AND CHURCH-WIDE, so the document that says a person is cleared is scoped to
+// the person and lasts until the church ends it. The key stays per session.
+//
+// NEGATIVE TESTS FIRST, throughout. In August a permission test passed while granting Finance handed over the
+// children's register, and the missing test was the refusal.
+
+test('a permission is scoped to a PERSON and carries NO KEY — the design the owner chose over the simpler one', () => {
+  const doc = buildCheckinPermission({ person: ADA, source: 'steward', lifetime: 'open', from: 1000, until: null });
+  assert.deepEqual(Object.keys(doc).sort(), ['from', 'lifetime', 'person', 'source', 'until'],
+    'the permission grew a field. It says WHO is cleared and FOR HOW LONG, and nothing else.');
+  assert.equal(doc.person, ADA, 'the permission does not name the person it clears');
+  // THE ONE THAT MATTERS. The rejected design was a person-scoped document wrapping a longer-lived register
+  // key: simpler, and a lost phone would then expose the whole year's register rather than one Sunday. The
+  // owner refused that trade knowingly. If a `keys` object ever appears here, that property has been spent.
+  assert.equal(doc.keys, undefined,
+    'a permission carries key material. That is the collapse back to "a person-scoped grant wrapping a ' +
+    'longer-lived register key" — the design the owner refused because a lost phone would then expose the ' +
+    'whole year\'s register instead of one Sunday.');
+  assert.doesNotMatch(JSON.stringify(doc), /[0-9a-f]{64}.*[0-9a-f]{64}/,
+    'the permission carries a second 64-hex value beside the person — the only hex it may hold is a pubkey');
+  assert.doesNotMatch(JSON.stringify(doc), /child|name|room|code|pickup|session/i,
+    'the permission carries something about a child or a session — it is about a person and a period');
+});
+
+test('a permission REFUSES at build time everything the relay refuses at the door', () => {
+  const base = { person: ADA, source: 'steward', lifetime: 'dated', from: 1000, until: 1000 + 300 * 86400 };
+  assert.throws(() => buildCheckinPermission({ ...base, person: '' }), /64-hex/);
+  assert.throws(() => buildCheckinPermission({ ...base, person: 'nope' }), /64-hex/);
+  assert.throws(() => buildCheckinPermission({ ...base, source: 'invented' }), /undeclared permission source/);
+  // A PERMISSION MAY NOT CITE ITSELF. 'permission' is a declared source — it is the one an ENVELOPE must
+  // declare — and a clearance whose provenance is "the clearances" is a loop in a safeguarding record.
+  assert.throws(() => buildCheckinPermission({ ...base, source: GRANT_SOURCE }), /undeclared permission source/,
+    'a permission cited the permissions as its own provenance');
+  assert.throws(() => buildCheckinPermission({ ...base, lifetime: 'forever' }), /undeclared lifetime/);
+  assert.throws(() => buildCheckinPermission({ ...base, lifetime: 'session' }), /undeclared lifetime/,
+    'a SESSION KEY lifetime was accepted for a clearance — the two tables answer different questions');
+  assert.throws(() => buildCheckinPermission({ ...base, until: null }), /must carry an end/);
+  assert.throws(() => buildCheckinPermission({ ...base, until: 500 }), /closes before it opens/);
+  assert.throws(() => buildCheckinPermission({ ...base, until: 1000 + MAX_PERMISSION_SECONDS + 1 }), /may not exceed/);
+  assert.throws(() => buildCheckinPermission({ ...base, lifetime: 'open', until: 5000 }), /must not carry an end/);
+  assert.throws(() => buildCheckinPermission({ ...base, lifetime: 'day', until: 1000 + 27 * 3600 }), /may not exceed/);
+});
+
+test('readCheckinPermission NEVER returns an unbounded clearance, and null is not "no limits"', () => {
+  const doc = buildCheckinPermission({ person: ADA, source: 'steward', lifetime: 'day', from: 1000, until: 1000 + 3600 });
+  assert.ok(readCheckinPermission(JSON.stringify(doc)), 'a well-formed permission was rejected');
+  for (const bad of [
+    '', 'not json', '[]', 'null', '"a string"', '{}',
+    JSON.stringify({ ...doc, person: 'nope' }),
+    JSON.stringify({ ...doc, person: undefined }),
+    JSON.stringify({ ...doc, source: 'invented' }),
+    JSON.stringify({ ...doc, source: GRANT_SOURCE }),
+    JSON.stringify({ ...doc, lifetime: undefined }),
+    JSON.stringify({ ...doc, lifetime: 'session' }),
+    JSON.stringify({ ...doc, until: null }),
+    JSON.stringify({ ...doc, until: doc.from - 1 }),
+    JSON.stringify({ ...doc, until: doc.from + MAX_PERMISSION_SECONDS + 1 }),
+    JSON.stringify({ ...doc, from: 'soon' }),
+    JSON.stringify({ ...doc, keys: { [ADA]: 'a-wrapped-register-key' }, until: null }),
+  ]) {
+    assert.equal(readCheckinPermission(bad), null,
+      'a permission this parser cannot vouch for came back as a permission: ' + bad.slice(0, 90));
+  }
+  // AND A LIFETIME WITH NO END IS ONLY LEGAL FOR THE ONE WHOSE POINT THAT IS
+  const openDoc = buildCheckinPermission({ person: ADA, source: 'steward', lifetime: 'open', from: 1000, until: null });
+  assert.equal(readCheckinPermission(JSON.stringify(openDoc)).until, null,
+    'the church\'s own "until a steward ends it" was refused by the parser');
+});
+
+test('a permission that has not OPENED yet admits NOBODY, and one that has lapsed admits nobody either', () => {
+  // Granting a January clearance in December is an ordinary thing for a church to do, and must be safe.
+  const pm = readCheckinPermission(JSON.stringify(buildCheckinPermission({
+    person: ADA, source: 'steward', lifetime: 'dated', from: 5000, until: 9000 })));
+  assert.equal(permissionAdmits(pm, 5000), true, 'the clearance is refused at the exact moment it begins');
+  assert.equal(permissionAdmits(pm, 9000), true, 'the clearance is refused at the exact moment it ends');
+  assert.equal(permissionAdmits(pm, 4999), false,
+    'a clearance granted for NEXT month cleared somebody THIS month — minting ahead is only safe if it is enforced');
+  assert.equal(permissionAdmits(pm, 9001), false, 'a clearance kept working after the date the church set');
+  assert.equal(permissionAdmits(pm, NaN), false);
+  assert.equal(permissionAdmits(null, 6000), false, 'no permission read as no limits');
+  assert.equal(permissionAdmits({ ...pm, person: 'nope' }, 6000), false,
+    'a permission naming no real pubkey cleared somebody');
+  // and permittedHelpers is the same answer, since it is the ONE question the issuer asks
+  assert.deepEqual(permittedHelpers([pm], 6000), [ADA]);
+  assert.deepEqual(permittedHelpers([pm], 4999), [], 'the issuer would have wrapped a key to a not-yet-cleared person');
+  assert.deepEqual(permittedHelpers([pm], 9001), [], 'the issuer would have wrapped a key to a lapsed clearance');
+  assert.deepEqual(permittedHelpers([], 6000), []);
+  assert.deepEqual(permittedHelpers(null, 6000), [], 'no permissions at all resolved to somebody');
+  assert.deepEqual(permittedHelpers([null, {}, { person: 'nope', from: 1, until: null }], 6000), [],
+    'malformed permissions cleared somebody — an unknown shape must clear nobody, never everybody');
+});
+
+test('the window a church means: "just that day", "until this date", "until we say otherwise"', () => {
+  // LOCAL TIME, because a church saying "cleared to the 31st of December" means their own 31st of December.
+  const d = permissionWindow('day', { date: '2026-09-13' });
+  assert.equal(new Date(d.from * 1000).getDate(), 13, 'a one-day clearance does not start on the day named');
+  assert.equal(new Date(d.until * 1000).getDate(), 13, 'a one-day clearance does not end on the day named');
+  assert.ok(d.until - d.from <= PERMISSION_LIFETIMES.day.max);
+  assert.equal(permissionWindow('day', {}), null, 'a day clearance with no date produced a window anyway');
+  assert.equal(permissionWindow('day', { date: 'sometime' }), null);
+
+  const t = 1788000000;
+  const y = permissionWindow('dated', { until: '2027-01-31', from: t });
+  assert.equal(y.from, t);
+  assert.equal(new Date(y.until * 1000).getMonth(), 0, 'a dated clearance does not end in the month named');
+  assert.equal(permissionWindow('dated', { until: '2099-01-31', from: t }), null,
+    'a clearance reaching past the cap was silently SHORTENED instead of refused — a church that typed 2099 ' +
+    'must see that it was not accepted, not quietly get 2027');
+  assert.equal(permissionWindow('dated', { until: '2020-01-31', from: t }), null,
+    'a clearance ending before it began was accepted');
+  assert.equal(permissionWindow('dated', {}), null);
+
+  const o = permissionWindow('open', { from: t });
+  assert.equal(o.until, null, 'the open-ended clearance minted an end date, so it is not open-ended');
+  assert.equal(o.from, t);
+  assert.equal(permissionWindow('forever', { from: t }), null, 'an unknown lifetime produced a window');
+  assert.equal(permissionWindow(null, { from: t }), null);
+});
+
+test('THE PERMISSION DEFAULT IS THE TIGHTEST, and unknown values fall to it rather than to the status quo', () => {
+  assert.equal(DEFAULT_PERMISSION_LIFETIME, 'day',
+    'the default clearance is no longer the tightest shape on offer. A church that never opens the screen must ' +
+    'get the safest behaviour, not the most convenient one.');
+  assert.equal(PERMISSION_LIFETIMES[DEFAULT_PERMISSION_LIFETIME].max,
+    Math.min(...Object.values(PERMISSION_LIFETIMES).filter(l => l.max != null).map(l => l.max)),
+    'the default is not the shortest capped lifetime on offer');
+  assert.deepEqual(permissionPolicy(null), { source: DEFAULT_HELPER_SOURCE, lifetime: DEFAULT_PERMISSION_LIFETIME });
+  assert.deepEqual(permissionPolicy({}), { source: DEFAULT_HELPER_SOURCE, lifetime: DEFAULT_PERMISSION_LIFETIME });
+  assert.equal(permissionPolicy({ lifetime: 'forever' }).lifetime, DEFAULT_PERMISSION_LIFETIME,
+    'an unrecognised clearance length resolved to something other than the tightest');
+  assert.equal(permissionPolicy({ lifetime: '__proto__' }).lifetime, DEFAULT_PERMISSION_LIFETIME);
+  assert.equal(permissionPolicy({ lifetime: 'session' }).lifetime, DEFAULT_PERMISSION_LIFETIME,
+    'a session-key lifetime was honoured as a clearance length');
+  assert.equal(permissionPolicy({ source: GRANT_SOURCE }).source, DEFAULT_HELPER_SOURCE,
+    'a permission may cite the permissions as its own provenance');
+  assert.deepEqual(permissionPolicy({ source: 'team', lifetime: 'open' }), { source: 'team', lifetime: 'open' });
+  assert.equal(isDeclaredPermissionLifetime('__proto__'), false);
+});
+
+test('every clearance shape is a real one a steward could read and choose, and exactly one never expires', () => {
+  for (const [id, l] of Object.entries(PERMISSION_LIFETIMES)) {
+    assert.equal(l.id, id, 'clearance ' + id + ' disagrees with its own key');
+    assert.ok(l.label && l.label.length > 8, 'clearance ' + id + ' has no label a steward could read');
+    assert.ok(l.describe && /\./.test(l.describe), 'clearance ' + id + ' does not describe its consequence');
+    assert.ok(l.max === null || (Number.isInteger(l.max) && l.max > 0 && l.max <= MAX_PERMISSION_SECONDS),
+      'clearance ' + id + ' has a cap above the ceiling every expiring clearance is held to');
+  }
+  assert.deepEqual(Object.keys(PERMISSION_LIFETIMES).sort(), ['dated', 'day', 'open'],
+    'the set of clearance shapes changed — three were offered because they are the three a safeguarding lead ' +
+    'would say out loud, and a fourth needs its own decision');
+  assert.equal(Object.values(PERMISSION_LIFETIMES).filter(l => l.max == null).length, 1,
+    'more than one clearance shape never expires, or none does. Exactly one may be open-ended, and only the ' +
+    'one whose entire point is "until a steward ends it".');
+});
+
+test('EVERY PROVENANCE IS DECLARED, and the envelope\'s pinned one is not one of them', () => {
+  // The swap point the owner asked for: "we may change that to be more specifically a safeguarding team after
+  // the pilot". Each of these is a real implementation with the same signature, which is the only proof the
+  // abstraction was not shaped around its first caller.
+  for (const src of Object.keys(HELPER_SOURCES)) {
+    assert.equal(typeof HELPER_SOURCES[src].resolve, 'function', 'source ' + src + ' is a label, not an answer');
+    assert.equal(isDeclaredSource(src), true);
+  }
+  assert.deepEqual(Object.keys(HELPER_SOURCES).filter(isPermissionSource).sort(), ['rota', 'steward', 'team'],
+    'the set of things that may say a person is cleared changed');
+  assert.equal(isPermissionSource(GRANT_SOURCE), false,
+    'the envelope\'s pinned source is also accepted as a clearance provenance, which is circular');
+  assert.equal(isPermissionSource('invented'), false);
+  assert.equal(isPermissionSource('__proto__'), false);
+  // NO CLEARANCE SHAPE CHANGES WHAT A KEY OPENS. The matrix that used to run over sources × session lifetimes
+  // runs here over sources × clearance lifetimes, and the document must not vary beyond its own five fields.
+  let n = 0;
+  const fields = ['from', 'lifetime', 'person', 'source', 'until'].join(',');
+  for (const src of Object.keys(HELPER_SOURCES).filter(isPermissionSource)) {
+    for (const life of Object.keys(PERMISSION_LIFETIMES)) {
+      const w = permissionWindow(life, { date: '2026-09-13', until: '2027-01-31', from: 1788000000, at: 1788000000 });
+      const doc = buildCheckinPermission({ person: ADA, source: src, lifetime: life, from: w.from, until: w.until });
+      assert.equal(Object.keys(doc).sort().join(','), fields,
+        `the clearance shape differs for source=${src} lifetime=${life} — a configuration is changing the document`);
+      assert.equal(doc.keys, undefined, `source=${src} lifetime=${life} put key material in a clearance`);
+      assert.equal(doc.person, ADA, `source=${src} lifetime=${life} changed WHO is cleared`);
+      n++;
+    }
+  }
+  assert.equal(n, 3 * 3, 're-anchor: not every clearance configuration was exercised');
+});
+
+test('A HELPER CANNOT REACH BACK: the fetch lead is a bounded number, not a console\'s judgement', () => {
+  // The property the owner paid machinery for. Session keys are now issued automatically and ahead of time, so
+  // without a lead limit a helper cleared for the YEAR could collect every envelope a console had run ahead and
+  // minted — the whole-year exposure he refused, arriving through the back door of the issuer.
+  //
+  // The relay enforces it (checkin-helper-capability.test.mjs drives that against a live gateway). What is
+  // asserted here is that the number exists, is short, and is shared rather than typed into two files.
+  assert.ok(Number.isInteger(KEY_LEAD_SECONDS) && KEY_LEAD_SECONDS > 0, 'the fetch lead is not a whole number of seconds');
+  assert.ok(KEY_LEAD_SECONDS <= 30 * 86400,
+    'the lead on fetching a session key is over a month. A cleared phone can now hoover up that much of the ' +
+    'register\'s keys in one REQ, which is most of the way back to the whole-year exposure the owner refused.');
+  assert.ok(KEY_LEAD_SECONDS >= 86400,
+    'the lead is under a day, so a church whose console opens weekly leaves its helpers with no key at all');
+  assert.ok(KEY_LEAD_SECONDS > MAX_SESSION_SECONDS,
+    'the lead is shorter than a session key\'s own life, so no key could ever be fetched before it opened');
+});
+
+
+// ══ THE OTHER END OF THE KEY: READING A RECORD'S HELPER COPY ══════════════════════════════════════════════
+// Piece 1 of reference/SCOPE-CHECKIN-SEALING-2026-09-10.md. `helperKeyFor` above hands back a session key;
+// `readCheckinHelperCopy` is what that key opens. The rules live in this module so the console, the relay and
+// whichever client slice 3 builds cannot disagree about what a malformed record means.
+//
+// ⚠ `unseal` IS A PARAMETER, AND THAT IS WHY THESE TESTS PASS ONE THAT DOES NOT THROW. Every negative here
+// was first written against real NIP-44 in checkin-key-separation.test.mjs, and SABOTAGE PROVED THEM
+// VACUOUS: deleting the key guard from readCheckinHelperCopy changed nothing, because nip44.decrypt happens
+// to throw on a zero-length key and the catch turned that into the same null. The guard was untested and the
+// assertion was passing for the wrong reason. A permissive `unseal` — which any future caller might supply,
+// and which is the whole point of the parameter — is what actually exercises the refusals.
+const CK_YES = () => JSON.stringify({ id: 'ci1', childName: 'Esther Ncube', code: '4417' });   // opens anything
+const CK_KEY = 'a'.repeat(64);
+const CK_TAGS = (ct) => [['d', 'trinityone/checkin:ci1'], ['t', 'trinityone'], ['enc', '2'], ['session', 'svc-am'], ['ck', ct]];
+
+test('THE HELPER COPY OPENS WITH A GOOD KEY, and carries the body the door needs', () => {
+  const got = readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, CK_YES);
+  assert.ok(got, 'a well-formed record with a valid key opened nothing');
+  assert.equal(got.code, '4417', 'the copy opened without the pickup code');
+  assert.equal(got.id, 'ci1');
+});
+
+test('A KEY THAT IS NOT 32 BYTES OF HEX IS REFUSED BEFORE ANY CIPHER SEES IT', () => {
+  // helperKeyFor returns '' for "my turn is not on" and "I am not a helper" — both ordinary answers — so ''
+  // reaches this function in normal operation and must never be handed to a cipher as if it were a key.
+  // Every case below uses an `unseal` that WOULD hand back a readable body, so only the guard can refuse it.
+  for (const bad of ['', null, undefined, 'not-a-key', 'A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), 0, {}]) {
+    assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), bad, CK_YES), null,
+      'a check-in record was opened with ' + JSON.stringify(bad) + ' as the key. helperKeyFor hands back \'\' ' +
+      'as an ORDINARY answer, so this is reachable without anything going wrong — and an unseal that returns ' +
+      'garbage instead of throwing would turn it into a readable safeguarding record');
+  }
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY.toUpperCase(), CK_YES), null,
+    'an upper-case key was accepted. Session keys are lower-case hex everywhere they are produced, and ' +
+    'accepting both spellings is how two callers come to disagree about whether a key matches');
+});
+
+test('NO ck TAG IS AN ORDINARY RECORD, NOT A FAULT — and never an empty register', () => {
+  // Every record written before this feature has none, and so does every record for a session the console
+  // held no key for. A reader that treated this as an error would show a leader at the door an empty room.
+  const noCk = [['d', 'trinityone/checkin:ci1'], ['enc', '1'], ['session', 'svc-am']];
+  assert.equal(readCheckinHelperCopy(noCk, CK_KEY, CK_YES), null, 'a record with no helper copy did not return null');
+  assert.equal(readCheckinHelperCopy([], CK_KEY, CK_YES), null, 'an event with no tags at all');
+  assert.equal(readCheckinHelperCopy(null, CK_KEY, CK_YES), null, 'a missing tag list threw or returned something');
+  assert.equal(readCheckinHelperCopy(CK_TAGS(''), CK_KEY, CK_YES), null, 'an empty ck value was treated as a ciphertext');
+});
+
+test('THE FIRST ck ONLY — an author may not offer alternatives', () => {
+  // The event is signed, so only its author can add a tag; but an author can add several. Trying each in
+  // turn would let a writer present one body to a reader that tries hardest and another to a reader that
+  // stops early. Taking the first is the rule the d-tag and session readers already apply.
+  const seen = [];
+  const two = [...CK_TAGS('first'), ['ck', 'second']];
+  readCheckinHelperCopy(two, CK_KEY, (ct) => { seen.push(ct); return CK_YES(); });
+  assert.deepEqual(seen, ['first'],
+    'the reader tried more than the first ck tag, so a record can carry two bodies and which one a helper ' +
+    'sees depends on which reader they are running');
+});
+
+test('A BODY THAT IS NOT AN OBJECT IS REFUSED — a string would spread into a row as characters', () => {
+  // encSubscribe does `byId.set(id, { id, ...obj, ts })`. Spreading a string produces {0:'{',1:'"'…} and a
+  // row that renders as nothing recognisable; spreading an array is no better.
+  for (const body of ['"just a string"', '[1,2,3]', 'null', '42', 'true']) {
+    assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, () => body), null,
+      'a ck copy containing ' + body + ' was accepted as a record body');
+  }
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, () => 'not json at all'), null, 'unparseable JSON');
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, () => { throw new Error('wrong key'); }), null,
+    'an unseal that threw was not caught, so one bad record takes the whole register down with it');
+  assert.equal(readCheckinHelperCopy(CK_TAGS('sealed'), CK_KEY, 'not a function'), null, 'a non-function unseal');
+});
+
+test('THE SESSION IS READ FROM THE CLEARTEXT TAG, because the answer is needed before anything can open', () => {
+  // A reader must know WHICH session key to reach for, and the sealed body cannot tell it — the body is
+  // inside the ciphertext it is trying to open. `_encCleartextTags` in the console emits this tag for exactly
+  // that purpose, and the relay's own read gate keys on the same one.
+  assert.equal(checkinSessionOf(CK_TAGS('x')), 'svc-am');
+  assert.equal(checkinSessionOf([['d', 'trinityone/checkin:ci1']]), '', 'a record with no session tag');
+  assert.equal(checkinSessionOf([['session', '  svc-am  ']]), 'svc-am', 'the value is not trimmed');
+  assert.equal(checkinSessionOf(null), '', 'a missing tag list threw');
+  assert.equal(checkinSessionOf([['session']]), '', 'a session tag with no value');
+});
+
+test('THE ROOM CODE is a deterministic four-digit digest of the session id, and NOTHING SECRET goes into it', () => {
+  // Slice A. The code names a session; it does not admit anyone (the relay gates do), so it is derived from
+  // the session id ALONE — the property the whole printed-sheet decision rests on.
+  const a = roomCode('svc-am-2026-09-13');
+  assert.match(a, /^\d{4}$/, 'the room code is not four digits: ' + JSON.stringify(a));
+  assert.equal(roomCode('svc-am-2026-09-13'), a, 'the same session id gave two different codes — a printed sheet and the app would disagree');
+  assert.notEqual(roomCode('svc-pm-2026-09-13'), '', 'a real session id produced no code');
+  // NO KEY, NO CLOCK, NO RANDOMNESS — the same input across processes must give the same digit. FNV-1a is a
+  // pure function of the string; this pins that nobody quietly reaches for Math.random or Date.
+  assert.equal(roomCode('svc-am-2026-09-13'), roomCode('svc-am-2026-09-13'.slice(0) + ''), 'derivation is not pure over the id');
+  // A MISSING ID HAS NO CODE — a caller must show nothing, never "0000".
+  assert.equal(roomCode(''), '', 'an empty session id got a code');
+  assert.equal(roomCode(null), '', 'a null session id got a code');
+  assert.equal(roomCode('  '), '', 'a whitespace-only session id got a code');
+  assert.equal(roomCode('  svc-am  '), roomCode('svc-am'), 'the id is not trimmed, so a stray space names a different room');
+});
+
+test('roomCodesCollide flags only the LIVE sessions that share four digits, so the wrong room is never confirmed back', () => {
+  // Over the handful of sessions a church runs at once, not globally. The ordinary answer is an empty set.
+  assert.equal(roomCodesCollide(['svc-am', 'svc-pm', 'svc-creche']).size, 0,
+    'three distinct sessions were reported as colliding');
+  // Construct a genuine collision: two ids that FNV-1a maps to the same four digits. Search a small space so
+  // the test does not assert a collision it only hopes exists.
+  let a = 'svc-a', b = '';
+  for (let i = 0; i < 100000 && !b; i++) { const cand = 'svc-' + i; if (cand !== a && roomCode(cand) === roomCode(a)) b = cand; }
+  assert.ok(b, 'fixture: found no colliding session id in the search space — widen it');
+  const clash = roomCodesCollide([a, b, 'svc-lonely']);
+  assert.ok(clash.has(a) && clash.has(b), 'a real four-digit collision was not flagged');
+  assert.equal(clash.has('svc-lonely'), false, 'a session that collides with nothing was flagged as if it did');
+  assert.equal(roomCodesCollide([]).size, 0, 'an empty session list threw or reported a collision');
+  assert.equal(roomCodesCollide(['', '  ', 'x']).size, 0, 'blank ids were counted as colliding');
 });

@@ -46,14 +46,42 @@ function prefixConstants() {
 // them. The previous version required want -> onevent -> guard on consecutive lines; adding one benign property
 // (`emit,`) made it silently match ZERO registrations while every assertion still passed, because the count was
 // only floored at >= 5. A structural test that can quietly stop reading its own subject is worse than none.
+// A REGISTRATION'S OWN BLOCK, not a fixed 1500 characters. The window was 1500 and that is shorter than some
+// handlers' onevent: a handler whose guards sat past the cut read as UNGUARDED, which is the same silent
+// blindness the `emit,` note above records. It now runs to the next registration (or 12000 characters, so a
+// runaway parse cannot swallow the file), which is strictly more of each handler than before.
+function blockAt(i) {
+  const next = SRC.indexOf('_onChurchDocs(', i + 1);
+  const end = next === -1 ? SRC.length : next;
+  return SRC.slice(i, Math.min(end, i + 12000));
+}
 function registrations() {
   const out = [];
   for (const m of SRC.matchAll(/_onChurchDocs\(\w+, \{/g)) {
-    const block = SRC.slice(m.index, m.index + 1500);
+    const block = blockAt(m.index);
     const w = block.match(/want: \[([^\]]+)\]/);
     if (!w) continue;
+    const want = w[1].trim();
     const g = block.match(/onevent\(e, d\) \{[\s\S]*?if \(!?d(?:\.startsWith\((\w+)\)|\s*!==\s*(\w+))\) return;/);
-    out.push({ want: w[1].trim(), guard: g ? (g[1] || g[2] || '').trim() : null, exact: g ? !g[1] : null });
+    // ── AND THE MULTI-PREFIX DISPATCH SHAPE, added 2026-09-10 ─────────────────────────────────────────────
+    // subscribeCheckinRegister reads THREE document types on one registration — a clearance, a session-key
+    // envelope and the records themselves — because the three decide one answer together and splitting them
+    // would put shared state behind three teardowns. It cannot have a single negative guard, so it dispatches
+    // positively: `if (d.startsWith(X)) { … return; }` once per declared want, with no fall-through.
+    //
+    // THIS IS A WIDENING OF WHAT THE TEST CAN READ, NOT OF WHAT IT ALLOWS. The invariant is unchanged — the
+    // slice a handler replays must be exactly the slice its own onevent accepts — and for this shape it is
+    // checked as a SET EQUALITY over every declared prefix, which is a stricter claim than the single-guard
+    // case (that one only compares the first guard it finds). A handler of this shape that declared a fourth
+    // want, or guarded on a prefix it never declared, fails here.
+    const wants = want.split(',').map(x => x.trim()).filter(Boolean);
+    if (wants.length > 1) {
+      const onev = block.slice(block.indexOf('onevent(e, d) {'));
+      const dispatched = [...onev.matchAll(/if \(d\.startsWith\((\w+)\)\) \{/g)].map(x => x[1]);
+      out.push({ want, wants, dispatched, guard: null, exact: null, multi: true });
+      continue;
+    }
+    out.push({ want, wants, guard: g ? (g[1] || g[2] || '').trim() : null, exact: g ? !g[1] : null, multi: false });
   }
   return out;
 }
@@ -74,8 +102,17 @@ test('every handler replays the SAME slice its own guard accepts', () => {
   assert.equal(regs.length, declared,
     `parsed ${regs.length} registrations but ${declared} declare want — the parser stopped seeing some, so they are unguarded`);
   assert.ok(declared >= 5, `expected the indexed handlers, found ${declared}`);
-  for (const r of regs) assert.ok(r.guard, `a handler declares want: [${r.want}] but no d-prefix guard was found in its onevent`);
-  for (const r of regs) {
+  for (const r of regs) assert.ok(r.multi || r.guard, `a handler declares want: [${r.want}] but no d-prefix guard was found in its onevent`);
+  // THE MULTI-PREFIX HANDLERS: the set of prefixes dispatched on must EQUAL the set declared, exactly. A
+  // declared want with no branch replays a slice nothing reads (the feature silently loses a document type);
+  // a branch with no declared want reads a slice that is never replayed, so it works live and is blank on
+  // every cold start — which is the commoner path and the harder failure to see.
+  for (const r of regs.filter(x => x.multi)) {
+    assert.deepEqual([...r.dispatched].sort(), [...r.wants].sort(),
+      `handler declares want: [${r.want}] but its onevent dispatches on [${r.dispatched.join(', ')}] — one of ` +
+      `those document types is either replayed and never read, or read and never replayed`);
+  }
+  for (const r of regs.filter(x => !x.multi)) {
     assert.equal(r.want, r.guard,
       `handler declares want: [${r.want}] but its onevent guards on ${r.guard} — it will replay the wrong slice and render blank`);
     // For the named constants, the declared prefix and a REAL d-tag built from it must land in the same bucket.
@@ -93,6 +130,26 @@ test('every handler replays the SAME slice its own guard accepts', () => {
       assert.ok(val.endsWith(':'), `${r.want} is guarded with startsWith but is not a prefix ("${val}")`);
       assert.equal(dkey(val), dkey(val + 'someid1234'),
         `${r.want} ("${val}") buckets differently from an actual document id — its slice would come back empty`);
+    }
+  }
+});
+
+test('every prefix a MULTI-PREFIX handler declares buckets like a real document id', () => {
+  // The other half of the check the single-guard loop already does, and the half that matters most for a new
+  // document type: if a declared prefix bucketed differently from an actual d-tag built from it, that slice
+  // would come back EMPTY on every replay and the feature would be blank on every cold start.
+  const dkey = realDkeyOf();
+  const consts = prefixConstants();
+  const multi = registrations().filter(r => r.multi);
+  assert.ok(multi.length >= 1, 're-anchor: no handler reads more than one document type any more');
+  for (const r of multi) {
+    for (const name of r.wants) {
+      const val = consts.get(name);
+      assert.ok(val, `${name} is declared as a want but is not a 'trinityone/…' prefix constant in this file`);
+      assert.notEqual(dkey(val), '', `${name} has no doc type — it would fall into the catch-all bucket`);
+      assert.ok(val.endsWith(':'), `${name} is dispatched with startsWith but is not a prefix ("${val}")`);
+      assert.equal(dkey(val), dkey(val + 'someid1234'),
+        `${name} ("${val}") buckets differently from an actual document id — its slice would come back empty`);
     }
   }
 });

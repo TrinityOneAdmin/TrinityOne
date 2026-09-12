@@ -1163,6 +1163,100 @@ function App() {
     if (F.subscribeChurchGroups) subs.push(F.subscribeChurchGroups(np, (gs) => { const g = gs || []; setChurchGroups(g); setChurchTeams(g.filter(x => x && x.kind === 'team')); lsSet('trinityone.serv.groups.' + np, g); }));
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, churches, connTick]);
+  // ── CHILDREN'S CHECK-IN: THE REGISTER, FOR SOMEBODY CLEARED TO WORK THE DOOR ────────────────────────────
+  // Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, read half. Feeds the Kids tab in
+  // ServingScreen; see Fellowship.subscribeCheckinRegister for the whole chain and what each field means.
+  //
+  // NOT CACHED IN localStorage, unlike its neighbours above, and that is the one deliberate difference. Those
+  // paint from cache so a serving card does not flash blank. THIS one must not: a stale register is a leader
+  // reading names and pickup codes for a room that has moved on, and the four states this screen exists to
+  // tell apart ("no key yet" / "cannot open" / "another session" / a real row) are all about what is true on
+  // this phone RIGHT NOW. The docs hub already persists the ciphertext, so a cold start is not a blank
+  // screen — it is the same reader over the same corpus, which is the honest kind of fast.
+  //
+  // `defaults` MATTERS: cleared:false with no keys is what makes the tab absent, so a church switch or a
+  // signed-out phone must land back on it rather than keep the last church's answer.
+  const CK_NONE = { cleared: false, lapsed: false, notYet: false, withdrawn: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
+  // THE PARENT'S HALF, at rest. `settled:false` so the card can tell "nothing has arrived yet" from "nothing
+  // is there", exactly as CK_NONE above does for the worker's.
+  const MYKIDS_NONE = { children: [], askAtDesk: 0, settled: false };
+  // ── THE ONE FACT BOTH CHECK-IN SUBSCRIPTIONS BELOW DEPEND ON: does this phone hold its signing key yet ──
+  //
+  // Both readers return a DEAD no-op without one (`if (!me || !sk) { cb(EMPTY); return () => {}; }`), so on a
+  // PIN-locked boot — which is every member the wizard talked into a PIN — they register no handler at all and
+  // the screen stays empty until something re-runs the effect.
+  //
+  // WHY NOT `idTick`, which is the obvious answer and was the first one written here. Two measured reasons,
+  // both from the 2026-09-11 audit of that attempt:
+  //   1. IT IS TOO EARLY. `idTick` bumps on `trinity-identity` — but deriveFromIdentity (src/fellowship.src.js)
+  //      IS that event's listener, and it AWAITS exportMnemonic() (a native SecureStorage read, which this repo
+  //      has measured as deferred for minutes on a sleeping screen) BEFORE assigning `sk`. So the re-run that
+  //      `trinity-identity` triggers still finds no key and registers the same dead no-op. What actually
+  //      rescues it is the LATER `trinity-profiles` dispatch, after `sk` is set — which idTick also listens to,
+  //      so the fix worked while the reason given for it was wrong.
+  //   2. IT IS FAR TOO NOISY. `trinity-profiles` fires once per arriving kind-0 and once per opened sealed
+  //      name, so in a church of N members idTick bumps N times — N teardown/re-register cycles of the docs
+  //      hub plus N replays of its buffered slice, on the two screens where a blank is a safeguarding lie.
+  //      This codebase has paid for that churn twice already (_mergeChurchProfile's "teardown/reopen storm",
+  //      and the setChurches guard whose churn raced Care-settings delivery and lost).
+  //
+  // So depend on the ANSWER, not on the notifications. `keyReady` is read at render, flips false->true exactly
+  // once, and the render that observes the flip is the one idTick's `trinity-profiles` bump causes — the tick
+  // is still the wake-up, it is just no longer the dependency. Same read as `myServPub` further down.
+  const keyReady = !!(window.Fellowship && window.Fellowship.myPubkey);
+  const [checkinRegister, setCheckinRegister] = useA(CK_NONE);
+  useAE(() => {
+    if (!lazyReady) return;
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.subscribeCheckinRegister) { setCheckinRegister(CK_NONE); return; }
+    return F.subscribeCheckinRegister(np, setCheckinRegister);
+    // `keyReady` IS LOAD-BEARING — see the note above it for what it is and why it is not `idTick`. Without
+    // it nothing re-runs this effect when the key lands: connTick USUALLY does the job (unlock ->
+    // deriveFromIdentity -> reconnectAll -> `trinity-reconnect` -> connTick), but that reconnect is
+    // CONDITIONAL — src/fellowship.src.js's deriveFromIdentity runs it only `if (wasKeyless && sk)` AND some
+    // church-doc hub is already open. Unlock before any hub has opened and connTick never moves, so this
+    // effect keeps the dead no-op it registered at mount for the rest of the session.
+    //
+    // ⚠ THIS IS NOT THE FIX FOR THE 2026-09-11 TWO-PHONE BLOCKER (a parent's screen not updating while the
+    // app is open) and must not be recorded as one. At step 3 of
+    // reference/DEVICE-VERIFICATION-two-phone-2026-09-11.md that phone was showing a child CORRECTLY — its
+    // handler was registered and past the guard — and a second child eight seconds later never arrived, which
+    // no re-subscribe can explain. scripts/a-parents-open-screen-is-told-live.test.mjs excludes the relay's
+    // live fanout for the filters it tests, and NOT for the `since` cursor a returning phone actually sends.
+    // The blocker is open.
+  }, [activeChurch, churches, connTick, lazyReady, keyReady]);
+  // MY OWN CHILDREN AT TODAY'S SESSION — STEP 2 of the parent surface, and the other half of check-in in
+  // this app. `checkinRegister` above is the WORKER's view and needs a clearance and a session key;
+  // THIS ONE NEEDS NEITHER AND IS FOR EVERY PARENT. It emits { children, askAtDesk, settled }, where
+  // `children` are only ever the records whose guardian copy THIS PHONE'S OWN KEY opened — see
+  // Fellowship.subscribeMyChildrenCheckins for the two conditions and why both are required.
+  const [myChildren, setMyChildren] = useA(MYKIDS_NONE);
+  useAE(() => {
+    if (!lazyReady) return;
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.subscribeMyChildrenCheckins) { setMyChildren(MYKIDS_NONE); return; }
+    return F.subscribeMyChildrenCheckins(np, setMyChildren);
+    // `keyReady` for the same reason as the register above, including the warning about what it does NOT fix.
+  }, [activeChurch, churches, connTick, lazyReady, keyReady]);
+  // A WORKER CHECKS A CHILD IN — slice B. The raw session key never enters React; this hands the record to
+  // Fellowship.writeCheckin, which seals it under the key the reader unwrapped and publishes it. Returns the
+  // { ok, reason } the screen shows LOUDLY on failure (§8), or { ok:false } when the app is not ready.
+  const checkinAdd = async (rec) => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.writeCheckin) return { ok: false, reason: 'unavailable' };
+    return F.writeCheckin(np, rec);
+  };
+  // slice C: a worker releases a child. The CODE MATCH is on the screen (KidsRow); this only writes the
+  // release document the match (or a manual release) produces. Returns { ok, reason }.
+  const checkinRelease = async (rec) => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.releaseCheckin) return { ok: false, reason: 'unavailable' };
+    return F.releaseCheckin(np, rec);
+  };
   // safeguarding: is THIS member a child for the active church, and who's cleared to contact youth.
   // Used to show a child only child-safe groups and to gate DMs (the relay enforces both regardless).
   // minorsKnown starts FALSE, and that is the whole point: an empty minors list is not the same answer as
@@ -1875,6 +1969,18 @@ function App() {
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
+    // Children's check-in, the WORKER's read view (Serving → Kids). Nothing to do with `safeguard.cleared`,
+    // which is the youth-contact clearance from trinityone/clearance: — these are two independent decisions a
+    // church makes, and a churchwarden sim on 2026-09-10 found that doing one and believing you had done the
+    // other is the likeliest mistake in this whole feature. This one is trinityone/checkinperm: plus a session
+    // key, and the relay requires BOTH.
+    checkinRegister,
+    checkinAdd,   // slice B: a worker checks a child in — Fellowship.writeCheckin, returns { ok, reason }
+    checkinRelease,   // slice C: a worker releases a child (code match on screen) — Fellowship.releaseCheckin
+    // …AND THE PARENT'S HALF. Their own children at today's session, with the pickup code the worker will
+    // ask for — { children, askAtDesk, settled }. There is deliberately NO parent release control anywhere
+    // beside it: a parent checking their own child out routes straight round the pickup code.
+    myChildren,
     joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed } for the active church
     // How far this phone's clock is from the relay's, in whole minutes, when we have actually MEASURED it.
     // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date

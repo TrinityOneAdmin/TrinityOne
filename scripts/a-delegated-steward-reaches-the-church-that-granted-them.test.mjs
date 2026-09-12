@@ -115,6 +115,11 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {},
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _localBlocked: new Set(),
     _applyNoPhotoList: () => {}, CAP_KEYS: {}, _capState: {}, _checkinMigrated: '',
+    // setActiveIdentity's OWN per-church reset block, which this file lifts. It gained the check-in
+    // session-key read stamp on 2026-09-10 (the piece-3 audit's identity-switch defect) and the session
+    // KEYS themselves with piece 1 — a key from church A must never seal or open a record in church B,
+    // and the map is keyed by session id, which two churches on one box can perfectly well share.
+    _ckKeysSettled: '', _ckSessionKeys: new Map(),
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
     window: Object.assign(win, { Steward: {} }),
   };

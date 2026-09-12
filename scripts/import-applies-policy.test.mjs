@@ -24,6 +24,19 @@
 // delivery goes through it, and it consults TODAY's clearance rather than whatever was true when the message
 // was sent. The tests below pin that invariant, and one of them is the pairing that stops "served to nobody"
 // being vacuously true of a relay that serves nothing.
+//
+// ⚠ AND THAT PARAGRAPH IS TRUE OF THE CASE IT WAS WRITTEN ABOUT AND NOT OF EVERY GATE. Corrected 2026-09-10
+// rather than left standing, because a claim this file makes about the whole relay is one a later change will
+// lean on. "A read gate is bypassed by none of them" holds when the gate RE-DERIVES its answer from the event
+// — which is what canRead() does for a kind-4 DM, calling safeguardAllows() against today's lists. It does NOT
+// hold for a read gate that consults a MAP note() populated: canRead()'s `checkinhelper:` branch reads
+// CHECKIN_HELPERS and calls checkinPermitted(), so it inherits whatever the ingest installed, and the ingest is
+// the door /import and peer sync come in through. Measured: a `checkinperm:` d-tag in UPPERCASE hex was refused
+// on the websocket, installed by this very route, and the session key served on it.
+//
+// So a read gate is a backstop only where it recomputes. Where it reads a derived map, the ingest IS the gate
+// and has to be as strict as accept(). This file has no check-in coverage at all; that half now lives in
+// scripts/note-installs-nothing-the-door-refuses.test.mjs, which drives note() with documents accept() refuses.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

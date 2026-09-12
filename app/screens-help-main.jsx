@@ -219,9 +219,18 @@ function HelpCenter({ open, onClose, initial, ctx }) {
 }
 
 // ── index ──
+// THE CONSOLE'S OWN ARTICLES ARE NOT LISTED HERE. help-data.jsx carries seven written for a steward, ids
+// `console-*`, addressed to the person running the church ("you ask for the code, match it against the one on
+// screen"). This index listed every article, so a parent — and a child's own account — could open "Children's
+// check-in at the door" from their Help tab, read the sentence promising that nothing about check-in appears
+// in their app, and go on to the relay's `['ck']` tag. Measured by the persona sim of 2026-09-11 from the child's
+// account. Nothing in them is secret; the subject is not theirs. `console` (no dash) and `how-it-works` are the
+// same subject for both readers and stay. A deep link (ctx.openHelp) still resolves any id — only the LIST is
+// the member's.
+const helpIsConsoleOnly = (a) => /^console-/.test(String((a && a.id) || ''));
 function HelpIndex({ D, fs, onOpen, onBackup, ctx }) {
   const hero = D.articles.find(a => a.id === 'words');
-  const rest = D.articles.filter(a => a.id !== 'words');
+  const rest = D.articles.filter(a => a.id !== 'words' && !helpIsConsoleOnly(a));
   return (
     <div style={{ padding: '18px 18px 36px' }}>
       <p style={{ fontFamily: 'var(--font-read)', fontSize: 17 * fs, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 20px', textWrap: 'pretty' }}>{D.intro}</p>

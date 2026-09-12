@@ -23,6 +23,15 @@ import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/ni
 // Rules the console has to agree with, written once. See scripts/trinity-rules.mjs — the two copies of photo
 // suppression had already drifted apart on case handling. ARCHITECTURE-2026-07-29.
 import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-rules.mjs';
+// THE SAME PARSERS THE RELAY AND THE CONSOLE USE, not a fourth copy of the rules. What a malformed grant or a
+// malformed helper copy MEANS is a safeguarding decision, and three implementations of it are three chances to
+// disagree — which is the whole reason scripts/checkin-role-source.mjs exists (see its header). `helperKeyFor`
+// and `readCheckinHelperCopy` had NO product caller anywhere in src/ or app/ before this; their only in-repo
+// caller was a test, which CLAUDE.md rule 1 says is not a feature.
+import { readHelperGrant, helperKeyFor, readCheckinHelperCopy, checkinSessionOf,
+         readCheckinPermission, permissionAdmits, roomCode, roomCodesCollide,
+         checkinGuardianPubs, checkinGuardianCopies,
+         readCheckinGuardianCopy, MAX_SESSION_SECONDS } from '../scripts/checkin-role-source.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -66,6 +75,69 @@ const ROTA_SETTINGS_D = 'trinityone/rota-settings';
 // steward-defined chat message tags (Testimony, Praise, …) — one church-signed doc alongside the built-in
 // "Prayer request". Validated against fixed allowlists on read so a forged doc can't inject CSS/icons.
 const MSGTAGS_D = 'trinityone/msgtags';
+// ── CHILDREN'S CHECK-IN, THE WORKER'S SIDE. Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md ────
+// THREE DOCUMENTS, AND THE MEMBER APP HAD NEVER READ ANY OF THEM. Declared in scripts/trinity-doc-types.mjs,
+// which is the one authority for these names; repeated here as literals beside their forty siblings, exactly
+// as the console does, and scripts/doc-registry.test.mjs is what keeps the copies honest.
+//
+//   • checkinperm:<myPub> — AM I CLEARED, and until when. Cleartext, church-signed, CARRIES NO KEY. The relay
+//     serves it to the church, its stewards, a care admin and THE PERSON IT NAMES (gateway.mjs, canRead's
+//     CHECKINPERM_D rule) — so this is the one document that lets a worker's own phone say "you are cleared
+//     until the 4th" rather than guessing from whether anything opened.
+//   • checkinhelper:<sessionId> — ONE SESSION'S KEY, wrapped per recipient. The only place a session key
+//     exists. The relay serves it to a named helper only while their clearance is live and only inside the
+//     session's window (plus a fortnight's lead), so a phone that holds none is the ORDINARY state, not a
+//     fault.
+//   • checkin:<id> — one child at one session. `content` is sealed to the church's SAFEGUARDING RING and a
+//     worker holds no ring key and must not try; the worker's copy rides in a ['ck', …] tag sealed under the
+//     session key, marked ['enc','2'].
+const CHECKINPERM_D = 'trinityone/checkinperm:';
+const CHECKINHELPER_D = 'trinityone/checkinhelper:';
+const CHECKIN_D = 'trinityone/checkin:';
+// A PARENT SAYS "WE ARE HERE" -- d=checkinarrival:<sid>:<authorpubhex>, authored by the PARENT, and NEVER a
+// register row. A parent never authors a `checkin:`: the child normally has no account, so nothing at the
+// relay links a parent to a child and a parent-authored row would reduce to "any member may invent a child
+// and a pickup code" (the hole F-B closed). The WORKER's phone turns an arrival into a row, through
+// writeCheckin. NOTE `checkinarrival:` is NOT a suffix of `checkin:` -- the colon makes them disjoint, so
+// every startsWith(CHECKIN_D) in this file is untouched by it.
+const CHECKINARRIVAL_D = 'trinityone/checkinarrival:';
+// ── THE SESSION KEYS THIS PHONE HOLDS, for the WRITER as well as the reader ───────────────────────────────
+// slice B of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. subscribeCheckinRegister already unwraps
+// each session key from MY OWN envelope slot; before this, that key lived only inside the reader's closure and
+// nothing could WRITE with it. A worker checking a child in seals the record's ['ck'] copy under this key —
+// and NOTHING ELSE, because she holds no safeguarding ring key and must not seal `content` (KNOT 1 of the
+// scope doc: the ring reads her ck copy through the session key it holds as an envelope keeper).
+//
+// KEYED BY CHURCH, THEN SESSION. Session ids can collide between churches (the console keeps _ckSessionKeys
+// and clears it on church switch for exactly this reason); keying by cp isolates them, and a withdrawal or a
+// church switch clears only that church's submap. It is fed by the ONE subscription the Kids screen runs and
+// read by writeCheckin; the raw key never crosses into React state, only into a signed, sealed event.
+// HOW FAR BACK — AND FORWARD — A PARENT'S OWN SCREEN LOOKS. See subscribeMyChildrenCheckins for why this is
+// load-bearing rather than tidiness: A GUARDIAN IS NEVER SERVED A TOMBSTONE, so a record with no release to
+// fold onto it would say a child is in a room for ever.
+//
+// ⚠ IT IS MAX_SESSION_SECONDS, NOT A ROUND NUMBER SOMEBODY LIKED. 16 hours was the first figure here and an
+// audit measured what it cost: `HELPER_LIFETIMES.day.max`, `PERMISSION_LIFETIMES.day.max` and
+// MAX_SESSION_SECONDS are all 26 hours, precisely so a church can run "a morning and an afternoon, or an
+// all-day event" off one session. At 16 hours a lock-in or a residential lost the parent's row WHILE THE
+// CHILD WAS STILL IN THE ROOM and the worker's key was still live — and the release, when it came, then had
+// no row to fold onto. The parent's view must not expire before the session that produced it can.
+const MYKIDS_WINDOW = MAX_SESSION_SECONDS;
+// TODAY, IN THE ROOM THE CHILD IS STANDING IN — never the UTC day. The console's register filters
+// `recs.filter(r => r.date === today)` against ITS local day (app/stew-dashboard.jsx), and src/steward.src.js
+// has stamped records with a local `_todayISO()` since it was written. This phone was the odd one out: it
+// stamped `new Date().toISOString().slice(0, 10)`, so a worker checking a child in on a Sunday MORNING in
+// Auckland wrote the previous day's date and the child never appeared on the desk's own register — the
+// 2026-07-24 kids-roll bug, back in the one writer that post-dates the guard. Caught by
+// scripts/calendar-day.test.mjs, which scans this file for exactly that idiom.
+// ONE CALLER: writeCheckin. Mirrors steward.src.js:_todayISO deliberately — the two bundles must agree on
+// what day it is or a record written on a phone and a record written at the desk sort differently.
+const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const _ckMemberKeys = new Map();                 // cp -> Map(sid -> 32 bytes of hex)
+const _ckMemKeySet = (cp, sid, k) => { let m = _ckMemberKeys.get(cp); if (!m) { m = new Map(); _ckMemberKeys.set(cp, m); } m.set(sid, k); };
+const _ckMemKeyDel = (cp, sid) => { const m = _ckMemberKeys.get(cp); if (m) m.delete(sid); };
+const _ckMemKeyClear = (cp) => { const m = _ckMemberKeys.get(cp); if (m) m.clear(); };
+const _ckMemKeyGet = (cp, sid) => { const m = _ckMemberKeys.get(cp); return (m && m.get(sid)) || ''; };
 const MSGTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
 const MSGTAG_ACCENTS = ['gold', 'sage', 'clay', 'sky', 'plum', 'teal'];
 // 'prayer' is NOT reserved — it's the default tag, editable/removable like any other. Only the built-in
@@ -1985,6 +2057,26 @@ function _hubBufSet(hub, key, e) {
   if (!sl) { sl = new Map(); hub.idx.set(dk, sl); }
   sl.set(key, e);
 }
+// DROP A SLICE OF THE CACHE — by document type, for every author — and forget it on disk in the same breath.
+// Written for a check-in worker whose clearance the church withdrew (owner's decision 2026-09-11, device finding
+// D3): the relay refuses her everything from that moment, but this cache had the session envelope and the
+// register and replayed them, names and pickup codes included, through a resume and a cold start. Deleting from
+// `buf` alone would leave the `idx` slice replaying them; deleting from memory alone would leave the disk copy
+// for the next boot. Both, then save NOW rather than in 800 ms, so a force-stop cannot keep them.
+function _hubDropSlices(cp, prefixes) {
+  const hub = _docsHubs.get(cp);
+  if (!hub || !hub.buf) return 0;
+  let n = 0;
+  for (const [key, e] of [...hub.buf.entries()]) {
+    const d = _dtag(e);
+    if (!prefixes.some(p => d.startsWith(p))) continue;
+    hub.buf.delete(key);
+    const sl = hub.idx.get(_dkeyOf(d)); if (sl) sl.delete(key);
+    n++;
+  }
+  if (n) { hub.dirty = true; _docsHubSaveNow(hub); }
+  return n;
+}
 function _docsHubSaveNow(hub) {
   if (!_mayCache()) return;
   if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
@@ -2577,6 +2669,19 @@ const PUBLISH_TIMEOUT_MS = 12000;
 // This is a drop-in for `_publishAny(a, b)` that REJECTS unless at least one relay genuinely
 // accepted, so every existing try/catch keeps its meaning instead of 29 call sites needing new logic.
 const _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
+// THE RELAY ACTUALLY ANSWERED "NO" — a strict subset of _PUB_FAILED, and the difference decides what a member
+// is told. These are NIP-01's OK=false reasons: a box read the event and refused it. `connection failure` is
+// deliberately NOT here — the socket never opened, so nobody refused anything and nobody accepted anything.
+// Neither is a rejected promise: that is the vendored library giving up waiting, never a relay's verdict.
+//
+// WHY THIS EXISTS. Measured on the Pixel, 2026-09-11 (F1, reference/DEVICE-VERIFICATION-two-phone-2026-09-11
+// .md): writeArrival reported `{ok:false}` TWICE on writes that had SUCCEEDED. _publishAny throws whenever no
+// relay acknowledged inside WEDGE_ACK_MS, and every caller flattened that into "failed" — so a slow ack over
+// the Funnel, or a socket that closed after the event was already on the wire, read as a refusal. A parent
+// would be told their arrival did not send, walk to the desk and say so, while the arrival was sitting on the
+// relay and about to appear on the worker's screen. A wrong failure message is worse than no message: it
+// sends a person to undo something that already worked.
+const _PUB_REFUSED = /^(error|blocked|invalid|restricted|rate-limited|auth-required)/i;
 // ── a socket that hears but will not speak ───────────────────────────────────────────────────────────────
 // SIMULATION ROUND 6: six phones in a congregation of twenty reached a moment after which nothing they
 // published ever arrived, while everything sent TO them kept arriving. Measured on the relay's own store —
@@ -2710,7 +2815,19 @@ function _publishAny(relays, evt) {
     if (!good) {
       const why = (rs.find(r => r.status === 'fulfilled') || {}).value
         || ((rs.find(r => r.status === 'rejected') || {}).reason || {}).message || 'no relay accepted this';
-      throw new Error(String(why));
+      const err = new Error(String(why));
+      // ADDITIVE, AND DELIBERATELY SO. Every existing caller reads `.message` or ignores the error entirely
+      // (33 call sites of _publishAny, 10 of _publishBounded, checked), so attaching a property changes
+      // nothing for any of them. A caller that wants to tell "the relay said no" from "nobody answered" can
+      // now ask, instead of guessing from a string that was never designed to be parsed.
+      //
+      // `refused` IS TRUE ONLY IF SOME BOX READ THIS EVENT AND SAID NO — a settled answer, worth telling a
+      // member about. False means we do not know: every relay timed out, closed, or was never reached, and
+      // THE EVENT MAY WELL HAVE LANDED. On the pilot's own default of two addresses to one box, the mixed
+      // case is ordinary rather than exotic, so this asks "did ANY relay refuse", never "what did the first
+      // one say" — the trap the old single `why` string fell into.
+      err.refused = rs.some(r => r.status === 'fulfilled' && _PUB_REFUSED.test(String(r.value == null ? '' : r.value)));
+      throw err;
     }
     return true;
   });
@@ -4747,6 +4864,803 @@ window.Fellowship = {
       oneose() { if (!bestTs) cb(null); },   // no doc → signal "use the default", never leave the caller hanging
     });
   },
+  // ── THE CHILDREN'S REGISTER, FOR SOMEBODY THE CHURCH HAS CLEARED TO WORK THE DOOR ──────────────────────
+  // Slice 3 of reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, read half only. THE FIRST PRODUCT CALLER of
+  // helperKeyFor and readCheckinHelperCopy: the whole chain existed and nothing in src/ or app/ consulted it.
+  //
+  // WHAT THIS IS NOT. It is not a gate. The relay serves a check-in record to a worker only when BOTH hold —
+  // they are named in that session's envelope AND their clearance is live (gateway.mjs, canRead's CHECKIN_D
+  // and CHECKINHELPER_D rules, and checkinPermitted() between them) — and both are enforced on the box. This
+  // subscription cannot widen that and must not pretend to narrow it: everything below decides what a screen
+  // can HONESTLY SAY about what arrived, and nothing below decides who may read anything.
+  //
+  // AND IT MUST NOT BLOCK. reference/DOMAIN.md, "Check-in supports a safeguarded church; it does not enforce
+  // safeguarding": a lapsed clearance, a rota gap, a ratio outside policy — none may stop a child being
+  // checked in. This is a read view, so the discipline is narrower and still real: it never refuses to show
+  // what it can open, it never hides a register because a clearance has since lapsed, and it never reports an
+  // absence as a fault.
+  //
+  // ── ROUTE BY THE RECORD'S OWN SESSION TAG, NEVER BY "ANY KEY I HOLD" ───────────────────────────────────
+  // The red-team pass of 2026-09-10 found that exact fallback leaks a MORNING register to an EVENING helper:
+  // trying each held key in turn opens whatever it happens to fit. So `checkinSessionOf(e.tags)` decides which
+  // key is reached for — the cleartext tag, because the answer is needed before anything can be opened, and it
+  // is the same tag the relay keys its own read rule on, so the box and the phone agree by construction — and
+  // when we hold no key for THAT session nothing is tried at all.
+  //
+  // ── FOUR THINGS A WORKER'S PHONE CAN HONESTLY BE IN, AND THEY LOOK NOTHING ALIKE ───────────────────────
+  // "Refused" and "served but unreadable" are different failures (both scope docs say so, in those words), so
+  // the emitted shape distinguishes them rather than collapsing them into an empty list:
+  //
+  //   cleared:false, keys 0        — the church has not cleared this person. Nothing is served and nothing is
+  //                                  shown; the screen does not exist. This is the state a parent persona
+  //                                  hunted for on 2026-09-10 and correctly found nothing of.
+  //   cleared:true,  keys 0        — cleared, and NO SESSION KEY HAS BEEN ISSUED. Nothing is wrong. Today this
+  //                                  is the commonest state of all: `issueCheckinSessionKeys` runs only while
+  //                                  an OWNER console is open, so a church whose console never opens has
+  //                                  cleared helpers with no keys, for any Sunday, ever.
+  //   foreign > 0                  — records arrived whose session tag names a session this phone holds NO key
+  //                                  for. Counted, never opened, never listed. It is the honest form of "a key
+  //                                  held, but this session is not one of them".
+  //   unreadable > 0               — a record in a session we DO hold the key for whose ['ck'] copy is absent
+  //                                  or will not open. Served ciphertext that will not open: the register is
+  //                                  not empty and this phone cannot show it. Every record written before the
+  //                                  double-lock landed, and every record written by a console that held no
+  //                                  session key, is in this state — publishCheckin OMITS the copy rather than
+  //                                  refusing to write, because nothing may block a check-in.
+  //
+  // ── WHY THE RAW EVENTS ARE KEPT AND RE-TRIED ───────────────────────────────────────────────────────────
+  // The records and the envelopes RACE, and on a cold start the records usually win: the hub replays its
+  // persisted corpus oldest-first before any envelope can be unwrapped. A reader that decided once, at arrival,
+  // would report a whole register as unreadable for ever. So each record is remembered with its tags and
+  // re-tried the moment a key for ITS session lands — which is the console's holding pen, whose one measured
+  // defect (it stored only { content, ts } and lost the tags, so a retry could never find the ck copy) this
+  // deliberately does not repeat. Re-tried per session, so a key arriving is O(that session), not O(corpus).
+  //
+  // ── WHAT THIS DOES NOT DO, on purpose ──────────────────────────────────────────────────────────────────
+  //   • IT DOES NOT FILTER BY AUTHOR, and that is a known unfixed relay defect rather than a choice made here.
+  //     Red-team F1 (2026-09-10): accept()'s CHECKIN_D helper clause binds a helper's write to the ['session']
+  //     tag the WRITER chooses and never to the record the d-tag addresses, so a helper cleared for one Sunday
+  //     can rewrite any record on any date — including its pickup code. Filtering to `_churchVoice` here would
+  //     NOT fix it (it would hide legitimate helper-written records the relay permits) and would give the
+  //     screen a boundary it must not claim to be. `_by` is carried on every row so the fix, when it comes,
+  //     has somewhere to land. Newest-wins per address, as the console's own register does.
+  //   • IT MAKES NO CLAIM FROM THE ABSENCE OF A TOMBSTONE. `removeCheckin` publishes a tombstone with no tags
+  //     at all, so canRead's CHECKIN_D branch finds no ['session'] and no ['p'] and refuses it: a worker is
+  //     never served the deletion of a record they can read. A tombstone from an author whose ordinary records
+  //     we already trust is honoured if one ever arrives; "no tombstone" is not evidence a child is present.
+  //   • THE LIVENESS BOOLEANS ARE COMPUTED AT EMIT TIME and do not re-fire on the clock alone, exactly as the
+  //     console's do. The raw window travels with them so a screen can be honest about what it is reading.
+  subscribeCheckinRegister(churchNpub, cb) {
+    const pubk = toPub(churchNpub);
+    const EMPTY = { cleared: false, lapsed: false, notYet: false, withdrawn: false, from: null, until: null, lifetime: '', sessions: [], keysHeld: 0, unreadable: 0, foreign: 0, settled: false };
+    if (!pubk) { cb({ ...EMPTY }); return () => {}; }
+    const me = String(pub || '').toLowerCase();
+    if (!me || !sk) { cb({ ...EMPTY }); return () => {}; }
+    let perm = null;                 // my own clearance, or null — readCheckinPermission's verdict, never a guess
+    let permTomb = false;            // the newest clearance document for me was a WITHDRAWAL (not merely unreadable)
+    let permTs = 0;
+    let purged = false;              // a withdrawal emptied this phone; the next clearance must refetch in full
+    const grants = new Map();        // sessionId -> { grant, ts } (the parsed envelope; window + pubs)
+    const keys = new Map();          // sessionId -> 32 bytes of hex, unwrapped from MY OWN slot
+    const recs = new Map();          // record id (the d-tag suffix) -> { sid, tags, ts, by }
+    // ARRIVALS, keyed sid|pub. A parent announcing themselves at the room door -- design section 3. The body
+    // is the parent's OWN self-seal and this phone will never open it, which is the design and not a
+    // limitation: the document's whole job is to deliver the author's pubkey provably, and the signature the
+    // relay checked has already done that. So everything below is read from CLEARTEXT -- the address, the
+    // session tag, and created_at.
+    const arrivals = new Map();      // sid + '|' + pub -> { pub, at }
+    const rows = new Map();          // record id -> the opened row, once
+    let eosed = false;
+
+    // ── ONE RECORD, ONE VERDICT ──────────────────────────────────────────────────────────────────────────
+    // Returns 'ok' | 'foreign' | 'unreadable'. The ONLY place a session key is chosen, and it is chosen by the
+    // record's own session tag. `readCheckinHelperCopy` refuses a key that is not 32 bytes of hex, so the ''
+    // that helperKeyFor returns for "my turn is not on" is never handed to a cipher.
+    const openRec = (id, r) => {
+      if (!r.sid) return 'unreadable';              // a record with no session tag: served, and unroutable
+      const keyHex = keys.get(r.sid) || '';
+      if (!keyHex) return 'foreign';                // not ours to open, and NOT tried against any other key
+      const obj = readCheckinHelperCopy(r.tags, keyHex, (ct, k) => nip44d(ct, _unhex(k)));
+      if (!obj) return 'unreadable';
+      // THE SAME `id` THE ADDRESS CARRIES, not the sealed body's. The console's own register keys on the body
+      // (`byId.set(id, { id, ...obj, ts })`) and the piece-1 notes record what that costs: a body whose id
+      // disagrees with its address FORKS the record — the same child present on one row and collected on
+      // another. Spread first, then overwrite, so a forked body cannot name a second address here.
+      // THE FIELDS THE SCREEN PAINTS ARE TYPED HERE, NOT TRUSTED. readCheckinHelperCopy vouches for "a JSON
+      // object", no more; a helper in her window writes records too (F-B), and a body with
+      // `childName: {…}` or `out: {…}` reached KidsRow as a JSX child on 2026-09-11's red team — which React
+      // refuses by throwing, and the only boundary above that row is the app root: one hostile record blanks
+      // the whole member app over a register with children in it. Strings stay strings, numbers become
+      // strings where a name or code is expected, everything else is "not in this copy".
+      const _str = (v) => (typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v) ? String(v) : ''));
+      const _when = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && /^\d{1,12}$/.test(v) ? Number(v) : undefined));
+      rows.set(id, { ...obj, id, session: r.sid, ts: r.ts, _by: r.by,
+        childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out),
+        // slice C: a RELEASE record carries `rel` (the check-in it collects) and `manual` (by hand, no code).
+        // Typed here for the same reason as the rest — a hostile body must not reach a row as an object.
+        rel: _str(obj.rel), manual: obj.manual === true,
+        // STEP 2: the guardians this record names, normalised by the SAME shared function the writers seal
+        // by, so the checkout the worker writes from this row can carry the parent's ['p'] tag and their
+        // ['gk'] copy. Typed here with everything else — a sealed body is a helper's to write (F-B), so
+        // `guardians: {…}` must reach neither a tag nor a cipher.
+        guardians: checkinGuardianPubs(obj) });
+      return 'ok';
+    };
+
+    const emit = _coalesce(() => {
+      const at = Math.floor(Date.now() / 1000);
+      const live = permissionAdmits(perm, at);
+      let unreadable = 0, foreign = 0;
+      const bySession = new Map();
+      // slice C / KNOT 2: a checkout is a SEPARATE document (a helper cannot rewrite the church's record —
+      // F-B), carrying a cleartext ['rel', <checkinId>] tag. Folded onto the check-in row it names, and ONLY
+      // when the release's own session matches the check-in's — both cleartext, so a release scoped to one
+      // session can never mark a child collected in another (the F1 shape, one level up). Keyed by
+      // session|checkinId so the match is structural.
+      const releaseByRel = new Map();
+      for (const [id, r] of recs) {
+        // ── AND THIS IS THE RETRY ────────────────────────────────────────────────────────────────────────
+        // The records and the envelopes RACE, and on a cold start the records win: the hub replays its
+        // persisted corpus oldest-first, before any envelope can be unwrapped. Re-opening here — rather than
+        // deciding once at arrival — is what makes a key landing late still open everything already on the
+        // phone, which on a cold start is every record there is. `rows` is the memo, so each record is opened
+        // at most once and a big corpus does not re-decrypt on every emit.
+        const state = rows.has(id) ? 'ok' : openRec(id, r);
+        if (state === 'foreign') { foreign++; continue; }
+        if (state === 'unreadable') { unreadable++; continue; }
+        const row = rows.get(id);
+        // A RELEASE, routed by its CLEARTEXT rel tag (no key needed to tell it from a child) — folded, never
+        // rendered as its own row, so it can never appear as a phantom child.
+        const relId = (r.tags.find(t => t[0] === 'rel') || [])[1] || '';
+        if (relId) {
+          const key = r.sid + '|' + relId;
+          const prev = releaseByRel.get(key);
+          if (!prev || (row.ts || 0) >= (prev.ts || 0)) releaseByRel.set(key, { out: row.out, manual: row.manual, by: row._by, ts: row.ts });
+          continue;
+        }
+        if (!bySession.has(r.sid)) bySession.set(r.sid, []);
+        bySession.get(r.sid).push(row);
+      }
+      // EVERY SESSION THIS PHONE HOLDS A KEY FOR, whether or not a child has been checked in yet — because
+      // "nobody is here yet" and "you hold no key for this room" are different things a worker needs told
+      // apart, and a session that only appeared once it had rows could never say the first.
+      // THE ROOM CODE, derived from the session id and NOTHING SECRET (slice A / roomCode), so a worker can
+      // read it to a parent or match it to the printed sheet. `clash` is over the sessions THIS PHONE holds a
+      // key for — the handful a church runs at once — so a screen can widen a collision rather than confirm
+      // the wrong session back. It carries no authority: it names the session, it does not admit anyone.
+      const heldSids = [...keys.keys()];
+      const clash = roomCodesCollide(heldSids);
+      const sessions = heldSids.map((sid) => {
+        const g = grants.get(sid);
+        // WHO HAS ALREADY BEEN CHECKED IN AGAINST THIS ARRIVAL. Counted from the record's CLEARTEXT ['p']
+        // tag, so it needs no key and holds for a record this phone cannot open. A family is NOT dropped
+        // from the queue once one child is in: a parent with two children checks both in from one arrival,
+        // and a queue that emptied itself after the first would make the second look like a mistake. The
+        // screen says how many, and the worker decides.
+        const checkedFor = new Map();
+        for (const [, r] of recs) {
+          if (r.sid !== sid) continue;
+          if ((r.tags.find(t => t[0] === 'rel') || [])[1]) continue;      // a release is not a child's row
+          for (const t of r.tags) if (t[0] === 'p' && t[1]) checkedFor.set(String(t[1]).toLowerCase(), (checkedFor.get(String(t[1]).toLowerCase()) || 0) + 1);
+        }
+        return {
+          session: sid,
+          roomCode: roomCode(sid),
+          roomClash: clash.has(sid),
+          // THE ARRIVALS QUEUE. `name` is resolved from the same `profiles` map every other screen in this
+          // app resolves a pubkey through, and is '' when this phone has not opened that member's sealed
+          // name yet -- which the screen must say honestly rather than paper over, because the name is what
+          // the worker confirms the child-to-parent pairing against.
+          arrivals: [...arrivals.values()].filter(a => a.session === sid).map(a => ({
+            pub: a.pub,
+            name: String(((profiles[a.pub] || {}).name) || ''),
+            at: a.at,
+            checkedIn: checkedFor.get(a.pub) || 0,
+          })).sort((x, y) => (x.at || 0) - (y.at || 0)),
+          from: g ? g.grant.from : null,
+          until: g ? g.grant.until : null,
+          helpers: g ? g.grant.pubs.length : 0,
+          // FOLD A RELEASE ONTO ITS CHILD ROW — a new object, never mutating the `rows` memo. A collected
+          // child keeps their row (so the register stays a legible record of who was in the room) and gains
+          // `out` / `manual` / `releasedBy`. The release's `out` wins when present; otherwise whatever the
+          // check-in record itself carried.
+          rows: (bySession.get(sid) || []).map((r0) => {
+            const rel = releaseByRel.get(sid + '|' + r0.id);
+            return rel ? { ...r0, out: (rel.out != null ? rel.out : r0.out), manual: !!rel.manual, releasedBy: rel.by } : r0;
+          }).sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
+        };
+      }).sort((a, b) => (a.from || 0) - (b.from || 0));
+      cb({
+        cleared: live,
+        // A CLEARANCE THAT EXISTS AND IS NOT LIVE, told apart from one that was never granted — AND ENDED TOLD
+        // APART FROM NOT STARTED YET. DOMAIN.md: say a key has expired, do not lock somebody out of a room
+        // mid-session, so a phone still holding a key goes on showing the register and says plainly that the
+        // clearance has ended.
+        //
+        // ⚠ THE THIRD STATE IS NOT DECORATION. The console shipped this as a BINARY on 2026-09-10 —
+        // `{r.live ? runsTo(r) : 'Ended ' + fmtD(r.until)}` — and a churchwarden sim clearing a helper for
+        // NEXT SUNDAY, which is the likeliest thing a warden ever does, was told four times over that the
+        // clearance had already ENDED. A window entirely in the future is not live and has not ended.
+        lapsed: !!perm && !live && perm.until != null && at > perm.until,
+        notYet: !!perm && !live && Number.isFinite(perm.from) && at < perm.from,
+        // WITHDRAWN, TOLD APART FROM NEVER CLEARED. Measured on the Oppo, 2026-09-11 (device finding D3): the
+        // church withdrew a helper's clearance, the relay refused her everything from that moment — and the
+        // phone, which had the register already, went on showing it through a resume AND a cold start with
+        // no line saying anything had changed. The tombstone DID arrive (perm went to null); the screen just
+        // had no word for it. A TOMBSTONE for me is a withdrawal; nothing else is — not the cold-start race
+        // where nothing has arrived yet, and not a clearance body this parser refuses (the 2026-09-11 audit
+        // showed relay/app version skew would otherwise read as "your church withdrew your clearance").
+        withdrawn: !perm && permTomb,
+        from: perm ? perm.from : null,
+        until: perm ? (perm.until == null ? null : perm.until) : null,
+        lifetime: perm ? String(perm.lifetime || '') : '',
+        sessions, keysHeld: keys.size, unreadable, foreign, settled: eosed,
+      });
+    });
+
+    // A NAME ARRIVING LATE MUST REACH THE SCREEN. An arrival carries a PUBKEY; the name comes from the
+    // church's sealed `name:` documents, which land on this same hub and fire `trinity-profiles` when they
+    // open. Without this the queue keeps whatever name it had at the moment the arrival arrived -- on a cold
+    // start, none -- and the worker confirms a pairing against a truncated key. The re-emit is the coalesced
+    // one, so a burst of names costs one render.
+    const onNames = () => { try { emit(); } catch (err) {} };
+    try { window.addEventListener('trinity-profiles', onNames); } catch (err) {}
+
+    const offDocs = _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
+      want: [CHECKINPERM_D, CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D],   // replay only these four slices (see _hubBufSet)
+      onevent(e, d) {
+        // ── MY OWN CLEARANCE ──────────────────────────────────────────────────────────────────────────────
+        // The relay serves exactly one of these to an ordinary member: their own. The suffix is checked anyway,
+        // because a phone must not report somebody else's clearance as its own if a box ever serves one.
+        if (d.startsWith(CHECKINPERM_D)) {
+          if (String(d.slice(CHECKINPERM_D.length) || '').toLowerCase() !== me) return;
+          // THE AUTHOR IS NOT CHECKED HERE, and the line that did is gone on purpose. It read
+          //     if (e.pubkey !== pubk) return;   // church-key-only, as the relay's own write rule is
+          // and the relay's write rule has not been church-key-only since 2026-09-10: a steward the church
+          // ticked for safeguarding clears people from her own console (checkinPermGrantor in
+          // scripts/gateway.mjs), the relay serves that clearance to the person, and mints and serves the
+          // keys and records that follow. The red team of 2026-09-11 measured both halves: the relay handing
+          // a steward-cleared helper everything, and this reader answering `cleared:false` — which, before
+          // a key arrives, is NO KIDS TAB AT ALL for the commonest way a church clears somebody.
+          // The relay is the boundary: canRead serves a member exactly one of these, their own, and accept()
+          // refuses any author who is not the church or its safeguarding steward. A phone cannot judge a
+          // steward's authority (it holds no roster) and must not pretend to; what it can do is report what
+          // its church's relay admitted. The worst a rogue relay buys here is a "cleared" line — the envelope
+          // is owner-minted from the permissions the relay itself enforces.
+          if ((e.created_at || 0) < permTs) return;  // newest wins, mirroring the relay's guard
+          permTs = e.created_at || 0;
+          // A WITHDRAWAL IS A TOMBSTONE, and it must land as "no clearance" rather than be ignored.
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) {
+            perm = null; permTomb = true;
+            // A WITHDRAWAL EMPTIES THIS PHONE. Owner's decision 2026-09-11 (device finding D3): the relay refuses a
+            // withdrawn worker everything from that moment, and what this phone already held — the envelope, the
+            // names, the pickup codes — must go with it, from memory and from the cache the next boot replays. The
+            // lost-phone trade in the scope doc is about phones the church cannot reach; this one it can.
+            grants.clear(); keys.clear(); _ckMemKeyClear(pubk); recs.clear(); rows.clear(); arrivals.clear();
+            // ⚠ CHECKINARRIVAL_D BY NAME. `startsWith(CHECKIN_D)` does NOT match an arrival -- the colon
+            // makes the two prefixes disjoint -- so omitting it here would leave a withdrawn worker's phone
+            // replaying the list of which families were at church, from disk, through a cold start. That is
+            // the same omission device finding D3 punished for the register itself.
+            _hubDropSlices(pubk, [CHECKINHELPER_D, CHECKIN_D, CHECKINARRIVAL_D]);
+            purged = true;
+            emit(); return;
+          }
+          permTomb = false;
+          perm = readCheckinPermission(e.content);   // null for anything it cannot vouch for — never "no limits"
+          // RE-CLEARED AFTER A PURGE: the documents the relay will serve again are OLDER than the hub's cursor, so
+          // a cursored refetch would return none of them — the same trap the admission path records above.
+          // Reset the cursor and refetch once, deferred, because this runs inside the hub's own onevent.
+          if (perm && purged) {
+            purged = false;
+            setTimeout(() => { const hub = _docsHubs.get(pubk); if (hub) { hub.since = 0; hub.fullAt = 0; } try { refetchChurchDocs(); } catch (err) {} }, 0);
+          }
+          emit(); return;
+        }
+        // ── ONE SESSION'S KEY ─────────────────────────────────────────────────────────────────────────────
+        if (d.startsWith(CHECKINHELPER_D)) {
+          const sid = d.slice(CHECKINHELPER_D.length);
+          if (!sid || e.pubkey !== pubk) return;     // owner-only mint; the relay refuses any other author
+          const held = grants.get(sid);
+          if (held && (held.ts || 0) > (e.created_at || 0)) return;
+          // A STOOD-DOWN SESSION'S KEY IS FORGOTTEN. revokeCheckinHelpers destroys the envelope, which was the
+          // one place that key existed, so after this nobody opens that session's copies — the church included.
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { grants.delete(sid); keys.delete(sid); _ckMemKeyDel(pubk, sid); emit(); return; }
+          const grant = readHelperGrant(e.content);
+          if (!grant || grant.session !== sid) return;   // the relay refuses a document whose d-tag and body disagree, so they agree
+          grants.set(sid, { grant, ts: e.created_at || 0 });
+          // MY OWN SLOT, unwrapped with my own secret and the CHURCH's pubkey — NIP-44's conversation key is
+          // symmetric, so this derives the same key the church used to wrap it. helperKeyFor answers '' for
+          // "my turn is not on" and "I am not a helper": both are ordinary answers, not faults, and both mean
+          // this phone holds no key for this session and opens nothing in it.
+          const at = Math.floor(Date.now() / 1000);
+          let k = '';
+          try { k = helperKeyFor(grant, me, at, (ct) => nip44d(ct, nip44ck(sk, e.pubkey))); } catch (err) { k = ''; }
+          // NO SEPARATE RETRY PASS. There was one, and the sabotage matrix proved it was dead code: deleting
+          // the call left every test green, because the emit loop below re-opens each record it has not
+          // opened yet, every time. One place decides, and it is the place a test can reach.
+          if (k) { keys.set(sid, k); _ckMemKeySet(pubk, sid, k); } else { keys.delete(sid); _ckMemKeyDel(pubk, sid); }
+          emit(); return;
+        }
+        // ── A PARENT AT THE ROOM DOOR ─────────────────────────────────────────────────────────────────────
+        // PLACED BEFORE THE REGISTER BRANCH so the ordering reads the way the two prefixes actually relate:
+        // they are DISJOINT (`checkin:` vs `checkina…`), so neither branch can swallow the other whichever
+        // way round they sit. Said out loud because it is the kind of thing a later edit assumes wrongly.
+        if (d.startsWith(CHECKINARRIVAL_D)) {
+          // THE ADDRESS IS `<sid>:<authorpubhex>` AND THE AUTHOR IS TAKEN FROM IT, then checked against the
+          // signature. The relay refuses any other shape (arrivalIdOk, at all four doors) -- but a phone that
+          // trusted its relay to have done so would show a family's name beside somebody else's key on a
+          // hostile or out-of-date box, and the name is what the worker confirms the pairing against.
+          const rest = d.slice(CHECKINARRIVAL_D.length);
+          const cut = rest.lastIndexOf(':');
+          const sid = cut > 0 ? rest.slice(0, cut) : '';
+          const who = cut > 0 ? rest.slice(cut + 1).toLowerCase() : '';
+          if (!sid || !/^[0-9a-f]{64}$/.test(who) || who !== String(e.pubkey || '').toLowerCase()) return;
+          // AND THE CLEARTEXT TAG MUST AGREE WITH THE ADDRESS, for the same reason the relay requires it: the
+          // tag is what a reader routes by and the address is what the store keys on, and an arrival that
+          // could live at one session's address while rendering on another session's screen is the F1 shape.
+          if (checkinSessionOf(e.tags) !== sid) return;
+          const key = sid + '|' + who;
+          const held = arrivals.get(key);
+          if (held && (held.ts || 0) > (e.created_at || 0)) return;      // newest wins per address
+          // "WE ARE NOT COMING AFTER ALL" -- a tombstone at the family's own address, which the relay admits
+          // from that family and from nobody else. Honoured unconditionally BECAUSE of that: unlike a check-in
+          // tombstone there is no author question left to ask, the address names the only person who may
+          // write it, and the check two lines up has already tied the address to the signature.
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { arrivals.delete(key); emit(); return; }
+          arrivals.set(key, { pub: who, session: sid, at: e.created_at || 0, ts: e.created_at || 0 });
+          emit(); return;
+        }
+        // ── A CHILD'S PRESENCE AT A SESSION ───────────────────────────────────────────────────────────────
+        if (d.startsWith(CHECKIN_D)) {
+          const id = d.slice(CHECKIN_D.length);
+          if (!id) return;
+          const held = recs.get(id);
+          if (held && (held.ts || 0) > (e.created_at || 0)) return;   // newest wins per address
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) {
+            // Honoured only from an author whose ordinary records this reader would already trust — the church
+            // or a steward still on its signed roster. A helper cannot tombstone even their own record
+            // (encRemove emits no ['session'] tag, so accept()'s CHECKIN_D branch refuses it), and honouring a
+            // stranger's tombstone would hide a child who is in the room.
+            if (_churchVoice(pubk, { _by: e.pubkey })) { recs.delete(id); rows.delete(id); emit(); }
+            return;
+          }
+          rows.delete(id);   // a newer version must be re-opened, never inherit the old body
+          recs.set(id, { sid: checkinSessionOf(e.tags), tags: e.tags, ts: e.created_at || 0, by: e.pubkey });
+          openRec(id, recs.get(id));
+          emit(); return;
+        }
+      },
+      onroster() { emit(); },   // a roster arriving changes which tombstones are honoured
+      // NOT STICKY, and this one is deliberately unlike its siblings. Elsewhere an EOSE with nothing to show
+      // is swallowed so a reconnect cannot blank a card. Here the empty answer IS the answer a worker needs —
+      // "you are cleared and no key has reached this phone" is the state to report, and holding it back would
+      // leave the screen on a loading state that never resolves.
+      oneose() { eosed = true; emit(); },
+    });
+    return () => { try { window.removeEventListener('trinity-profiles', onNames); } catch (err) {} offDocs(); };
+  },
+
+  // ── A PARENT SAYS "WE ARE HERE" ──────────────────────────────────────────────────────────────────────────
+  // STEP 1 of the parent surface. reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md section 3: a
+  // parent announces themselves at the door of the children's room, and the WORKER turns that into the
+  // register row.
+  //
+  // WHY THIS IS NOT A CHECK-IN, and the whole reason the document exists. Design section 7, the owner: "most
+  // children getting checked in will not have a phone." So in the ordinary case nothing at the relay links a
+  // parent to a child -- `guardianOfIn` is keyed on the CHILD's pubkey, and `guardians:` is owner-only and is
+  // never served to an ordinary member. A parent-authored `checkin:` row would therefore have had no
+  // authority to be checked against and would have reduced to "ANY MEMBER MAY INVENT A CHILD AND A PICKUP
+  // CODE" -- the hole F-B (90c4bf5) closed. Forging an arrival buys a spurious line on a worker's screen, the
+  // same data-quality nuisance the printed room code already knowingly accepts. Forging a register row buys a
+  // child.
+  //
+  // IT CARRIES NO KEY MATERIAL AND NO CHILD'S NAME. The body is sealed to the author's OWN key -- non-empty
+  // (an empty content is the tombstone convention; see writeCheckin's sentinel for what that cost once) and
+  // opaque to every reader including the worker, who never opens it and does not need to. The document's only
+  // job is to deliver the parent's pubkey provably, and the signature has already done that. The worker types
+  // the child's name at the desk exactly as she does today.
+  //
+  // ⚠ NOTHING IN app/ CALLS THIS YET, AND THAT IS SAID PLAINLY RATHER THAN LEFT TO BE FOUND. The parent's own
+  // surface -- entering the room code from the door, and reading their child's record back -- is STEP 2,
+  // because reading back needs a guardian-sealed copy that does not exist (see the STOP-AND-PLAN section of
+  // reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md). This function ships now so that the relay tests
+  // drive the SHIPPED writer rather than a mirror of it, which is the trap tests-must-drive-shipped-code
+  // records. It grants no authority it did not already have: any member could sign this event by hand, and
+  // the gate that matters is the relay's.
+  //
+  // IT FAILS LOUD, NEVER OPTIMISTICALLY (design section 8). _publishAny THROWS unless a relay accepted the
+  // write, so a refusal (not a member, a closed session, somebody else's address) and a mid-service outage
+  // both land here as { ok:false } -- the parent is told to see the desk rather than believing they are
+  // expected in a room that has never heard of them.
+  //
+  // Returns { ok:true, id } or { ok:false, reason }.
+  async writeArrival(churchNpub, rec) {
+    const cp = toPub(churchNpub);
+    if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    const sid = String((rec || {}).session || '').trim();
+    if (!sid) return { ok: false, reason: 'no-session' };
+    // THE ADDRESS NAMES ME. The relay enforces this at all four doors (arrivalIdOk); composing it from `pub`
+    // here means the shipped writer can never be the thing that violates it.
+    const d = CHECKINARRIVAL_D + sid + ':' + pub;
+    let body;
+    try { body = nip44e(JSON.stringify({ at: Math.floor(Date.now() / 1000) }), nip44ck(sk, pub)); }
+    catch (e) { return { ok: false, reason: 'seal-failed' }; }
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', d], ['t', NET], ['church', cp], ['session', sid]], content: body }, sk);
+    // THREE ANSWERS, NOT TWO — and the third is the one this writer got wrong on a real phone. See _PUB_REFUSED
+    // for the measurement. `refused` means a relay read the arrival and said no: settled, tell them plainly.
+    // Anything else means NOBODY ANSWERED, which is not the same as "it did not send" — the event is signed and
+    // on the wire and may already be on the worker's screen. A parent must not be sent to the desk to report a
+    // failure that did not happen, so the caller gets a distinct reason and the screen says "we could not
+    // confirm", never "that did not send".
+    try { await _publishAny(relaysForChurch(cp), evt); }
+    catch (e) {
+      return { ok: false, reason: (e && e.refused) ? 'refused' : 'unconfirmed',
+               message: String((e && e.message) || e), id: d };
+    }
+    return { ok: true, id: d };
+  },
+
+  // ── A WORKER CHECKS A CHILD IN, FROM HER OWN PHONE ───────────────────────────────────────────────────────
+  // slice B of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. The write half of slice 3: a cleared,
+  // in-window worker adds a named child to the register. §7 of the design: most children have no phone, so the
+  // child is NAMED here (typed at the desk) and has no account.
+  //
+  // KNOT 1 — ONLY THE ['ck'] COPY. She holds the SESSION key (unwrapped from her envelope slot, kept in
+  // _ckMemberKeys by the reader) and NOT the safeguarding ring key, so she seals ONLY the ck copy and leaves
+  // `content` empty. The safeguarding ring still reads her record: the ring stewards are KEEPERS of this
+  // session's envelope, so they hold the session key and open her ck copy through it (the console's
+  // encSubscribe falls back to it, gateway serves it). She writes no ring copy because she cannot make one.
+  //
+  // THE ['p'] GUARDIAN TAG COMES FROM A SIGNED ARRIVAL, OR IT DOES NOT COME AT ALL. 2026-09-11, step 1 of the
+  // parent surface. The console names guardians from the church's guardian map; a WORKER's phone does not hold
+  // that map and must not gain it (the relay withholds minors:/guardians: from ordinary members, on purpose).
+  // So this writer NEVER GUESSES A GUARDIAN. `rec.guardian` is only ever the pubkey the WORKER CONFIRMED off an
+  // arrival on her screen — a document the relay admitted only from that pubkey's own address, so the link
+  // between the tag and the person is a signature and not an inference. Absent or malformed, the record is
+  // written with no guardian link at all, exactly as it was before today: DOMAIN.md and design §10, nothing in
+  // this feature blocks a child reaching the room, and "the family has no app" is the ordinary Sunday.
+  //
+  // WHAT THE TAG BUYS AND WHAT IT DOES NOT. canRead's CHECKIN_D branch serves a p-tagged pubkey the record, so
+  // the named guardian is handed CIPHERTEXT they cannot open — there is no guardian-sealed copy, which is
+  // STEP 2 and deliberately not built here (a `gk` written with no reader is an engine nobody consults). That
+  // delivery is not new: a console-written record has carried p-tags since the feature shipped.
+  //
+  // IT FAILS LOUD, NEVER OPTIMISTICALLY (design §8). No session key held → her turn is not on, or no envelope
+  // has reached this phone: she is not a writer the relay would admit, so this returns { ok:false } at once
+  // rather than pretending. And _publishAny THROWS unless a relay actually accepted the write — a relay
+  // refusal (not a helper, out of window) and a mid-session outage both land here as { ok:false }, so the
+  // screen tells her it did not work and to see the desk, rather than showing a child as checked in when the
+  // room does not. This is NOT "blocking a check-in": a worker with a live key is never refused by us; a
+  // phone with no key has no cryptographic means to write a readable record in the first place.
+  //
+  // Returns { ok:true, id } or { ok:false, reason }.
+  async writeCheckin(churchNpub, rec) {
+    const cp = toPub(churchNpub);
+    if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    const o = rec || {};
+    const sid = String(o.session || '').trim();
+    if (!sid) return { ok: false, reason: 'no-session' };            // a record with no session cannot be opened by a helper — and the door needs one
+    const keyHex = _ckMemKeyGet(cp, sid);
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: 'no-key' };   // fail LOUD: turn not on / no envelope on this phone
+    const childName = String(o.childName || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!childName) return { ok: false, reason: 'no-name' };
+    // ONE PUBKEY, IN ONE SPELLING, OR NONE. A 64-hex string and nothing else: an npub, a name, an object or a
+    // list would each reach the tag as something the relay's read gate cannot match and readers would show as
+    // a guardian who is not one. Silently dropped rather than refused, because a record with no guardian link
+    // is a complete record and refusing the check-in would block a child over a display detail.
+    // ⚠ `typeof === 'string'` FIRST, and it is not belt-and-braces. JS stringifies a ONE-ELEMENT ARRAY to its
+    // element, so `String(['<64 hex>'])` is 64 hex characters and a bare String()+regex admitted a LIST where
+    // a pubkey belongs. Caught by the malformed-input test below, 2026-09-11. A list is the shape this writer
+    // must never accept — the console names guardians from the church's map, this phone has no map, and one
+    // signed arrival names exactly one person.
+    const guardian = (typeof o.guardian === 'string' && /^[0-9a-f]{64}$/.test(o.guardian.toLowerCase())) ? o.guardian.toLowerCase() : '';
+    const id = 'ci' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    // THE SAME BODY SHAPE THE CONSOLE'S publishCheckin WRITES, so one reader opens both. `guardians: []` —
+    // this writer holds no guardian map (see the note above). `out: null` — a check-in is not a checkout;
+    // release is its own document (slice C / KNOT 2).
+    const body = {
+      id, child: '', childName,
+      date: String(o.date || '') || _todayISO(),
+      in: Math.floor(Date.now() / 1000), out: null,
+      code: String(o.code || '').trim(), room: String(o.room || '').trim(),
+      note: String(o.note || '').trim(), session: sid, guardians: guardian ? [guardian] : [],
+    };
+    // THE PARENT'S OWN COPY — STEP 2 of the parent surface. One ['gk'] per guardian named in the body,
+    // which on this writer is EXACTLY the one pubkey a signed arrival delivered and never a guess (see the
+    // note above on why this phone holds no guardian map). Sealed under nip44ck(mySk, guardianPub), which
+    // the parent's phone re-derives as nip44ck(theirSk, e.pubkey) — the conversation key is symmetric.
+    // Derived from `body`, so it carries the same child name, pickup code and times the worker sees.
+    //
+    // IT IS NOT INSIDE THE try BELOW: checkinGuardianCopies swallows a per-guardian failure and answers []
+    // rather than throwing, because a parent's copy failing must cost that parent their copy and never cost
+    // the CHILD their check-in (reference/DOMAIN.md, design §10). A record with no gk is a complete record.
+    const gks = checkinGuardianCopies(body, (plain, gp) => nip44e(plain, nip44ck(sk, gp)));
+    let ck, sentinel;
+    try {
+      ck = nip44e(JSON.stringify(body), _unhex(keyHex));
+      // ⚠ content MUST NOT BE EMPTY. An empty `content` is the TOMBSTONE convention: checkinTombstone() in the
+      // relay (`!e.content`) refuses it as a deletion (F-D: a helper writes records, never removes them), and
+      // subscribeCheckinRegister treats it as a withdrawal of the record. A worker holds no ring key, so she
+      // cannot write the ring's copy that fills `content` for a console record — she seals a NON-EMPTY
+      // sentinel under the SESSION key instead. It is opaque to the ring (encOpen tries the ring key, throws,
+      // and falls back to the ['ck'] copy) and no reader ever surfaces it: it exists only so the record is a
+      // record and not a tombstone. KNOT 1 of the scope doc.
+      sentinel = nip44e(JSON.stringify({ enc: 2 }), _unhex(keyHex));
+    } catch (e) { return { ok: false, reason: 'seal-failed' }; }
+    // CLEARTEXT TAGS, matching _encCleartextTags in the console so the relay's read gate and both readers key
+    // on the same strings. A ['p'] ONLY when a signed arrival supplied it. content is the non-empty sentinel
+    // above, never the ring's copy.
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['enc', '2'],
+             // EXACTLY THE ONE PUBKEY THE SIGNED ARRIVAL DELIVERED, and never a second. A list here would be a
+             // guess about a family, and a guess is what this writer has no map to make.
+             ...(guardian ? [['p', guardian]] : []), ['ck', ck], ...gks],
+      content: sentinel }, sk);
+    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    return { ok: true, id };
+  },
+
+  // ── A WORKER RELEASES A CHILD — CHECKOUT AND MANUAL RELEASE ───────────────────────────────────────────────
+  // slice C / KNOT 2 of reference/SCOPE-CHECKIN-MEMBER-ACTIONS-2026-09-11.md. A checkout must NOT rewrite the
+  // check-in record: F-B refuses a helper writing at an address the church already holds one at, and a child
+  // checked in by the console lives at a church-held address. So a release is its OWN document — a fresh
+  // `checkin:<newId>` carrying a cleartext ['rel', <checkinId>] tag — authored by the helper, admitted by the
+  // SAME already-audited CHECKIN_D helper gate (fresh address → F-B and F1 both pass), and folded onto the
+  // check-in row by the reader when their SESSION tags match.
+  //
+  // THE CODE MATCH HAPPENS ON THE SCREEN, NOT HERE. The relay holds no keys, so it cannot compare a code; the
+  // worker's phone holds the record's ck copy and compares `rec.code` there (KidsRow), and a failed match is
+  // LOUD and writes nothing (§6 rule 5). This function is the WRITE that follows a match, or a MANUAL release
+  // (`manual:true`) for a dead phone / a grandparent — recorded distinctly so a register that omits it is not
+  // incomplete, NOT because we suspect the helper (§7 / §10).
+  //
+  // Returns { ok:true, id } or { ok:false, reason }.
+  async releaseCheckin(churchNpub, rec) {
+    const cp = toPub(churchNpub);
+    if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    const o = rec || {};
+    const sid = String(o.session || '').trim();
+    const rel = String(o.rel || '').trim();
+    if (!sid) return { ok: false, reason: 'no-session' };
+    if (!rel) return { ok: false, reason: 'no-rel' };                // a release must name the check-in it collects
+    const keyHex = _ckMemKeyGet(cp, sid);
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) return { ok: false, reason: 'no-key' };   // fail LOUD, same as writeCheckin
+    const id = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    // THE GUARDIANS OF THE CHILD BEING CHECKED OUT, carried through from the check-in row the worker is
+    // releasing — normalised by the SAME shared function the tags and the seal use, so a hostile sealed body
+    // (`guardians: [{...}]`, `guardians: 'npub1…'`) reaches neither a tag nor a cipher. §7 of the design:
+    // a manual release must be "visible to the guardian afterwards", and the scope doc's KNOT 2 names this
+    // ['p'] tag for exactly that.
+    //
+    // ⚠ WITHOUT THIS A PARENT'S SCREEN SHOWS A CHILD PRESENT FOR EVER. A guardian is never served a
+    // tombstone, and a worker's checkout is a SEPARATE document rather than an edit of the check-in (F-B), so
+    // "collected" can only reach a parent as a release THEY can read. That is the known consequence the scope
+    // doc says to carry, and this is where it is paid for.
+    const gpubs = checkinGuardianPubs(o);
+    const body = { id, rel, session: sid, out: Math.floor(Date.now() / 1000), manual: o.manual === true, by: pub, guardians: gpubs };
+    // One copy per guardian, same derivation as writeCheckin's. Outside the try for the same reason: a
+    // parent's copy failing must never be the thing that stops a child being signed out of a room.
+    const gks = checkinGuardianCopies(body, (plain, gp) => nip44e(plain, nip44ck(sk, gp)));
+    let ck, sentinel;
+    try {
+      ck = nip44e(JSON.stringify(body), _unhex(keyHex));
+      sentinel = nip44e(JSON.stringify({ enc: 2 }), _unhex(keyHex));   // non-empty, or the relay reads it as a tombstone (see writeCheckin)
+    } catch (e) { return { ok: false, reason: 'seal-failed' }; }
+    // A ['rel'] tag routes the reader's fold; ['p'] is what makes canRead's CHECKIN_D branch serve this
+    // release to the parent it names (that branch is UNCHANGED — it has always served a p-tagged pubkey);
+    // content is the sentinel, NOT a ring copy.
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['rel', rel], ['enc', '2'],
+             ...gpubs.map(h => ['p', h]), ['ck', ck], ...gks],
+      content: sentinel }, sk);
+    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    return { ok: true, id };
+  },
+
+  // ── MY OWN CHILDREN, AT TODAY'S SESSION — THE PARENT'S SIDE ────────────────────────────────────────────
+  // STEP 2 of the parent surface. reference/DESIGN-CHECKIN-IN-THE-MEMBER-APP-2026-09-09.md §2 ("parents get
+  // check-in for their own children only, with no new key at all") and §4 ("the parent shows the code from
+  // their phone; the worker checks it matches"). The owner's constraint, in his words: *"parents don't have
+  // any records surfaced to them… the code must still be shown as we designed."*
+  //
+  // ── WHAT THIS IS, AND THE FOUR THINGS IT IS NOT ────────────────────────────────────────────────────────
+  // It is ONE thing: the children a parent's own key can prove are theirs, with the pickup code the worker
+  // will ask for. It is NOT a register — there is no list of the room, no other family, no roll, and nothing
+  // here can widen into one, because the only records it ever renders are the ones a ciphertext SEALED TO
+  // THIS PHONE'S OWN KEY opened. It is NOT a gate: the relay decided who is served what long before this ran
+  // (canRead's CHECKIN_D branch, unchanged, serves a ['p']-tagged guardian). It is NOT a writer: a parent
+  // never authors a `checkin:` record (that is what `writeArrival` exists for) and there is deliberately NO
+  // release control anywhere on this path — a parent checking their own child out would route straight round
+  // the pickup code, which is the one thing the code is for. And it is NOT a claim about absence: see the
+  // tombstone note below.
+  //
+  // ── TWO CONDITIONS, BOTH REQUIRED, AND THE SECOND IS THE CRYPTOGRAPHIC ONE ─────────────────────────────
+  //   1. the record ['p']-tags ME — read from the CLEARTEXT tag, so it costs no key and it is the same field
+  //      the relay's own read rule keys on; and
+  //   2. one of its ['gk'] copies opens with MY OWN secret against the record's AUTHOR.
+  // The p-tag makes the phone agree with the box about which records are about my family, so a record reaching
+  // me down canRead's OTHER two routes — an in-window helper of the session, or a `guardianOfIn` parent of a
+  // pubkey the record names — is never rendered here as one of mine. The gk is the cryptographic half: only a
+  // ciphertext sealed to my key opens at all.
+  //
+  // ⚠ AND HERE IS WHAT THE CONJUNCTION DOES NOT BUY, corrected 2026-09-11 after an audit refuted the claim
+  // that stood here. It said requiring the p-tag defeated a hostile in-window helper (red-team F1), on the
+  // reasoning that "she has to name me there too". SHE CAN: she writes both fields. A helper the relay admits
+  // under accept()'s CHECKIN_D branch can write a record at a fresh address, ['p']-tag any member, and seal a
+  // ['gk'] to them — and that member's phone renders a child who does not exist, with a code that releases
+  // nobody.
+  //
+  // THIS READER DOES NOT FILTER BY AUTHOR, and that is the SAME known relay defect subscribeCheckinRegister
+  // records above, not a new one and not a choice made here. Filtering to `_churchVoice` would hide every
+  // WORKER-WRITTEN record — which is the ordinary path, since a worker's phone is what turns an arrival into
+  // a row — and this phone cannot tell a cleared helper from any other member, because it holds no envelope
+  // and no roster. `_by` is carried on every row so the fix, when the relay gets one, has somewhere to land.
+  //
+  // WHAT IT IS WORTH, stated rather than glossed: forging one buys a spurious line on a parent's screen —
+  // the same data-quality nuisance the printed room code and the arrival queue already knowingly accept. It
+  // does not buy a child: the code is compared at the door against the WORKER's copy of the register, and a
+  // child who was never checked in has no row there. And a false "collected" needs the release's ['session']
+  // tag to equal the check-in's, which means an in-window helper OF THAT SESSION — who can check that child
+  // out for real, so it is not an escalation.
+  //
+  // ── EVERY `gk`, NOT THE FIRST ──────────────────────────────────────────────────────────────────────────
+  // `readCheckinGuardianCopy` iterates. A child with two parents carries two copies, and taking the first
+  // hands the mother's ciphertext to the father: she reads the code and he reads nothing, which looks exactly
+  // like "the app is broken for me". The rule and its contrast with the ['ck'] reader are written up in
+  // scripts/checkin-role-source.mjs.
+  //
+  // ── "COLLECTED" ARRIVES AS A DOCUMENT, NEVER AS AN ABSENCE ─────────────────────────────────────────────
+  // A guardian is never served a tombstone (`removeCheckin` publishes no tags at all, so canRead finds no
+  // ['session'] and no ['p'] and refuses it). So a parent's screen CANNOT learn "collected" from a record
+  // going away, and must learn it from a RELEASE it can read — its own gk copy on the release document,
+  // routed by the release's cleartext ['rel'] tag and folded only when the two SESSION tags agree (the same
+  // structural guard the worker's register applies, so a release scoped to one session can never mark a
+  // child collected in another). A console checkout is different and needs no fold: it rewrites the record
+  // itself with `out` set, and the parent's copy of the rewrite carries it.
+  //
+  // ── AND A WINDOW, WHICH IS LOAD-BEARING RATHER THAN TIDINESS ───────────────────────────────────────────
+  // Because no tombstone ever arrives, a record with nothing to fold onto it would sit on a parent's screen
+  // saying a child is in a room, for ever — three Sundays later included. So only TODAY'S records are shown.
+  //
+  // ⚠ ONE MEASURE, AND IT IS THE EVENT'S OWN created_at — NEVER THE SEALED BODY'S `in`. Corrected 2026-09-11
+  // after an audit measured two faults in reading `in`:
+  //   • IT IS UNBOUNDED IN THE FUTURE. A body carrying `in: now + 400 days` sat on a parent's screen at +0,
+  //     +30, +200 and +399 days. The one thing between a stale record and "a child is in a room for ever" was
+  //     itself a field a helper writes.
+  //   • AND IT SILENTLY EMPTIED THE SCREEN. A record published NOW whose body said `in` was 17 hours ago —
+  //     an ordinary console clock drift — vanished entirely, with `askAtDesk` at 0: indistinguishable from
+  //     "no children here", which is the exact conflation the three states below exist to prevent.
+  // `created_at` is the timestamp every reader in this app already routes by (newest-wins, the hub's cursor),
+  // it is present whether or not the copy opened — so the shown and the counted branches now use the SAME
+  // measure, which they did not — and it is the one thing about a record this reader was already trusting.
+  //
+  // AND IT IS SYMMETRIC. A record dated in the FUTURE is shown for one window from now and then ages out,
+  // rather than for ever. It hides nothing a parent needs: the code they need is today's.
+  //
+  // ── AND THE STATE THAT HAS NO COPY AT ALL ──────────────────────────────────────────────────────────────
+  // A walk-up at the desk, a dead phone, a record written before this shipped, a console that could not seal
+  // — all produce a record that names me and that I cannot open. That is `askAtDesk`, counted separately and
+  // never conflated with an empty screen: "served and unreadable" and "no children here" are different
+  // things, and the screen has words for the first. It is emitted from the first event onward rather than
+  // waiting for EOSE, because a parent standing at a door must not be shown a spinner that never resolves.
+  //
+  // cb({ children, askAtDesk, settled }).
+  subscribeMyChildrenCheckins(churchNpub, cb) {
+    const pubk = toPub(churchNpub);
+    const EMPTY = { children: [], askAtDesk: 0, settled: false };
+    if (!pubk) { cb({ ...EMPTY }); return () => {}; }
+    const me = String(pub || '').toLowerCase();
+    if (!me || !sk) { cb({ ...EMPTY }); return () => {}; }
+    const recs = new Map();     // record id (the d-tag suffix) -> { sid, rel, tags, ts, by, mine }
+    const rows = new Map();     // record id -> the opened body, once
+    let eosed = false;
+
+    // ONE RECORD, ONE VERDICT: 'ok' | 'not-mine' | 'sealed-to-someone-else'. The ONLY place this phone's own
+    // key is used, and it is only reached for a record whose CLEARTEXT ['p'] tag already names me.
+    const openRec = (id, r) => {
+      if (!r.mine) return 'not-mine';
+      let obj = null;
+      try { obj = readCheckinGuardianCopy(r.tags, (ct) => nip44d(ct, nip44ck(sk, r.by))); } catch (err) { obj = null; }
+      if (!obj) return 'sealed-to-someone-else';
+      // THE FIELDS THE SCREEN PAINTS ARE TYPED HERE, NOT TRUSTED — the same discipline the worker's register
+      // carries and for the same measured reason: a body with `childName: {…}` reached a row as a JSX child
+      // on 2026-09-11's red team, React refuses an object child by throwing, and the only boundary above a
+      // Today card is the app root. One hostile record would blank the whole member app.
+      const _str = (v) => (typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v) ? String(v) : ''));
+      const _when = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && /^\d{1,12}$/.test(v) ? Number(v) : undefined));
+      // `_by` IS CARRIED AND NOT USED, exactly as subscribeCheckinRegister carries it and for the same
+      // reason: this reader does not filter by author (see the note above on what that costs and why a
+      // client-side filter would hide the ordinary worker-written record), so the author travels with the
+      // row and the fix has somewhere to land the day the relay gets one.
+      rows.set(id, { id, session: r.sid, ts: r.ts, _by: r.by,
+        childName: _str(obj.childName), code: _str(obj.code), in: _when(obj.in), out: _when(obj.out),
+        rel: _str(obj.rel), manual: obj.manual === true });
+      return 'ok';
+    };
+
+    const emit = _coalesce(() => {
+      const at = Math.floor(Date.now() / 1000);
+      // ONE MEASURE FOR BOTH BRANCHES, off the event's own created_at, and symmetric — see the note above
+      // for the two faults reading the sealed body's `in` had. `row` is still taken so a caller cannot
+      // reintroduce the split by passing it.
+      const fresh = (r, _row) => Math.abs(at - (r.ts || 0)) <= MYKIDS_WINDOW;
+      let askAtDesk = 0;
+      const kids = [];
+      // Keyed session|checkinId, structurally, so a release admitted under one session can never fold onto
+      // another session's row.
+      const releaseByRel = new Map();
+      for (const [id, r] of recs) {
+        // THE RETRY. Records and the app's own readiness race on a cold start, and re-opening here — rather
+        // than deciding once at arrival — costs one decryption per record thanks to the `rows` memo.
+        const state = rows.has(id) ? 'ok' : openRec(id, r);
+        if (state === 'not-mine') continue;          // not a record about my family; never counted, never shown
+        if (state === 'sealed-to-someone-else') {
+          // A RELEASE I CANNOT OPEN IS NOT A MISSING PICKUP CODE. Routed by its cleartext ['rel'] tag, which
+          // needs no key: counting it would tell a parent to ask for a code for a child already collected.
+          if (!r.rel && fresh(r, null)) askAtDesk++;
+          continue;
+        }
+        const row = rows.get(id);
+        if (!fresh(r, row)) continue;
+        if (r.rel) {
+          const k = r.sid + '|' + r.rel;
+          const prev = releaseByRel.get(k);
+          if (!prev || (row.ts || 0) >= (prev.ts || 0)) releaseByRel.set(k, row);
+          continue;                                   // a release is never a child's row
+        }
+        kids.push(row);
+      }
+      cb({
+        children: kids.map((r0) => {
+          const rel = releaseByRel.get(r0.session + '|' + r0.id);
+          return rel ? { ...r0, out: (rel.out != null ? rel.out : r0.out), manual: !!rel.manual } : r0;
+        }).sort((a, b) => String(a.childName || '').localeCompare(String(b.childName || '')) || (a.ts || 0) - (b.ts || 0)),
+        askAtDesk,
+        settled: eosed,
+      });
+    });
+
+    return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
+      want: [CHECKIN_D],   // replay only this slice (see _hubBufSet)
+      onevent(e, d) {
+        // ⚠ `checkinarrival:` IS NOT MATCHED HERE and does not need excluding — the colon makes the two
+        // prefixes disjoint (`checkin:` vs `checkina…`), the same fact subscribeCheckinRegister records.
+        if (!d.startsWith(CHECKIN_D)) return;
+        const id = d.slice(CHECKIN_D.length);
+        if (!id) return;
+        const held = recs.get(id);
+        if (held && (held.ts || 0) > (e.created_at || 0)) return;      // newest wins per address
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) {
+          // Honoured only from an author whose ordinary records this reader would already trust. In practice
+          // a guardian is never SERVED a tombstone at all (canRead's CHECKIN_D branch finds no ['session']
+          // and no ['p'] on one and refuses it), so this is belt and braces — and it must stay strict:
+          // honouring a stranger's tombstone would erase a parent's own child's pickup code from their
+          // screen while the child is in the room.
+          if (_churchVoice(pubk, { _by: e.pubkey })) { recs.delete(id); rows.delete(id); emit(); }
+          return;
+        }
+        rows.delete(id);   // a newer version must be re-opened, never inherit the old body
+        recs.set(id, {
+          sid: checkinSessionOf(e.tags),
+          // BOTH ROUTING FACTS COME FROM CLEARTEXT TAGS THE RELAY ITSELF ENFORCES ON, never from a sealed
+          // body a helper wrote — so a release cannot claim a session it was not admitted under, and a
+          // record cannot claim a guardian the relay did not serve it to.
+          rel: ((e.tags.find(t => t[0] === 'rel') || [])[1] || ''),
+          mine: e.tags.some(t => t[0] === 'p' && String(t[1] || '').toLowerCase() === me),
+          tags: e.tags, ts: e.created_at || 0, by: e.pubkey,
+        });
+        emit();
+      },
+      onroster() { emit(); },   // a roster arriving changes which tombstones are honoured
+      // NOT STICKY, like the worker's register and unlike most cards in this app: the empty answer IS an
+      // answer here, and holding it back would leave a parent at a door on a state that never resolves.
+      oneose() { eosed = true; emit(); },
+    });
+  },
+
   // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a
   // need present on the church's relay was written by an authorised pubkey. cb([{ id, displayLabel, type,
   // startDate, endDate, recipient, notes, ts }]).

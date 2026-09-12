@@ -11,7 +11,11 @@ import { npubEncode } from 'nostr-tools/nip19';
 const OUT = process.argv[2] || '/tmp';
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 if (!CHROME) { console.error('no chromium'); process.exit(1); }
-const PORT = 8894, CDP = 9351;
+// MOVED OFF 8894/9351 ON 2026-09-11: restore-storm.test.mjs owns both. Nothing had ever checked a probe's
+// ports against a test's (scripts/test-ports.test.mjs read only *.test.mjs until that day), and a clash here
+// is the quiet kind — run this probe while the suite is going and its relay can answer on behalf of the one
+// restore-storm meant to start, so a broken restore reports green.
+const PORT = 8915, CDP = 9361;
 const ROOT = new URL('..', import.meta.url).pathname;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 

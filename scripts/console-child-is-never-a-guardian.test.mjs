@@ -61,9 +61,9 @@ const furniture = () => ({
 });
 
 // ── the Members panel, over a church whose guardians map and minors list we set ────────────────────────────
-async function membersPanel({ minors, guardians, requests = [] }) {
+async function membersPanel({ minors, guardians, requests = [], checkinCleared = [] }) {
   const { React, draw } = miniReact();
-  const calls = { minors: [], guardians: [] };
+  const calls = { minors: [], guardians: [], ckRevoked: [] };
   const g = {
     React, ...furniture(),
     window: {
@@ -73,7 +73,10 @@ async function membersPanel({ minors, guardians, requests = [] }) {
         setApproved: () => Promise.resolve(true),
         setGuardians: (m) => { calls.guardians.push(m); return Promise.resolve(true); },
         setNoPhoto: () => Promise.resolve(true),
+        revokeCheckinPermission: (p) => { calls.ckRevoked.push(p); return Promise.resolve({ id: 'x' }); },
       },
+      // who holds a CHECK-IN clearance, in the shape subscribeCheckinPermissions delivers
+      useStewardCheckinPermissions: () => checkinCleared.map(p => ({ person: p, source: 'steward', lifetime: 'open', from: 0, until: null })),
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({}), useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors, approved: [], nophoto: [], guardians }),
       useStewardGuardians: () => guardians,
@@ -91,6 +94,23 @@ async function membersPanel({ minors, guardians, requests = [] }) {
 }
 
 const tick = () => new Promise(r => setTimeout(r, 5));
+
+// ── 0. the whole panel, pressing the real control: marking withdraws a check-in clearance ─────────────
+// The audit of feb333f found the `ckClearedSet` derivation in DashMembers outside every slice — both slicing
+// tests inject it themselves — so the wire from the hook to toggleMinor was untested and could be cut without
+// a test moving. This presses "Mark as a child" on the rendered panel with the hook returning that person.
+
+test('MARKING A CHILD ON THE RENDERED PANEL withdraws the check-in clearance the hook says they hold', async () => {
+  const s = await membersPanel({ minors: [], guardians: {}, checkinCleared: [ADULT] });
+  const mark = s.btn(/^Mark as a child/);
+  assert.ok(mark.length >= 1, 're-anchor: no "Mark as a child" control on the rendered panel');
+  const mine = mark.find(b => String(b.props['aria-label'] || '').includes('Ruth Okafor')) || mark[0];
+  mine.props.onClick();
+  await tick(); await tick();
+  assert.deepEqual(s.calls.ckRevoked, [ADULT],
+    'THE WIRE FROM useStewardCheckinPermissions TO toggleMinor IS CUT: marking a cleared person withdrew nothing. ' +
+    'revoked: ' + JSON.stringify(s.calls.ckRevoked) + ' minors writes: ' + JSON.stringify(s.calls.minors));
+});
 
 // ── 1. a request from a child ──────────────────────────────────────────────────────────────────────────────
 test('CONTROL: a guardian request from an ADULT still has a live Confirm that links them', async () => {
@@ -148,8 +168,22 @@ async function checkin({ minors, guardians, present }) {
       useStewardSafeguard: () => ({ minors, minorsKnown: true }),
       useStewardGuardians: () => guardians,
       useStewardMembers: members,
+      // ADDED 2026-09-10 with slice 2 of check-in. The panel reads the calendar so a record can name its
+      // session (the tag a cleared helper's read gate keys on) — an empty list here means "no service
+      // today", which is exactly the state this file's own subject does not depend on.
+      useStewardServices: () => [],
+      useStewardIdv: () => 1, useStewardConn: () => 1,
       addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
     },
+    useStewNarrow: () => false,
+    // The clearances panel is now DashCheckin's sibling on the same page. Stubbed rather than sliced in:
+    // this file is about who is printed as a pickup contact, and that panel prints nobody.
+    CheckinClearances: () => null,
+    // CheckinSessionKeys arrived 2026-09-10 with piece 3 of check-in sealing — DashCheckin renders it too.
+    CheckinSessionKeys: () => null,
+    // StewHelpLink arrived 2026-09-10 with the check-in copy cut — the register's intro note ends in a link
+    // to the 'console-checkin' guide. It lives in app/stew-help.jsx, same global scope in the real console.
+    StewHelpLink: () => null,
   };
   const mod = await loadSlices(
     [['function DashCheckin()', 'DashCheckin'], ['function CheckinPicker(', 'CheckinPicker'],

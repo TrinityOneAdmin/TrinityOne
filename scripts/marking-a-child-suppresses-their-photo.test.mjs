@@ -35,9 +35,9 @@ const slice = (from, to) => {
 // ASYNC since 2026-09-03: toggleMinor now AWAITS setMinors/setApproved so it can refuse to paint a
 // safeguarding change the relay did not accept (audit #4). The lift must await it too, or `calls` is read
 // before the writes have been recorded and every assertion here reads an empty list.
-async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared = false, pk = 'kidpub' }) {
+async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared = false, ckCleared = false, revokeOk = true, pk = 'kidpub' }) {
   const body = slice('const toggleMinor = async (pk) => {', '\n  };') + '\n  };';
-  const calls = { minors: [], approved: [], nophoto: [], reseal: [], notice: [] };
+  const calls = { minors: [], approved: [], nophoto: [], reseal: [], notice: [], ckRevoked: [] };
   const sg = {
     minors: marking ? [] : [pk],
     approved: cleared ? [pk] : [],
@@ -47,7 +47,7 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
   // `guardians` / `parentSet`: toggleMinor now reads the parent map when MARKING, to end any guardian role the
   // person holds (a child is never a guardian — D2). Nobody here is a guardian; that path has its own tests in
   // console-safeguarding-controls-are-wired.test.mjs.
-  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls', 'nameByPub', 'guardians', 'parentSet',
+  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls', 'nameByPub', 'guardians', 'parentSet', 'ckClearedSet',
     body + '\nreturn toggleMinor;')(
     sg,
     new Set(sg.minors),
@@ -57,12 +57,14 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
       setMinors: (l) => { calls.minors.push(l); return true; },
       setApproved: (l) => { calls.approved.push(l); },
       setNoPhoto: (l) => { calls.nophoto.push(l); },
+      revokeCheckinPermission: (p) => { calls.ckRevoked.push(p); return revokeOk ? { id: 'x' } : null; },
     } },
     (...a) => calls.reseal.push(a),
     (n) => calls.notice.push(n),
     calls,
     { },   // nameByPub — only read on the failure branches, which these cases do not take
     {}, new Set(),   // guardians, parentSet
+    new Set(ckCleared ? [pk] : []),   // ckClearedSet — who holds a check-in clearance
   );
   await fn(pk);
   return calls;
@@ -109,6 +111,31 @@ test('UNMARKING someone who was NOT suppressed must not suppress them', async ()
   const c = await runToggle({ marking: false, kidPhotosAllowed: false, alreadySuppressed: false });
   assert.equal(c.nophoto.length, 0,
     'unmarking a child SUPPRESSED their photo — the opposite of what the action means');
+});
+
+test('MARKING somebody as a child withdraws the check-in clearance they hold', async () => {
+  // Owner's decision 2026-09-11 (D4's second half): the relay refuses every use of a marked child's clearance,
+  // but the document stayed on disk, the console went on listing them under Check-in, and unmarking brought it
+  // quietly back. Youth-work already withdraws on the opposite transition; this is the same courtesy.
+  const c = await runToggle({ marking: true, kidPhotosAllowed: true, alreadySuppressed: false, ckCleared: true });
+  assert.deepEqual(c.ckRevoked, ['kidpub'], 'a child who held a check-in clearance still holds it on the relay after the marking');
+  assert.equal(c.notice.filter(n => n && n.tone === 'fail').length, 0, 'a successful withdrawal was reported as a failure');
+});
+test('…and says so when the relay refuses the withdrawal', async () => {
+  const c = await runToggle({ marking: true, kidPhotosAllowed: true, alreadySuppressed: false, ckCleared: true, revokeOk: false });
+  // THE LAST WRITE IS WHAT THE SCREEN SHOWS. The first version of this asserted a call COUNT and passed while
+  // the tail of toggleMinor overwrote the refusal with null (or the guardian success line) in the same tick —
+  // measured by the audit of feb333f. setMinorNotice is a useState setter; only the final value renders.
+  const last = c.notice[c.notice.length - 1];
+  assert.ok(last && last.tone === 'fail' && /check-in clearance/.test(last.text),
+    'A REFUSED WITHDRAWAL IS NOT WHAT THE SCREEN ENDS UP SHOWING — the notice written last was: ' + JSON.stringify(last));
+  assert.equal(c.reseal.length, 1, 'the child\'s reseal was skipped on the refusal path');
+});
+test('…and touches nobody who holds no check-in clearance, nor anyone being UNMARKED', async () => {
+  const a = await runToggle({ marking: true, kidPhotosAllowed: true, alreadySuppressed: false, ckCleared: false });
+  assert.deepEqual(a.ckRevoked, [], 'a withdrawal was published for somebody who was never cleared');
+  const b = await runToggle({ marking: false, kidPhotosAllowed: true, alreadySuppressed: false, ckCleared: true });
+  assert.deepEqual(b.ckRevoked, [], 'UNMARKING somebody withdrew their check-in clearance — that is the youth-work rule, not this one');
 });
 
 test('kidPhotosAllowed is derived from the CHURCH, and derived correctly', async () => {
