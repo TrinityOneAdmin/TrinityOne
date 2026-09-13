@@ -1418,27 +1418,42 @@ function MyChildrenCard({ ctx }) {
   // "that was turned away, take them to the desk" about an arrival ALREADY ON THE WORKER'S SCREEN. That is
   // device finding F1's harm, reintroduced through a different door; found by audit of 23f7200.
   // This card survives the fold, so the arrival does.
-  // ⚠ REHYDRATED FROM DISK, because React state alone does not survive leaving this screen. `app.jsx`
-  // renders ONE screen at a time, so a tab switch unmounts this card and everything it was holding: tap
-  // "We're here", glance at Community, come back, and the square was gone with the button offered again —
-  // over an arrival already on the worker's screen. Tap again on a flaky socket and the card reports "that
-  // was turned away, take them to the desk" about a check-in the worker is looking at. The fold was fixed
-  // earlier the same day; this is the same harm through the tab, and through an app restart.
+  // ⚠ THE STATE IS THE TRUTH AND THE STORE IS A MIRROR. Reading FROM the store instead would mean a full or
+  // refused localStorage leaves a parent with no square AT THE MOMENT OF THE TAP — strictly worse than the
+  // bug. `setArrivalOutcome` returns false rather than throwing, and this card carries on regardless.
+  const [arr, setArr] = React.useState({ busy: false, res: null, forSession: '' });
+  // ⚠ RE-READ WHENEVER IT BECOMES READABLE, NOT ONCE AT MOUNT — and the difference is the door a parent
+  // actually uses. A `useState` initialiser fixed the TAB SWITCH and not the RESTART: reading the store
+  // needs both the church npub AND `_mePub()`, and at a cold start neither exists yet. `createRoot().render()`
+  // is synchronous, while `deriveFromIdentity` sets `Fellowship.myPubkey` after two awaits — on native a
+  // dynamic import of secure storage plus a bridge round trip, which memory records deferred for MINUTES on
+  // a sleeping screen. That is exactly the parent's case: phone in a pocket, opened at the door. And
+  // `ctx.church` is null while `lockNow()` holds, which it does whenever a PIN is set and the pubkey has not
+  // landed. So the initialiser read an empty store and nothing ever looked again. Found by audit 2026-09-13.
   //
-  // ⚠ THE STATE IS STILL THE TRUTH HERE AND THE STORE IS A MIRROR. Reading FROM the store instead would
-  // mean a full or refused localStorage leaves a parent with no square AT THE MOMENT OF THE TAP — strictly
-  // worse than the bug. `setArrivalOutcome` returns false rather than throwing, and this card carries on.
-  const [arr, setArr] = React.useState(() => {
-    try {
-      const F = window.Fellowship, np = (ctx && ctx.church && ctx.church.npub) || '';
-      const o = (F && F.arrivalOutcome && np) ? F.arrivalOutcome(np) : null;
-      // The session is carried back so a stale answer cannot paint over today's door. WereHereSection
-      // already refuses anything whose `forSession` is not the session in window — the same rule `landed`
-      // and `inARoom` apply — so a morning arrival simply does not match the evening service.
-      return o ? { busy: false, res: { ok: o.ok, reason: o.reason }, forSession: o.session }
-               : { busy: false, res: null, forSession: '' };
-    } catch (e) { return { busy: false, res: null, forSession: '' }; }
-  });
+  // ⚠ KEYED ON THE TWO VALUES THAT ARRIVE LATE, so this runs the moment either turns up — and again on a
+  // CHURCH SWITCH, which does not remount this card (`screens.today` carries no `key`), so a mount-time read
+  // would never see the new church's record.
+  const npForArr = (ctx && ctx.church && ctx.church.npub) || '';
+  const meForArr = (window.Fellowship && window.Fellowship.myPubkey) || '';
+  React.useEffect(() => {
+    // ⚠ `meForArr` EARNS ITS PLACE IN THE DEPS, NOT IN THIS LINE. Measured: removing it from the guard
+    // changes nothing — `arrivalOutcome` goes through `_kidSlot`, which returns '' without a member, so the
+    // read already answers null and the state is left alone. Removing it from the DEPS below is what breaks
+    // the restart, because nothing then re-runs when identity lands. Kept here as belt-and-braces; if you
+    // are looking for the load-bearing half, it is the dependency array.
+    if (!npForArr || !meForArr) return;
+    let o = null;
+    try { const F = window.Fellowship; o = (F && F.arrivalOutcome) ? F.arrivalOutcome(npForArr) : null; } catch (e) { o = null; }
+    // ⚠ NEVER CLOBBER A LIVE ANSWER. A tap in flight, or one already answered in this mount, is newer than
+    // anything on disk. Without this guard a late identity event could overwrite the outcome of a tap the
+    // parent has just made — which is the harm this whole mechanism exists to prevent, arriving by a third
+    // route. The session travels with it, and WereHereSection refuses anything whose `forSession` is not the
+    // session in window, so a morning answer cannot paint the eleven o'clock door.
+    setArr(cur => (cur.busy || cur.res || cur.forSession) ? cur
+      : (o ? { busy: false, res: { ok: o.ok, reason: o.reason }, forSession: o.session }
+           : cur));
+  }, [npForArr, meForArr]);
   const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(MYKIDS_OPEN_KEY, v ? '1' : '0'); } catch (e) {} };
   const offers = wereHereOffers(ctx);
   // TWO REASONS TO LOOK AGAIN, AND ONLY ONE OF THEM COSTS ANYTHING. Both moved up from WereHereSection when

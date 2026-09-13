@@ -85,9 +85,9 @@ function store(seed = {}) {
 }
 // The real engine, plus the ONE thing a harness may control: what time it is. `now` is threaded through
 // arrivalSessionNow's own second parameter, which is the shipped signature — not a Date stub.
-function fellowship(ls, clock, keyed = true) {
+function fellowship(ls, clock, keyed = true, identity = { v: true }) {
   const scope = {
-    localStorage: ls, _mePub: () => ME, _mayCache: () => keyed, toPub: (x) => String(x || ''),
+    localStorage: ls, _mePub: () => (identity.v ? ME : ''), _mayCache: () => keyed, toPub: (x) => String(x || ''),
     lifetimeWindow, DEFAULT_HELPER_LIFETIME,
     window: { dispatchEvent() {}, Fellowship: null },
     Event: function Event(n) { this.type = n; },
@@ -105,7 +105,14 @@ function fellowship(ls, clock, keyed = true) {
   // shipped function's own parameter rather than by faking the clock.
   // `clock` is a BOX, not a number, so a test can move time under a card that is already mounted — which is
   // the only way to reach "the eleven o'clock button, with nine o'clock's refusal still on screen".
-  return { ...api, myPubkey: ME, arrivalSessionNow: (svcs) => api.arrivalSessionNow(svcs, clock.v) };
+  // ⚠ `myPubkey` IS A GETTER OVER A BOX, NOT A CONSTANT, and that is what lets a test model a COLD START.
+  // It was hard-coded to ME, so this harness could never reproduce the case where the app paints Today
+  // before `deriveFromIdentity` has resolved — which on native is two awaits away, including a dynamic
+  // import of secure storage that memory records deferred for MINUTES on a sleeping screen. A restart-
+  // ordering bug is invisible to a harness where identity is always already there. Found by audit 2026-09-13.
+  const out = { ...api, arrivalSessionNow: (svcs) => api.arrivalSessionNow(svcs, clock.v) };
+  Object.defineProperty(out, 'myPubkey', { get: () => (identity.v ? ME : ''), configurable: true });
+  return out;
 }
 
 // A Sunday, a service at 09:00, and the window the SHARED module says that service has.
@@ -120,14 +127,16 @@ const DATA = { VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world
 const BIBLE = { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], bookName: () => 'Genesis', bookAbbr: () => 'Gen', maxChapter: () => 50, activeVersion: 'WEB' };
 
 function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult = { ok: true, id: 'x' }, qrRenderer = true,
-                clockIsWrong = false, clockSkewMins, clockSkewAhead = true, myChildren = null, unmounts = false } = {}) {
+                clockIsWrong = false, clockSkewMins, clockSkewAhead = true, myChildren = null, unmounts = false,
+                identityReady = true, churchReady = true } = {}) {
   // ⚠ `unmounts` IS NOT DECORATION. The default harness keeps a store for ever, so a component rendered as
   // `{open ? <X/> : null}` survives a close-and-reopen that real React would unmount — and the collapse test
   // below would pass over the exact bug it is named after. See miniReact in render-jsx-screen.mjs.
   const { React, draw } = miniReact({ unmounts });
   const ls = store(seed);
   const clock = { v: now };
-  const F = fellowship(ls, clock);
+  const identity = { v: identityReady };
+  const F = fellowship(ls, clock, true, identity);
   const qrTexts = [];
   const arriveCalls = [];
   const timers = [];
@@ -161,8 +170,9 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
     Math, Date, JSON, Set, Map, Number, String, Array, Promise, Object, isNaN, Boolean, parseInt, parseFloat,
   };
   const mod = loadScreen('app/screens-today.jsx', ['TodayScreen', 'MyChildrenCard', 'WereHereSection'], globals);
+  const churchBox = { v: churchReady };
   const ctx = {
-    church: { id: 'c1', name: "St Chad's", npub: CHURCH },
+    get church() { return churchBox.v ? { id: 'c1', name: "St Chad's", npub: CHURCH } : null; },
     churchServices: services,
     myChildren: myChildren || { children: [], askAtDesk: 0, settled: true },
     care: { settings: { enabled: false }, needs: [], myPub: 'me' },
@@ -175,7 +185,9 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
     clockIsWrong, clockSkewMins, clockSkewAhead,
   };
   const api = {
-    ls, F, ctx, qrTexts, arriveCalls, timers, clock,
+    ls, F, ctx, qrTexts, arriveCalls, timers, clock, identity, churchBox,
+    // The two things that arrive late on a real phone. `arrive()` is the moment the app becomes usable.
+    arrive() { identity.v = true; churchBox.v = true; api.redraw(); return api.redraw(); },
     setNow(t) { clock.v = t; return api.redraw(); },
     // ⚠ THE CARD DRIVEN HERE IS MyChildrenCard, NOT THE SECTION INSIDE IT, and that is deliberate. Since
     // 2026-09-12 "We're here" and the QR are a section in this card's fold — the owner's ask, because the
@@ -187,8 +199,14 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
     section: () => draw(mod.WereHereSection, { ctx }),
     screen: () => draw(mod.TodayScreen, { ctx }),
   };
-  api.tree = api.card();
   api.redraw = () => { api.tree = api.card(); return api.tree; };
+  // ⚠ TWO DRAWS AT MOUNT, BECAUSE REACT RE-RENDERS AFTER AN EFFECT SETS STATE AND miniReact DOES NOT.
+  // The card rehydrates a persisted arrival from an effect rather than a `useState` initialiser — an
+  // initialiser cannot see the church npub or the pubkey at a cold start, which is the restart door this
+  // whole mechanism exists to close. One draw mounts and queues the effect; the second reflects what it set,
+  // which is what a phone shows. A single draw here would make every test below blind to that effect.
+  api.redraw();
+  api.redraw();
   api.press = (label) => {
     const b = shownButton(api.tree, label);
     assert.equal(b.length, 1, 'expected one control reading ' + JSON.stringify(label) + ', found ' + b.length);
@@ -601,6 +619,68 @@ test('IT IS A MIRROR, NOT THE STATE: a phone that cannot write still shows the s
   //     the throw escapes an async handler and takes the run with it, which is precisely what it would do
   //     to a parent's screen at a door.
   // Keep both. Neither is redundant with the other; they fail in opposite directions.
+});
+
+test('A RESTART: the app paints Today BEFORE the phone knows who it is, and the square still comes back', async () => {
+  // ⚠ THE DOOR A PARENT ACTUALLY USES, and the one a `useState` initialiser could not close. Reading the
+  // store needs the church npub AND the pubkey; at a cold start neither exists. `createRoot().render()` is
+  // synchronous while `deriveFromIdentity` sets `Fellowship.myPubkey` after two awaits — on native a dynamic
+  // import of secure storage and a bridge round trip, deferred for MINUTES on a sleeping screen, which is
+  // exactly a phone taken out of a pocket at a door. Audit finding, 2026-09-13.
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no square was drawn');
+
+  // The restart: same phone, same storage, but the app mounts Today before identity has resolved.
+  const cold = today({ seed: t.ls.v, identityReady: false, churchReady: false });
+  assert.equal(shownButton(cold.tree, 'We’re here').length, 0,
+    're-anchor: with no church there should be no card at all yet, so the assertion below is about the ' +
+    'arrival and not about an empty screen');
+  cold.arrive();                                  // deriveFromIdentity resolves, the lock lifts
+  assert.equal(shown(cold.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'NO SQUARE AFTER A RESTART. The arrival is written and on the worker’s screen; this phone read an empty ' +
+    'store before it knew who it was, and never looked again. Read: ' + reads(cold.tree));
+  assert.equal(shownButton(cold.tree, 'We’re here').length, 0,
+    'the button is offered again over an arrival that landed — a second tap on a flaky socket then reports ' +
+    '"take them to the desk" about a check-in the worker is looking at');
+  assert.deepEqual(cold.arriveCalls, [], 'the restart published a second arrival by itself');
+});
+
+test('A CHURCH SWITCH re-reads, because the card is not remounted', async () => {
+  // `screens.today` carries no `key`, so switching church does NOT remount this card. A mount-time read
+  // would keep showing the first church's answer for ever.
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  const other = today({ seed: t.ls.v, churchReady: false });
+  assert.equal(shown(other.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+    're-anchor: with no church there is nothing to show');
+  other.arrive();
+  assert.equal(shown(other.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'the card never re-read the store when the church arrived');
+});
+
+test('A RE-READ NEVER OVERWRITES AN ANSWER THE PARENT HAS JUST GIVEN', async () => {
+  // The guard inside the effect. The effect re-runs whenever the church npub or the pubkey changes — a
+  // church switch, a reconnect, identity landing late — and without the guard it would replace a LIVE
+  // outcome with whatever is on disk.
+  //
+  // ⚠ THE DISK MUST DISAGREE WITH THE SCREEN, OR THIS TEST PROVES NOTHING. My first version fired a redraw
+  // with matching values and could not discriminate: the sabotage row came back green, which is how a blind
+  // test announces itself. So the store is seeded with a REFUSAL, writes are then made to fail (quota), and
+  // the parent taps successfully — the screen says landed, the disk still says refused.
+  const t = today({ seed: { ...READY, [`trinityone.arrivedat.${CHURCH}|${ME}`]: JSON.stringify({ session: 'svc-am', ok: false, reason: 'refused', at: 1 }) } });
+  t.ls.setItem = () => { throw new Error('QuotaExceededError'); };
+  await t.click('We’re here');
+  assert.match(reads(t.tree), /Show this to the children’s worker/i, 're-anchor: the fresh tap did not land');
+
+  // Now force the effect to re-run, exactly as a church switch does: the npub goes away and comes back.
+  t.churchBox.v = false; t.redraw();
+  t.churchBox.v = true; t.redraw(); t.redraw();
+  const c = reads(t.tree);
+  assert.ok(!/desk/i.test(c),
+    'A STALE REFUSAL ON DISK OVERWROTE A SUCCESSFUL TAP the parent had just made. The screen now sends them ' +
+    'to the desk over a check-in that is on the worker’s screen. Read: ' + c);
+  assert.match(c, /Show this to the children’s worker/i, 'the landed square was lost on the re-read');
 });
 
 // ══════════════ AND IT STOPS ASKING ONCE THEY ARE IN A ROOM ═══════════════════════════════════════════════
