@@ -6527,7 +6527,7 @@
   );
   function _relayKey(url) {
     try {
-      return normalizeURL2(String(url || ""));
+      return relayAddrKey(String(url || ""));
     } catch {
       return String(url || "");
     }
