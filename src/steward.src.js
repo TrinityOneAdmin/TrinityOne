@@ -1196,10 +1196,19 @@ let _localToken = null;
 // always wins. A recovery that depends on one timer firing before a human types a passphrase is not a
 // recovery. Raised by the audit of f0ceb92, whose headline said this path never runs at all — that was
 // wrong for the real app, and right about the fragility.
+// ⚠ `0.0.0.0` IS DELIBERATELY NOT IN THIS LIST, and it used to be — the same removal `0ac3ee6` made in the
+// sibling gate in relay-app/home.js, which this one was left out of. The gateway's `/local-token` route
+// accepts only 127.0.0.1, localhost and ::1, so a page served at 0.0.0.0 passed THIS check, asked for the
+// admin token, and was refused. ADMITTING AN ADDRESS THE SERVER REFUSES IS STRICTLY WORSE THAN NOT ADMITTING
+// IT: the caller cannot tell "not a local box" from "a local box that said no", and in the relay app that
+// difference stranded a box on the panel at every launch with no way back to the wizard.
+// Not reachable here today — `localAdminToken` returns '' either way and every caller treats that as "no
+// token" — so this is the rule being made the same in both places, not a live bug. Audit item 20,
+// 2026-09-14. scripts/two-loopback-gates-agree.test.mjs pins them together.
 function _originIsLoopback() {
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.hostname) return false;
-  return /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ''));
+  return /^(localhost|127\.0\.0\.1|::1)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ''));
 }
 async function localAdminToken() {
   if (_localToken) return _localToken;
@@ -3339,12 +3348,26 @@ window.Steward = {
   // Signs the boxes this console can prove into the church's own membership document. Additive: it never
   // drops an entry that is merely unreachable.
   //
-  // STILL NOT CALLED AUTOMATICALLY ANYWHERE, and with C4's gate live that is now a DEPLOYMENT BLOCKER rather
-  // than a loose end: a church whose relay is admitted by neither the canonical pin nor this console's own
-  // origin has no way to author the document that would admit it, so its members would find no relay they
-  // may publish to. Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own —
-  // and the Suite's common case (§6-quater) is covered meanwhile by the same-origin root, which needs no
-  // document at all.
+  // STILL NOT CALLED AUTOMATICALLY ANYWHERE — and the sentence that used to be here, calling that a
+  // "DEPLOYMENT BLOCKER … its members would find no relay they may publish to", IS FALSE. Audit item 17,
+  // 2026-09-14, checked against the gate rather than against this comment.
+  //
+  // WHAT proveRelay ACTUALLY DOES (src/relay-net.src.js): after the one refusal for our own shipped
+  // addresses, it tries canonical pin → same origin → the church's relay-net document → and then admits
+  // anything that proved it holds a relay identity key at all, as `root: 'software'`. A self-hosting
+  // church's box reaches that last line and is admitted with NO document in existence. So nobody is cut off,
+  // and this function is a loose end, not a blocker.
+  //
+  // TWO THINGS THE NEXT PERSON TO WIRE IT UP NEEDS, because neither is visible from the call site:
+  //  · ROOT 3 IS INERT IN PRACTICE. No console authors a relay-net document today, so the `church` root
+  //    matches nothing and every self-hosted box is admitted one line lower on proof alone. Turning this on
+  //    does not "enable" self-hosting; it narrows nothing and adds a signed record.
+  //  · `9ec4310`'s GUARD IS UNEXERCISED. That commit fixed a doc-wipe — a read nobody answered was reported
+  //    as an empty church, the document was rebuilt from scratch with `created_at: now()`, and newest-wins
+  //    UN-ADMITTED every box the church had signed, on every member's phone. The `!complete → unknown:true`
+  //    return below is that fix, and with zero callers it has never run outside its test. It is the first
+  //    thing to exercise on a real slow link when this is wired in, not the last.
+  // Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own.
   enrolRelayNet,
 
   // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----

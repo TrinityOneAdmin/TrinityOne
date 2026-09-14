@@ -96,9 +96,23 @@ test('the outbox carries private messages ONLY, never the church\'s documents', 
 });
 
 test('giving up is visible, and reversible by the steward', () => {
+  // ⚠ THIS TEST USED TO MATCH /retryQueuedDM/ AND /dropQueuedDM/ AGAINST THE WHOLE BUNDLE, and both matched
+  // — their own definitions. So it passed for the entire period in which, by the console's own account,
+  // "StewDmWindow called none of them" and the screen that would make giving up VISIBLE did not exist. A
+  // test satisfied by a function's definition says nothing about whether anything calls it; audit item 14,
+  // 2026-09-14, and it is the same shape as CLAUDE.md rule 1 in a file that is not about a screen.
+  //
+  // WHAT PROVES THE CLAIM NOW, by rendering the console's DM window and clicking the controls:
+  //   scripts/a-dm-that-never-sent-is-not-sent.test.mjs
+  //     · "a message the console has GIVEN UP ON says so, and offers a way back" — Try again and Discard
+  //       are found in the tree and their handlers are asserted to reach Steward.retryQueuedDM/dropQueuedDM
+  //     · "a message given up on REPAINTS as failed without reopening the thread"
+  //   scripts/a-message-the-console-gave-up-on-stays-given-up.test.mjs — that the give-up STATE is real.
+  // What is left here is the one thing honest to read off the bundle: that the flush can reach it at all.
+  // (Matching vendor/steward.js is sound — esbuild removes dead code, so a disabled branch disappears.)
   const flush = stripComments(fnBody(ST, 'async function _sOutFlush', '_sOutFlush'));
   assert.match(flush, /failed\s*=\s*true/,
     'a message that cannot be sent is retried for ever or dropped — neither is something a steward can see');
-  assert.match(stripComments(ST), /retryQueuedDM/, 'a steward cannot retry a message the app gave up on');
-  assert.match(stripComments(ST), /dropQueuedDM/, 'a steward cannot discard a message the app gave up on');
+  assert.match(flush, /S_OUT_TRIES/,
+    'the give-up threshold is inlined or gone, so the flush no longer measures against a stated limit');
 });

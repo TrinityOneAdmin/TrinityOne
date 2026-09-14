@@ -8654,9 +8654,17 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     if (!payload) return;
     if (!window.confirm('Restore this church onto this device?\n\nThis replaces the church key currently held here — make sure it’s backed up. You’ll be asked to set a PIN.')) return;
     // NO reload here. adoptChurch → restoreKey keeps the seed in MEMORY ONLY and sets needsPin, so the
-    // forced-PIN modal can encrypt and persist it; a reload throws that memory away and leaves the device
-    // with no key at all (restoreKey has already cleared the old one). StewardRoot swaps StewDashboard for
-    // StewardForcedPin on the needsPin event and remounts it after, which is the refresh the reload was for.
+    // forced-PIN modal can encrypt and persist it; a reload throws that memory away. StewardRoot swaps
+    // StewDashboard for StewardForcedPin on the needsPin event and remounts it after, which is the refresh
+    // the reload was for.
+    // ⚠ THE PARENTHESIS HERE USED TO SAY "(restoreKey has already cleared the old one)" AND IT IS BACKWARDS.
+    // cd67c7a deliberately REMOVED that eager wipe, because it left the device with no church key at all in
+    // the window between the wipe and setPin() — deterministic key loss, found on a phone 2026-08-04. Today
+    // restoreKey() calls setKey(), which sets in-memory state and nothing else; the previous key stays in
+    // localStorage and the hardware store until setPin() overwrites the same slot.
+    // SO THE HAZARD A RELOAD CAUSES IS THE OPPOSITE ONE, AND QUIETER: the restored seed is lost, the OLD key
+    // is still there, and the console comes back looking perfectly normal as the church it was before. The
+    // steward believes they adopted a church and did not. Same rule, right reason. Audit item 13, 2026-09-14.
     try { window.Steward.adoptChurch(payload); }
     catch (e) { window.alert('That QR isn’t a valid church handoff.'); }
   };
@@ -8666,9 +8674,13 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — make sure its recovery phrase is backed up first.\n\nContinue?')) return;
     try {
       // NO reload — see adoptScanned. restoreKey() deliberately does NOT persist: the seed lives in memory
-      // until the forced-PIN modal encrypts it, and restoreKey has ALREADY removed the previous key from
-      // localStorage and the hardware store. Reloading here dropped the only copy, so the console came back
-      // to "Set up a new church" having destroyed the old key and kept nothing. Found on-device 2026-08-04.
+      // until the forced-PIN modal encrypts it.
+      // ⚠ AND THE SECOND HALF OF THIS USED TO READ "restoreKey has ALREADY removed the previous key from
+      // localStorage and the hardware store … the console came back to 'Set up a new church' having
+      // destroyed the old key and kept nothing." That WAS true on 2026-08-04 and is the bug cd67c7a fixed by
+      // deleting the eager wipe. Describing the fixed code as though it were still broken is worse than
+      // saying nothing: the next reader looks for a wipe that is not there, or restores one thinking it was
+      // an oversight. Audit item 13, 2026-09-14 — checked against setKey(), which touches memory only.
       window.Steward.restoreKey(restorePhrase);
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };

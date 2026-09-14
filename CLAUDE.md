@@ -105,7 +105,7 @@ refused and never was.
 the relay, so "which machines get the data" IS the security boundary, not a networking detail.
 
 Two things in there look like bugs and are load-bearing. **The relay-net read at
-`fellowship.src.js:650` is unfiltered on purpose** — the proof that a relay is ours is a document you
+`churchRelayNet()` in `src/fellowship.src.js` is unfiltered on purpose** — the proof that a relay is ours is a document you
 must read from a relay you have not yet proved; gate it and no phone can ever bootstrap. **Root 3
 matches the pubkey, never the URL** — tunnel addresses churn, so URL-matching drops every
 self-hosting church off every phone on each reboot.
