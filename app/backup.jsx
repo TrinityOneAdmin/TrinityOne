@@ -335,5 +335,32 @@
   }
   const readFile = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Couldn’t read that file.')); r.readAsText(file); });
 
-  window.TrinityBackup = { encryptObj, decryptStr, checkPass, PASS_MIN, collectMember, applyMember, collectSteward, applySteward, saveFile, savedWhere, readFile };
+  // ── RECORDING THAT A MEMBER IS BACKED UP — ONE WRITER, BECAUSE TWO IS WHAT BROKE IT ────────────────────
+  // `trinityone.backedup.<npub>` is what silences the "Secure your account" nudge on Today and puts a date
+  // on the Security screen. There are TWO routes that produce a member backup file — app/identity-extras.jsx
+  // doExport (the recovery hub) and app/screens-library.jsx doExport (the "Back up your data" card on You) —
+  // and they write the SAME file from the SAME collectMember(), seed and all. Only the first recorded it.
+  //
+  // MEASURED ON A PHONE, 2026-09-14 (Oppo CPH2477, throwaway account, APK 213): backed up through the You
+  // card, `trinityone-backup-2026-09-14.json` landed in /sdcard/Documents carrying the member's twelve
+  // words — and `trinityone.backedup.*` was still empty and Today still read "Secure your account · Set up
+  // recovery so you never lose access if you change phones." A member who has done exactly what was asked
+  // is nagged for ever and shown no backup date, which teaches them to ignore the one reminder that matters.
+  //
+  // ⚠ NEVER CALL THIS ON A BRANCH THAT SAYS THERE MAY BE NO FILE. saveFile's `res.warn` means the direct
+  // write did not happen and it fell back; recording a backup there is what audit 2026-09-02 #7 found, and
+  // it silenced the nudge for precisely the people who had no file. Callers must check `warn` first.
+  //
+  // CALLERS (CLAUDE.md rule 2 — complete list): app/identity-extras.jsx markSaved (the recovery hub's
+  // export, and its "I've written them down" button), app/screens-library.jsx doExport. The 12-word
+  // ceremony in app/identity.jsx writes the same key directly and is deliberately left alone: writing the
+  // words down IS a backup, and it has no file to warn about.
+  function recordBackup() {
+    try {
+      const np = (window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub) || '';
+      if (np) localStorage.setItem('trinityone.backedup.' + np, new Date().toISOString());
+      return !!np;
+    } catch (e) { return false; }
+  }
+  window.TrinityBackup = { encryptObj, decryptStr, checkPass, PASS_MIN, collectMember, applyMember, collectSteward, applySteward, saveFile, savedWhere, readFile, recordBackup };
 })();
