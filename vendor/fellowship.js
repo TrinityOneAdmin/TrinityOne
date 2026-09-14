@@ -12147,7 +12147,7 @@
       try {
         await _publishAny(relaysForChurch(cp), evt);
       } catch (e) {
-        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+        return { ok: false, reason: e && e.refused ? "refused" : "unconfirmed", message: String(e && e.message || e) };
       }
       return { ok: true, id };
     },
@@ -12206,7 +12206,7 @@
       try {
         await _publishAny(relaysForChurch(cp), evt);
       } catch (e) {
-        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+        return { ok: false, reason: e && e.refused ? "refused" : "unconfirmed", message: String(e && e.message || e) };
       }
       return { ok: true, id };
     },

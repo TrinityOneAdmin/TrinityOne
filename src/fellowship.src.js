@@ -5701,7 +5701,15 @@ window.Fellowship = {
              // guess about a family, and a guess is what this writer has no map to make.
              ...(guardian ? [['p', guardian]] : []), ['ck', ck], ...gks],
       content: sentinel }, sk);
-    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    // ⚠ THREE ANSWERS, NOT TWO. `_publishAny` throws when NOBODY ANSWERED inside WEDGE_ACK_MS as well as when
+    // a relay REFUSED, and flattening both to one answer is what put "That did not save — see the desk.
+    // Nothing was written." on a worker's screen over a check-in that had landed. She retries; `code` is
+    // deliberately not regenerated, so the parent's phone shows the child twice with two pickup codes and
+    // one of them fails the match at collection. Audit finding 2026-09-14.
+    // `writeArrival` has answered these three ways since device finding F1 (2026-09-11) — the fix went into
+    // one of three sibling writers. `err.refused` is set by `_publishAny` from _PUB_REFUSED.
+    try { await _publishAny(relaysForChurch(cp), evt); }
+    catch (e) { return { ok: false, reason: (e && e.refused) ? 'refused' : 'unconfirmed', message: String((e && e.message) || e) }; }
     return { ok: true, id };
   },
 
@@ -5758,7 +5766,15 @@ window.Fellowship = {
       tags: [['d', CHECKIN_D + id], ['t', NET], ['church', cp], ['session', sid], ['rel', rel], ['enc', '2'],
              ...gpubs.map(h => ['p', h]), ['ck', ck], ...gks],
       content: sentinel }, sk);
-    try { await _publishAny(relaysForChurch(cp), evt); } catch (e) { return { ok: false, reason: 'publish-failed', message: String((e && e.message) || e) }; }
+    // ⚠ THREE ANSWERS, NOT TWO. `_publishAny` throws when NOBODY ANSWERED inside WEDGE_ACK_MS as well as when
+    // a relay REFUSED, and flattening both to one answer is what put "That did not save — see the desk.
+    // Nothing was written." on a worker's screen over a check-in that had landed. She retries; `code` is
+    // deliberately not regenerated, so the parent's phone shows the child twice with two pickup codes and
+    // one of them fails the match at collection. Audit finding 2026-09-14.
+    // `writeArrival` has answered these three ways since device finding F1 (2026-09-11) — the fix went into
+    // one of three sibling writers. `err.refused` is set by `_publishAny` from _PUB_REFUSED.
+    try { await _publishAny(relaysForChurch(cp), evt); }
+    catch (e) { return { ok: false, reason: (e && e.refused) ? 'refused' : 'unconfirmed', message: String((e && e.message) || e) }; }
     return { ok: true, id };
   },
 

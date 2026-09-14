@@ -691,6 +691,10 @@ function KidsRow({ rec, ctx, open, onToggle }) {
     catch (e) { res = { ok: false }; }
     setBusy(false);
     if (res && res.ok) { setMode(''); setEntry(''); }   // the collected row arrives from the relay and folds
+    // ⚠ "NOTHING WAS WRITTEN" IS A CLAIM, AND IT WAS FALSE HALF THE TIME. `unconfirmed` means nobody
+    // answered in time — the release is signed, on the wire, and may already have landed. Telling a worker
+    // it did not save sends her to undo something that already worked. Same rule as the parent's card.
+    else if (res && res.reason === 'unconfirmed') setErr('We couldn’t confirm that — it may well have saved. Check the register before doing it again.');
     else setErr('That did not save — see the desk. Nothing was written.');
   };
   const confirmCode = () => {
@@ -838,7 +842,15 @@ function KidsAddChild({ ctx, session, arrivals }) {
       else { setScanned([]); setName(''); setPicked(''); }
     } else {
       // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
-      setMsg({ ok: false, text: 'That did not save — see the desk. Nothing was written.' });
+      // ⚠ BUT NOT LOUDER THAN THE TRUTH. `unconfirmed` means nobody answered inside the ack window, not
+      // that the write failed: the record is signed and on the wire and often lands a moment later. Telling
+      // her "nothing was written" makes her check the child in AGAIN — and `code` is not regenerated on a
+      // retry, so the parent's phone ends up showing the child twice with two pickup codes, one of which
+      // fails the match at collection. Audit finding 2026-09-14; the parent's card has worded these three
+      // ways since device finding F1.
+      setMsg({ ok: false, text: (res && res.reason === 'unconfirmed')
+        ? 'We couldn’t confirm that reached your church — it may well have. Check the register before checking them in again.'
+        : 'That did not save — see the desk. Nothing was written.' });
     }
   };
   // ⚠ THE MITIGATION THIS SCREEN EXISTS TO CARRY. Checking in FROM AN ARRIVAL must never be a bare tap.
