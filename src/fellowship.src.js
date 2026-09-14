@@ -3432,7 +3432,32 @@ window.Fellowship = {
     // MyData.startSync restores it, and its anti-clobber guard only republishes when a local copy exists — so
     // wiping here cannot destroy the backup. Declared as trinityone/chatseen in scripts/trinity-doc-types.mjs.
     const FORCE_WIPE = new Set(['trinityone.mydata:data/chatseen']);
-    const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k) && (FORCE_WIPE.has(k) || (
+    // ⚠ A PARENT'S OWN CHILDREN'S NAMES ARE KEPT. Owner's decision, 2026-09-14, after a device run measured
+    // them being wiped: "I think the names being on the phone is fine. A parent will likely have much more
+    // personal information on the phone anyway."
+    //
+    // THEY MEET BOTH REASONS THE KEEP LIST ABOVE ALREADY GIVES, which is why this is consistent with the
+    // design rather than a hole in it:
+    //   · they are THE MEMBER'S OWN WRITING, not the church's — a parent typed their own children's first
+    //     names, exactly like mydata/notes/journal/highlights, which are kept for that reason;
+    //   · NOTHING REBUILDS THEM ON UNLOCK. §3b's whole design is that these never leave the phone — the
+    //     church is never told a member brings children — so there is no document to restore them from.
+    //     Wiping them is permanent data loss, which the outbox note above already names as "not hygiene".
+    //
+    // WHAT IT COSTS, STATED HONESTLY: a seized LOCKED phone now yields "this member brings children to this
+    // church, named X and Y". The church is named by `followedChurches`, which is already kept.
+    //
+    // MEASURED ON A PIXEL, 2026-09-14: the wipe is a RACE — `lockNow()` is `hasPin() && !myPubkey`, and
+    // identity resolves two awaits away — so these names survived one restart and were destroyed by the next
+    // two. A parent cannot learn a rule from that, and when they are gone the check-in card does not render
+    // at all: no error, no prompt, just a parent at a door with nothing to tap.
+    //
+    // `arrivedat` goes with them deliberately: it is the outcome of the last "we're here" tap, it is useless
+    // without the names beside it, and losing it re-offers a button over an arrival already on the worker's
+    // screen.
+    const KEEP_PREFIX = ['trinityone.bringkids.', 'trinityone.mykidnames.', 'trinityone.arrivedat.'];
+    const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k)
+      && !KEEP_PREFIX.some(p => k.startsWith(p)) && (FORCE_WIPE.has(k) || (
       !k.startsWith('trinityone.mydata:') && !k.startsWith('trinityone.backedup.')
       // approvedToast.<church> is the "we already told you you were accepted" marker. Wiping it makes the
       // app re-announce the member's acceptance on the next unlock — reported on a real phone, 2026-07-29,
