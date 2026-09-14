@@ -9083,7 +9083,8 @@
         const err = new Error(String(why));
         const _said = (r) => String(r.status === "rejected" ? r.reason && r.reason.message || r.reason || "" : r.value == null ? "" : r.value);
         err.refused = rs.some((r) => _PUB_REFUSED.test(_said(r)));
-        if (!targets.length) err.unsent = true;
+        const _unreachable = (r) => r.status === "fulfilled" && /^connection failure/i.test(String(r.value == null ? "" : r.value));
+        if (!targets.length || rs.length && rs.every(_unreachable)) err.unsent = true;
         throw err;
       }
       return true;

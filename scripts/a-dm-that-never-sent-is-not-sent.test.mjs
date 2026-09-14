@@ -192,8 +192,15 @@ function miniReact() {
   };
   // `flush` runs the effects this draw queued. A caller that never flushes is back to the no-op above, so
   // both draw helpers below call it.
-  const flush = () => { const run = queued; queued = []; run.forEach(fn => { try { fn(); } catch (e) { throw new Error('an effect threw during render: ' + e.message); } }); };
-  return { React, reset: () => { i = 0; mi = 0; ei = 0; }, flush };
+  // KEEP WHAT THE EFFECTS RETURN. React calls those cleanups on unmount; a harness that discards them cannot
+  // see a listener that is never removed — which is exactly the sabotage that survived the audit of this
+  // file. `unmount()` runs them, so a test can ask what the component let go of.
+  const cleanups = [];
+  const flush = () => { const run = queued; queued = [];
+    run.forEach(fn => { try { const c = fn(); if (typeof c === 'function') cleanups.push(c); }
+      catch (e) { throw new Error('an effect threw during render: ' + e.message); } }); };
+  const unmount = () => { const c = cleanups.splice(0); c.forEach(f => { try { f(); } catch (e) {} }); return c.length; };
+  return { React, reset: () => { i = 0; mi = 0; ei = 0; }, flush, unmount };
 }
 
 // Walk a rendered tree collecting every string, and every node matching a predicate.
@@ -218,7 +225,15 @@ const find = (n, pred, out = []) => {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 async function dmWindow(result, outbox) {
   const sent = [], retried = [], dropped = [];
-  const { React, reset, flush } = miniReact();
+  // A REAL EVENT BUS, because the case that matters is a TRANSITION. Every outbox test in this file used to
+  // seed the queue BEFORE the window mounted, so they only ever proved that an outbox which already had
+  // content at mount time is rendered. The defect measured on a real console is the other case: the window
+  // is ALREADY OPEN, the steward types, sendDM queues, and the words must appear — which happens only
+  // through the `steward-outbox` event. The audit of this fix proved it: deleting that one listener left all
+  // 16 tests in this file green while a live console showed nothing at all.
+  const listeners = new Map();
+  let queue = outbox ? [...outbox] : [];
+  const { React, reset, flush, unmount } = miniReact();
   const Steward = {
     subscribeDMThread: () => () => {},
     sendDM: async (pk, body) => { sent.push([pk, body]); return result; },
@@ -227,7 +242,7 @@ async function dmWindow(result, outbox) {
     // existed in src/steward.src.js since the outbox was added; StewDmWindow called none of them, so a
     // queued message was invisible. Measured on a REAL console before this was written: the words sat in
     // the outbox with _pending true and the open thread showed no trace of them.
-    outboxForPeer: () => (outbox || []),
+    outboxForPeer: (pk) => queue.filter(o => !o.peer || o.peer === pk),
     retryQueuedDM: (id) => { retried.push(id); return true; },
     dropQueuedDM: (id) => { dropped.push(id); },
   };
@@ -236,13 +251,20 @@ async function dmWindow(result, outbox) {
     // addEventListener: the outbox effect subscribes to `steward-outbox` so the bubble repaints when the
     // flush marks an item failed. A stub that lacked it would throw inside the effect and the whole window
     // would render empty — which looks exactly like the defect under test.
-    window: { Steward, addEventListener: () => {}, removeEventListener: () => {} },
+    window: { Steward,
+      addEventListener: (k, f) => { listeners.set(k, [...(listeners.get(k) || []), f]); },
+      removeEventListener: (k, f) => { listeners.set(k, (listeners.get(k) || []).filter(x => x !== f)); } },
     Icon: () => null, SkBadge: () => null,
     SK_TINT: { gold: { fg: '#000' } },
     nameHandle: () => '', shortNpub: () => 'npub1…',
   });
   const draw = () => { reset(); const t = Comp({ peer: { pubkey: 'peerhex', name: 'Ruth' }, offset: 0, onClose: () => {} }); flush(); return t; };
-  return { draw, sent, retried, dropped };
+  // what _sOutSave() does in the engine: change the queue, then tell every listener
+  const fire = () => (listeners.get('steward-outbox') || []).forEach(f => f());
+  const enqueue = (item) => { queue = [...queue, item]; fire(); };
+  // what the flush does when it counts a try or gives up: change the item in place, then announce it
+  const mark = (id, patch) => { queue = queue.map(o => (o.id === id ? { ...o, ...patch } : o)); fire(); };
+  return { draw, sent, retried, dropped, enqueue, mark, listeners, unmount };
 }
 
 test('CONTROL: the console DM window renders, and its send button reaches Steward.sendDM', async () => {
@@ -446,4 +468,63 @@ test('a queued message that the relay then ACCEPTS is not shown twice', async ()
   const shown = texts(one());
   const hits = shown.join(' | ').split('Can you call me back about Sunday?').length - 1;
   assert.equal(hits, 1, 'the steward sees their own message twice the moment it lands: ' + hits + ' copies');
+});
+
+
+test('THE TRANSITION: the window is already open, she sends, and the words appear', async () => {
+  // The defect, exactly as measured on a real console: thread open, relay stalled, composer emptied, nothing
+  // on screen. Seeding the outbox before mount cannot see this — only the `steward-outbox` event can, and
+  // the audit proved that deleting that listener left every other test in this file green.
+  const w = await dmWindow({ id: 'e1' });
+  settle(w);
+  assert.doesNotMatch(texts(w.draw()).join(' | '), /Can you call me back about Sunday\?/,
+    're-anchor: the thread already contained the message before it was sent');
+  w.enqueue({ id: 'q9', created_at: 1, peer: 'peerhex', _pending: true, _failed: false, plain: 'Can you call me back about Sunday?' });
+  const after = texts(w.draw()).join(' | ');
+  assert.match(after, /Can you call me back about Sunday\?/,
+    'THE STEWARD TYPED, THE RELAY DID NOT ANSWER, AND HER WORDS LEFT THE SCREEN. The message is safely ' +
+    'queued and will be delivered — and an open thread shows no trace of it, which is indistinguishable ' +
+    'from having said nothing.');
+  assert.match(after, /Waiting to send/, 'it arrived with no indication that it has not gone yet');
+});
+
+test('a message given up on REPAINTS as failed without reopening the thread', async () => {
+  // The flush marks an item failed 45 seconds to an hour later. If that does not reach an OPEN window, the
+  // steward sits watching "Waiting to send" over a message the console has abandoned, with the Try again
+  // button that would revive it never appearing.
+  const w = await dmWindow({ id: 'e1' }, [{ id: 'q1', created_at: 1, peer: 'peerhex', _pending: true, _failed: false, plain: 'Are you all right?' }]);
+  assert.match(texts(settle(w)).join(' | '), /Waiting to send/, 're-anchor: it did not start as waiting');
+  w.mark('q1', { _pending: false, _failed: true });     // what the flush does on the eighth try
+  const after = texts(w.draw()).join(' | ');
+  assert.match(after, /Couldn’t send/,
+    'THE CONSOLE GAVE UP AND THE OPEN THREAD STILL SAYS "Waiting to send". The steward waits for a reply to ' +
+    'a message that will never go, and never sees the control that would send it.');
+  assert.doesNotMatch(after, /Waiting to send/, 'it shows both states at once');
+});
+
+test('the window shows only THIS peer’s queue', async () => {
+  const w = await dmWindow({ id: 'e1' }, [
+    { id: 'mine', created_at: 1, peer: 'peerhex', _pending: true, plain: 'for Ruth' },
+    { id: 'theirs', created_at: 1, peer: 'someone-else', _pending: true, plain: 'for somebody else entirely' },
+  ]);
+  const shown = texts(settle(w)).join(' | ');
+  assert.match(shown, /for Ruth/, 're-anchor: this peer’s own queued message is missing');
+  assert.doesNotMatch(shown, /for somebody else entirely/,
+    'ANOTHER MEMBER’S PRIVATE MESSAGE IS ON THIS THREAD. The engine filters by peer today; nothing noticed ' +
+    'when this stopped asking it to.');
+});
+
+test('the window unsubscribes when it closes', async () => {
+  // One listener per open window. Without the cleanup, a console left running all Sunday accumulates one per
+  // thread opened, and each holds a stale closure that calls setQueued for a window that has gone. This
+  // sabotage survived the audit because the harness threw effect cleanups away; it keeps them now.
+  const w = await dmWindow({ id: 'e1' });
+  settle(w);
+  assert.equal((w.listeners.get('steward-outbox') || []).length, 1,
+    'expected exactly one outbox listener per open window, saw ' + (w.listeners.get('steward-outbox') || []).length);
+  const ran = w.unmount();
+  assert.ok(ran > 0, 'the outbox effect returns no cleanup at all — nothing is ever unsubscribed');
+  assert.equal((w.listeners.get('steward-outbox') || []).length, 0,
+    'THE LISTENER OUTLIVED THE WINDOW. Every thread a steward opens leaves one behind, each calling into a ' +
+    'component that is no longer on screen.');
 });

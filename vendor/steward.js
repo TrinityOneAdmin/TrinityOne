@@ -16755,7 +16755,9 @@ zoo`.split("\n");
     const tries = item.tries || 0;
     if (!tries || !item.lastTry) return true;
     const wait = Math.min(45e3 * Math.pow(2, tries), S_OUT_BACKOFF_MS);
-    return (now() - item.lastTry) * 1e3 >= wait;
+    const since = now() - item.lastTry;
+    if (since < 0) return true;
+    return since * 1e3 >= wait;
   }
   async function _sOutFlush(ignoreBackoff) {
     if (_sFlushing || !sk) return;
@@ -16765,15 +16767,21 @@ zoo`.split("\n");
     try {
       for (const item of [..._sOutbox]) {
         if (!_sOutDue(item, ignoreBackoff)) continue;
-        const r = await publish(item.evt);
+        let r = false;
+        try {
+          r = await publish(item.evt);
+        } catch (e) {
+          r = false;
+        }
+        const live = _sOutbox.find((o) => o && o.evt && o.evt.id === item.evt.id) || item;
         if (r) {
           _sOutbox = _sOutbox.filter((o) => o.evt.id !== item.evt.id);
           _sOutPlain.delete(item.evt.id);
           _sOutSave();
         } else {
-          item.tries = (item.tries || 0) + 1;
-          item.lastTry = now();
-          if (item.tries >= S_OUT_TRIES) item.failed = true;
+          live.tries = (live.tries || 0) + 1;
+          live.lastTry = now();
+          if (live.tries >= S_OUT_TRIES) live.failed = true;
           _sOutSave();
         }
       }
@@ -22827,6 +22835,17 @@ zoo`.split("\n");
     // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
     resolveRelayName(name, opts) {
       return resolveRelayName(name, opts);
+    },
+    // WHICH NAME, IF ANY, POINTS AT THIS ADDRESS. Read-only, and it exists so a screen can say what a steward
+    // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
+    // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
+    // durable handle while the URL is not. Audit item 19, 2026-09-14.
+    // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+    relayNameFor(url) {
+      const u = normRelay(url);
+      if (!u) return "";
+      const hit = getNamedRelays().find((e) => e && normRelay(e.url) === u);
+      return hit ? String(hit.name || "") : "";
     },
     // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
     rememberRelayName(name, url) {

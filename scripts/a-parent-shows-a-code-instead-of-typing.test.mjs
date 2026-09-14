@@ -357,7 +357,10 @@ test('REFUSED WITH NO MEASURED CAUSE NAMES NO CAUSE, AND DOES NOT BLAME THE CHUR
 test('…and when the clock IS measured wrong, it says so, with the number and the direction', async () => {
   // The measured skew is the only honest discriminator this client has, and where it exists it is the most
   // useful thing on the screen: it is the one cause a parent can actually do something about.
-  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' },
+  // ⚠ AND THE RELAY'S OWN WORDS MATTER, not just the measured skew. A wrong clock produces `auth-required`
+  // (NIP-42 fails on it) and nothing else; naming the clock over `blocked` or `rate-limited` is a causal
+  // claim about a member the church may have deliberately turned away. See the conflation test below.
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused', message: 'auth-required: we can’t serve unauthenticated users' },
                     clockIsWrong: true, clockSkewMins: 15, clockSkewAhead: true });
   await t.click('We’re here');
   const c = reads(t.tree);
@@ -365,7 +368,7 @@ test('…and when the clock IS measured wrong, it says so, with the number and t
   assert.match(c, /15/, 'the measured skew is not shown');
   assert.match(c, /ahead of/, 'the direction is not shown');
   assert.match(c, /desk/i, 'naming the clock replaced the thing that actually gets the child into the room');
-  const b = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' },
+  const b = today({ seed: READY, arriveResult: { ok: false, reason: 'refused', message: 'auth-required: bad clock' },
                     clockIsWrong: true, clockSkewMins: 9, clockSkewAhead: false });
   await b.click('We’re here');
   assert.match(reads(b.tree), /behind/, 'a phone running slow was told it was running fast');
@@ -1006,4 +1009,39 @@ test('…and on an unlocked phone the same control still says so when the list i
   s.press('Add');
   assert.match(reads(s.tree), /already on the list, or the list is full/i,
     'a thirteenth child vanished with no word said');
+});
+
+test('A BLOCKED MEMBER WITH A SLIGHTLY WRONG CLOCK IS NOT TOLD THE CLOCK IS WHY', async () => {
+  // Found by the audit of the refusal fix, 2026-09-14. The clock branch was UNREACHABLE for as long as
+  // `err.refused` was dead code; the moment it started firing it accused the clock over every refusal
+  // vocabulary, because `ctx.clockIsWrong` is measured independently of WHY the relay said no.
+  // The person on the other end of `blocked:` is someone the church has deliberately turned away. Handing
+  // them a number of minutes to chase is the exact half of the precedent that
+  // a-refused-proof-does-not-accuse-the-clock-or-the-member.test.mjs exists for.
+  for (const message of ['blocked: not a member or not permitted for this group',
+                         'invalid: signature failed',
+                         'restricted: not authenticated',
+                         'rate-limited: slow down',
+                         'error: relay storage unavailable — nothing was saved']) {
+    const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused', message },
+                      clockIsWrong: true, clockSkewMins: 12, clockSkewAhead: true });
+    await t.click('We’re here');
+    const c = reads(t.tree);
+    assert.ok(!/clock/i.test(c),
+      'THE CARD BLAMED THE CLOCK FOR "' + message.split(':')[0] + '". The clock is measured wrong and that ' +
+      'is true, but it is not why — and for `blocked` the real answer is a person, not a setting. Read: ' + c);
+    assert.match(c, /can’t tell why/i, 'it must say it cannot tell, rather than naming the wrong cause');
+    assert.match(c, /desk/i, 'and still point at the thing that gets the child into the room');
+  }
+});
+
+test('a refusal REHYDRATED after a restart carries no message, so it names no cause', async () => {
+  // setArrivalOutcome stores ok + reason only. Under-claiming is the right way round: a parent coming back
+  // to this screen is told plainly that we cannot tell, rather than being handed a cause we cannot support.
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' },
+                    clockIsWrong: true, clockSkewMins: 12, clockSkewAhead: true });
+  await t.click('We’re here');
+  const c = reads(t.tree);
+  assert.ok(!/clock/i.test(c), 'a refusal with no recorded words was still blamed on the clock');
+  assert.match(c, /can’t tell why/i, 'and it must say so');
 });

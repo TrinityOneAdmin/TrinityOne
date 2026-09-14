@@ -1726,6 +1726,22 @@ function WereHereSection({ ctx, arr, setArr }) {
           {/* …AND IT IS ABOUT THE ROOM IN FRONT OF THEM. `arrivedFor` pins every one of these three states to
               the session they were answered for, so a refusal at nine o'clock is not still on screen over the
               eleven o'clock button. A church with two services is the case that makes it visible.
+              ⚠ AND IT NAMES THE CLOCK ONLY FOR THE ONE REFUSAL A CLOCK CAN CAUSE. This branch was unreachable
+              for as long as `err.refused` was dead code (fixed 2026-09-14), and the moment it started firing
+              it began accusing the clock over EVERY refusal vocabulary. `ctx.clockIsWrong` is a MEASURED
+              verdict — clockLooksWrong(), five minutes — and it is entirely independent of why the relay
+              said no, so a member the church has deliberately BLOCKED, on a phone a few minutes out, read
+              "your clock … is why that was turned away". A causal claim we had not established, about the
+              one case where the truth is a person, not a setting.
+              The comment below justified it with "the relay's refusals are byte-identical from here". That
+              was true when it was written and is not now: `res.message` carries the relay's own words, so
+              `auth-required` (which IS what a skewed clock produces — NIP-42 fails on it) is distinguishable
+              from `blocked`, `invalid`, `restricted`, `error` and `rate-limited`. Named for auth-required,
+              no cause named for the rest. Audit of the refusal fix, 2026-09-14.
+              ⚠ A REHYDRATED OUTCOME CARRIES NO MESSAGE (setArrivalOutcome keeps ok + reason only), so a
+              parent returning to this screen after a restart gets the no-cause wording. That is the right
+              way round: it under-claims rather than accusing the wrong thing.
+
               ⚠ THE THIRD OUTCOME NAMES NO CAUSE IT HAS NOT MEASURED, and this sentence used to. It read
               "Your church hasn't opened a children's room for this service", which is only ONE of at least
               four things `refused` covers: _PUB_REFUSED matches /^(error|blocked|invalid|restricted|
@@ -1740,7 +1756,7 @@ function WereHereSection({ ctx, arr, setArr }) {
             <span style={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.35, color: 'var(--ink-2)' }}>
               {res.reason !== 'refused'
                 ? 'That didn’t reach your church. Take them to the desk — they’ll be checked in there.'
-                : ctx && ctx.clockIsWrong
+                : (ctx && ctx.clockIsWrong && /^auth-required/i.test(String((res && res.message) || '')))
                   ? 'This phone’s clock is about ' + (ctx.clockSkewMins || 'a few') + ' minutes ' + (ctx.clockSkewAhead ? 'ahead of' : 'behind') + ' your church’s, which is why that was turned away. Take them to the desk — they’ll be checked in there.'
                   : 'That was turned away and we can’t tell why. Take them to the desk — they’ll be checked in there, and whoever runs the room can look into it afterwards.'}
             </span>

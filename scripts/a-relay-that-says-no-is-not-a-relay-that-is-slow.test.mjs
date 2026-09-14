@@ -172,3 +172,33 @@ test('THE ADMISSION GATE emptying the list is "not-sent" too — no socket is op
     'yet every caller reports "we couldn\'t confirm that — it may well have reached your church".');
   assert.equal(r.refused, false, 'no relay refused it — no relay was dialled');
 });
+
+test('A RELAY THAT CANNOT BE REACHED AT ALL is "not-sent" — no socket opened, nothing was written', async () => {
+  // THE COMMONEST FAILURE IN THE ROOM THIS FEATURE IS FOR, and the first version of this fix got it wrong:
+  // a children's worker in a hall with no signal. pool.publish resolves an unopenable socket as the string
+  // `connection failure: …`, which is deliberately not in the refusal vocabulary — so neither flag was set
+  // and she was told "we couldn't confirm that reached your church — it may well have." It did not. These
+  // writers have no retry queue, so the register will never show the child.
+  const dead = 'ws://127.0.0.1:1/relay';           // nothing listens on port 1
+  const r = await publish([dead]);
+  assert.equal(r.threw, true, 're-anchor: publishing to an unreachable relay reported success');
+  assert.equal(r.unsent, true,
+    'AN UNREACHABLE RELAY IS REPORTED AS "it may well have saved". No socket was ever opened. Message: ' + r.message);
+  assert.equal(r.refused, false, 'nobody refused it — nothing was reachable to refuse it');
+});
+
+test('…but ONE unreachable address alongside a SILENT one is still only "unconfirmed"', async () => {
+  // The other half, and the reason this is `every` and not `some`: the silent relay may well have taken it.
+  MODE = 'silent';
+  const r = await publish(['ws://127.0.0.1:1/relay', URL_]);
+  assert.equal(r.unsent, false,
+    'a relay that read the event and said nothing was written off as "nothing was sent" because a DIFFERENT ' +
+    'address could not be dialled. The event may well be on the relay, and the worker is being sent to undo it.');
+});
+
+test('…and an unreachable address alongside a REFUSAL is a refusal', async () => {
+  MODE = 'refuse:blocked: not a member or not permitted for this group';
+  const r = await publish(['ws://127.0.0.1:1/relay', URL_]);
+  assert.equal(r.refused, true, 'a settled refusal was lost because another address could not be dialled');
+  assert.equal(r.unsent, false, 'it reached a relay, which read it and said no — that is not "nothing was sent"');
+});

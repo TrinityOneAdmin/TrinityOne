@@ -2893,10 +2893,22 @@ function _publishAny(relays, evt) {
       // resolves connection failures as strings, and `connection failure` is deliberately NOT in this
       // vocabulary, so it cannot be mistaken for an answer.
       err.refused = rs.some(r => _PUB_REFUSED.test(_said(r)));
-      // NOTHING LEFT THE DEVICE. An empty target list means no socket was opened, so there is no event in
-      // flight to be hopeful about. Distinct from `refused` (a box said no) and from neither (nobody
-      // answered in time), because all three want different words on a worker's screen.
-      if (!targets.length) err.unsent = true;
+      // NOTHING LEFT THE DEVICE. Distinct from `refused` (a box said no) and from neither (nobody answered
+      // in time), because all three want different words on a worker's screen.
+      //
+      // THREE PATHS REACH NO SOCKET, NOT TWO, and the third is by far the commonest: the relay could not be
+      // REACHED. `pool.publish` resolves those as the string `connection failure: …` (thrown by ensureRelay,
+      // so the socket never opened and nothing was written to any wire), and `connection failure` is
+      // deliberately absent from _PUB_REFUSED — so neither flag was set and a children's worker in a hall
+      // with no signal was told "we couldn't confirm that reached your church — it may well have." It
+      // definitively did not, these three writers have no retry queue, and the register will never show the
+      // child. Found by the audit of this fix, 2026-09-14; the first version of it named two paths.
+      //
+      // ⚠ EVERY TARGET, NOT ANY. With two addresses where one refused to connect and the other simply never
+      // answered, the honest answer is still `unconfirmed` — the silent one may well have taken it. `unsent`
+      // is only true when NOTHING could have been sent anywhere.
+      const _unreachable = (r) => r.status === 'fulfilled' && /^connection failure/i.test(String(r.value == null ? '' : r.value));
+      if (!targets.length || (rs.length && rs.every(_unreachable))) err.unsent = true;
       throw err;
     }
     return true;

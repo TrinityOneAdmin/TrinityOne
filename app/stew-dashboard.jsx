@@ -3714,6 +3714,17 @@ function DashRelaysCard() {
   // WHICH RELAY REFUSED, keyed the way both sides store it. Recomputed when the alarm flips or the health
   // check returns, which is exactly when it can change. Compared with trailing slashes and case removed:
   // the pool keys relays by its own normaliser and a raw string compare has missed silently three times.
+  // ⚠ REMOVING A RELAY WAS ONE TAP AND TOOK THE WAY BACK WITH IT. Audit item 19, 2026-09-14, and MEASURED
+  // on a real console: a relay added by name (`falgate-box` → `wss://box.example.ts.net/relay`) was removed
+  // by a single click on a trash icon with no confirmation, and `Steward.removeRelay` also deleted the
+  // name→url binding — deliberately, so auto-follow cannot re-add what a steward just removed.
+  // The consequence is the part nobody sees coming: the NAME is the durable handle and the URL is not. A
+  // self-hosted box reached through a tunnel changes address, which is the whole reason the name exists
+  // (CLAUDE.md rule 10's note on root 3: "tunnel addresses churn"). So after one misplaced tap the steward
+  // has no relay, no name, and an address on screen that may already be stale — and the member app's own
+  // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
+  const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
+  const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   const refusedSet = React.useMemo(() => {
     const key = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
     const m = new Map();
@@ -3789,8 +3800,24 @@ function DashRelaysCard() {
                   {refused ? <SkPill tint="clay">Refused our last change</SkPill> : null}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Answering' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
-                  {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
+                  {!self && r.url !== own ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
+                {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
+                    the name goes too, and that — not the address on screen — is what would bring it back. */}
+                {confirmDrop === r.url ? (
+                  <div role="alert" style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginTop: 8, paddingTop: 9, borderTop: '1px solid var(--line)' }}>
+                    <span style={{ flex: 1, minWidth: 180, fontSize: 12, lineHeight: 1.45, color: 'var(--ink-2)' }}>
+                      {/* ⚠ CURLY APOSTROPHE, AND NOT FOR TYPOGRAPHY. A straight ' in JSX TEXT is an
+                          unbalanced quote to every brace-walking slicer in scripts/ — fnBody enters string
+                          mode and runs past the end of the component, so any test that lifts this card dies
+                          with "could not find the end of DashRelaysCard". Cost me a test run on the day this
+                          was written. The whole file already uses ’; this is why. */}
+                      Stop sending this church’s data to this relay?{relayName(r.url) ? ' It was added by the name “' + relayName(r.url) + '” — that name is forgotten too, so write it down if you may want it back.' : ' You would need this exact address to add it again.'}
+                    </span>
+                    <button onClick={() => { window.Steward.removeRelay(r.url); setConfirmDrop(null); }} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
+                    <button onClick={() => setConfirmDrop(null)} title="Keep this relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Keep it</button>
+                  </div>
+                ) : null}
               </div>
             );
           })}

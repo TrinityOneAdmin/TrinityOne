@@ -2480,7 +2480,15 @@ function _sOutDue(item, ignoreBackoff) {
   const tries = item.tries || 0;
   if (!tries || !item.lastTry) return true;
   const wait = Math.min(45000 * Math.pow(2, tries), S_OUT_BACKOFF_MS);
-  return (now() - item.lastTry) * 1000 >= wait;
+  // ⚠ A CLOCK THAT MOVED BACKWARDS MUST NOT SILENCE A MESSAGE. `lastTry` is written from this machine's own
+  // clock; if the console booted with a fast RTC and NTP then corrected it, `lastTry` sits in the future and
+  // this subtraction goes negative — so the message is skipped, `tries` never climbs, it never reaches the
+  // give-up state, and the steward watches "Waiting to send" for the whole length of the skew. Measured by
+  // the audit of this fix: a day fast → a day of total silence, then normal service. A timestamp we cannot
+  // have written yet is not evidence of anything, so treat it as due and let the attempt re-stamp it.
+  const since = now() - item.lastTry;
+  if (since < 0) return true;
+  return since * 1000 >= wait;
 }
 // `ignoreBackoff` is passed by the relay-returned listener only.
 async function _sOutFlush(ignoreBackoff) {
@@ -2495,7 +2503,25 @@ async function _sOutFlush(ignoreBackoff) {
       // install, up to 200 of them — while the comment below promised the opposite and `lastTry` was written
       // and never read. The give-up state was unreachable in practice. Audit finding 2026-09-14.
       if (!_sOutDue(item, ignoreBackoff)) continue;
-      const r = await publish(item.evt);
+      // ⚠ PUBLISH CAN THROW, AND A THROW USED TO ABANDON THE REST OF THE QUEUE. There was no try here: a
+      // rejection from publish() propagated out of the loop, `finally` cleared the flag, and the caller's
+      // .catch swallowed it — so every message BEHIND this one was never attempted, and this one's `tries`
+      // never moved, so it could never reach the give-up state either. publish() opens with
+      // _waitForRegistration() and calls relays(); either can reject. A throw is a failed try, not an exit.
+      let r = false;
+      try { r = await publish(item.evt); } catch (e) { r = false; }
+      // ⚠ MUTATE THE LIVE ITEM, NOT THIS SNAPSHOT. The loop walks `[..._sOutbox]`, and ANY call to
+      // `_sOutLoad()` while it runs replaces `_sOutbox` with freshly-parsed objects — at which point `item`
+      // is an orphan, every `tries`/`lastTry` written below lands on nothing, and the `_sOutSave()` after it
+      // serialises the reloaded array without them.
+      // THAT IS NOT HYPOTHETICAL AND IT IS NEW. `outboxForPeer()` opens with `_sOutLoad()`, and the DM
+      // window's `steward-outbox` listener — the first listener that event has ever had — calls it from
+      // inside `_sOutSave()`, synchronously, in the middle of this loop. `tries` and `lastTry` were
+      // write-only before the backoff read them, so the orphaning was harmless; now it means the backoff
+      // does not engage at all while a steward has a DM window open. Measured by the audit of this fix: 20
+      // queued messages over a dead relay went on the wire 1086 times instead of 160, the tail item 111
+      // times instead of 8 — on exactly the thin pipe this product exists to work over.
+      const live = _sOutbox.find(o => o && o.evt && o.evt.id === item.evt.id) || item;
       if (r) { _sOutbox = _sOutbox.filter(o => o.evt.id !== item.evt.id); _sOutPlain.delete(item.evt.id); _sOutSave(); }
       else {
         // publish() answers false for "every relay rejected" without saying whether that was a refusal or an
@@ -2504,9 +2530,9 @@ async function _sOutFlush(ignoreBackoff) {
         // THAT VISIBILITY IS THE OTHER HALF OF THIS FIX and lived nowhere until the same audit: the engine
         // has had outboxForPeer/retryQueuedDM/dropQueuedDM all along and StewDmWindow never called one of
         // them, so "a failed state the steward can see" was a sentence about a screen that did not exist.
-        item.tries = (item.tries || 0) + 1;
-        item.lastTry = now();
-        if (item.tries >= S_OUT_TRIES) item.failed = true;
+        live.tries = (live.tries || 0) + 1;
+        live.lastTry = now();
+        if (live.tries >= S_OUT_TRIES) live.failed = true;
         _sOutSave();
       }
     }
@@ -8619,6 +8645,16 @@ window.Steward = {
   // required). C5: the answer must be wss:// AND pass the network gate before it comes back. Pass
   // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
   resolveRelayName(name, opts) { return resolveRelayName(name, opts); },
+  // WHICH NAME, IF ANY, POINTS AT THIS ADDRESS. Read-only, and it exists so a screen can say what a steward
+  // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
+  // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
+  // durable handle while the URL is not. Audit item 19, 2026-09-14.
+  // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+  relayNameFor(url) {
+    const u = normRelay(url); if (!u) return '';
+    const hit = getNamedRelays().find(e => e && normRelay(e.url) === u);
+    return hit ? String(hit.name || '') : '';
+  },
   // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
   rememberRelayName(name, url) {
     const n = String(name || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
