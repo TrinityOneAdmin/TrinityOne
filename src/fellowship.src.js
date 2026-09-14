@@ -2852,7 +2852,21 @@ function _publishAny(relays, evt) {
       if (targets[i]) { try { _noteSendResult(targets[i], out); } catch (e) {} }
     });
     if (!good) {
-      const why = (rs.find(r => r.status === 'fulfilled') || {}).value
+      // ⚠ A RELAY THAT SPOKE OUTRANKS ONE THAT COULD NOT BE DIALLED. This took the first FULFILLED value,
+      // and nostr-tools resolves an unopenable socket with `connection failure: …` while REJECTING a real
+      // `OK:false` — so on any publish set where one address was down, `connection failure` won and the
+      // relay's own words were thrown away. Order-independent and ordinary rather than exotic: a church's
+      // set is its own relay plus the canonical ones, so one being down is a normal Sunday.
+      // WHAT IT COST: the parent's card names the clock only for `auth-required`, which is the one refusal a
+      // skewed clock produces — so with a second address down, a member whose phone is measurably out was
+      // told "we can't tell why" and sent to the desk over the one cause they could have fixed themselves.
+      // Found by the audit of the refusal fix, 2026-09-14.
+      const _spoke = (r) => (r.status === 'fulfilled'
+        ? String(r.value == null ? '' : r.value)
+        : String((r.reason && r.reason.message) || r.reason || ''));
+      const _said = (r) => _spoke(r) && !/^connection failure/i.test(_spoke(r));
+      const why = (rs.find(_said) ? _spoke(rs.find(_said)) : '')
+        || (rs.find(r => r.status === 'fulfilled') || {}).value
         || ((rs.find(r => r.status === 'rejected') || {}).reason || {}).message || 'no relay accepted this';
       const err = new Error(String(why));
       // ADDITIVE, AND DELIBERATELY SO. Every existing caller reads `.message` or ignores the error entirely
@@ -2885,14 +2899,14 @@ function _publishAny(relays, evt) {
       // question — "is retrying pointless?". `rate-limited` and `auth-required` are worth retrying and are
       // still a box reading the event and saying no. The screen needs "did anybody settle this", which is
       // _PUB_REFUSED, applied to whichever half of the result actually carries the relay's words.
-      const _said = (r) => String(r.status === 'rejected'
+      const _saidAny = (r) => String(r.status === 'rejected'
         ? ((r.reason && r.reason.message) || r.reason || '')
         : (r.value == null ? '' : r.value));
       // STILL "did ANY relay refuse", never "what did the first one say" — on the pilot's own default of two
       // addresses to one box the mixed case is ordinary. A fulfilled value is checked too: pool.publish
       // resolves connection failures as strings, and `connection failure` is deliberately NOT in this
       // vocabulary, so it cannot be mistaken for an answer.
-      err.refused = rs.some(r => _PUB_REFUSED.test(_said(r)));
+      err.refused = rs.some(r => _PUB_REFUSED.test(_saidAny(r)));
       // NOTHING LEFT THE DEVICE. Distinct from `refused` (a box said no) and from neither (nobody answered
       // in time), because all three want different words on a worker's screen.
       //

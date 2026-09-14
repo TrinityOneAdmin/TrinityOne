@@ -40,6 +40,8 @@ function run(anchor, what, extra, call) {
     setMsg: (m) => { if (m) seen.msg.push(m); },
     setMode: () => { seen.cleared++; }, setEntry: () => {},
     setPending: () => {}, setName: () => {}, setPicked: () => {}, setScanned: () => {},
+    // how the family was chosen (scan vs tap) — cleared alongside `picked` when the form resets
+    setBySig: () => {}, bySig: false,
     setCode: (c) => seen.code.push(c), svNewCode: () => 'NEW1',
     code: '1234', session: 'svc-am', scanned: [], queue: [],
     rec: { id: 'ci1', session: 'svc-am', code: '1234', guardians: [] },

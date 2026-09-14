@@ -73,13 +73,22 @@ function libraryRoute({ warn = false } = {}) {
   return { run, store: r.store, toasts };
 }
 
-test('backing up from the card on You RECORDS it — the nudge must stop', async () => {
+// ⚠ BOTH BUTTONS. The card ships "Save to device" (`run('local')`) and "Save to cloud" (`run('cloud')`),
+// and the first version of these tests drove only the first — so `if (mode === 'local' && …recordBackup())`
+// left every one of them green while a member who backs up to cloud is nagged for ever. Found by the audit
+// of this fix, 2026-09-14. On Android the cloud path writes the SAME seed-bearing file to Documents and then
+// opens a share sheet; there is nothing about it that makes it less of a backup.
+const MODES = ['local', 'cloud'];
+
+test('backing up from the card on You RECORDS it — either button, the nudge must stop', async () => {
+  for (const mode of MODES) {
   const L = libraryRoute();
-  await L.run('local');
+  await L.run(mode);
   assert.equal(L.store['trinityone.backedup.' + NPUB] != null, true,
-    'A MEMBER BACKED UP AND THE APP DID NOT RECORD IT. Measured on a phone: the file was written, carrying ' +
-    'their twelve words, and Today still said "Secure your account". They are nagged for ever for doing ' +
-    'exactly what was asked, and the Security screen shows no backup date.');
+    'A MEMBER BACKED UP VIA "' + mode + '" AND THE APP DID NOT RECORD IT. Measured on a phone: the file was ' +
+    'written, carrying their twelve words, and Today still said "Secure your account". They are nagged for ' +
+    'ever for doing exactly what was asked, and the Security screen shows no backup date.');
+  }
 });
 
 test('…and records a DATE, not a bare flag — the Security screen shows when', async () => {
@@ -89,15 +98,17 @@ test('…and records a DATE, not a bare flag — the Security screen shows when'
   assert.match(String(v), /^\d{4}-\d{2}-\d{2}T/, 'the marker is not an ISO timestamp: ' + JSON.stringify(v));
 });
 
-test('a save that FELL BACK records nothing — the nudge must keep asking', async () => {
+test('a save that FELL BACK records nothing — either button, the nudge must keep asking', async () => {
+  for (const mode of MODES) {
   // audit 2026-09-02 #7, the opposite error: `warn` means the direct write did not happen and the member
   // may have no file at all. Going quiet there abandons exactly the people who need the reminder.
   const L = libraryRoute({ warn: true });
-  await L.run('local');
+  await L.run(mode);
   assert.equal(L.store['trinityone.backedup.' + NPUB], undefined,
     'A BACKUP WAS RECORDED OVER A SAVE THAT SAYS IT MAY NOT HAVE HAPPENED. The nudge goes quiet for the ' +
     'members most likely to have no file.');
   assert.ok(L.toasts.some(t => /can’t write/.test(t)), 're-anchor: the fallback warning is no longer shown');
+  }
 });
 
 // ── ROUTE 2: the recovery hub (app/identity-extras.jsx markSaved) ───────────────────────────────────────
@@ -124,12 +135,24 @@ test('the hub still works if backup.jsx has not loaded', () => {
   assert.ok(store['trinityone.backedup.' + NPUB], 'with no TrinityBackup on the page, nothing was recorded');
 });
 
-test('BOTH routes reach the same key, so the nudge cannot disagree with itself', async () => {
-  const L = libraryRoute();
-  await L.run('local');
-  const viaCard = Object.keys(L.store);
-  const r = recorder(); r.fn();
-  assert.deepEqual(viaCard, Object.keys(r.store),
-    'the two backup routes write DIFFERENT keys, so one of them will still be nagged: ' +
-    JSON.stringify(viaCard) + ' vs ' + JSON.stringify(Object.keys(r.store)));
+test('BOTH routes reach the same key, so the nudge cannot disagree with itself', () => {
+  // ⚠ THIS USED TO COMPARE recorder().fn WITH ITSELF — true by construction, and it never touched
+  // app/identity-extras.jsx at all, so it could not see the two routes diverge. Flagged by the audit of
+  // this fix, 2026-09-14. It drives the CARD and the HUB separately now, each through its own shipped code.
+  const viaCard = libraryRoute();
+  const cardKeys = (async () => { await viaCard.run('local'); return Object.keys(viaCard.store); })();
+
+  const hub = recorder();
+  const markSaved = new Function('window', 'localStorage',
+    fnBody(EXTRAS, 'const markSaved = () => {', 'markSaved') + '\nreturn markSaved;')(
+      { TrinityIdentity: { current: { npub: NPUB } }, TrinityBackup: { recordBackup: hub.fn } },
+      { setItem: () => { throw new Error('the hub bypassed recordBackup'); } });
+  markSaved();
+
+  return cardKeys.then((keys) => {
+    assert.deepEqual(keys, Object.keys(hub.store),
+      'THE TWO BACKUP ROUTES WRITE DIFFERENT KEYS, so one of them will still be nagged: ' +
+      JSON.stringify(keys) + ' via the card vs ' + JSON.stringify(Object.keys(hub.store)) + ' via the hub.');
+    assert.deepEqual(keys, ['trinityone.backedup.' + NPUB], 'the key is not the one the nudge reads: ' + keys);
+  });
 });

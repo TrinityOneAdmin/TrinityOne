@@ -202,3 +202,31 @@ test('…and an unreachable address alongside a REFUSAL is a refusal', async () 
   assert.equal(r.refused, true, 'a settled refusal was lost because another address could not be dialled');
   assert.equal(r.unsent, false, 'it reached a relay, which read it and said no — that is not "nothing was sent"');
 });
+
+
+test('THE RELAY’S OWN WORDS SURVIVE an unreachable address in the same publish set', async () => {
+  // Found by the audit of the refusal fix, 2026-09-14. `why` took the first FULFILLED value, and nostr-tools
+  // RESOLVES an unopenable socket with "connection failure: …" while REJECTING a real OK:false — so with one
+  // address down, the dial failure won and the relay's actual answer was thrown away.
+  // A church's publish set is its own relay plus the canonical ones, so one being down is an ordinary
+  // Sunday, not an exotic case. THE COST: the parent's card names the clock only for `auth-required`, the
+  // one refusal a skewed clock produces — so a member whose phone is measurably out was told "we can't tell
+  // why" and sent to the desk over the one cause they could have fixed themselves.
+  MODE = 'refuse:auth-required: we can’t serve unauthenticated users';
+  for (const targets of [['ws://127.0.0.1:1/relay', URL_], [URL_, 'ws://127.0.0.1:1/relay']]) {
+    const r = await publish(targets);
+    assert.equal(r.refused, true, 're-anchor: the refusal was lost entirely');
+    assert.match(r.message, /^auth-required/,
+      'THE RELAY SAID "auth-required" AND THE APP REPORTED A DIAL FAILURE INSTEAD. Every caller that reads ' +
+      '`message` to explain WHY now gets "connection failure", so the one cause a member can act on is ' +
+      'invisible. Order: ' + JSON.stringify(targets) + ' → ' + r.message);
+  }
+});
+
+test('…but when NOBODY spoke, the dial failure is still what it says', async () => {
+  // The floor. If no relay answered at all, "connection failure" is the honest message and must survive.
+  const r = await publish(['ws://127.0.0.1:1/relay', 'ws://127.0.0.1:2/relay']);
+  assert.match(r.message, /connection failure/i,
+    'with nothing reachable the message must say so, not invent an answer: ' + r.message);
+  assert.equal(r.unsent, true, 're-anchor: nothing left the device and it was not reported as such');
+});

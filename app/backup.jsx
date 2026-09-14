@@ -243,8 +243,10 @@
   // — a button that only exists on the backup card — or simply "Share canceled", which is a plugin's words,
   // not English anyone owes a member. Every default below is the sentence that was there before, so the four
   // backup callers are unchanged; only a caller that passes its own gets different words.
-  // Callers (CLAUDE.md rule 2 — complete list): app/identity-extras.jsx doExport, app/screens-library.jsx
-  // doExport, app/stew-dashboard.jsx (the church-key backup), app/screens-serving.jsx svDownloadICS.
+  // Callers (CLAUDE.md rule 2 — complete list): app/identity-extras.jsx `doExport`, app/screens-library.jsx
+  // `run` (⚠ this said `doExport`; that name does not exist in that file, and a rule-2 list nobody can grep
+  // is not a list — corrected 2026-09-14), app/stew-dashboard.jsx (the church-key backup),
+  // app/screens-serving.jsx svDownloadICS.
   async function saveFile(filename, text, mode, opts) {
     const _mime = (opts && opts.mime) || 'application/json';
     const _title = (opts && opts.title) || 'TrinityOne backup';
@@ -338,7 +340,7 @@
   // ── RECORDING THAT A MEMBER IS BACKED UP — ONE WRITER, BECAUSE TWO IS WHAT BROKE IT ────────────────────
   // `trinityone.backedup.<npub>` is what silences the "Secure your account" nudge on Today and puts a date
   // on the Security screen. There are TWO routes that produce a member backup file — app/identity-extras.jsx
-  // doExport (the recovery hub) and app/screens-library.jsx doExport (the "Back up your data" card on You) —
+  // doExport (the recovery hub) and app/screens-library.jsx `run` (the "Back up your data" card on You — BOTH its buttons, Save to device and Save to cloud) —
   // and they write the SAME file from the SAME collectMember(), seed and all. Only the first recorded it.
   //
   // MEASURED ON A PHONE, 2026-09-14 (Oppo CPH2477, throwaway account, APK 213): backed up through the You
@@ -352,7 +354,9 @@
   // it silenced the nudge for precisely the people who had no file. Callers must check `warn` first.
   //
   // CALLERS (CLAUDE.md rule 2 — complete list): app/identity-extras.jsx markSaved (the recovery hub's
-  // export, and its "I've written them down" button), app/screens-library.jsx doExport. The 12-word
+  // export, and its "I've written them down" button), app/screens-library.jsx `run`. ⚠ THIS SAID
+  // `doExport`, WHICH DOES NOT EXIST IN THAT FILE — the function is `run`, and a rule-2 list is only worth
+  // having if the next person can grep it. Corrected by the audit of 2026-09-14. The 12-word
   // ceremony in app/identity.jsx writes the same key directly and is deliberately left alone: writing the
   // words down IS a backup, and it has no file to warn about.
   function recordBackup() {

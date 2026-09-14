@@ -2499,7 +2499,10 @@ function _sOutDue(item, ignoreBackoff) {
   if (since < 0) return true;
   return since * 1000 >= wait;
 }
-// `ignoreBackoff` is passed by the relay-returned listener only.
+// CALLERS (CLAUDE.md rule 2 — complete list, grepped 2026-09-14): the 45s interval below, the
+// `steward-relay-returned` listener below (the only one that passes `ignoreBackoff`), and `retryQueuedDM`.
+// THREE. A commit message of mine said four; the audit of it counted three. The number is the whole point of
+// the rule, so it is written here where it can be checked rather than in a message nobody greps.
 async function _sOutFlush(ignoreBackoff) {
   if (_sFlushing || !sk) return;
   _sOutLoad();

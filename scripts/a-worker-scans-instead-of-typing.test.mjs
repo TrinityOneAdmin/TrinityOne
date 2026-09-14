@@ -524,19 +524,75 @@ test('the confirmation names the TIME when it cannot name the person', async () 
   assert.ok(!/the person who just arrived/.test(t), 'the old constant is still on screen: ' + t);
 });
 
-test('with MORE THAN ONE unnamed family, the panel says it cannot tell them apart', async () => {
+test('two families whose rows read IDENTICALLY — the panel says it cannot tell them apart', async () => {
+  // Same minute, so the clock time added by this fix does not separate them either.
   const d = desk(register([session('svc-am', [
-    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, '', 0, AM_FROM + 60),
+    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, '', 0, AM_FROM),
   ])]));
-  d.press(0, 'Someone arrived at ' + clockOf(AM_FROM) + ' —');
+  // Both rows read the same, so they cannot be pressed by text — which is the defect. Tap the row itself.
+  const rows = shown(d.tree(0), n => n.type === 'button' && n.props && n.props['aria-pressed'] !== undefined);
+  assert.equal(rows.length, 2, 're-anchor: expected two queue rows, saw ' + rows.length);
+  rows[0].props.onClick();
   d.type(0, 'Child’s name', 'Milo');
   await d.click(0, 'Check a child in');
   const t = d.reads(0);
   assert.match(t, /Milo → /, 're-anchor: the pairing panel never opened, so this test proves nothing');
   assert.match(t, /can’t tell them apart/,
-    'TWO UNNAMED FAMILIES AND THE CONFIRMATION READS AS CERTAIN. It may name either of them, and a question ' +
-    'that looks checked launders a guess into a verified pairing. Screen read: ' + t);
+    'TWO FAMILIES READ IDENTICALLY AND THE CONFIRMATION READS AS CERTAIN. It may name either of them, and a ' +
+    'question that looks checked launders a guess into a verified pairing. Screen read: ' + t);
   assert.match(t, /Ask before you tap/, 'it must hand the check to the person who can actually make it');
+});
+
+test('TWO FAMILIES WITH THE SAME RESOLVED NAME are caught too — an ordinary Sunday', async () => {
+  // Found by the audit of this fix, 2026-09-14, and it is the substantive half: the first version of the
+  // warning counted UNNAMED arrivals, so two members both displaying as "Sarah" — which is what a church
+  // whose sealed display names are first-name-only has every week — produced two identical rows, a
+  // confirmation reading "Milo → Sarah?", and NO warning at all. Resolving the names does not make the
+  // question answerable; it just makes the ambiguity look authoritative.
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, 'Sarah', 0, AM_FROM), arrival(SECOND, 'Sarah', 0, AM_FROM + 600),
+  ])]));
+  // Same problem as the test above, and the same point: two identical rows cannot be told apart by text.
+  const rows = shown(d.tree(0), n => n.type === 'button' && n.props && n.props['aria-pressed'] !== undefined);
+  assert.equal(rows.length, 2, 're-anchor: expected two queue rows, saw ' + rows.length);
+  rows[0].props.onClick();
+  d.type(0, 'Child’s name', 'Milo');
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → Sarah\?/, 're-anchor: the pairing panel never opened');
+  assert.match(t, /can’t tell them apart/,
+    'TWO FAMILIES BOTH READ "Sarah" AND NOTHING SAID SO. The worker taps one, and a child’s name and pickup ' +
+    'code go to whichever of them she guessed. Screen read: ' + t);
+});
+
+test('the SCAN path never warns — the family is picked by signature, not by a tap', async () => {
+  // The mirror failure, also from that audit. Scanning picks the family by the pubkey off a SIGNED arrival,
+  // so there is nothing to confuse however many unnamed families are in the queue. A warning on the one path
+  // carrying a cryptographic guarantee is a warning the worker learns to tap through — which is item 12's
+  // own argument ("degraded to wallpaper") turned on its fix.
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, '', 0, AM_FROM),
+  ])]));
+  d.scan(0, qr(TOM, ['Milo']));
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → /, 're-anchor: the scan did not reach a pairing');
+  assert.ok(!/can’t tell them apart/.test(t),
+    'the scan path warned about an ambiguity it does not have — the family came off a signed arrival: ' + t);
+});
+
+test('two unnamed families the CLOCK separates do not trigger the warning', async () => {
+  // The discriminator this fix added must actually count. 45 minutes apart is not ambiguous.
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, '', 0, AM_FROM + 2700),
+  ])]));
+  d.press(0, 'Someone arrived at ' + clockOf(AM_FROM) + ' —');
+  d.type(0, 'Child’s name', 'Milo');
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → /, 're-anchor');
+  assert.ok(!/can’t tell them apart/.test(t),
+    'the warning fired over two rows the clock plainly separates, which teaches the worker to ignore it: ' + t);
 });
 
 test('…and with only ONE unnamed family it does NOT cry wolf', async () => {

@@ -9079,10 +9079,12 @@
         }
       });
       if (!good) {
-        const why = (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
+        const _spoke = (r) => r.status === "fulfilled" ? String(r.value == null ? "" : r.value) : String(r.reason && r.reason.message || r.reason || "");
+        const _said = (r) => _spoke(r) && !/^connection failure/i.test(_spoke(r));
+        const why = (rs.find(_said) ? _spoke(rs.find(_said)) : "") || (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
         const err = new Error(String(why));
-        const _said = (r) => String(r.status === "rejected" ? r.reason && r.reason.message || r.reason || "" : r.value == null ? "" : r.value);
-        err.refused = rs.some((r) => _PUB_REFUSED.test(_said(r)));
+        const _saidAny = (r) => String(r.status === "rejected" ? r.reason && r.reason.message || r.reason || "" : r.value == null ? "" : r.value);
+        err.refused = rs.some((r) => _PUB_REFUSED.test(_saidAny(r)));
         const _unreachable = (r) => r.status === "fulfilled" && /^connection failure/i.test(String(r.value == null ? "" : r.value));
         if (!targets.length || rs.length && rs.every(_unreachable)) err.unsent = true;
         throw err;

@@ -127,7 +127,17 @@ const find = (n, p, out = []) => {
   return out;
 };
 
-async function relayPanel({ name = 'falgate-box' } = {}) {
+// ⚠ TWO ROWS, AND relayNameFor ANSWERS PER URL. The first version of this fixture had ONE row and stubbed
+// `relayNameFor: () => name` — a constant that ignores its argument — so replacing BOTH `relayName(r.url)`
+// calls with a completely different address left 6/6 green. The tests proved the panel calls the lookup and
+// renders the answer; they could not prove it asks about the relay being removed. A steward removing
+// `falgate-box` could be told "It was added by the name 'grace-city'", write that down, and have no way back
+// to the box she actually removed — which is the whole of what item 19 is about. Audit, 2026-09-14.
+const ROW_A = 'wss://box.example.ts.net/relay';
+const ROW_B = 'wss://second-box.example.ts.net/relay';
+const NAMES = { [ROW_A]: 'falgate-box', [ROW_B]: 'grace-city' };
+
+async function relayPanel({ names = NAMES } = {}) {
   const removed = [];
   const { React, reset, flush } = mini();
   const src = fnBody(DASH, 'function DashRelaysCard()', 'DashRelaysCard');
@@ -139,10 +149,10 @@ async function relayPanel({ name = 'falgate-box' } = {}) {
   } finally { rmSync(tmp, { force: true }); }
   const key = '__r19_' + Math.random().toString(36).slice(2);
   const Steward = {
-    relaysDetailed: () => [{ url: 'wss://box.example.ts.net/relay', status: 'on', ms: 20, member: true }],
-    relays: () => ['wss://box.example.ts.net/relay'], relaysRaw: () => ['wss://box.example.ts.net/relay'],
+    relaysDetailed: () => [{ url: ROW_A, status: 'on', ms: 20, member: true }, { url: ROW_B, status: 'on', ms: 30, member: true }],
+    relays: () => [ROW_A, ROW_B], relaysRaw: () => [ROW_A, ROW_B],
     removeRelay: (u) => { removed.push(u); return true; },
-    relayNameFor: () => name,
+    relayNameFor: (u) => names[u] || '',
     ownRelayUrl: () => '', selfHostedUrl: () => '', addRelay: () => {}, publishRelayList: async () => {},
   };
   globalThis[key] = {
@@ -153,7 +163,7 @@ async function relayPanel({ name = 'falgate-box' } = {}) {
     // The card reads its whole relay list from this hook, so the fixture lives here: one removable relay,
     // answering, in-network, and NOT the church's own box (the trash control is hidden for `self` and for
     // `own`, which would make this test vacuous).
-    useRelayBackupState: () => ({ status: [{ url: 'wss://box.example.ts.net/relay', status: 'on', ms: 20, member: true }], backup: null }),
+    useRelayBackupState: () => ({ status: [{ url: ROW_A, status: 'on', ms: 20, member: true }, { url: ROW_B, status: 'on', ms: 30, member: true }], backup: null }),
     location: { host: 'console.example' },
     relaysThatRefused: () => [],
     Panel: () => null,
@@ -165,7 +175,8 @@ async function relayPanel({ name = 'falgate-box' } = {}) {
   return { draw, removed };
 }
 
-const trash = (tree) => find(tree, n => n.type === 'button' && /Remove relay/i.test((n.props && n.props['aria-label']) || ''))[0];
+const trashAll = (tree) => find(tree, n => n.type === 'button' && /Remove relay/i.test((n.props && n.props['aria-label']) || ''));
+const trash = (tree, i = 0) => trashAll(tree)[i];
 
 test('one tap does NOT remove a relay — the console asks first', async () => {
   const p = await relayPanel();
@@ -180,17 +191,37 @@ test('one tap does NOT remove a relay — the console asks first', async () => {
     'nothing on the screen asks — the tap simply did nothing, which is its own bug');
 });
 
-test('…and the confirmation NAMES the binding that goes with it', async () => {
-  const p = await relayPanel({ name: 'falgate-box' });
-  trash(p.draw()).props.onClick();
+test('…and the confirmation NAMES THE BINDING OF THE ROW SHE TAPPED, not just some name', async () => {
+  // Two rows, two different names. Tapping the SECOND must not name the first's binding.
+  const p = await relayPanel();
+  trash(p.draw(), 1).props.onClick();
   const after = texts(p.draw()).join(' | ');
-  assert.match(after, /falgate-box/,
+  assert.match(after, /grace-city/,
     'THE STEWARD IS NOT TOLD THE NAME IS GOING TOO. The name is the durable handle for a box behind a ' +
     'rotating tunnel address; the URL on screen may already be stale. Without it there is no way back.');
+  assert.ok(!/falgate-box/.test(after),
+    'THE CONFIRMATION NAMED A DIFFERENT RELAY’S BINDING. She writes down "falgate-box", removes the box that ' +
+    'was called "grace-city", and has no way back to either. Screen read: ' + after);
+});
+
+test('…and confirming removes THAT row, not another one', async () => {
+  const p = await relayPanel();
+  trash(p.draw(), 1).props.onClick();
+  find(p.draw(), n => n.type === 'button' && /Remove this relay/i.test((n.props && n.props.title) || ''))[0].props.onClick();
+  assert.deepEqual(p.removed, [ROW_B],
+    'the confirmation asked about one relay and removed another: ' + JSON.stringify(p.removed));
+});
+
+test('the confirmation opens on ONE row only', async () => {
+  const p = await relayPanel();
+  trash(p.draw(), 0).props.onClick();
+  const t = texts(p.draw()).join(' | ');
+  const n = (t.match(/Stop sending this church/g) || []).length;
+  assert.equal(n, 1, 'the confirmation rendered on ' + n + ' rows — every relay is now armed for removal');
 });
 
 test('a relay with NO name says what IS needed to add it again', async () => {
-  const p = await relayPanel({ name: '' });
+  const p = await relayPanel({ names: {} });
   trash(p.draw()).props.onClick();
   const after = texts(p.draw()).join(' | ');
   assert.match(after, /this exact address/,
@@ -212,6 +243,6 @@ test('confirming removes it; "Keep it" does not', async () => {
   const go = find(q.draw(), n => n.type === 'button' && /Remove this relay/i.test((n.props && n.props.title) || ''))[0];
   assert.ok(go, 're-anchor: the confirmation has no confirm button');
   go.props.onClick();
-  assert.deepEqual(q.removed, ['wss://box.example.ts.net/relay'],
+  assert.deepEqual(q.removed, [ROW_A],
     'confirming did not actually remove the relay — the control is now decorative');
 });

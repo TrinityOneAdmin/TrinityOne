@@ -649,7 +649,12 @@ function svWhen(ts) {
 // integer: the Oppo showed "Collected · 1789084514" on 2026-09-11 while the console beside it said
 // "out 12:55 AM". Same format as the console's fmtT, so the two screens agree about one collection.
 function svClock(ts) {
-  if (!Number.isFinite(ts)) return '';
+  // ⚠ `> 0`, NOT JUST isFinite. `Number.isFinite(0)` is true, so `svClock(0)` painted "1:00 AM" and
+  // `svClock(-1)` painted "12:59 AM" — an invented time. The ingest is `{ at: e.created_at || 0 }`, so a
+  // record with no created_at reached here as 0, and on the check-in screens that time is the ONE thing a
+  // worker is told to check against the person in front of her. An empty string falls back to wording that
+  // claims nothing. Audit, 2026-09-14. (A real epoch second is ~1.7e9; nothing legitimate is near zero.)
+  if (!Number.isFinite(ts) || ts <= 0) return '';
   try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; }
 }
 // ONE HELP BUTTON, VISIBLE, with real text — the member app's ctx.openHelp deep link, styled as the app's other
@@ -815,6 +820,25 @@ function svArrivalLine(a) {
   return t ? 'Someone arrived at ' + t + ' — their name hasn’t reached your phone yet'
            : 'Someone’s arrived — their name hasn’t reached your phone yet';
 }
+// ⚠ IS THIS QUESTION ACTUALLY ABLE TO TELL THIS FAMILY FROM ANOTHER ONE? Ask about the LABEL, which is what
+// the worker reads, not about whether names have resolved. The first version of this counted UNNAMED
+// arrivals, and the audit of 2026-09-14 showed that to be wrong in both directions:
+//   · it fired on the SCAN path, where the family is picked by the pubkey off a signed arrival and there is
+//     nothing to confuse — a warning on the one path carrying a cryptographic guarantee;
+//   · it fired for two unnamed arrivals 45 minutes apart, which the clock time added by this very fix makes
+//     plainly distinguishable;
+//   · and it stayed SILENT for two families whose resolved names are both "Sarah", which is an ordinary
+//     Sunday in a church whose sealed display names are first-name-only — two identical rows, one
+//     confirmation reading "Milo → Sarah?", and nothing said.
+// A warning that fires where there is no ambiguity is one the worker learns to tap through, which is item
+// 12's own argument turned on its fix.
+function svAmbiguous(queue, pub) {
+  const list = Array.isArray(queue) ? queue.filter(Boolean) : [];
+  const me = list.find(a => a.pub === pub);
+  if (!me) return false;                       // no arrival behind this pairing — nothing to confuse it with
+  const mine = svArrivalLabel(me);
+  return list.some(a => a.pub !== pub && svArrivalLabel(a) === mine);
+}
 function svArrivalLabel(a) {
   const n = svArrivalName(a);
   if (n) return n;
@@ -831,7 +855,13 @@ function KidsAddChild({ ctx, session, arrivals }) {
   const [picked, setPicked] = useSv('');
   // …AND THE PAIRING THE WORKER HAS BEEN ASKED TO CONFIRM, held separately so the confirmation can only ever
   // name what was on screen when she was asked.
-  const [pending, setPending] = useSv(null);  // { childName, guardian, label } | null
+  const [pending, setPending] = useSv(null);  // { childName, guardian, label, bySig } | null
+  // HOW THE FAMILY WAS CHOSEN, which decides whether the confirmation can be ambiguous at all. A SCAN picks
+  // the family by the pubkey off a SIGNED arrival — the relay admitted that document from that pubkey's own
+  // address — so the pairing is exact however alike two rows look, and warning there teaches the worker to
+  // tap through a warning that is always wrong. A TAP is her reading a row and choosing, which is precisely
+  // where two identical rows can go wrong. Audit of item 12's fix, 2026-09-14.
+  const [bySig, setBySig] = useSv(false);
   // ── SCANNING THE PARENT'S CODE — §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md ───────────────────
   const [scanning, setScanning] = useSv(false);
   // QRScanner IS SINGLE-SHOT: its loop calls onResult once and stops rescheduling, relying on the caller to
@@ -861,7 +891,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
       // stay armed.
       const rest = scanned.filter(n => n !== childName);
       if (rest.length && guardian && queue.some(a => a && a.pub === guardian)) { setScanned(rest); setName(rest[0]); }
-      else { setScanned([]); setName(''); setPicked(''); }
+      else { setScanned([]); setName(''); setPicked(''); setBySig(false); }
     } else {
       // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
       // ⚠ BUT NOT LOUDER THAN THE TRUTH. `unconfirmed` means nobody answered inside the ack window, not
@@ -890,7 +920,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
   const submit = async () => {
     const nm = name.trim();
     if (!nm || busy) return;
-    if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalLabel(pickedArrival) }); return; }
+    if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalLabel(pickedArrival), bySig }); return; }
     await write(nm, '');
   };
   // ⚠ THE LOAD-BEARING RULE OF THE WHOLE NO-TYPING DESIGN, AND IT IS ENFORCED RIGHT HERE.
@@ -929,11 +959,11 @@ function KidsAddChild({ ctx, session, arrivals }) {
       // CLEAR ANY EARLIER PICK. A failed scan must not leave a stale pairing armed under a fresh name: that
       // would be the "Milo → Sarah Henderson?" mitigation answering about the wrong family. Clearing can only
       // ever REMOVE a guardian tag, never invent one, so it is the safe direction.
-      setScanned([]); setPicked(''); setPending(null);
+      setScanned([]); setPicked(''); setBySig(false); setPending(null);
       setMsg({ ok: false, text: 'Nobody with that code has said they’re at this door. Type the child’s name instead.' });
       return;
     }
-    setPicked(hit.pub); setPending(null); setScanned(p.c); setName(p.c[0]); setMsg(null);
+    setPicked(hit.pub); setBySig(true); setPending(null); setScanned(p.c); setName(p.c[0]); setMsg(null);
   };
   return (
     <div style={{ borderTop: '1px solid var(--line)', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -945,7 +975,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
           {queue.map(a => (
             // TAPPING A ROW BY HAND DROPS THE SCANNED NAMES. They belong to the code that picked the family
             // this row may not be — leaving them up would offer one family's children under another's name.
-            <button key={a.pub} onClick={() => { setPicked(p => (p === a.pub ? '' : a.pub)); setPending(null); setMsg(null); setScanned([]); }} aria-pressed={picked === a.pub}
+            <button key={a.pub} onClick={() => { setPicked(p => (p === a.pub ? '' : a.pub)); setBySig(false); setPending(null); setMsg(null); setScanned([]); }} aria-pressed={picked === a.pub}
               style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 12, cursor: 'pointer',
                 border: '1px solid ' + (picked === a.pub ? 'var(--sage)' : 'var(--line)'), background: picked === a.pub ? 'color-mix(in oklab, var(--sage) 12%, var(--surface))' : 'var(--surface)' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -1008,10 +1038,10 @@ function KidsAddChild({ ctx, session, arrivals }) {
               launders a guess into a checked pairing. It does NOT block — design §10, nothing in this
               feature stops a child reaching a room — it hands the check back to the one person who can
               actually make it, who is standing at the desk. */}
-          {queue.filter(a => a && !svArrivalName(a)).length > 1 ? (
+          {!pending.bySig && svAmbiguous(queue, pending.guardian) ? (
             <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink-2)', fontWeight: 600 }}>
-              More than one family here has no name on this phone yet, so this question can’t tell them apart.
-              Ask before you tap.
+              Another family here reads exactly the same on this screen, so this question can’t tell them
+              apart. Ask before you tap.
             </div>
           ) : null}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
