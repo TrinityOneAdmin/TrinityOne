@@ -16747,13 +16747,24 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  async function _sOutFlush() {
+  var S_OUT_TRIES = 8;
+  var S_OUT_BACKOFF_MS = 30 * 60 * 1e3;
+  function _sOutDue(item, ignoreBackoff) {
+    if (item.failed) return false;
+    if (ignoreBackoff) return true;
+    const tries = item.tries || 0;
+    if (!tries || !item.lastTry) return true;
+    const wait = Math.min(45e3 * Math.pow(2, tries), S_OUT_BACKOFF_MS);
+    return (now() - item.lastTry) * 1e3 >= wait;
+  }
+  async function _sOutFlush(ignoreBackoff) {
     if (_sFlushing || !sk) return;
     _sOutLoad();
     if (!_sOutbox.length) return;
     _sFlushing = true;
     try {
       for (const item of [..._sOutbox]) {
+        if (!_sOutDue(item, ignoreBackoff)) continue;
         const r = await publish(item.evt);
         if (r) {
           _sOutbox = _sOutbox.filter((o) => o.evt.id !== item.evt.id);
@@ -16762,7 +16773,7 @@ zoo`.split("\n");
         } else {
           item.tries = (item.tries || 0) + 1;
           item.lastTry = now();
-          if (item.tries >= 8) item.failed = true;
+          if (item.tries >= S_OUT_TRIES) item.failed = true;
           _sOutSave();
         }
       }
@@ -16773,7 +16784,7 @@ zoo`.split("\n");
   try {
     window.addEventListener("steward-relay-returned", () => {
       setTimeout(() => {
-        _sOutFlush().catch(() => {
+        _sOutFlush(true).catch(() => {
         });
       }, 3e3);
     });

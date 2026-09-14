@@ -22,7 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { stripComments, fnBody } from './test-slice.mjs';
+import { stripComments, fnBody, stmt } from './test-slice.mjs';
 
 const ST = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
@@ -67,6 +67,17 @@ test('the retry re-sends the SAME event, and stops trying eventually — visibly
     now: () => 1000,
     lsGet: (k) => store[k], lsSet: (k, v) => { store[k] = v; },
     _sOutKey: () => 'k', S_OUTBOX_MAX: 200,
+    // The give-up threshold, taken from the bundle rather than retyped — a hard-coded 8 here would keep
+    // passing after somebody changed the real one.
+    S_OUT_TRIES: new Function(stmt(ST, 'var S_OUT_TRIES =', 'S_OUT_TRIES') + '\nreturn S_OUT_TRIES;')(),
+    // LIFTED, NOT STUBBED — _sOutDue is what decides whether an item is attempted at all (audit item 9,
+    // 2026-09-14: a message already given up on was being re-published for ever). A stub here would answer
+    // the question this test asks on the shipped code's behalf.
+    _sOutDue: new Function(
+      stmt(ST, 'var S_OUT_TRIES =', 'S_OUT_TRIES') + '\n' +
+      stmt(ST, 'var S_OUT_BACKOFF_MS =', 'S_OUT_BACKOFF_MS') + '\n' +
+      'const now = () => 1000;\n' +
+      fnBody(ST, 'function _sOutDue(item, ignoreBackoff)', '_sOutDue') + '\nreturn _sOutDue;')(),
   }, 'async function _sOutFlush');
   await flush();
   assert.equal(attempts, 1, 'the flush did not attempt the queued message');

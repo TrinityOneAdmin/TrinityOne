@@ -2466,29 +2466,56 @@ function _sOutSave() {
   try { lsSet(_sOutKey(), JSON.stringify(_sOutbox.slice(-S_OUTBOX_MAX))); } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-outbox')); } catch (e) {}
 }
-async function _sOutFlush() {
+// HOW LONG TO WAIT BEFORE THE NEXT ATTEMPT — 90s, 3m, 6m, 12m, 24m, then half-hourly.
+// ⚠ THIS IS NOT A REFINEMENT, IT IS LOAD-BEARING. Without it the eight tries below are spent in six minutes
+// flat (the interval is 45s), so ANY six-minute outage — a router reboot, a phone in a lift, a church hall
+// with one bar — permanently gives up on every message queued at the time. Adding the skip without adding
+// the backoff would have turned "retries for ever" into "gives up almost immediately", which is worse for
+// the person waiting for a reply. Eight tries now span about an hour and three quarters.
+const S_OUT_TRIES = 8;
+const S_OUT_BACKOFF_MS = 30 * 60 * 1000;
+function _sOutDue(item, ignoreBackoff) {
+  if (item.failed) return false;               // given up on: only the steward's own "Try again" revives it
+  if (ignoreBackoff) return true;              // the relay just came back — ask it now, do not sit out a wait
+  const tries = item.tries || 0;
+  if (!tries || !item.lastTry) return true;
+  const wait = Math.min(45000 * Math.pow(2, tries), S_OUT_BACKOFF_MS);
+  return (now() - item.lastTry) * 1000 >= wait;
+}
+// `ignoreBackoff` is passed by the relay-returned listener only.
+async function _sOutFlush(ignoreBackoff) {
   if (_sFlushing || !sk) return;
   _sOutLoad();
   if (!_sOutbox.length) return;
   _sFlushing = true;
   try {
     for (const item of [..._sOutbox]) {
+      // ⚠ IT RE-PUBLISHED WHAT IT HAD ALREADY GIVEN UP ON. `failed` was set and then never read here, so a
+      // message that had exhausted its tries went back on the wire every 45 seconds for the life of the
+      // install, up to 200 of them — while the comment below promised the opposite and `lastTry` was written
+      // and never read. The give-up state was unreachable in practice. Audit finding 2026-09-14.
+      if (!_sOutDue(item, ignoreBackoff)) continue;
       const r = await publish(item.evt);
       if (r) { _sOutbox = _sOutbox.filter(o => o.evt.id !== item.evt.id); _sOutPlain.delete(item.evt.id); _sOutSave(); }
       else {
         // publish() answers false for "every relay rejected" without saying whether that was a refusal or an
         // outage, so tries are counted and a message is eventually given up on rather than retried for ever.
         // Giving up is VISIBLE — it moves to a failed state the steward can see and retry — never a discard.
+        // THAT VISIBILITY IS THE OTHER HALF OF THIS FIX and lived nowhere until the same audit: the engine
+        // has had outboxForPeer/retryQueuedDM/dropQueuedDM all along and StewDmWindow never called one of
+        // them, so "a failed state the steward can see" was a sentence about a screen that did not exist.
         item.tries = (item.tries || 0) + 1;
         item.lastTry = now();
-        if (item.tries >= 8) item.failed = true;
+        if (item.tries >= S_OUT_TRIES) item.failed = true;
         _sOutSave();
       }
     }
   } finally { _sFlushing = false; }
 }
 try {
-  window.addEventListener('steward-relay-returned', () => { setTimeout(() => { _sOutFlush().catch(() => {}); }, 3000); });
+  // THE RELAY IS BACK — do not make a waiting message sit out a backoff that was measured against an outage
+  // which has just ended. Still skips items already given up on: those are the steward's to revive.
+  window.addEventListener('steward-relay-returned', () => { setTimeout(() => { _sOutFlush(true).catch(() => {}); }, 3000); });
   setInterval(() => { _sOutFlush().catch(() => {}); }, 45000);
 } catch (e) {}
 // TARGETED PUBLISH, for the safeguarding write path only. The shared publish() above resolves on

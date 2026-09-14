@@ -9016,7 +9016,36 @@ function StewDmWindow({ peer, offset, onClose }) {
   const [rxFor, setRxFor] = React.useState('');   // msg id whose emoji picker is open
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey]);
-  React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, min]);
+  // ⚠ THE OTHER HALF OF THE OUTBOX, AND IT LIVED NOWHERE. The engine has had outboxForPeer, retryQueuedDM
+  // and dropQueuedDM since the outbox was added; this window called none of them, and `msgs` only ever holds
+  // what comes BACK off the relay. So a message the console had safely queued was invisible: the composer
+  // emptied and the steward saw nothing at all. Measured on a real console, 2026-09-14 — the words sat in
+  // the outbox with `_pending: true` while the open thread showed no trace of them. A vicar answering a
+  // member in distress had no way to tell a sent message from a swallowed one.
+  // The member app has rendered exactly this since 2026-08-26 (app/screens-chat.jsx, the dmQueued block);
+  // this is the same treatment, same wording, on the console. Owner's decision: "queue and retry, but show it."
+  const [queued, setQueued] = React.useState([]);
+  React.useEffect(() => {
+    const S = window.Steward; if (!S || !S.outboxForPeer) return;
+    const refresh = () => setQueued((S.outboxForPeer(peer.pubkey) || []).map(o => ({
+      id: o.id, mine: true, ts: o.created_at,
+      // THE PLAINTEXT IS MEMORY-ONLY ON PURPOSE — the queued item holds ciphertext that was going to a relay
+      // anyway, so a seized laptop gains nothing (see the note on _sOutPlain). The cost is that a RELOAD
+      // leaves a waiting message with no words, and an empty bubble reads as corruption. Say what it is.
+      text: o.plain || '(a message you sent earlier — still waiting to send)',
+      _pending: !o._failed, _failed: !!o._failed,
+    })));
+    refresh();
+    window.addEventListener('steward-outbox', refresh);
+    return () => window.removeEventListener('steward-outbox', refresh);
+  }, [peer.pubkey]);
+  // Queued items that the relay has since accepted come back through subscribeDMThread under the SAME event
+  // id, so dedupe on it or the steward sees their own message twice at the moment it lands.
+  const shown = React.useMemo(() => {
+    const have = new Set(msgs.map(m => m.id));
+    return [...msgs, ...queued.filter(q => !have.has(q.id))];
+  }, [msgs, queued]);
+  React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, queued, min]);
   // NOTHING ON THIS SCREEN EVER RENDERED A FAILURE. The send was fire-and-forget, the composer was cleared
   // regardless, and the thread below only shows what comes BACK off the relay — so when Steward.sendDM
   // returned null (no key, no peer hex, or the encrypt threw, all of them before the outbox push) the
@@ -9047,9 +9076,23 @@ function StewDmWindow({ peer, offset, onClose }) {
         <React.Fragment>
           <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
-            {msgs.map(m => (
+            {shown.map(m => (
               <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
+                {/* A WAITING MESSAGE MUST LOOK LIKE ONE. Without this footer the bubble above is identical to
+                    a delivered message, which is worse than showing nothing: the words are safe, and the
+                    steward is told they went. Mirrors app/screens-chat.jsx. */}
+                {m._failed || m._pending ? (m._failed ? (
+                  <span style={{ fontSize: 10.5, color: 'var(--clay-ink)', margin: '3px 2px 0', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Icon name="alert" size={10} color="currentColor" />Couldn’t send
+                    <button onClick={() => window.Steward.retryQueuedDM(m.id)} title="Try sending this again" style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 10.5 }}>Try again</button>
+                    <button onClick={() => window.Steward.dropQueuedDM(m.id)} title="Throw this message away" style={{ border: 'none', background: 'none', padding: 0, color: 'var(--ink-3)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 10.5 }}>Discard</button>
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 10.5, color: 'var(--ink-3)', margin: '3px 2px 0', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <Icon name="clock" size={10} color="currentColor" />Waiting to send
+                  </span>
+                )) : null}
                 {m.reactions && m.reactions.length ? (
                   <div style={{ display: 'flex', gap: 3, marginTop: 2, flexWrap: 'wrap' }}>
                     {Object.entries(m.reactions.reduce((a, e) => (a[e] = (a[e] || 0) + 1, a), {})).map(([emo, n]) => (
