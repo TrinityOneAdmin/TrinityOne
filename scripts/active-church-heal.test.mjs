@@ -124,8 +124,17 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // benefits from the heal for the same reason: a stale id leaves np undefined and the tap is a LOUD no-op
   // the card reports in words, never a silent write to the wrong church. Checked by reading both, not by
   // assuming the shape from the name.
-  assert.equal(sites.length, 41,
-    `the active-church resolution sites changed (${sites.length} vs 41) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 41 → 42 on 2026-09-14: ctx.readUnavailableDates, which resolves the active church to its npub to call
+  // Fellowship.readUnavailable — the church's own copy of the Sundays this member is away, read back before
+  // the "When are you away?" sheet is allowed to save over it. Identical in shape to ctx.getUnavailableDates
+  // and ctx.setUnavailableDates beside it. It benefits from the heal, and the failure it guards is the
+  // reason it must: with a stale id np is undefined and it answers `{ dates: [], complete: false }` — and
+  // `complete: false` is what STOPS the sheet saving, so a stale id costs the member one refused save with a
+  // reason on screen, never a silent overwrite of every away-Sunday the church already holds.
+  // ⚠ ADDED BY 68564c5 WITHOUT MOVING THIS COUNT, which is exactly the accounting CLAUDE.md rule 8 exists
+  // for; caught by this test in the full-suite run of 2026-09-14, not by the commit that did it.
+  assert.equal(sites.length, 42,
+    `the active-church resolution sites changed (${sites.length} vs 42) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

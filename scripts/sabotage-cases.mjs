@@ -1235,7 +1235,11 @@ export const CASES = [
     file: 'src/relay-net.src.js',
     // memory: relay-url-normalisation-trap. The pool keys its connections by normalizeURL(); a raw compare
     // that differs only by a trailing slash misses SILENTLY, and the gate then misses the relay it is about.
-    find: `function _relayKey(url) { try { return normalizeURL(String(url || '')); } catch { return String(url || ''); } }`,
+    // ⚠ RE-ANCHORED 2026-09-14. This still said `normalizeURL`, which 62c376c replaced with `relayAddrKey`
+    // so the gate's refusal and its possession proof compare addresses the same way. A `find` that matches
+    // nothing is a sabotage case that silently stops sabotaging — it reports GREEN for ever, which is the one
+    // thing a sabotage case must never do.
+    find: `function _relayKey(url) { try { return relayAddrKey(String(url || '')); } catch { return String(url || ''); } }`,
     replace: `function _relayKey(url) { return String(url || ''); }`,
     test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
   },

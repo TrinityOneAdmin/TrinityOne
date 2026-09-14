@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8974;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const PORT = 8977;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 await requireFreePort(PORT, 'a-relay-on-the-wifi-answers-to-its-wifi-address.test.mjs');
 
 // This machine's own private address — the one a phone on the same wifi would dial.
