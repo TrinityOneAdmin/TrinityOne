@@ -9055,7 +9055,9 @@
     const candidates = _dedupeRelays(relays);
     const targets = _netRelays(candidates);
     if (!targets.length && (candidates.length || churchRelaysRaw().length)) {
-      return Promise.reject(new Error(NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours"));
+      const e0 = new Error(NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours");
+      e0.unsent = true;
+      return Promise.reject(e0);
     }
     try {
       for (const u of targets) {
@@ -9079,11 +9081,18 @@
       if (!good) {
         const why = (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
         const err = new Error(String(why));
-        err.refused = rs.some((r) => r.status === "fulfilled" && _PUB_REFUSED.test(String(r.value == null ? "" : r.value)));
+        const _said = (r) => String(r.status === "rejected" ? r.reason && r.reason.message || r.reason || "" : r.value == null ? "" : r.value);
+        err.refused = rs.some((r) => _PUB_REFUSED.test(_said(r)));
+        if (!targets.length) err.unsent = true;
         throw err;
       }
       return true;
     });
+  }
+  function _pubReason(e) {
+    if (e && e.unsent) return "not-sent";
+    if (e && e.refused) return "refused";
+    return "unconfirmed";
   }
   function _publishBounded(relays, evt) {
     return Promise.race([
@@ -12053,7 +12062,7 @@
       } catch (e) {
         return {
           ok: false,
-          reason: e && e.refused ? "refused" : "unconfirmed",
+          reason: _pubReason(e),
           message: String(e && e.message || e),
           id: d
         };
@@ -12147,7 +12156,7 @@
       try {
         await _publishAny(relaysForChurch(cp), evt);
       } catch (e) {
-        return { ok: false, reason: e && e.refused ? "refused" : "unconfirmed", message: String(e && e.message || e) };
+        return { ok: false, reason: _pubReason(e), message: String(e && e.message || e) };
       }
       return { ok: true, id };
     },
@@ -12206,7 +12215,7 @@
       try {
         await _publishAny(relaysForChurch(cp), evt);
       } catch (e) {
-        return { ok: false, reason: e && e.refused ? "refused" : "unconfirmed", message: String(e && e.message || e) };
+        return { ok: false, reason: _pubReason(e), message: String(e && e.message || e) };
       }
       return { ok: true, id };
     },

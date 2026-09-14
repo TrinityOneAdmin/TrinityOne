@@ -16,6 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const SHIP = readFileSync(new URL('../vendor/identity.js', import.meta.url), 'utf8');
 
@@ -42,18 +43,16 @@ function guard({ native = true, pub = '', encPub = null } = {}) {
   const store = {};
   if (pub) store['trinityone.nostr.pub'] = pub;
   if (encPub) store['trinityone.nostr.mnemonic.enc'] = JSON.stringify({ v: 2, native: 1, pub: encPub });
-  // ⚠ BRACE-MATCHED, NOT `indexOf('\\n}')`. The bundle is indented, so the source spelling of a closing brace
-  // never appears at column 0 and the slice ran on to the end of the file — "Unexpected token 'return'".
-  // Same fixed-window trap this repo keeps re-learning, in its third costume.
-  const i = SHIP.indexOf('function _recoveryReference()');
-  const j = SHIP.indexOf('function encOwnerPub()', i);
-  const open = SHIP.indexOf('{', j);
-  let depth = 0, end = -1;
-  for (let k = open; k < SHIP.length; k++) {
-    if (SHIP[k] === '{') depth++;
-    else if (SHIP[k] === '}' && --depth === 0) { end = k; break; }
-  }
-  const body = SHIP.slice(i, end + 1);
+  // ⚠ USE THE HOUSE SLICER. This hand-rolled a brace walk, which was already the fix for `indexOf('\\n}')`
+  // (the bundle is indented, so a source-spelled closing brace never appears at column 0 and the slice ran
+  // to the end of the file). But a bare depth counter is blind to a brace inside a STRING, a COMMENT or a
+  // REGEX, and `fnBody` in test-slice.mjs is quote- and comment-aware and walks the parameter list first.
+  // Neither lifted function carries such a brace TODAY; the point is that the next edit to either of them
+  // must not be able to make this test slice garbage and report it as a code failure.
+  // Flagged by a local-model pass, 2026-09-14 — for the wrong reason (it said nested objects desynchronise
+  // the counter, which they do not) but at the right line.
+  const body = fnBody(SHIP, 'function _recoveryReference()', '_recoveryReference') + '\n' +
+               fnBody(SHIP, 'function encOwnerPub()', 'encOwnerPub');
   const fn = new Function('localStorage', 'PUB_KEY', 'ENC_KEY', body + '\nreturn _recoveryReference;')(
     { getItem: (k) => (k in store ? store[k] : null) }, 'trinityone.nostr.pub', 'trinityone.nostr.mnemonic.enc');
   return !!(native && fn());

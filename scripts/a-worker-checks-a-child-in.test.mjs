@@ -532,7 +532,12 @@ function liftArrivalWithPublish(actor, publishImpl) {
     get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
       throw new ReferenceError('the shipped writeArrival needs a stub for ' + String(k)); },
   });
-  return new Function('scope', 'with (scope) { return ({ ' +
+  return new Function('scope', 'with (scope) { ' +
+    // LIFTED, NOT STUBBED. _pubReason is the shipped four-way classifier the three writers now share; a stub
+    // here would supply the very answer the three tests below are named after. What SETS `refused` and
+    // `unsent` on the error is proved against a real socket in
+    // scripts/a-relay-that-says-no-is-not-a-relay-that-is-slow.test.mjs.
+    fnBody(FELLOWSHIP, 'function _pubReason(e) {', '_pubReason') + '\n return ({ ' +
     fnBody(FELLOWSHIP, 'async writeArrival(churchNpub, rec) {', 'writeArrival') + ' }); }')(proxy).writeArrival;
 }
 

@@ -844,10 +844,13 @@ function KidsAddChild({ ctx, session, arrivals }) {
       // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
       // ⚠ BUT NOT LOUDER THAN THE TRUTH. `unconfirmed` means nobody answered inside the ack window, not
       // that the write failed: the record is signed and on the wire and often lands a moment later. Telling
-      // her "nothing was written" makes her check the child in AGAIN — and `code` is not regenerated on a
-      // retry, so the parent's phone ends up showing the child twice with two pickup codes, one of which
-      // fails the match at collection. Audit finding 2026-09-14; the parent's card has worded these three
-      // ways since device finding F1.
+      // her "nothing was written" makes her check the child in AGAIN, which mints a second record and shows
+      // the child TWICE on the parent's card. ⚠ CORRECTED by the audit of this fix: both rows carry the SAME
+      // code (it is not regenerated on a retry), so either matches at collection — but collecting one leaves
+      // the OTHER showing the child as still in the room for the rest of the window. The three answers, and
+      // now four: `not-sent` (nothing left the phone) and `refused` (a box read it and said no) are SETTLED
+      // and get the plain message; only `unconfirmed` is softened. The parent's card has worded these ways
+      // since device finding F1.
       setMsg({ ok: false, text: (res && res.reason === 'unconfirmed')
         ? 'We couldn’t confirm that reached your church — it may well have. Check the register before checking them in again.'
         : 'That did not save — see the desk. Nothing was written.' });

@@ -2,13 +2,17 @@
 // Run: node --test scripts/the-worker-screen-tells-her-which-of-three-happened.test.mjs
 //
 // The POINT OF USE for the engine change proved in a-check-in-that-landed-is-not-called-a-failure.test.mjs
+// and, for how `refused` / `not-sent` are DECIDED on the wire, a-relay-that-says-no-is-not-a-relay-that-is-slow.
 // (CLAUDE.md rule 1). That test proves writeCheckin/releaseCheckin now answer three ways. This one proves the
 // SCREEN acts on the third one — delete the branch from screens-serving.jsx and the engine test stays green.
 //
 // THE HARM THIS GUARDS, in order:
-//   • "Nothing was written" over a check-in that LANDED → she checks the child in again. `code` is not
-//     regenerated on a retry, so the parent's phone shows the child TWICE with two pickup codes, and at
-//     collection one of them fails the match: "That code does not match. The child was NOT checked out."
+//   • "Nothing was written" over a check-in that LANDED → she checks the child in again, which mints a
+//     second record, and the parent's phone shows the child TWICE. Both rows carry the SAME code (it is not
+//     regenerated on a retry), so either matches at collection — but collecting one leaves the OTHER showing
+//     the child as still in the room for the rest of the window, on the parent's card and on the register,
+//     with nothing prompting anyone to notice. ⚠ An earlier telling of this said "two pickup codes, one of
+//     which fails the match"; the audit of 2026-09-14 checked it against the code and it is wrong.
 //   • the same over a COLLECTION that landed → she releases the child a second time, or sends a family to
 //     the desk over a child already signed out.
 //   • and the reverse, which is worse: softening a REAL failure into "it may well have saved" would leave a
@@ -64,12 +68,13 @@ test('CHECK-IN: an UNCONFIRMED write must not be reported as "nothing was writte
   assert.equal(s.msg[0].ok, false, 're-anchor: an unconfirmed write was painted as a success');
   assert.doesNotMatch(s.msg[0].text, NOTHING,
     'THE SCREEN STILL CLAIMS "Nothing was written" OVER A CHECK-IN THAT MAY HAVE LANDED. She checks the ' +
-    'child in again, the code is not regenerated, and the parent ends up holding two codes — one of which ' +
-    'fails at collection. Shown: ' + s.msg[0].text);
+    'child in again and the parent ends up with two rows for one child; collecting one leaves the other ' +
+    'showing the child still in the room. Shown: ' + s.msg[0].text);
 });
 
 test('CHECK-IN: a REAL failure is still flatly a failure — no softening', async () => {
-  for (const reason of ['refused', 'no-key', 'threw', 'unavailable']) {
+  // `not-sent` is the admission gate (rule 10) or an empty relay list — nothing left the phone at all.
+  for (const reason of ['refused', 'not-sent', 'no-key', 'threw', 'unavailable']) {
     const s = await run(...CHECKIN, answering('checkinAdd', { ok: false, reason }), f => f('Milo', ''));
     assert.match(s.msg[0].text, NOTHING,
       'A SETTLED FAILURE (' + reason + ') is being softened into "it may well have saved". A child is in a ' +
@@ -78,7 +83,7 @@ test('CHECK-IN: a REAL failure is still flatly a failure — no softening', asyn
 });
 
 test('CHECK-IN: neither failure clears the form or burns the code — she can try again', async () => {
-  for (const reason of ['unconfirmed', 'refused']) {
+  for (const reason of ['unconfirmed', 'refused', 'not-sent']) {
     const s = await run(...CHECKIN, answering('checkinAdd', { ok: false, reason }), f => f('Milo', ''));
     assert.equal(s.code.length, 0,
       'the pickup code was regenerated over a FAILED check-in (' + reason + '), so the code on screen no ' +
@@ -102,7 +107,7 @@ test('COLLECTION: an UNCONFIRMED release must not be reported as "nothing was wr
 });
 
 test('COLLECTION: a REAL failure is still flatly a failure', async () => {
-  for (const reason of ['refused', 'no-key', 'no-rel']) {
+  for (const reason of ['refused', 'not-sent', 'no-key', 'no-rel']) {
     const s = await run(...RELEASE, answering('checkinRelease', { ok: false, reason }), f => f(false));
     assert.match(s.err[0], NOTHING,
       'A SETTLED failure (' + reason + ') on a COLLECTION is being softened into "it may well have saved" — ' +

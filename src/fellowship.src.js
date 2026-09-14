@@ -2826,7 +2826,12 @@ function _publishAny(relays, evt) {
   // principle, which is the candidate list, which keeps its never-empty guard. If it does, then something
   // could have been sent and was not, and the caller must be able to say so in its own words.
   if (!targets.length && (candidates.length || churchRelaysRaw().length)) {
-    return Promise.reject(new Error(NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours'));
+    // `unsent` — SEE THE NOTE ON err.refused BELOW. This path opens no socket at all, so it is not "we could
+    // not confirm it": it is "it did not leave this phone", and a caller that softens it would tell a worker
+    // a child may be registered when the admission gate (rule 10) refused to publish anywhere.
+    const e0 = new Error(NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours');
+    e0.unsent = true;
+    return Promise.reject(e0);
   }
   // …AND LOOK THE RELAY UP THE WAY THE POOL FILES IT. pool.relays is keyed by the normalised address, exactly
   // like the connection map. The first version of this line used the raw one — the same trap fixed twenty
@@ -2860,11 +2865,60 @@ function _publishAny(relays, evt) {
       // THE EVENT MAY WELL HAVE LANDED. On the pilot's own default of two addresses to one box, the mixed
       // case is ordinary rather than exotic, so this asks "did ANY relay refuse", never "what did the first
       // one say" — the trap the old single `why` string fell into.
-      err.refused = rs.some(r => r.status === 'fulfilled' && _PUB_REFUSED.test(String(r.value == null ? '' : r.value)));
+      // ⚠ THIS READ THE WRONG HALF OF THE RESULT AND WAS DEAD FOR EVERY REAL REFUSAL. Audit, 2026-09-14.
+      // It asked only `status === 'fulfilled'`. nostr-tools settles a publish the other way round:
+      //     OK:true  → ep.resolve(reason)          (node_modules/nostr-tools … AbstractRelay, "OK" case)
+      //     OK:false → ep.reject(new Error(reason))
+      // so a relay that READ the event and said no arrives REJECTED, and `refused` was false for every
+      // refusal this product can actually produce — `blocked: not a member or not permitted for this group`,
+      // `error: relay storage unavailable — nothing was saved`, `invalid: signature failed`, and the
+      // rate-limit refusals of the production relay image. The only way to make it fire was OK:TRUE carrying
+      // a refusal-shaped reason, which is a protocol contradiction.
+      //
+      // The consequence was the exact inversion the three writers exist to prevent: a settled refusal was
+      // reported as "we couldn't confirm it — it may well have saved", so a child could be waved into a room
+      // over a record the relay had explicitly rejected. The file already SAID this, twenty lines down, where
+      // isPermanentRefusal is introduced: "nostr-tools surfaces it as a rejection whose message carries that
+      // reason". The code here disagreed with that sentence and the sentence was right.
+      //
+      // WHY NOT isPermanentRefusal: _PERMANENT is /^(blocked|invalid|restricted)/ and answers a different
+      // question — "is retrying pointless?". `rate-limited` and `auth-required` are worth retrying and are
+      // still a box reading the event and saying no. The screen needs "did anybody settle this", which is
+      // _PUB_REFUSED, applied to whichever half of the result actually carries the relay's words.
+      const _said = (r) => String(r.status === 'rejected'
+        ? ((r.reason && r.reason.message) || r.reason || '')
+        : (r.value == null ? '' : r.value));
+      // STILL "did ANY relay refuse", never "what did the first one say" — on the pilot's own default of two
+      // addresses to one box the mixed case is ordinary. A fulfilled value is checked too: pool.publish
+      // resolves connection failures as strings, and `connection failure` is deliberately NOT in this
+      // vocabulary, so it cannot be mistaken for an answer.
+      err.refused = rs.some(r => _PUB_REFUSED.test(_said(r)));
+      // NOTHING LEFT THE DEVICE. An empty target list means no socket was opened, so there is no event in
+      // flight to be hopeful about. Distinct from `refused` (a box said no) and from neither (nobody
+      // answered in time), because all three want different words on a worker's screen.
+      if (!targets.length) err.unsent = true;
       throw err;
     }
     return true;
   });
+}
+// ── WHAT DO WE TELL THE PERSON HOLDING THE PHONE? ────────────────────────────────────────────────────────
+// FOUR outcomes, not two, and the difference between them is a child at a door.
+//   ok           the relay acknowledged it — handled by the caller, never reaches here
+//   'not-sent'   nothing left this device: no relay could be proved ours, or the list was empty. SETTLED.
+//   'refused'    a box read it and said no. SETTLED, and never to be softened — softening it would wave a
+//                child into a room over a record the relay explicitly rejected.
+//   'unconfirmed' nobody answered inside WEDGE_ACK_MS. NOT a verdict: the event is signed, on the wire, and
+//                often lands a moment later. Telling a worker "nothing was written" here is what sent her to
+//                check a child in twice. Device finding F1, measured on a Pixel 2026-09-11.
+//
+// ONE FUNCTION, because there are three sibling writers and the last round of this fix reached only one of
+// them — and then the one it reached was wrong in the other direction for a month. Callers: writeArrival,
+// writeCheckin, releaseCheckin. Any new writer that reports an outcome to a member should use it.
+function _pubReason(e) {
+  if (e && e.unsent) return 'not-sent';
+  if (e && e.refused) return 'refused';
+  return 'unconfirmed';
 }
 function _publishBounded(relays, evt) {
   return Promise.race([
@@ -5599,7 +5653,7 @@ window.Fellowship = {
     // confirm", never "that did not send".
     try { await _publishAny(relaysForChurch(cp), evt); }
     catch (e) {
-      return { ok: false, reason: (e && e.refused) ? 'refused' : 'unconfirmed',
+      return { ok: false, reason: _pubReason(e),
                message: String((e && e.message) || e), id: d };
     }
     return { ok: true, id: d };
@@ -5703,13 +5757,17 @@ window.Fellowship = {
       content: sentinel }, sk);
     // ⚠ THREE ANSWERS, NOT TWO. `_publishAny` throws when NOBODY ANSWERED inside WEDGE_ACK_MS as well as when
     // a relay REFUSED, and flattening both to one answer is what put "That did not save — see the desk.
-    // Nothing was written." on a worker's screen over a check-in that had landed. She retries; `code` is
-    // deliberately not regenerated, so the parent's phone shows the child twice with two pickup codes and
-    // one of them fails the match at collection. Audit finding 2026-09-14.
+    // Nothing was written." on a worker's screen over a check-in that had landed. She retries, which mints a
+    // fresh record id, and the parent's phone then shows the child TWICE. ⚠ CORRECTED 2026-09-14 by the audit
+    // of this fix: `code` is deliberately NOT regenerated on a retry, so both rows carry the SAME code and
+    // either one matches at collection — the first telling of this said "two pickup codes, one of which
+    // fails the match", which the code contradicts. The real harm is the other way round: collect one row and
+    // the OTHER still shows the child as present, on the parent's card and on the worker's register, for the
+    // rest of the window, with nothing prompting anyone to notice. Audit finding 2026-09-14.
     // `writeArrival` has answered these three ways since device finding F1 (2026-09-11) — the fix went into
     // one of three sibling writers. `err.refused` is set by `_publishAny` from _PUB_REFUSED.
     try { await _publishAny(relaysForChurch(cp), evt); }
-    catch (e) { return { ok: false, reason: (e && e.refused) ? 'refused' : 'unconfirmed', message: String((e && e.message) || e) }; }
+    catch (e) { return { ok: false, reason: _pubReason(e), message: String((e && e.message) || e) }; }
     return { ok: true, id };
   },
 
@@ -5768,13 +5826,17 @@ window.Fellowship = {
       content: sentinel }, sk);
     // ⚠ THREE ANSWERS, NOT TWO. `_publishAny` throws when NOBODY ANSWERED inside WEDGE_ACK_MS as well as when
     // a relay REFUSED, and flattening both to one answer is what put "That did not save — see the desk.
-    // Nothing was written." on a worker's screen over a check-in that had landed. She retries; `code` is
-    // deliberately not regenerated, so the parent's phone shows the child twice with two pickup codes and
-    // one of them fails the match at collection. Audit finding 2026-09-14.
+    // Nothing was written." on a worker's screen over a check-in that had landed. She retries, which mints a
+    // fresh record id, and the parent's phone then shows the child TWICE. ⚠ CORRECTED 2026-09-14 by the audit
+    // of this fix: `code` is deliberately NOT regenerated on a retry, so both rows carry the SAME code and
+    // either one matches at collection — the first telling of this said "two pickup codes, one of which
+    // fails the match", which the code contradicts. The real harm is the other way round: collect one row and
+    // the OTHER still shows the child as present, on the parent's card and on the worker's register, for the
+    // rest of the window, with nothing prompting anyone to notice. Audit finding 2026-09-14.
     // `writeArrival` has answered these three ways since device finding F1 (2026-09-11) — the fix went into
     // one of three sibling writers. `err.refused` is set by `_publishAny` from _PUB_REFUSED.
     try { await _publishAny(relaysForChurch(cp), evt); }
-    catch (e) { return { ok: false, reason: (e && e.refused) ? 'refused' : 'unconfirmed', message: String((e && e.message) || e) }; }
+    catch (e) { return { ok: false, reason: _pubReason(e), message: String((e && e.message) || e) }; }
     return { ok: true, id };
   },
 
