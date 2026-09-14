@@ -78,12 +78,25 @@ const DEVICE_KEYS = [
   'trinityone.readerScale', 'trinityone.settings', 'trinityone.nostr.mnemonic.enc',
   'trinityone.backedup.' + NPUB,   // names the MEMBER, not the church — see the test below
   'trinityone.bible.translation', 'trinityone.reading.position',
+  // ⚠ AND THE THREE A PHONE ARGUED BACK ON. Every one of these carries a 64-hex pubkey in its NAME, so the
+  // IDENTIFIER rule takes them unless something exempts them — and until bf25f49 nothing did.
+  'trinityone.bringkids.' + CHURCH + '|' + MEMBER,
+  'trinityone.mykidnames.' + CHURCH + '|' + MEMBER,
+  'trinityone.arrivedat.' + CHURCH + '|' + MEMBER,
 ];
+
+// ⚠ THREE PREFIXES ARE DELIBERATE KEEPS AND MUST BE NAMED HERE, or this assertion and the keep-list
+// contradict each other and one of them is wrong. bringkids / mykidnames / arrivedat hold a parent's own
+// children's first names and whether they were brought — argued for one at a time after a Pixel measured a
+// locked boot destroying them permanently (2026-09-12), and ruled on by the owner: "the names being on the
+// phone is fine. A parent will likely have much more personal information on the phone anyway."
+// They are pinned by their own tests at the foot of this file.
+const DELIBERATE_KEEPS = /^trinityone\.(backedup|approvedToast|bringkids|mykidnames|arrivedat)\./;
 
 test('the caches the device was still holding are wiped', () => {
   const left = runWipe(DEVICE_KEYS);
   // backedup.<own npub> is a deliberate keep — see its own test below.
-  const churchKeyed = left.filter(k => (k.includes(CHURCH) || k.includes(NPUB)) && !/^trinityone\.(backedup|approvedToast)\./.test(k));
+  const churchKeyed = left.filter(k => (k.includes(CHURCH) || k.includes(NPUB)) && !DELIBERATE_KEEPS.test(k));
   assert.deepEqual(churchKeyed, [],
     'these still name the congregation on a locked phone: ' + churchKeyed.join(', '));
 });
@@ -117,7 +130,153 @@ test('no key naming the congregation survives, including ones nobody listed', ()
   // NAME and no version of the prefix list covered them, because every new feature added one and nobody went
   // back. This is the same failure as the relay's served-file denylist.
   const left = runWipe(DEVICE_KEYS);
-  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k) && !/^trinityone\.(backedup|approvedToast)\./.test(k));
+  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k) && !DELIBERATE_KEEPS.test(k));
+  assert.deepEqual(named, [], 'these still name the congregation on a locked phone: ' + named.join(', '));
+});
+
+test('the "you were accepted" marker is kept, or the app re-announces it', () => {
+  // Reported on a real phone minutes after the property-based wipe went in: unlocking produced a fresh
+  // "you have been accepted into the church" toast, because the marker saying we had already said it was
+  // wiped. It names a church that the KEPT followedChurches already names, so retaining it reveals nothing.
+  const left = runWipe(DEVICE_KEYS);
+  assert.ok(left.some(k => k.startsWith('trinityone.approvedToast.')),
+    'the member is told they were accepted into their church all over again on every unlock');
+});
+
+test('the seed-backup flag is kept, deliberately', () => {
+  // It carries the member's OWN npub, not the congregation's, and their key is already on this device. Wiping
+  // it costs a re-nag to back up the seed after every lock, for no forensic gain. Stated, not silent.
+  const left = runWipe(DEVICE_KEYS);
+  assert.ok(left.some(k => k.startsWith('trinityone.backedup.')),
+    'wiping the backup flag makes the app ask the member to write down their words again after every lock');
+});
+
+test('the church list is KEPT, and the comment says so', () => {
+  // Deliberate: nothing rebuilds followedChurches on unlock — only a 12-word restore reconstructs it from
+  // member: documents — so wiping it would strand a member outside their own church. The point of this test
+  // is that the limitation is STATED rather than claimed away, which is what F8 was really about.
+  const left = runWipe(DEVICE_KEYS);
+  assert.ok(left.includes('trinityone.followedChurches'), 'wiping this strands the member with no way back');
+  const at = F.indexOf('clearCommunityCache() {');
+  const near = F.slice(Math.max(0, at - 2200), at);
+  assert.match(near, /followedChurches/,
+    'the comment must name what it does NOT wipe — claiming to remove "every cache that would reveal church membership" while keeping the church list is the defect');
+  assert.doesNotMatch(near, /wipe every localStorage cache that would reveal church membership/,
+    'the overclaiming comment is back');
+});
+
+// ── F7: does it run at all? ──────────────────────────────────────────────────────────────────────────────
+// ── ITEM 15 (audit 2026-09-14): THESE TWO USED TO MATCH TEXT IN app/app.jsx ────────────────────────────
+// app/*.jsx ships UNBUNDLED, so `false && ` — or `if (true) return true;` — leaves every word in place and
+// a text-matching assertion still passes. Sabotage proved it: `if (true) return true;` at the top of the
+// wipe's `attempt()` left 9/9 green, over the one effect that decides whether a seized, locked phone still
+// holds a congregation's caches. CLAUDE.md rule 3, in the file that most needs it.
+// THE EFFECT IS LIFTED OUT OF app/app.jsx AND RUN NOW. Nothing below matches source text.
+function lockEffect({ locked, engineAfter = 0 }) {
+  const A = readFileSync(ROOT + 'app/app.jsx', 'utf8');
+  const a = A.indexOf('const wipedForLock = useAR(false);');
+  assert.notEqual(a, -1, 'the locked-boot wipe is gone from app.jsx — re-anchor this test');
+  const b = A.indexOf('}, [commLocked]);', a);
+  assert.notEqual(b, -1, 'the wipe effect no longer ends at [commLocked] — re-anchor');
+  const src = A.slice(a, b + '}, [commLocked]);'.length)
+    .replace('const wipedForLock = useAR(false);', 'const wipedForLock = { current: false };')
+    .replace('useAE(() => {', 'const __effect = (() => {')
+    .replace('}, [commLocked]);', '});');
+  let wipes = 0, ticks = [];
+  // the engine appears only after `engineAfter` polls — the race the effect's bounded retry exists for
+  let polls = 0;
+  const win = { get Fellowship() {
+    return (polls++ >= engineAfter) ? { clearCommunityCache: () => { wipes++; } } : {};
+  } };
+  const scope = {
+    commLocked: locked, window: win,
+    setInterval: (fn) => { ticks.push(fn); return 1; }, clearInterval: () => {},
+    setTimeout: () => 2, clearTimeout: () => {},
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped wipe effect needs a stub for ' + String(k)); },
+  });
+  const run = new Function('scope', 'with (scope) { ' + src + '\nreturn __effect; }')(proxy);
+  const cleanup = run();
+  return { wipes: () => wipes, tick: () => ticks.forEach(f => f()), cleanup, scope };
+}
+
+test('a LOCKED boot actually calls the wipe — the effect, run, not its source text', () => {
+  const e = lockEffect({ locked: true });
+  assert.equal(e.wipes(), 1,
+    'THE LOCKED-BOOT WIPE DID NOT RUN. A seized, locked phone keeps every congregation cache on disk. This ' +
+    'is the effect executed, so no amount of dead code in app.jsx can satisfy it.');
+});
+
+test('an UNLOCKED boot does not wipe — over-wiping is the other way to get this wrong', () => {
+  const e = lockEffect({ locked: false });
+  assert.equal(e.wipes(), 0, 'the app wiped a member’s church caches on an ordinary unlocked boot');
+});
+
+test('it does not wipe twice while locked, and re-arms when the lock clears', () => {
+  const e = lockEffect({ locked: true });
+  e.tick(); e.tick();
+  assert.equal(e.wipes(), 1, 'the wipe ran again on a later tick — it loops for the whole locked session');
+  // …and unlocking re-arms it, so a SECOND lock in one session still wipes.
+  const u = lockEffect({ locked: false });
+  assert.equal(u.scope.commLocked, false, 're-anchor');
+  const again = lockEffect({ locked: true });
+  assert.equal(again.wipes(), 1, 'a second lock in one session no longer wipes');
+});
+
+test('it RETRIES until the engine has loaded, rather than recording a wipe that never happened', () => {
+  // The device caught this one: marking the flag before checking window.Fellowship meant a run that arrived
+  // before vendor/fellowship.js had finished loading recorded itself as "wiped" and never tried again —
+  // 11 church-keyed caches still on disk at a locked boot.
+  const e = lockEffect({ locked: true, engineAfter: 3 });
+  assert.equal(e.wipes(), 0, 're-anchor: the engine was supposed to be absent on the first attempt');
+  e.tick(); e.tick(); e.tick(); e.tick();
+  assert.equal(e.wipes(), 1,
+    'THE WIPE GAVE UP BECAUSE THE ENGINE HAD NOT LOADED YET, and marked itself done. On a locked boot that ' +
+    'is the whole feature not running, silently.');
+});
+
+
+test('the caches the device was still holding are wiped', () => {
+  const left = runWipe(DEVICE_KEYS);
+  // backedup.<own npub> is a deliberate keep — see its own test below.
+  const churchKeyed = left.filter(k => (k.includes(CHURCH) || k.includes(NPUB)) && !DELIBERATE_KEEPS.test(k));
+  assert.deepEqual(churchKeyed, [],
+    'these still name the congregation on a locked phone: ' + churchKeyed.join(', '));
+});
+
+test('the serving and care caches go too', () => {
+  // F8. Pastoral and sometimes medical, and every key carries the church npub. All re-fetch after unlock.
+  const left = runWipe(DEVICE_KEYS);
+  assert.deepEqual(left.filter(k => k.startsWith('trinityone.serv.')), [], 'serving/rota caches survive a lock');
+  assert.deepEqual(left.filter(k => k.startsWith('trinityone.care.')), [], 'care needs and slots survive a lock');
+});
+
+test('the Bible, the member’s own writing and their unsent messages all survive', () => {
+  // Over-wiping is the other way to get this wrong. The lock screen's whole purpose is that the app remains
+  // a Bible reader; the journal and notes are the MEMBER's, not the church's; and the outbox holds messages
+  // they wrote that have not been delivered — losing those is data loss dressed up as hygiene.
+  const left = runWipe(DEVICE_KEYS);
+  for (const k of ['trinityone.bible.translation', 'trinityone.reading.position', 'trinityone.readerScale',
+    'trinityone.settings', 'trinityone.nostr.mnemonic.enc', 'trinityone.outbox',
+    'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes',
+    // 2026-09-06: the "a relay accepted my join" stamp. Wiped, every locked boot would tell a pending member
+    // their request was never sent. Its key names nobody; see JOINSENT_KEY in fellowship.src.js.
+    // joinintent: the join a locked phone promised to make once unlocked. Wiped, the promise dies on the
+    // very boot it was made to survive. See JOININTENT_KEY.
+    'trinityone.joinsent', 'trinityone.joinintent']) {
+    assert.ok(left.includes(k), 'the wipe destroyed ' + k);
+  }
+});
+
+test('no key naming the congregation survives, including ones nobody listed', () => {
+  // The property, not the list. Eleven caches on the real device carried the church or the member in the key
+  // NAME and no version of the prefix list covered them, because every new feature added one and nobody went
+  // back. This is the same failure as the relay's served-file denylist.
+  const left = runWipe(DEVICE_KEYS);
+  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k) && !DELIBERATE_KEEPS.test(k));
   assert.deepEqual(named, [], 'these still name the congregation on a locked phone: ' + named.join(', '));
 });
 
@@ -169,4 +328,39 @@ test('and a mid-session lock wipes too, without looping', () => {
   assert.match(block, /wipedForLock/, 'nothing guards against re-wiping on every render while locked');
   assert.match(block, /if \(!commLocked\) \{ wipedForLock\.current = false;/,
     'the guard is never re-armed, so locking a second time in one session would not wipe');
+});
+
+
+// ── ITEM 10 (audit 2026-09-14): bf25f49's FIX HAD NO TEST ──────────────────────────────────────────────
+// Sabotage removing the keep-list clause left 124/124 green, over a fix for MEASURED PERMANENT DATA LOSS.
+// Found on a Pixel, 2026-09-12: a locked boot destroyed a parent's children's names — intermittently, so it
+// read as the app being flaky — and they do not come back. The parent opens the app at a children's door on
+// Sunday morning to an empty card and cannot tell whether they ever entered them.
+test('a parent’s children, and whether they were brought, SURVIVE a locked boot', () => {
+  const left = runWipe(DEVICE_KEYS);
+  for (const [prefix, what] of [
+    ['trinityone.mykidnames.', 'the names of this parent’s children'],
+    ['trinityone.bringkids.', 'whether this parent said they are bringing them'],
+    ['trinityone.arrivedat.', 'the answer the church gave when they tapped "We’re here"'],
+  ]) {
+    const key = prefix + CHURCH + '|' + MEMBER;
+    assert.ok(left.includes(key),
+      'A LOCKED BOOT DESTROYED ' + what.toUpperCase() + ', PERMANENTLY. Measured on a Pixel, 2026-09-12. ' +
+      'The parent opens the app at the door to an empty card, with nothing saying why. Missing: ' + key);
+  }
+});
+
+test('…and the exemption is by PREFIX, so it cannot be dodged by a longer key', () => {
+  // The keys are `<prefix><churchPub>|<memberPub>`; an exact-match keep-list would miss every real one.
+  const long = 'trinityone.mykidnames.' + CHURCH + '|' + MEMBER + '|extra';
+  assert.ok(runWipe([long]).includes(long), 'the keep is an exact match, so real keys are still wiped');
+});
+
+test('the exemption does NOT widen the wipe’s hole — a church cache with a similar name still goes', () => {
+  // The other way to get a keep-list wrong. `trinityone.mykids…` is not `trinityone.mykidnames.`, and a
+  // prefix test written loosely (startsWith('trinityone.mykid')) would spare a key nobody argued for.
+  const near = ['trinityone.mykids.' + CHURCH, 'trinityone.bringkid.' + CHURCH, 'trinityone.arrived.' + CHURCH];
+  const left = runWipe(near);
+  assert.deepEqual(left, [],
+    'the keep-list is matching more than the three prefixes that were argued for, one at a time: ' + left.join(', '));
 });

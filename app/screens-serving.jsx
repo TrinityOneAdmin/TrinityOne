@@ -792,12 +792,34 @@ function svArrivalName(a) {
 // The two places an unresolved parent is worded, kept apart because one is a sentence and one is a label
 // inside a question, and a single string cannot read well as both. Neither invents a name: a screen that
 // substituted a key fragment would make an unresolved stranger look like a known family.
+// ⚠ AN UNRESOLVED ARRIVAL MUST STILL BE TELLABLE FROM ANOTHER ONE. Both of these used to collapse to a
+// CONSTANT when the sealed name had not arrived — "Someone's arrived…" on every row, "the person who just
+// arrived" in every confirmation. Two families at the door at once and the worker sees two identical rows
+// and is asked two identical questions, so the one mitigation the no-typing design rests on ("name both
+// sides", reference/PLAN-CHECKIN-NO-TYPING §3b) degrades to wallpaper at exactly the moment it is load-
+// bearing: the measured risk is her tapping the wrong row and handing a child's name and pickup code to
+// the wrong family. Audit item 12, 2026-09-14.
+//
+// THE ARRIVAL TIME IS THE DISCRIMINATOR, and it is deliberately not a key fragment. The note these two
+// functions already carried is right — "a screen that substituted a key fragment would make an unresolved
+// stranger look like a known family" — and a clock time cannot be mistaken for a name. It is also the one
+// fact the worker can check against the person in front of her ("were you here just before the service
+// started?"). `at` comes off the signed arrival, so it is not ours to invent either.
+//
+// It is NOT a complete answer and is not dressed up as one: two families arriving inside the same minute
+// still read alike, which is why the panel below says so out loud when more than one arrival is unnamed.
 function svArrivalLine(a) {
   const n = svArrivalName(a);
-  return n ? n + ' has arrived' : 'Someone’s arrived — their name hasn’t reached your phone yet';
+  if (n) return n + ' has arrived';
+  const t = svClock(a && a.at);
+  return t ? 'Someone arrived at ' + t + ' — their name hasn’t reached your phone yet'
+           : 'Someone’s arrived — their name hasn’t reached your phone yet';
 }
 function svArrivalLabel(a) {
-  return svArrivalName(a) || 'the person who just arrived';
+  const n = svArrivalName(a);
+  if (n) return n;
+  const t = svClock(a && a.at);
+  return t ? 'the person who arrived at ' + t : 'the person who just arrived';
 }
 function KidsAddChild({ ctx, session, arrivals }) {
   const queue = Array.isArray(arrivals) ? arrivals : [];
@@ -980,6 +1002,18 @@ function KidsAddChild({ ctx, session, arrivals }) {
       {pending ? (
         <div style={{ borderRadius: 14, border: '1px solid var(--sage)', background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, lineHeight: 1.25, color: 'var(--ink)' }}>{pending.childName + ' → ' + pending.label + '?'}</div>
+          {/* ⚠ AND WHEN THE QUESTION CANNOT DISTINGUISH THEM, SAY SO RATHER THAN LOOK CONFIDENT. With two or
+              more arrivals whose names have not reached this phone, "Milo → the person who arrived at 9:42?"
+              may name either of them, and a confirmation that reads as certain is worse than none: it
+              launders a guess into a checked pairing. It does NOT block — design §10, nothing in this
+              feature stops a child reaching a room — it hands the check back to the one person who can
+              actually make it, who is standing at the desk. */}
+          {queue.filter(a => a && !svArrivalName(a)).length > 1 ? (
+            <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink-2)', fontWeight: 600 }}>
+              More than one family here has no name on this phone yet, so this question can’t tell them apart.
+              Ask before you tap.
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button onClick={() => write(pending.childName, pending.guardian)} disabled={busy}
               style={{ padding: '8px 14px', borderRadius: 11, border: 'none', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13.5 }}>

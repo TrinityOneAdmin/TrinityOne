@@ -3033,11 +3033,26 @@ if (typeof window !== 'undefined') {
 // a SECOND account on a device that already answered this question — and "Milo and Ivy" is a far worse thing
 // to inherit than a cached room list. A member half in the key means the next person starts blank.
 //
-// ⚠ AND IT IS WIPED BY A LOCKED BOOT, ON PURPOSE. clearCommunityCache's IDENTIFIER rule takes any
-// `trinityone.*` key whose NAME carries a 64-hex pubkey, which both of these do by construction. A list of
-// children's first names sitting on a seized, locked phone is precisely what that wipe exists to prevent, so
-// this is the correct outcome and not an oversight: the cost is that a member who PIN-locks re-types two
-// names, and the desk works regardless. Recorded here so nobody "fixes" it by exempting the prefix.
+// ⚠ THIS PARAGRAPH USED TO SAY THE OPPOSITE, AND A PHONE SETTLED IT. It read: a locked boot wipes these
+// "ON PURPOSE … the correct outcome and not an oversight: the cost is that a member who PIN-locks re-types
+// two names … Recorded here so nobody 'fixes' it by exempting the prefix."
+// The premise was wrong about the cost. MEASURED ON A PIXEL, 2026-09-12: a locked boot destroyed a parent's
+// children's names INTERMITTENTLY AND PERMANENTLY — not "re-types two names" but "opens the app on Sunday
+// morning to an empty card and cannot tell whether they ever entered them". No test could have found it;
+// the phone did. `bf25f49` exempted the prefix, which is exactly what this paragraph forbade, and the
+// exemption is right.
+//
+// WHY IT IS RIGHT, AND WHAT WAS ACTUALLY TRADED. The threat this wipe exists for is a SEIZED, LOCKED phone.
+// These two keys hold a handful of children's FIRST NAMES, typed by the parent, about their own family —
+// which is the one category of data on this device the owner explicitly ruled on (owner, 2026-09-12: "I
+// think the names being on the phone is fine. A parent will likely have much more personal information on
+// the phone anyway"). Set against that: a parent at a children's door with an empty card and no idea why.
+// KEEP_PREFIX in clearCommunityCache is the exemption; scripts/locked-boot-wipe.test.mjs pins it.
+//
+// ⚠ AND THE IDENTIFIER RULE STILL APPLIES TO EVERYTHING ELSE. clearCommunityCache takes any `trinityone.*`
+// key whose NAME carries a 64-hex pubkey, which both of these do by construction — so they are wiped unless
+// something exempts them. Do not read this note as "the wipe is optional"; read it as "these three prefixes,
+// and nothing else, were argued for one at a time."
 const BRINGKIDS_KEY = 'trinityone.bringkids.';   // + churchPubHex + '|' + memberPubHex -> '1' | '0'
 const MYKIDNAMES_KEY = 'trinityone.mykidnames.'; // + churchPubHex + '|' + memberPubHex -> JSON string[]
 const ARRIVEDAT_KEY = 'trinityone.arrivedat.';   // + churchPubHex + '|' + memberPubHex -> {session, ok, reason, at}
