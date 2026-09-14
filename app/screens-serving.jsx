@@ -300,7 +300,31 @@ function UnavailSheet({ open, onClose, ctx }) {
   // every Sunday given before it. Measured on a real member: 13 + 27 Sep saved, then 20 Sep added, and the
   // stored record became 20 Sep alone. It also made cancelling impossible: you cannot untick what is not shown.
   const [had, setHad] = useSv(false);
-  useSvE(() => { if (open) { const cur = ctx.getUnavailableDates ? ctx.getUnavailableDates() : []; setSel(cur); setHad(cur.length > 0); setErr(''); setBusy(false); } }, [open]);
+  // `known` is what the CHURCH holds: null until the read answers, so the difference between "they hold
+  // nothing" and "we could not ask" is visible rather than collapsed into an empty list.
+  const [known, setKnown] = useSv(null);
+  // ⚠ THE LOCAL COPY PAINTS FIRST, THEN THE CHURCH'S ANSWER CORRECTS IT — and the save is held until that
+  // answer lands. The mirror was the ONLY source this sheet ever read, and an ordinary wipe destroys it; a
+  // blank sheet plus one new date then REPLACED the church's whole list, deleting every date the member had
+  // already given, from the rota, with a success toast. Audit finding, 2026-09-14.
+  useSvE(() => {
+    if (!open) return;
+    const cur = ctx.getUnavailableDates ? ctx.getUnavailableDates() : [];
+    setSel(cur); setHad(cur.length > 0); setErr(''); setBusy(false); setKnown(null);
+    let live = true;
+    Promise.resolve(ctx.readUnavailableDates ? ctx.readUnavailableDates() : { dates: cur, complete: true })
+      .then((r) => {
+        if (!live || !r) return;
+        // ⚠ ONLY AN ANSWERED READ IS ALLOWED TO CHANGE WHAT IS ON SCREEN. A read nobody answered leaves the
+        // sheet exactly as the mirror painted it and leaves `known` null, which is what blocks the save
+        // below. Treating it as an empty list is the mistake that arms the replace-with-nothing.
+        if (!r.complete) return;
+        setKnown(r.dates);
+        setSel(r.dates); setHad(r.dates.length > 0);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [open]);
   const sundays = svNextSundays(6);
   const toggle = (iso) => setSel(s => s.includes(iso) ? s.filter(x => x !== iso) : [...s, iso]);
   return (
@@ -329,6 +353,15 @@ function UnavailSheet({ open, onClose, ctx }) {
           an unavailability is cancelled, and there was previously no way to do it at all. */}
       <button onClick={async () => {
         if (busy) return;
+        // ⚠ REFUSE TO SAVE OVER AN ANSWER WE NEVER GOT. Every save REPLACES the whole list, so writing while
+        // this sheet is showing a list it could not confirm deletes whatever the church actually holds. A
+        // read that nobody answered is not "you have told them nothing" — that conflation is what turned an
+        // ordinary cache wipe into the rota losing two Sundays a member had already given. Audit 2026-09-14.
+        if (known === null) {
+          setErr('We couldn’t check what your church already has, so nothing was changed — saving now could ' +
+                 'wipe dates you’ve already given. Check your connection and open this again.');
+          return;
+        }
         setBusy(true); setErr('');
         try {
           await ctx.setUnavailableDates(sel);

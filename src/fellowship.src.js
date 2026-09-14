@@ -6868,6 +6868,47 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp) return [];
     try { const v = JSON.parse(localStorage.getItem(UNAVAIL_MIRROR + cp) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
   },
+  // ── ASK THE CHURCH WHAT IT ALREADY HOLDS ──────────────────────────────────────────────────────────────
+  // The local mirror was the ONLY copy this screen ever read, and that made an ordinary wipe destroy the
+  // church's record too: the mirror goes, the sheet opens blank, the member ticks one new Sunday, and each
+  // save REPLACES the whole array — so the two Sundays they had already given are deleted from the rota,
+  // by them, while adding a third. Nobody is told. Measured by audit 2026-09-14.
+  //
+  // The document is addressable at the MEMBER'S OWN key and signed by them, so their phone can simply fetch
+  // it. The mirror is a cache from here on, not the truth.
+  //
+  // ⚠ IT ANSWERS `{ dates, complete }`, AND `complete` IS THE WHOLE POINT. A read that nobody answered must
+  // never be reported as "you have told them nothing" — that is exactly the shape that armed the relay
+  // doc-wipe (B0 in reference/PLAN-ENROLMENT-GAP-2026-09-02.md: "a failed read reports a COMPLETED read of
+  // an EMPTY church"), and here it would arm the same replace-with-nothing. A caller that cannot see
+  // `complete: true` must refuse to save a replacement.
+  //
+  // `maxWait` for the reason `_newestByD` carries it: nostr-tools arms its OWN eose timer and calls
+  // `oneose` when it expires whether or not a relay answered, so without this a silent socket would report
+  // a completed read of an empty document — the very thing this function exists to distinguish.
+  readUnavailable(churchNpub, ms = 6000) {
+    const cp = toPub(churchNpub);
+    const me = window.Fellowship.myPubkey;
+    if (!cp || !me) return Promise.resolve({ dates: [], complete: false });
+    return new Promise((resolve) => {
+      let best = null, complete = false, done = false;
+      const finish = () => {
+        if (done) return; done = true;
+        try { sub.close(); } catch (e) {}
+        let dates = [];
+        if (best) { try { const o = JSON.parse(best.content || '{}'); dates = Array.isArray(o.dates) ? o.dates.filter(d => typeof d === 'string') : []; } catch (e) { dates = []; } }
+        // The mirror is refreshed ONLY from an answered read, so a failed one cannot quietly overwrite it.
+        if (complete) { try { localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(dates)); } catch (e) {} }
+        resolve({ dates, complete });
+      };
+      const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [me], '#d': ['trinityone/unavail:' + me] }], {
+        onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
+        oneose() { complete = true; finish(); },
+        maxWait: ms + 5000,
+      });
+      setTimeout(finish, ms);
+    });
+  },
 
   // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
   // FEDERATION Phase 2 — read a church's signed NIP-65 relay-list (kind 10002) and ADOPT the relays it

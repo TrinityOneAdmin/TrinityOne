@@ -2137,6 +2137,19 @@ function App() {
       if (!(window.Fellowship && window.Fellowship.getUnavailable)) return [];
       return window.Fellowship.getUnavailable(np);
     },
+    // ⚠ ASK THE CHURCH, DO NOT TRUST THE PHONE'S COPY. `getUnavailableDates` reads a LOCAL MIRROR that an
+    // ordinary wipe destroys — and because every save REPLACES the whole array, a blank sheet plus one new
+    // date deletes every date the member had already given, from the ROTA, silently. Measured by audit
+    // 2026-09-14. The document is addressable at the member's own key and signed by them, so their phone can
+    // just fetch it.
+    // Answers { dates, complete }. `complete` is not decoration: a read nobody answered must never be
+    // rendered as "you have told them nothing", or saving over it destroys the church's record — the same
+    // shape as the relay doc-wipe (B0).
+    readUnavailableDates: () => {
+      const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+      if (!np || !(window.Fellowship && window.Fellowship.readUnavailable)) return Promise.resolve({ dates: [], complete: false });
+      return window.Fellowship.readUnavailable(np);
+    },
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
