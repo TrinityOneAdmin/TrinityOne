@@ -422,6 +422,27 @@ async function init() {
       if (rem) { sessionMnemonic = rem; apply(deriveProfile(rem), { ephemeral: false }); return; }
       applyLocked(); return;
     }
+    // ⚠ A FAILED READ IS NOT AN EMPTY PHONE. `secureGet` ends `catch (e) { …; return null; }`, so a secure
+    // store that THROWS answers exactly as it does when there genuinely is no account — and the next line
+    // used to mint a fresh identity and write it over the top. The member opens the app as a brand-new
+    // nameless person: no name, no churches, no history, and the seed that would have brought it back
+    // overwritten. `secureSet`'s own comment already names the shape ("a Keystore that silently no-ops the
+    // write, known on some Androids after credential changes"). Audit finding 2026-09-14.
+    //
+    // ⚠ THE PIN CASE WAS ALREADY SAFE — the orphan-blob branch above recovers a PIN-locked identity, which
+    // is why this only ever bit a phone with NO PIN. That branch exists because of an earlier audit; this is
+    // the same lesson applied to the other half.
+    //
+    // So: ask whether this phone has ever held an account before minting over it. `_recoveryReference()` is
+    // the function that answers, and the comment above it already states the rule this path was breaking —
+    // a missing reference means "cannot prove it", NEVER "must be fine". A phone that HAS a reference but
+    // cannot read its seed is a phone with a broken store, not a new phone, and the honest answer is to say
+    // so rather than to replace the person.
+    if (isNative() && _recoveryReference()) {
+      console.warn('[identity] this phone has held an account but its seed could not be read — refusing to mint over it');
+      applyLocked();
+      return;
+    }
     mnemonic = generateSeedWords(); await secureSet(mnemonic);
   }
   apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });

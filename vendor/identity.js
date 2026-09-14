@@ -12277,6 +12277,11 @@ zoo`.split("\n"));
         applyLocked();
         return;
       }
+      if (isNative() && _recoveryReference()) {
+        console.warn("[identity] this phone has held an account but its seed could not be read \u2014 refusing to mint over it");
+        applyLocked();
+        return;
+      }
       mnemonic = generateSeedWords();
       await secureSet(mnemonic);
     }
