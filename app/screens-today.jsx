@@ -1421,7 +1421,10 @@ function MyChildrenCard({ ctx }) {
   // ⚠ THE STATE IS THE TRUTH AND THE STORE IS A MIRROR. Reading FROM the store instead would mean a full or
   // refused localStorage leaves a parent with no square AT THE MOMENT OF THE TAP — strictly worse than the
   // bug. `setArrivalOutcome` returns false rather than throwing, and this card carries on regardless.
-  const [arr, setArr] = React.useState({ busy: false, res: null, forSession: '' });
+  // ⚠ `forChurch` AND `forMe` TRAVEL WITH THE ANSWER, and the guard below is why. Without them the card
+  // could only ask "is there an answer?", never "whose, and for which church?" — so once anything had been
+  // tapped the re-read was dead for the life of the card. Found by audit 2026-09-14.
+  const [arr, setArr] = React.useState({ busy: false, res: null, forSession: '', forChurch: '', forMe: '' });
   // ⚠ RE-READ WHENEVER IT BECOMES READABLE, NOT ONCE AT MOUNT — and the difference is the door a parent
   // actually uses. A `useState` initialiser fixed the TAB SWITCH and not the RESTART: reading the store
   // needs both the church npub AND `_mePub()`, and at a cold start neither exists yet. `createRoot().render()`
@@ -1445,14 +1448,28 @@ function MyChildrenCard({ ctx }) {
     if (!npForArr || !meForArr) return;
     let o = null;
     try { const F = window.Fellowship; o = (F && F.arrivalOutcome) ? F.arrivalOutcome(npForArr) : null; } catch (e) { o = null; }
-    // ⚠ NEVER CLOBBER A LIVE ANSWER. A tap in flight, or one already answered in this mount, is newer than
-    // anything on disk. Without this guard a late identity event could overwrite the outcome of a tap the
-    // parent has just made — which is the harm this whole mechanism exists to prevent, arriving by a third
-    // route. The session travels with it, and WereHereSection refuses anything whose `forSession` is not the
-    // session in window, so a morning answer cannot paint the eleven o'clock door.
-    setArr(cur => (cur.busy || cur.res || cur.forSession) ? cur
-      : (o ? { busy: false, res: { ok: o.ok, reason: o.reason }, forSession: o.session }
-           : cur));
+    // ⚠ NEVER CLOBBER THIS PERSON'S OWN LIVE ANSWER — AND NEVER KEEP SOMEBODY ELSE'S.
+    // The first half is why the guard exists: a tap in flight is newer than anything on disk, and a late
+    // identity event must not overwrite an answer the parent has just given.
+    // The second half is what it was missing. It asked only "is there an answer?", so after ANY tap the
+    // re-read was dead for the life of the card — and this card is not remounted when the church changes
+    // (`screens.today` carries no `key`) or when a second member signs in on the same phone. Measured: the
+    // new person was shown a square built from THEIR key for an arrival they never made, with no button
+    // left to tap, and the worker scanning it got "nobody with that code has said they're at this door".
+    // Now the answer carries whose it is, so "keep" means "keep MINE, for THIS church".
+    setArr(cur => {
+      // ⚠ THE PERSON HALF IS THE LOAD-BEARING ONE; THE CHURCH HALF IS DEFENSIVE. Measured by sabotage:
+      // dropping `forMe` fails the second-person test, dropping `forChurch` fails nothing. That is not
+      // because the church case is fine — it is because `landed` already requires the answer's session to
+      // be the session in window, and two churches never share a session id, so a kept foreign answer
+      // cannot paint a square. It only costs this person their OWN stored answer at the second church, so
+      // they tap again and the worker sees a duplicate line. Mild, and worth closing anyway: the guard
+      // should mean what it says, and a future change to `landed` must not silently make this load-bearing.
+      const mine = cur.forChurch === npForArr && cur.forMe === meForArr;
+      if (mine && (cur.busy || cur.res || cur.forSession)) return cur;
+      return o ? { busy: false, res: { ok: o.ok, reason: o.reason }, forSession: o.session, forChurch: npForArr, forMe: meForArr }
+               : { busy: false, res: null, forSession: '', forChurch: npForArr, forMe: meForArr };
+    });
   }, [npForArr, meForArr]);
   const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(MYKIDS_OPEN_KEY, v ? '1' : '0'); } catch (e) {} };
   const offers = wereHereOffers(ctx);
@@ -1677,7 +1694,7 @@ function WereHereSection({ ctx, arr, setArr }) {
   catch (e) { svg = ''; }
   const say = async () => {
     if (busy) return;
-    setArr({ busy: true, res: null, forSession: '' });
+    setArr({ busy: true, res: null, forSession: '', forChurch: np, forMe: (F && F.myPubkey) || '' });
     let r;
     // A BUTTON THAT DOES NOTHING AND SAYS NOTHING IS THE WORST OF THE THREE THINGS THIS CARD CAN BE. An
     // earlier version returned early when `ctx.checkinArrive` was missing, which on a shell that had not
@@ -1686,7 +1703,7 @@ function WereHereSection({ ctx, arr, setArr }) {
     try { r = (ctx && ctx.checkinArrive) ? await ctx.checkinArrive({ session: now.session }) : { ok: false, reason: 'unavailable' }; }
     catch (e) { r = { ok: false, reason: 'threw' }; }
     const out = r || { ok: false, reason: 'unavailable' };
-    setArr({ busy: false, forSession: now.session, res: out });
+    setArr({ busy: false, forSession: now.session, res: out, forChurch: np, forMe: (F && F.myPubkey) || '' });
     // WRITTEN ALONGSIDE, NEVER INSTEAD. A refusal is recorded too: "we tried and were turned away" is an
     // answer a parent coming back to this screen needs as much as a success, and re-tapping after a refusal
     // is exactly how the duplicate-arrival confusion starts.

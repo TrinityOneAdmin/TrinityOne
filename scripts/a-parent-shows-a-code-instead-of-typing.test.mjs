@@ -87,7 +87,10 @@ function store(seed = {}) {
 // arrivalSessionNow's own second parameter, which is the shipped signature — not a Date stub.
 function fellowship(ls, clock, keyed = true, identity = { v: true }) {
   const scope = {
-    localStorage: ls, _mePub: () => (identity.v ? ME : ''), _mayCache: () => keyed, toPub: (x) => String(x || ''),
+    // ⚠ ONE SOURCE OF IDENTITY FOR THE ENGINE AND THE APP. They were two stubs, so a test could change
+    // `myPubkey` and leave `_mePub` answering the old person — which made the card look broken when it was
+    // the harness that was inconsistent. A real phone has one identity; so does this now.
+    localStorage: ls, _mePub: () => (identity.v ? (identity.pub || ME) : ''), _mayCache: () => keyed, toPub: (x) => String(x || ''),
     lifetimeWindow, DEFAULT_HELPER_LIFETIME,
     window: { dispatchEvent() {}, Fellowship: null },
     Event: function Event(n) { this.type = n; },
@@ -111,7 +114,7 @@ function fellowship(ls, clock, keyed = true, identity = { v: true }) {
   // import of secure storage that memory records deferred for MINUTES on a sleeping screen. A restart-
   // ordering bug is invisible to a harness where identity is always already there. Found by audit 2026-09-13.
   const out = { ...api, arrivalSessionNow: (svcs) => api.arrivalSessionNow(svcs, clock.v) };
-  Object.defineProperty(out, 'myPubkey', { get: () => (identity.v ? ME : ''), configurable: true });
+  Object.defineProperty(out, 'myPubkey', { get: () => (identity.v ? (identity.pub || ME) : ''), configurable: true });
   return out;
 }
 
@@ -681,6 +684,43 @@ test('A RE-READ NEVER OVERWRITES AN ANSWER THE PARENT HAS JUST GIVEN', async () 
     'A STALE REFUSAL ON DISK OVERWROTE A SUCCESSFUL TAP the parent had just made. The screen now sends them ' +
     'to the desk over a check-in that is on the worker’s screen. Read: ' + c);
   assert.match(c, /Show this to the children’s worker/i, 'the landed square was lost on the re-read');
+});
+
+test('A SECOND PERSON ON THE SAME PHONE IS NEVER SHOWN THE FIRST PERSON\u2019S CODE', () => {
+  // ⚠ THE GUARD ONLY ASKED "IS THERE AN ANSWER?", NEVER "WHOSE?". So after any tap the re-read was dead for
+  // the life of the card — and this card is not remounted when a second member signs in (`screens.today`
+  // carries no `key`). Measured before the fix: the new person saw a square built from THEIR key for an
+  // arrival they never made, and NO button left to tap. The worker scanning it gets "nobody with that code
+  // has said they're at this door". Audit finding, 2026-09-14.
+  const t = today({ seed: READY });
+  t.identity.v = true;
+  return t.click('We’re here').then(() => {
+    assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no square');
+    // A different person signs in — one who ALSO brings children, or there would be no card to get wrong.
+    const B = 'd'.repeat(64);
+    t.ls.v['trinityone.bringkids.' + CHURCH + '|' + B] = '1';
+    t.ls.v['trinityone.mykidnames.' + CHURCH + '|' + B] = JSON.stringify(['Noah']);
+    t.identity.pub = B;
+    t.redraw(); t.redraw();
+    const c = reads(t.tree);
+    assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+      'THE NEW PERSON IS SHOWN A CODE FOR AN ARRIVAL THEY NEVER MADE. Read: ' + c);
+    assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+      'AND THEY HAVE NO WAY TO ANNOUNCE — the only control is gone, so they are stuck until a force-stop.');
+    assert.match(c, /Bringing Noah in\?/,
+      'the card names the FIRST person\u2019s children to the second person. Read: ' + c);
+  });
+});
+
+test('\u2026and a CHURCH SWITCH re-reads rather than keeping the other church\u2019s answer', async () => {
+  // The common half of the same defect: someone in two churches announces at one, switches to the other,
+  // and the card keeps the first church's answer instead of reading the second's.
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  t.churchBox.v = false; t.redraw();
+  t.churchBox.v = true; t.redraw(); t.redraw();
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    're-anchor: returning to the SAME church must still restore this person\u2019s own answer');
 });
 
 // ══════════════ AND IT STOPS ASKING ONCE THEY ARE IN A ROOM ═══════════════════════════════════════════════
